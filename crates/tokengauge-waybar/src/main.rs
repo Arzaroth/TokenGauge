@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
@@ -5,9 +6,9 @@ use anyhow::Result;
 use clap::Parser;
 use serde::Serialize;
 use tokengauge_core::{
-    FetchResult, ProviderPayload, ProviderRow, TokenGaugeConfig, WaybarWindow, ensure_cache_dir,
-    fetch_all_providers, load_config, payload_to_rows, read_cache, write_cache_full,
-    write_default_config,
+    CostInfo, ExtraWindowRow, FetchResult, ProviderPayload, ProviderRow, TokenGaugeConfig,
+    WaybarWindow, ensure_cache_dir, fetch_all_providers, format_updated_relative, load_config,
+    payload_to_rows_with_costs, read_cache_full, write_cache_full, write_default_config,
 };
 
 #[derive(Parser, Debug)]
@@ -55,8 +56,8 @@ fn main() -> Result<()> {
     let config = load_config(Some(config_path))?;
     ensure_cache_dir(&config.cache_file)?;
 
-    let payloads = match maybe_refresh(&config) {
-        Ok(payloads) => payloads,
+    let (payloads, costs) = match maybe_refresh(&config) {
+        Ok(pair) => pair,
         Err(error) => {
             let output = WaybarOutput {
                 text: "⟂".into(),
@@ -68,7 +69,7 @@ fn main() -> Result<()> {
         }
     };
 
-    let rows = payload_to_rows(payloads);
+    let rows = payload_to_rows_with_costs(payloads, &costs);
     if rows.is_empty() {
         let output = WaybarOutput {
             text: "—".into(),
@@ -104,7 +105,9 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn maybe_refresh(config: &TokenGaugeConfig) -> Result<Vec<ProviderPayload>> {
+fn maybe_refresh(
+    config: &TokenGaugeConfig,
+) -> Result<(Vec<ProviderPayload>, HashMap<String, CostInfo>)> {
     let now = SystemTime::now();
     let stale = match std::fs::metadata(&config.cache_file) {
         Ok(metadata) => metadata
@@ -117,12 +120,17 @@ fn maybe_refresh(config: &TokenGaugeConfig) -> Result<Vec<ProviderPayload>> {
     };
 
     if stale {
-        let FetchResult { payloads, errors } = fetch_all_providers(config);
-        // Cache both payloads and errors
-        write_cache_full(&config.cache_file, &payloads, &errors)?;
-        Ok(payloads)
+        let FetchResult {
+            payloads,
+            errors,
+            costs,
+        } = fetch_all_providers(config);
+        write_cache_full(&config.cache_file, &payloads, &errors, &costs)?;
+        Ok((payloads, costs))
     } else {
-        read_cache(&config.cache_file)
+        let cached = read_cache_full(&config.cache_file)?;
+        let costs = cached.costs();
+        Ok((cached.payloads().to_vec(), costs))
     }
 }
 
@@ -218,19 +226,120 @@ fn format_credits_line(credits: &str) -> Option<String> {
     ))
 }
 
-fn format_provider_card(row: &ProviderRow) -> String {
-    let name = pango_escape(&row.provider);
+fn format_tokens(t: u64) -> String {
+    if t >= 1_000_000_000 {
+        format!("{:.1}B", t as f64 / 1e9)
+    } else if t >= 1_000_000 {
+        format!("{:.1}M", t as f64 / 1e6)
+    } else if t >= 1_000 {
+        format!("{:.1}K", t as f64 / 1e3)
+    } else {
+        format!("{t}")
+    }
+}
+
+fn format_extra_window(extra: &ExtraWindowRow) -> String {
+    let title = pango_escape(&extra.title);
+    let title_padded = format!("{title:<14}");
+    match extra.used {
+        Some(pct) => {
+            let bar = tooltip_bar(pct);
+            let color = color_for(pct);
+            let pct_cell = format!("{pct:>3}%");
+            let reset_part = if extra.reset == "—" {
+                "no data".to_string()
+            } else {
+                format!("resets {}", pango_escape(&extra.reset))
+            };
+            format!(
+                "  {title_padded}  [<span foreground=\"{color}\">{bar}</span>]  <span foreground=\"{color}\">{pct_cell}</span>   {reset_part}"
+            )
+        }
+        None => format!(
+            "  {title_padded}  <span foreground=\"{DIM_COLOR}\">[──────────]</span>          no data"
+        ),
+    }
+}
+
+fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
+    let today_usd = format!("${:.2}", cost.today_usd);
+    let monthly_usd = format!("${:.2}", cost.monthly_usd);
+    let today_tokens = format_tokens(cost.today_tokens);
+    let monthly_tokens = format_tokens(cost.monthly_tokens);
+    vec![
+        format!(
+            "  Today     <span foreground=\"{DIM_COLOR}\">{today_usd}  ·  {today_tokens} tokens</span>"
+        ),
+        format!(
+            "  Month     <span foreground=\"{DIM_COLOR}\">{monthly_usd}  ·  {monthly_tokens} tokens</span>"
+        ),
+    ]
+}
+
+fn format_header(row: &ProviderRow) -> String {
     let icon = icon_markup(&row.provider);
-    let session = format_provider_line("Session", row.session_used, &row.session_reset);
-    let weekly = format_provider_line("Weekly", row.weekly_used, &row.weekly_reset);
-    let mut lines = vec![
-        format!("<b>{icon}  {name}</b>"),
-        session,
-        weekly,
-    ];
+    let name = pango_escape(&row.provider);
+    let plan = row.plan_label.as_deref().filter(|s| !s.is_empty());
+    let badge = match plan {
+        Some(p) => format!(
+            "  <span foreground=\"{DIM_COLOR}\">·  {}</span>",
+            pango_escape(p)
+        ),
+        None => String::new(),
+    };
+    format!("<b>{icon}  {name}</b>{badge}")
+}
+
+fn format_provider_card(row: &ProviderRow) -> String {
+    let mut lines = vec![format_header(row)];
+
+    if let Some(iso) = row.updated_iso.as_deref()
+        && let Some(rel) = format_updated_relative(iso)
+    {
+        lines.push(format!(
+            "  <span foreground=\"{DIM_COLOR}\">Updated {}</span>",
+            pango_escape(&rel)
+        ));
+    }
+
+    lines.push(format_provider_line(
+        "Session",
+        row.session_used,
+        &row.session_reset,
+    ));
+    lines.push(format_provider_line(
+        "Weekly",
+        row.weekly_used,
+        &row.weekly_reset,
+    ));
+    if row.tertiary_used.is_some() || row.tertiary_reset != "—" {
+        lines.push(format_provider_line(
+            "Tertiary",
+            row.tertiary_used,
+            &row.tertiary_reset,
+        ));
+    }
+
+    if !row.extra_windows.is_empty() {
+        lines.push(String::new());
+        lines.push(format!(
+            "  <span foreground=\"{DIM_COLOR}\">Extra usage</span>"
+        ));
+        for extra in &row.extra_windows {
+            lines.push(format_extra_window(extra));
+        }
+    }
+
+    if let Some(cost) = &row.cost {
+        lines.push(String::new());
+        lines.push(format!("  <span foreground=\"{DIM_COLOR}\">Cost</span>"));
+        lines.extend(format_cost_lines(cost));
+    }
+
     if let Some(credits) = format_credits_line(&row.credits) {
         lines.push(credits);
     }
+
     format!("<tt>{}</tt>", lines.join("\n"))
 }
 
@@ -365,9 +474,15 @@ mod tests {
             weekly_used: Some(19),
             weekly_window_minutes: Some(10080),
             weekly_reset: "in 4d 11h".to_string(),
+            tertiary_used: None,
+            tertiary_reset: "—".to_string(),
             credits: "—".to_string(),
             source: "oauth".to_string(),
             updated: "07:37".to_string(),
+            updated_iso: None,
+            plan_label: None,
+            extra_windows: Vec::new(),
+            cost: None,
         }
     }
 

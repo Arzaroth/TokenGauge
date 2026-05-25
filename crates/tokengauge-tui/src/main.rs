@@ -19,7 +19,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokengauge_core::{
     FetchResult, ProviderFetchError, ProviderRow, fetch_all_providers, load_config,
-    payload_to_rows, read_cache_full, write_cache_full, write_default_config,
+    payload_to_rows_with_costs, read_cache_full, write_cache_full, write_default_config,
 };
 
 const BAR_WIDTH: usize = 10;
@@ -125,8 +125,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, args: &Args) -
             if let Ok(config) = load_config(args.config.clone())
                 && let Ok(cached) = read_cache_full(&config.cache_file)
             {
-                let (payloads, errors) = cached.into_parts();
-                state.rows = payload_to_rows(payloads);
+                let (payloads, errors, costs) = cached.into_parts();
+                state.rows = payload_to_rows_with_costs(payloads, &costs);
                 state.errors = errors;
                 state.last_error = None;
             }
@@ -212,17 +212,20 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
         Err(_) => true,
     };
 
-    let (payloads, errors) = match cached {
+    let (payloads, errors, costs) = match cached {
         Some(cached) if !force && !stale => cached.into_parts(),
         _ => {
-            let FetchResult { payloads, errors } = fetch_all_providers(&config);
-            // Cache both payloads and errors
-            write_cache_full(&config.cache_file, &payloads, &errors).ok();
-            (payloads, errors)
+            let FetchResult {
+                payloads,
+                errors,
+                costs,
+            } = fetch_all_providers(&config);
+            write_cache_full(&config.cache_file, &payloads, &errors, &costs).ok();
+            (payloads, errors, costs)
         }
     };
 
-    let rows = payload_to_rows(payloads);
+    let rows = payload_to_rows_with_costs(payloads, &costs);
     Ok(RefreshResult { rows, errors })
 }
 

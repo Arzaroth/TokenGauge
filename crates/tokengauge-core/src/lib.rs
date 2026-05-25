@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,7 +19,21 @@ use serde::{Deserialize, Serialize};
 pub struct UsageSnapshot {
     pub primary: Option<UsageWindow>,
     pub secondary: Option<UsageWindow>,
+    #[serde(default)]
+    pub tertiary: Option<UsageWindow>,
     pub updated_at: Option<String>,
+    #[serde(default)]
+    pub login_method: Option<String>,
+    #[serde(default)]
+    pub extra_rate_windows: Vec<ExtraRateWindow>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtraRateWindow {
+    pub id: Option<String>,
+    pub title: Option<String>,
+    pub window: Option<UsageWindow>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -439,6 +454,8 @@ fn extract_json_message(raw: &str) -> Option<String> {
 pub struct FetchResult {
     pub payloads: Vec<ProviderPayload>,
     pub errors: Vec<ProviderFetchError>,
+    #[serde(default)]
+    pub costs: HashMap<String, CostInfo>,
 }
 
 /// Cached data format - stores both payloads and errors.
@@ -449,6 +466,8 @@ pub enum CachedData {
     Full {
         payloads: Vec<ProviderPayload>,
         errors: Vec<ProviderFetchError>,
+        #[serde(default)]
+        costs: HashMap<String, CostInfo>,
     },
     /// Legacy format - just an array of payloads (for backwards compatibility)
     Legacy(Vec<ProviderPayload>),
@@ -469,12 +488,38 @@ impl CachedData {
         }
     }
 
-    pub fn into_parts(self) -> (Vec<ProviderPayload>, Vec<ProviderFetchError>) {
+    pub fn costs(&self) -> HashMap<String, CostInfo> {
         match self {
-            CachedData::Full { payloads, errors } => (payloads, errors),
-            CachedData::Legacy(payloads) => (payloads, Vec::new()),
+            CachedData::Full { costs, .. } => costs.clone(),
+            CachedData::Legacy(_) => HashMap::new(),
         }
     }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<ProviderPayload>,
+        Vec<ProviderFetchError>,
+        HashMap<String, CostInfo>,
+    ) {
+        match self {
+            CachedData::Full {
+                payloads,
+                errors,
+                costs,
+            } => (payloads, errors, costs),
+            CachedData::Legacy(payloads) => (payloads, Vec::new(), HashMap::new()),
+        }
+    }
+}
+
+/// Cost info for a provider (sourced from ccusage).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CostInfo {
+    pub today_usd: f64,
+    pub today_tokens: u64,
+    pub monthly_usd: f64,
+    pub monthly_tokens: u64,
 }
 
 // ============================================================================
@@ -490,9 +535,22 @@ pub struct ProviderRow {
     pub weekly_used: Option<u8>,
     pub weekly_window_minutes: Option<u32>,
     pub weekly_reset: String,
+    pub tertiary_used: Option<u8>,
+    pub tertiary_reset: String,
     pub credits: String,
     pub source: String,
     pub updated: String,
+    pub updated_iso: Option<String>,
+    pub plan_label: Option<String>,
+    pub extra_windows: Vec<ExtraWindowRow>,
+    pub cost: Option<CostInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExtraWindowRow {
+    pub title: String,
+    pub used: Option<u8>,
+    pub reset: String,
 }
 
 // ============================================================================
@@ -613,8 +671,11 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
         return FetchResult {
             payloads: Vec::new(),
             errors: Vec::new(),
+            costs: HashMap::new(),
         };
     }
+
+    let ccusage_handle = thread::spawn(|| fetch_ccusage_costs(Duration::from_secs(10)));
 
     // Spawn threads for each provider
     let handles: Vec<_> = enabled
@@ -664,7 +725,12 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
         }
     }
 
-    FetchResult { payloads, errors }
+    let costs = ccusage_handle.join().unwrap_or_default();
+    FetchResult {
+        payloads,
+        errors,
+        costs,
+    }
 }
 
 // ============================================================================
@@ -688,10 +754,22 @@ pub fn parse_payload_bytes(bytes: &[u8]) -> Result<Vec<ProviderPayload>> {
 }
 
 pub fn payload_to_rows(payloads: Vec<ProviderPayload>) -> Vec<ProviderRow> {
+    payload_to_rows_with_costs(payloads, &HashMap::new())
+}
+
+pub fn payload_to_rows_with_costs(
+    payloads: Vec<ProviderPayload>,
+    costs: &HashMap<String, CostInfo>,
+) -> Vec<ProviderRow> {
     payloads
         .into_iter()
         .filter(|payload| !payload.has_error())
-        .map(provider_to_row)
+        .map(|payload| {
+            let cost = costs.get(&payload.provider.to_lowercase()).cloned();
+            let mut row = provider_to_row(payload);
+            row.cost = cost;
+            row
+        })
         .collect()
 }
 
@@ -748,34 +826,66 @@ pub fn format_updated(value: Option<String>) -> String {
     value
 }
 
-fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
-    let usage = payload.usage;
-    let (
-        session_used,
-        session_window,
-        session_reset,
-        weekly_used,
-        weekly_window,
-        weekly_reset,
-        updated,
-    ) = if let Some(usage) = usage {
-        let primary = usage.primary;
-        let secondary = usage.secondary;
-        let updated = format_updated(usage.updated_at);
-        let (session_used, session_window, session_reset) = format_window(primary);
-        let (weekly_used, weekly_window, weekly_reset) = format_window(secondary);
-        (
-            session_used,
-            session_window,
-            session_reset,
-            weekly_used,
-            weekly_window,
-            weekly_reset,
-            updated,
-        )
+/// Format an ISO8601 timestamp as a relative "Xm ago" string.
+/// Returns None if parsing fails.
+pub fn format_updated_relative(iso: &str) -> Option<String> {
+    let ts = DateTime::parse_from_rfc3339(iso).ok()?;
+    let delta = Utc::now().signed_duration_since(ts.with_timezone(&Utc));
+    let secs = delta.num_seconds().max(0);
+    Some(if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h ago", secs / 3600)
     } else {
-        (None, None, "—".into(), None, None, "—".into(), "—".into())
-    };
+        format!("{}d ago", secs / 86400)
+    })
+}
+
+fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
+    let mut session_used = None;
+    let mut session_window = None;
+    let mut session_reset = "—".to_string();
+    let mut weekly_used = None;
+    let mut weekly_window = None;
+    let mut weekly_reset = "—".to_string();
+    let mut tertiary_used = None;
+    let mut tertiary_reset = "—".to_string();
+    let mut updated = "—".to_string();
+    let mut updated_iso = None;
+    let mut plan_label = None;
+    let mut extra_windows = Vec::new();
+
+    if let Some(usage) = payload.usage {
+        let (s_used, s_win, s_reset) = format_window(usage.primary);
+        session_used = s_used;
+        session_window = s_win;
+        session_reset = s_reset;
+
+        let (w_used, w_win, w_reset) = format_window(usage.secondary);
+        weekly_used = w_used;
+        weekly_window = w_win;
+        weekly_reset = w_reset;
+
+        let (t_used, _, t_reset) = format_window(usage.tertiary);
+        tertiary_used = t_used;
+        tertiary_reset = t_reset;
+
+        updated_iso = usage.updated_at.clone();
+        updated = format_updated(usage.updated_at);
+        plan_label = usage.login_method;
+
+        extra_windows = usage
+            .extra_rate_windows
+            .into_iter()
+            .filter_map(|w| {
+                let title = w.title?;
+                let (used, _, reset) = format_window(w.window);
+                Some(ExtraWindowRow { title, used, reset })
+            })
+            .collect();
+    }
 
     let credits = payload
         .credits
@@ -798,9 +908,15 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
         weekly_used,
         weekly_window_minutes: weekly_window,
         weekly_reset,
+        tertiary_used,
+        tertiary_reset,
         credits,
         source,
         updated,
+        updated_iso,
+        plan_label,
+        extra_windows,
+        cost: None,
     }
 }
 
@@ -822,11 +938,12 @@ pub fn read_cache(path: &Path) -> Result<Vec<ProviderPayload>> {
     Ok(cached.payloads().to_vec())
 }
 
-/// Write cache with both payloads and errors.
+/// Write cache with payloads, errors and optional costs.
 pub fn write_cache_full(
     path: &Path,
     payloads: &[ProviderPayload],
     errors: &[ProviderFetchError],
+    costs: &HashMap<String, CostInfo>,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).ok();
@@ -834,6 +951,7 @@ pub fn write_cache_full(
     let data = CachedData::Full {
         payloads: payloads.to_vec(),
         errors: errors.to_vec(),
+        costs: costs.clone(),
     };
     let contents = serde_json::to_string(&data)?;
     fs::write(path, contents)
@@ -843,7 +961,144 @@ pub fn write_cache_full(
 
 /// Write cache with only payloads (legacy, for backwards compatibility).
 pub fn write_cache(path: &Path, payloads: &[ProviderPayload]) -> Result<()> {
-    write_cache_full(path, payloads, &[])
+    write_cache_full(path, payloads, &[], &HashMap::new())
+}
+
+// ============================================================================
+// ccusage Integration
+// ============================================================================
+
+/// Map a ccusage model name to a TokenGauge provider key.
+/// Returns None if the model doesn't belong to a tracked provider.
+pub fn model_to_provider(model: &str) -> Option<&'static str> {
+    let lower = model.to_lowercase();
+    if lower.starts_with("claude") {
+        Some("claude")
+    } else if lower.starts_with("gpt")
+        || lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("o4")
+        || lower.starts_with("codex")
+        || lower.starts_with("openai")
+    {
+        Some("codex")
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CcusageDailyResponse {
+    #[serde(default)]
+    daily: Vec<CcusageDay>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CcusageDay {
+    #[serde(default)]
+    model_breakdowns: Vec<CcusageModelBreakdown>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CcusageModelBreakdown {
+    model_name: String,
+    #[serde(default)]
+    cost: f64,
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    cache_creation_tokens: u64,
+    #[serde(default)]
+    cache_read_tokens: u64,
+}
+
+fn ccusage_total_tokens(b: &CcusageModelBreakdown) -> u64 {
+    b.input_tokens + b.output_tokens + b.cache_creation_tokens + b.cache_read_tokens
+}
+
+fn aggregate_ccusage(response: &CcusageDailyResponse) -> HashMap<String, (f64, u64)> {
+    let mut totals: HashMap<String, (f64, u64)> = HashMap::new();
+    for day in &response.daily {
+        for b in &day.model_breakdowns {
+            if let Some(provider) = model_to_provider(&b.model_name) {
+                let entry = totals.entry(provider.to_string()).or_insert((0.0, 0));
+                entry.0 += b.cost;
+                entry.1 += ccusage_total_tokens(b);
+            }
+        }
+    }
+    totals
+}
+
+fn run_ccusage(args: &[&str], timeout: Duration) -> Result<CcusageDailyResponse> {
+    let (tx, rx) = mpsc::channel();
+    let child = Command::new("npx")
+        .arg("--yes")
+        .arg("ccusage")
+        .args(args)
+        .arg("--json")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to spawn ccusage (is npx installed?)")?;
+
+    thread::spawn(move || {
+        let result = child.wait_with_output();
+        let _ = tx.send(result);
+    });
+
+    let output = rx
+        .recv_timeout(timeout)
+        .map_err(|_| anyhow!("ccusage timeout after {:?}", timeout))?
+        .context("ccusage process failed")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("ccusage exited non-zero: {}", stderr.trim()));
+    }
+
+    serde_json::from_slice(&output.stdout).context("ccusage output was not valid JSON")
+}
+
+/// Fetch ccusage cost info. Returns a map from provider key (claude/codex) to CostInfo.
+/// Returns empty map on any failure (ccusage missing, no logs, parse error).
+pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
+    let today = Local::now().format("%Y%m%d").to_string();
+    let month_start = Local::now().format("%Y%m01").to_string();
+
+    let daily = match run_ccusage(&["daily", "--since", &today], timeout) {
+        Ok(r) => r,
+        Err(_) => return HashMap::new(),
+    };
+    let monthly = match run_ccusage(&["daily", "--since", &month_start], timeout) {
+        Ok(r) => r,
+        Err(_) => return HashMap::new(),
+    };
+
+    let today_agg = aggregate_ccusage(&daily);
+    let monthly_agg = aggregate_ccusage(&monthly);
+
+    let mut result = HashMap::new();
+    let providers: std::collections::HashSet<String> =
+        today_agg.keys().chain(monthly_agg.keys()).cloned().collect();
+    for provider in providers {
+        let today = today_agg.get(&provider).copied().unwrap_or((0.0, 0));
+        let monthly = monthly_agg.get(&provider).copied().unwrap_or((0.0, 0));
+        result.insert(
+            provider,
+            CostInfo {
+                today_usd: today.0,
+                today_tokens: today.1,
+                monthly_usd: monthly.0,
+                monthly_tokens: monthly.1,
+            },
+        );
+    }
+    result
 }
 
 // ============================================================================
@@ -1210,14 +1465,16 @@ mod tests {
         let cached = CachedData::Full {
             payloads: vec![payload.clone()],
             errors: vec![error.clone()],
+            costs: HashMap::new(),
         };
 
         assert_eq!(cached.payloads().len(), 1);
         assert_eq!(cached.errors().len(), 1);
 
-        let (payloads, errors) = cached.into_parts();
+        let (payloads, errors, costs) = cached.into_parts();
         assert_eq!(payloads.len(), 1);
         assert_eq!(errors.len(), 1);
+        assert!(costs.is_empty());
     }
 
     #[test]
@@ -1235,9 +1492,10 @@ mod tests {
         assert_eq!(cached.payloads().len(), 1);
         assert_eq!(cached.errors().len(), 0); // legacy has no errors
 
-        let (payloads, errors) = cached.into_parts();
+        let (payloads, errors, costs) = cached.into_parts();
         assert_eq!(payloads.len(), 1);
         assert!(errors.is_empty());
+        assert!(costs.is_empty());
     }
 
     // ------------------------------------------------------------------------

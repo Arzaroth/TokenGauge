@@ -18,6 +18,9 @@ cache_file = "/tmp/tokengauge-usage.json"
 window = "daily"
 # Where to place the module: "left" or "right"
 placement = "right"
+# Provider key shown in the waybar text. Unset = show all providers stacked.
+# Mouse scroll over the module rotates the selection.
+# primary = "claude"
 
 [providers]
 # OAuth providers - set to true/false to enable/disable

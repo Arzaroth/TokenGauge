@@ -7,8 +7,9 @@ use clap::Parser;
 use serde::Serialize;
 use tokengauge_core::{
     CostInfo, ExtraWindowRow, FetchResult, ProviderPayload, ProviderRow, TokenGaugeConfig,
-    WaybarWindow, ensure_cache_dir, fetch_all_providers, format_updated_relative, load_config,
-    payload_to_rows_with_costs, read_cache_full, write_cache_full, write_default_config,
+    WaybarState, WaybarWindow, ensure_cache_dir, fetch_all_providers, format_updated_relative,
+    load_config, payload_to_rows_with_costs, read_cache_full, read_waybar_state, waybar_state_path,
+    write_cache_full, write_default_config, write_waybar_state,
 };
 
 #[derive(Parser, Debug)]
@@ -16,6 +17,15 @@ use tokengauge_core::{
 struct Args {
     #[arg(long, env = "TOKENGAUGE_CONFIG")]
     config: Option<PathBuf>,
+    /// Rotate the provider shown in the waybar text and exit (no JSON output).
+    #[arg(long, value_enum)]
+    rotate: Option<RotateDir>,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum RotateDir {
+    Next,
+    Prev,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,6 +58,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let config_path = args
         .config
+        .clone()
         .unwrap_or_else(tokengauge_core::default_config_path);
     if !config_path.exists() {
         write_default_config(&config_path)?;
@@ -55,6 +66,11 @@ fn main() -> Result<()> {
 
     let config = load_config(Some(config_path))?;
     ensure_cache_dir(&config.cache_file)?;
+
+    if let Some(dir) = args.rotate {
+        handle_rotate(&config, dir)?;
+        return Ok(());
+    }
 
     let (payloads, costs) = match maybe_refresh(&config) {
         Ok(pair) => pair,
@@ -80,7 +96,29 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let text = rows
+    let state = read_waybar_state(&waybar_state_path(&config.cache_file));
+    let selected_key = state
+        .selected
+        .as_deref()
+        .or(config.waybar.primary.as_deref());
+    let visible_rows: Vec<ProviderRow> = match selected_key {
+        Some(key) => {
+            let lower = key.to_lowercase();
+            let matched: Vec<ProviderRow> = rows
+                .iter()
+                .filter(|r| r.provider.to_lowercase() == lower)
+                .cloned()
+                .collect();
+            if matched.is_empty() {
+                rows.clone()
+            } else {
+                matched
+            }
+        }
+        None => rows.clone(),
+    };
+
+    let text = visible_rows
         .iter()
         .map(|row| {
             let used = match config.waybar.window {
@@ -93,7 +131,7 @@ fn main() -> Result<()> {
         .join("   ");
     let text = format!("   {text}");
 
-    let tooltip = format_tooltip_cards(&rows);
+    let tooltip = format_tooltip_cards(&visible_rows);
 
     let output = WaybarOutput {
         text,
@@ -102,6 +140,60 @@ fn main() -> Result<()> {
     };
 
     println!("{}", serde_json::to_string(&output)?);
+    Ok(())
+}
+
+const SCROLL_THROTTLE_MS: i64 = 250;
+
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn handle_rotate(config: &TokenGaugeConfig, dir: RotateDir) -> Result<()> {
+    let cached = match read_cache_full(&config.cache_file) {
+        Ok(c) => c,
+        Err(_) => return Ok(()),
+    };
+    let rows = payload_to_rows_with_costs(cached.payloads().to_vec(), &cached.costs());
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let state_path = waybar_state_path(&config.cache_file);
+    let state = read_waybar_state(&state_path);
+
+    let now = now_ms();
+    if now - state.last_rotated_ms < SCROLL_THROTTLE_MS {
+        return Ok(());
+    }
+
+    let current_key = state
+        .selected
+        .clone()
+        .or_else(|| config.waybar.primary.clone());
+    let current_idx = current_key
+        .as_deref()
+        .and_then(|key| {
+            let lower = key.to_lowercase();
+            rows.iter()
+                .position(|r| r.provider.to_lowercase() == lower)
+        })
+        .unwrap_or(0);
+
+    let len = rows.len();
+    let next_idx = match dir {
+        RotateDir::Next => (current_idx + 1) % len,
+        RotateDir::Prev => (current_idx + len - 1) % len,
+    };
+    let new_state = WaybarState {
+        selected: Some(rows[next_idx].provider.to_lowercase()),
+        last_rotated_ms: now,
+    };
+    write_waybar_state(&state_path, &new_state)?;
     Ok(())
 }
 
@@ -200,17 +292,17 @@ fn format_provider_line(label: &str, used: Option<u8>, reset: &str) -> String {
             let color = color_for(pct);
             let pct_cell = format!("{pct:>3}%");
             let reset_part = if reset == "—" {
-                "no data".to_string()
+                "not started".to_string()
             } else {
                 format!("resets {}", pango_escape(reset))
             };
             format!(
-                "  {label:<7}  [<span foreground=\"{color}\">{bar}</span>]  <span foreground=\"{color}\">{pct_cell}</span>   {reset_part}"
+                "  {label:<8}  [<span foreground=\"{color}\">{bar}</span>]  <span foreground=\"{color}\">{pct_cell}</span>   {reset_part}"
             )
         }
         None => {
             format!(
-                "  {label:<7}  [<span foreground=\"{DIM_COLOR}\">──────────</span>]          no data"
+                "  {label:<8}  [<span foreground=\"{DIM_COLOR}\">──────────</span>]          no data"
             )
         }
     }
@@ -247,7 +339,7 @@ fn format_extra_window(extra: &ExtraWindowRow) -> String {
             let color = color_for(pct);
             let pct_cell = format!("{pct:>3}%");
             let reset_part = if extra.reset == "—" {
-                "no data".to_string()
+                "not started".to_string()
             } else {
                 format!("resets {}", pango_escape(&extra.reset))
             };
@@ -516,11 +608,11 @@ mod tests {
     }
 
     #[test]
-    fn format_provider_card_missing_reset_renders_no_data() {
+    fn format_provider_card_missing_reset_renders_not_started() {
         let mut row = sample_row("Codex");
         row.weekly_reset = "—".to_string();
         let card = format_provider_card(&row);
-        assert!(card.contains("no data"));
+        assert!(card.contains("not started"));
         assert!(!card.contains("resets —"));
     }
 

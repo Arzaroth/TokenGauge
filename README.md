@@ -71,7 +71,7 @@ Edit `~/.config/tokengauge/config.toml`:
 
 The module displays per-provider usage bars. Hover for detailed tooltip with reset times.
 
-Set `waybar.primary` (e.g. `primary = "claude"`) to show only one provider in the bar text. The tooltip always lists all providers. Scrolling on the module rotates the visible provider; that choice is persisted in `<cache_dir>/tokengauge-waybar-state.json` and overrides `primary` until you scroll again.
+Set `waybar.primary` (e.g. `primary = "claude"`) to show only one provider in the bar text and tooltip. Unset = show all providers stacked. Scrolling on the module rotates the visible provider; that choice is persisted in `<cache_dir>/tokengauge-waybar-state.json` and overrides `primary` until you scroll again. Click opens the TUI on the same provider.
 
 ### TUI
 

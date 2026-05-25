@@ -1030,6 +1030,79 @@ pub fn write_cache(path: &Path, payloads: &[ProviderPayload]) -> Result<()> {
 }
 
 // ============================================================================
+// Display helpers (shared between waybar binary and TUI)
+// ============================================================================
+
+pub const DIM_HEX: &str = "#6c7086";
+pub const SEPARATOR_HEX: &str = "#45475a";
+pub const GREEN_HEX: &str = "#a6e3a1";
+pub const YELLOW_HEX: &str = "#f9e2af";
+pub const RED_HEX: &str = "#f38ba8";
+pub const NEUTRAL_HEX: &str = "#cdd6f4";
+
+pub struct ProviderIcon {
+    pub glyph: &'static str,
+    pub color_hex: &'static str,
+}
+
+pub fn provider_icon(label: &str) -> ProviderIcon {
+    match label.to_lowercase().as_str() {
+        "claude" => ProviderIcon {
+            glyph: "\u{f0721}",
+            color_hex: "#DE7356",
+        },
+        "codex" => ProviderIcon {
+            glyph: "\u{f0b2b}",
+            color_hex: "#74AA9C",
+        },
+        "copilot" => ProviderIcon {
+            glyph: "\u{f4b8}",
+            color_hex: "#8b5cf6",
+        },
+        "z.ai" | "zai" => ProviderIcon {
+            glyph: "Z",
+            color_hex: "#126EF4",
+        },
+        _ => ProviderIcon {
+            glyph: "\u{f06a9}",
+            color_hex: NEUTRAL_HEX,
+        },
+    }
+}
+
+pub fn color_hex_for_percent(percent: u8) -> &'static str {
+    match percent {
+        0..=49 => GREEN_HEX,
+        50..=79 => YELLOW_HEX,
+        _ => RED_HEX,
+    }
+}
+
+pub fn format_tokens(t: u64) -> String {
+    if t >= 1_000_000_000 {
+        format!("{:.1}B", t as f64 / 1e9)
+    } else if t >= 1_000_000 {
+        format!("{:.1}M", t as f64 / 1e6)
+    } else if t >= 1_000 {
+        format!("{:.1}K", t as f64 / 1e3)
+    } else {
+        format!("{t}")
+    }
+}
+
+/// Parse `#RRGGBB` into (r, g, b). Returns None on malformed input.
+pub fn parse_hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
+    let s = hex.strip_prefix('#')?;
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    Some((r, g, b))
+}
+
+// ============================================================================
 // Waybar State (rotation selection)
 // ============================================================================
 
@@ -1882,6 +1955,39 @@ mod tests {
         let read = read_waybar_state(&path);
         assert_eq!(read.selected.as_deref(), Some("codex"));
         assert_eq!(read.last_rotated_ms, 0);
+    }
+
+    #[test]
+    fn format_tokens_units() {
+        assert_eq!(format_tokens(500), "500");
+        assert_eq!(format_tokens(1_500), "1.5K");
+        assert_eq!(format_tokens(2_300_000), "2.3M");
+        assert_eq!(format_tokens(4_500_000_000), "4.5B");
+    }
+
+    #[test]
+    fn provider_icon_known_and_default() {
+        assert_eq!(provider_icon("Claude").glyph, "\u{f0721}");
+        assert_eq!(provider_icon("claude").color_hex, "#DE7356");
+        assert_eq!(provider_icon("Codex").glyph, "\u{f0b2b}");
+        assert_eq!(provider_icon("Unknown").glyph, "\u{f06a9}");
+    }
+
+    #[test]
+    fn color_hex_for_percent_thresholds() {
+        assert_eq!(color_hex_for_percent(0), GREEN_HEX);
+        assert_eq!(color_hex_for_percent(49), GREEN_HEX);
+        assert_eq!(color_hex_for_percent(50), YELLOW_HEX);
+        assert_eq!(color_hex_for_percent(79), YELLOW_HEX);
+        assert_eq!(color_hex_for_percent(80), RED_HEX);
+    }
+
+    #[test]
+    fn parse_hex_rgb_works() {
+        assert_eq!(parse_hex_rgb("#a6e3a1"), Some((0xa6, 0xe3, 0xa1)));
+        assert_eq!(parse_hex_rgb("#DE7356"), Some((0xDE, 0x73, 0x56)));
+        assert_eq!(parse_hex_rgb("not-hex"), None);
+        assert_eq!(parse_hex_rgb("#abc"), None);
     }
 
     #[test]

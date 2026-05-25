@@ -319,6 +319,10 @@ pub struct TokenGaugeConfig {
     pub cache_file: PathBuf,
     /// Timeout in seconds for each provider request
     pub timeout_secs: u64,
+    /// Enable ccusage cost fetching (requires `npx ccusage`)
+    pub ccusage_enabled: bool,
+    /// Timeout in seconds for each ccusage call
+    pub ccusage_timeout_secs: u64,
     pub providers: ProvidersConfig,
     pub waybar: WaybarConfig,
 }
@@ -330,6 +334,8 @@ impl Default for TokenGaugeConfig {
             refresh_secs: 600,
             cache_file: PathBuf::from("/tmp/tokengauge-usage.json"),
             timeout_secs: 10,
+            ccusage_enabled: true,
+            ccusage_timeout_secs: 15,
             providers: ProvidersConfig {
                 codex: Some(true),
                 claude: Some(true),
@@ -715,7 +721,15 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
         };
     }
 
-    let ccusage_handle = thread::spawn(|| fetch_ccusage_costs(Duration::from_secs(10)));
+    let ccusage_enabled = config.ccusage_enabled;
+    let ccusage_timeout = Duration::from_secs(config.ccusage_timeout_secs.max(1));
+    let ccusage_handle = thread::spawn(move || {
+        if ccusage_enabled {
+            fetch_ccusage_costs(ccusage_timeout)
+        } else {
+            HashMap::new()
+        }
+    });
 
     // Spawn threads for each provider
     let handles: Vec<_> = enabled
@@ -1204,6 +1218,11 @@ refresh_secs = 600
 
 # Cache file location
 cache_file = "/tmp/tokengauge-usage.json"
+
+# Enable ccusage cost fetching (requires `npx ccusage` to be available)
+ccusage_enabled = true
+# Timeout in seconds for each ccusage call (cold starts can be slow)
+ccusage_timeout_secs = 15
 
 [waybar]
 # Which window to show in waybar: "daily" or "weekly"

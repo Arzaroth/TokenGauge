@@ -10,6 +10,11 @@ refresh_secs = 600
 # Timeout in seconds for each provider request
 timeout_secs = 10
 
+# Enable ccusage cost fetching (requires `npx ccusage` to be available)
+ccusage_enabled = true
+# Timeout in seconds for each ccusage call (cold starts can be slow)
+ccusage_timeout_secs = 15
+
 # Cache file location
 cache_file = "/tmp/tokengauge-usage.json"
 

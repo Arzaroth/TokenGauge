@@ -37,11 +37,12 @@ struct WaybarOutput {
 
 fn format_bar(label: &str, value: Option<u8>) -> String {
     let icon = icon_markup(label);
+    let escaped_label = pango_escape(label);
     let (bars, percent) = match value {
         Some(percent) => (bar_blocks(percent), format!("{percent}%")),
         None => ("—".to_string(), "—".to_string()),
     };
-    format!("{icon} {label} {bars} {percent}")
+    format!("{icon} {escaped_label} {bars} {percent}")
 }
 
 fn bar_blocks(percent: u8) -> String {
@@ -502,6 +503,13 @@ mod tests {
         assert!(result.contains("Codex — —"));
         assert!(result.contains("\u{f0b2b}"));
         assert!(result.contains("foreground=\"#74AA9C\""));
+    }
+
+    #[test]
+    fn format_bar_escapes_label() {
+        let result = format_bar("ev<il>", Some(50));
+        assert!(result.contains("ev&lt;il&gt;"));
+        assert!(!result.contains(" ev<il> "));
     }
 
     // ------------------------------------------------------------------------

@@ -15,14 +15,19 @@ use crossterm::terminal::{
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokengauge_core::{
-    FetchResult, ProviderFetchError, ProviderRow, fetch_all_providers, load_config,
-    payload_to_rows_with_costs, read_cache_full, write_cache_full, write_default_config,
+    CostInfo, ExtraWindowRow, FetchResult, ProviderFetchError, ProviderRow, fetch_all_providers,
+    format_updated_relative, load_config, payload_to_rows_with_costs, read_cache_full,
+    write_cache_full, write_default_config,
 };
 
-const BAR_WIDTH: usize = 10;
+const BAR_WIDTH: usize = 40;
+const DIM: Color = Color::Rgb(108, 112, 134);
+const GREEN: Color = Color::Rgb(166, 227, 161);
+const YELLOW: Color = Color::Rgb(249, 226, 175);
+const RED: Color = Color::Rgb(243, 139, 168);
 
 #[derive(Parser, Debug)]
 #[command(version, about = "TokenGauge TUI")]
@@ -40,6 +45,9 @@ struct AppState {
     last_error: Option<String>,
     status_message: Option<String>,
     spinner_index: usize,
+    scroll: u16,
+    content_height: u16,
+    viewport_height: u16,
 }
 
 impl AppState {
@@ -52,7 +60,19 @@ impl AppState {
             last_error: None,
             status_message: None,
             spinner_index: 0,
+            scroll: 0,
+            content_height: 0,
+            viewport_height: 0,
         }
+    }
+
+    fn max_scroll(&self) -> u16 {
+        self.content_height.saturating_sub(self.viewport_height)
+    }
+
+    fn scroll_by(&mut self, delta: i32) {
+        let new = (self.scroll as i32 + delta).max(0) as u16;
+        self.scroll = new.min(self.max_scroll());
     }
 }
 
@@ -132,7 +152,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, args: &Args) -
             }
         }
 
-        terminal.draw(|frame| draw_ui(frame, &state, pending_refresh.is_some()))?;
+        terminal.draw(|frame| draw_ui(frame, &mut state, pending_refresh.is_some()))?;
 
         if event::poll(Duration::from_millis(120))?
             && let Event::Key(key) = event::read()?
@@ -143,6 +163,15 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, args: &Args) -
             if matches!(key.code, KeyCode::Char('r')) && pending_refresh.is_none() {
                 state.status_message = Some("Refreshing…".to_string());
                 pending_refresh = Some(spawn_refresh(args, true));
+            }
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => state.scroll_by(1),
+                KeyCode::Char('k') | KeyCode::Up => state.scroll_by(-1),
+                KeyCode::PageDown => state.scroll_by(state.viewport_height as i32),
+                KeyCode::PageUp => state.scroll_by(-(state.viewport_height as i32)),
+                KeyCode::Char('g') | KeyCode::Home => state.scroll = 0,
+                KeyCode::Char('G') | KeyCode::End => state.scroll = state.max_scroll(),
+                _ => {}
             }
         }
 
@@ -229,38 +258,260 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
     Ok(RefreshResult { rows, errors })
 }
 
-fn percent_color(percent_left: u8) -> Color {
-    match percent_left {
-        70..=100 => Color::Green,
-        40..=69 => Color::Yellow,
-        20..=39 => Color::LightRed,
-        _ => Color::Red,
+fn color_for(percent: u8) -> Color {
+    match percent {
+        0..=49 => GREEN,
+        50..=79 => YELLOW,
+        _ => RED,
     }
 }
 
-fn bar_line(percent_used: Option<u8>) -> Line<'static> {
-    match percent_used {
-        Some(percent) => {
-            let percent = percent.min(100);
-            let filled = (percent as usize * BAR_WIDTH).div_ceil(100);
-            let empty = BAR_WIDTH.saturating_sub(filled);
-            let color = percent_color(100 - percent);
-            let filled_bar = "█".repeat(filled);
-            let empty_bar = "░".repeat(empty);
-            Line::from(vec![
-                Span::styled(filled_bar, Style::default().fg(color)),
-                Span::styled(empty_bar, Style::default().fg(Color::DarkGray)),
+fn provider_icon(label: &str) -> (&'static str, Color) {
+    match label.to_lowercase().as_str() {
+        "claude" => ("\u{f0721}", Color::Rgb(0xDE, 0x73, 0x56)),
+        "codex" => ("\u{f0b2b}", Color::Rgb(0x74, 0xAA, 0x9C)),
+        "copilot" => ("\u{f4b8}", Color::Rgb(0x8B, 0x5C, 0xF6)),
+        "z.ai" | "zai" => ("Z", Color::Rgb(0x12, 0x6E, 0xF4)),
+        _ => ("\u{f06a9}", Color::Rgb(0xCD, 0xD6, 0xE4)),
+    }
+}
+
+fn render_bar(percent: u8) -> (String, Color) {
+    let pct = percent.min(100);
+    let filled = (pct as usize * BAR_WIDTH).div_ceil(100);
+    let empty = BAR_WIDTH.saturating_sub(filled);
+    let bar = format!("{}{}", "━".repeat(filled), "─".repeat(empty));
+    (bar, color_for(pct))
+}
+
+fn format_tokens(t: u64) -> String {
+    if t >= 1_000_000_000 {
+        format!("{:.1}B", t as f64 / 1e9)
+    } else if t >= 1_000_000 {
+        format!("{:.1}M", t as f64 / 1e6)
+    } else if t >= 1_000 {
+        format!("{:.1}K", t as f64 / 1e3)
+    } else {
+        format!("{t}")
+    }
+}
+
+fn window_section(label: &str, used: Option<u8>, reset: &str) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!("  {label}"),
+        Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+    )));
+    match used {
+        Some(pct) => {
+            let (bar, color) = render_bar(pct);
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(bar, Style::default().fg(color)),
+            ]));
+            let reset_text = if reset == "—" {
+                "not started".to_string()
+            } else {
+                format!("resets {reset}")
+            };
+            lines.push(Line::from(vec![
+                Span::raw("  "),
                 Span::styled(
-                    format!(" {:>3}%", percent),
+                    format!("{pct}% used"),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ),
+                Span::raw("   "),
+                Span::styled(reset_text, Style::default().fg(DIM)),
+            ]));
+        }
+        None => {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("─".repeat(BAR_WIDTH), Style::default().fg(DIM)),
+            ]));
+            lines.push(Line::from(Span::styled(
+                "  no data",
+                Style::default().fg(DIM),
+            )));
+        }
+    }
+    lines
+}
+
+fn extra_window_line(extra: &ExtraWindowRow) -> Line<'static> {
+    let title = format!("{:<14}", truncate(&extra.title, 14));
+    const EXTRA_BAR: usize = 20;
+    match extra.used {
+        Some(pct) => {
+            let pct = pct.min(100);
+            let filled = (pct as usize * EXTRA_BAR).div_ceil(100);
+            let empty = EXTRA_BAR.saturating_sub(filled);
+            let bar = format!("{}{}", "━".repeat(filled), "─".repeat(empty));
+            let color = color_for(pct);
+            let trailing = if extra.reset == "—" {
+                if pct == 0 {
+                    String::new()
+                } else {
+                    "  not started".to_string()
+                }
+            } else {
+                format!("  resets {}", extra.reset)
+            };
+            Line::from(vec![
+                Span::raw("  "),
+                Span::raw(title),
+                Span::styled(bar, Style::default().fg(color)),
+                Span::raw("  "),
+                Span::styled(
+                    format!("{pct:>3}%"),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(trailing, Style::default().fg(DIM)),
             ])
         }
-        None => Line::from(Span::styled("—", Style::default().fg(Color::DarkGray))),
+        None => Line::from(vec![
+            Span::raw("  "),
+            Span::raw(title),
+            Span::styled("─".repeat(EXTRA_BAR), Style::default().fg(DIM)),
+            Span::raw("    "),
+            Span::styled("no data", Style::default().fg(DIM)),
+        ]),
     }
 }
 
-fn draw_ui(frame: &mut ratatui::Frame, state: &AppState, is_refreshing: bool) {
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{cut}…")
+    }
+}
+
+fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
+    vec![
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Today", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("      "),
+            Span::styled(
+                format!("${:.2}", cost.today_usd),
+                Style::default().fg(GREEN),
+            ),
+            Span::styled(
+                format!("  ·  {} tokens", format_tokens(cost.today_tokens)),
+                Style::default().fg(DIM),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Month", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("      "),
+            Span::styled(
+                format!("${:.2}", cost.monthly_usd),
+                Style::default().fg(GREEN),
+            ),
+            Span::styled(
+                format!("  ·  {} tokens", format_tokens(cost.monthly_tokens)),
+                Style::default().fg(DIM),
+            ),
+        ]),
+    ]
+}
+
+fn provider_card_lines(row: &ProviderRow) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+
+    let (icon, icon_color) = provider_icon(&row.provider);
+    let mut header = vec![
+        Span::styled(format!("{icon}  "), Style::default().fg(icon_color)),
+        Span::styled(
+            row.provider.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if let Some(plan) = row.plan_label.as_deref().filter(|s| !s.is_empty()) {
+        header.push(Span::styled(
+            format!("  ·  {plan}"),
+            Style::default().fg(DIM),
+        ));
+    }
+    lines.push(Line::from(header));
+
+    if let Some(iso) = row.updated_iso.as_deref()
+        && let Some(rel) = format_updated_relative(iso)
+    {
+        lines.push(Line::from(Span::styled(
+            format!("   Updated {rel}"),
+            Style::default().fg(DIM),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.extend(window_section("Session", row.session_used, &row.session_reset));
+    lines.push(Line::from(""));
+    lines.extend(window_section("Weekly", row.weekly_used, &row.weekly_reset));
+    if row.tertiary_used.is_some() || row.tertiary_reset != "—" {
+        lines.push(Line::from(""));
+        lines.extend(window_section(
+            "Tertiary",
+            row.tertiary_used,
+            &row.tertiary_reset,
+        ));
+    }
+
+    if !row.extra_windows.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Extra usage",
+            Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+        )));
+        for extra in &row.extra_windows {
+            lines.push(extra_window_line(extra));
+        }
+    }
+
+    if let Some(cost) = &row.cost {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Cost",
+            Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+        )));
+        lines.extend(cost_lines(cost));
+    }
+
+    if row.credits != "—" && !row.credits.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Credits", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("    "),
+            Span::styled(format!("${}", row.credits), Style::default().fg(GREEN)),
+        ]));
+    }
+
+    lines
+}
+
+fn all_cards_lines(rows: &[ProviderRow], width: u16) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    let sep_len = (width as usize).saturating_sub(2).min(80);
+    let separator = "─".repeat(sep_len);
+    for (i, row) in rows.iter().enumerate() {
+        if i > 0 {
+            out.push(Line::from(""));
+            out.push(Line::from(Span::styled(
+                format!(" {separator}"),
+                Style::default().fg(DIM),
+            )));
+            out.push(Line::from(""));
+        }
+        out.extend(provider_card_lines(row));
+    }
+    out
+}
+
+fn draw_ui(frame: &mut ratatui::Frame, state: &mut AppState, is_refreshing: bool) {
     let size = frame.area();
 
     // Calculate layout based on whether we have errors
@@ -311,6 +562,7 @@ fn draw_ui(frame: &mut ratatui::Frame, state: &AppState, is_refreshing: bool) {
         .block(Block::default().borders(Borders::ALL).title("TokenGauge"));
     frame.render_widget(header, layout[0]);
 
+    let body_area = layout[1];
     if state.rows.is_empty() && state.errors.is_empty() {
         let message = state
             .status_message
@@ -320,74 +572,23 @@ fn draw_ui(frame: &mut ratatui::Frame, state: &AppState, is_refreshing: bool) {
         let empty = Paragraph::new(message)
             .style(Style::default().fg(Color::Red))
             .block(Block::default().borders(Borders::ALL).title("Usage"));
-        frame.render_widget(empty, layout[1]);
+        frame.render_widget(empty, body_area);
+        state.content_height = 0;
+        state.viewport_height = body_area.height.saturating_sub(2);
     } else {
-        let table_rows = state.rows.iter().flat_map(|row| {
-            let primary = Row::new(vec![
-                Cell::from(Span::styled(
-                    row.provider.clone(),
-                    Style::default().add_modifier(Modifier::BOLD),
-                )),
-                Cell::from(bar_line(row.session_used)),
-                Cell::from(Span::styled(
-                    row.session_reset.clone(),
-                    Style::default().fg(Color::Gray),
-                )),
-                Cell::from(bar_line(row.weekly_used)),
-                Cell::from(Span::styled(
-                    row.weekly_reset.clone(),
-                    Style::default().fg(Color::Gray),
-                )),
-                Cell::from(Span::styled(
-                    row.credits.clone(),
-                    Style::default().fg(Color::LightGreen),
-                )),
-                Cell::from(Span::styled(
-                    row.source.clone(),
-                    Style::default().fg(Color::LightBlue),
-                )),
-                Cell::from(Span::styled(
-                    row.updated.clone(),
-                    Style::default().fg(Color::DarkGray),
-                )),
-            ]);
-            let spacer = Row::new(vec![Cell::from(" "); 8]);
-            [primary, spacer]
-        });
-
-        let table = Table::new(
-            table_rows,
-            [
-                Constraint::Length(12),
-                Constraint::Length(18),
-                Constraint::Length(20),
-                Constraint::Length(18),
-                Constraint::Length(20),
-                Constraint::Length(10),
-                Constraint::Length(18),
-                Constraint::Min(8),
-            ],
-        )
-        .header(
-            Row::new([
-                Cell::from("Provider"),
-                Cell::from("Session Used"),
-                Cell::from("Session Reset"),
-                Cell::from("Weekly Used"),
-                Cell::from("Weekly Reset"),
-                Cell::from("Credits"),
-                Cell::from("Source"),
-                Cell::from("Updated"),
-            ])
-            .style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        )
-        .block(Block::default().borders(Borders::ALL).title("Usage"));
-
-        frame.render_widget(table, layout[1]);
+        let inner_width = body_area.width.saturating_sub(2);
+        let inner_height = body_area.height.saturating_sub(2);
+        let lines = all_cards_lines(&state.rows, inner_width);
+        state.content_height = lines.len() as u16;
+        state.viewport_height = inner_height;
+        if state.scroll > state.max_scroll() {
+            state.scroll = state.max_scroll();
+        }
+        let paragraph = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((state.scroll, 0))
+            .block(Block::default().borders(Borders::ALL).title("Usage"));
+        frame.render_widget(paragraph, body_area);
     }
 
     // Render errors section if there are errors

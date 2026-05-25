@@ -21,6 +21,8 @@ placement = "right"
 # Provider key shown in the waybar text. Unset = show all providers stacked.
 # Mouse scroll over the module rotates the selection.
 # primary = "claude"
+# Minimum milliseconds between scroll-triggered rotations (debounce)
+scroll_throttle_ms = 250
 
 [providers]
 # OAuth providers - set to true/false to enable/disable

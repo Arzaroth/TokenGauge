@@ -61,6 +61,7 @@ Edit `~/.config/tokengauge/config.toml`:
 | `providers.<name>.api_key` | API key for API providers | — |
 | `waybar.window` | Show `daily` or `weekly` usage | `daily` |
 | `waybar.placement` | `left` or `right` in the waybar | `right` |
+| `waybar.primary` | Provider key shown in the bar text (unset = show all) | unset |
 
 > **Note:** Waybar's `interval` controls how often the UI refreshes. Keep it shorter than `refresh_secs` so the UI updates from cache without extra API calls.
 
@@ -69,6 +70,8 @@ Edit `~/.config/tokengauge/config.toml`:
 ### Waybar
 
 The module displays per-provider usage bars. Hover for detailed tooltip with reset times.
+
+Set `waybar.primary` (e.g. `primary = "claude"`) to show only one provider in the bar text. The tooltip always lists all providers. Scrolling on the module rotates the visible provider; that choice is persisted in `<cache_dir>/tokengauge-waybar-state.json` and overrides `primary` until you scroll again.
 
 ### TUI
 

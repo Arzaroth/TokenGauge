@@ -2,5 +2,7 @@
   "exec": "tokengauge-waybar",
   "return-type": "json",
   "interval": 60,
-  "on-click": "ghostty -e tokengauge-tui"
+  "on-click": "ghostty -e tokengauge-tui",
+  "on-scroll-up": "tokengauge-waybar --rotate=next",
+  "on-scroll-down": "tokengauge-waybar --rotate=prev"
 }

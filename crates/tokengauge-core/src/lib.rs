@@ -280,6 +280,7 @@ impl ProvidersConfig {
 pub struct WaybarConfig {
     pub window: WaybarWindow,
     pub placement: WaybarPlacement,
+    pub primary: Option<String>,
 }
 
 impl Default for WaybarConfig {
@@ -287,6 +288,7 @@ impl Default for WaybarConfig {
         Self {
             window: WaybarWindow::Daily,
             placement: WaybarPlacement::default(),
+            primary: None,
         }
     }
 }
@@ -965,6 +967,43 @@ pub fn write_cache(path: &Path, payloads: &[ProviderPayload]) -> Result<()> {
 }
 
 // ============================================================================
+// Waybar State (rotation selection)
+// ============================================================================
+
+/// Persistent waybar text selection (lives next to the cache file).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WaybarState {
+    /// Provider key (lowercase, e.g. "claude") currently shown in the waybar text.
+    /// None = follow config (config.waybar.primary, else show all).
+    pub selected: Option<String>,
+    /// Unix milliseconds of the last rotation. Used to throttle rapid scroll events.
+    #[serde(default)]
+    pub last_rotated_ms: i64,
+}
+
+/// Derive the waybar-state path from the cache file path.
+pub fn waybar_state_path(cache_file: &Path) -> PathBuf {
+    let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
+    parent.join("tokengauge-waybar-state.json")
+}
+
+pub fn read_waybar_state(path: &Path) -> WaybarState {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return WaybarState::default();
+    };
+    serde_json::from_str(&contents).unwrap_or_default()
+}
+
+pub fn write_waybar_state(path: &Path, state: &WaybarState) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    let contents = serde_json::to_string(state)?;
+    fs::write(path, contents)
+        .with_context(|| format!("failed to write waybar state {}", path.display()))
+}
+
+// ============================================================================
 // ccusage Integration
 // ============================================================================
 
@@ -1139,6 +1178,9 @@ cache_file = "/tmp/tokengauge-usage.json"
 window = "daily"
 # Where to place the module: "left" or "right"
 placement = "right"
+# Provider key shown in the waybar text. Unset = show all providers stacked.
+# Mouse scroll over the module rotates the selection (overrides this until restart).
+# primary = "claude"
 
 [providers]
 # OAuth providers - set to true/false to enable/disable
@@ -1750,5 +1792,60 @@ mod tests {
             toml::from_str(r#"window = "daily""#).expect("parse partial waybar config");
         assert_eq!(config.window, WaybarWindow::Daily);
         assert_eq!(config.placement, WaybarPlacement::Right);
+        assert_eq!(config.primary, None);
+    }
+
+    #[test]
+    fn waybar_config_primary_round_trips() {
+        let config: WaybarConfig =
+            toml::from_str(r#"primary = "claude""#).expect("parse primary");
+        assert_eq!(config.primary.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn waybar_state_path_lives_next_to_cache() {
+        let cache = PathBuf::from("/tmp/foo/bar.json");
+        let state = waybar_state_path(&cache);
+        assert_eq!(state, PathBuf::from("/tmp/foo/tokengauge-waybar-state.json"));
+    }
+
+    #[test]
+    fn waybar_state_round_trips() {
+        let tmp = tempdir_for_test("waybar_state");
+        let path = tmp.join("state.json");
+        let state = WaybarState {
+            selected: Some("claude".to_string()),
+            last_rotated_ms: 12345,
+        };
+        write_waybar_state(&path, &state).expect("write state");
+        let read = read_waybar_state(&path);
+        assert_eq!(read.selected.as_deref(), Some("claude"));
+        assert_eq!(read.last_rotated_ms, 12345);
+    }
+
+    #[test]
+    fn waybar_state_legacy_without_last_rotated_parses() {
+        let tmp = tempdir_for_test("waybar_state_legacy");
+        let path = tmp.join("state.json");
+        fs::write(&path, r#"{"selected":"codex"}"#).unwrap();
+        let read = read_waybar_state(&path);
+        assert_eq!(read.selected.as_deref(), Some("codex"));
+        assert_eq!(read.last_rotated_ms, 0);
+    }
+
+    #[test]
+    fn waybar_state_missing_file_returns_default() {
+        let path = PathBuf::from("/tmp/tokengauge-state-doesnt-exist-xyz.json");
+        let _ = fs::remove_file(&path);
+        let state = read_waybar_state(&path);
+        assert_eq!(state.selected, None);
+    }
+
+    fn tempdir_for_test(prefix: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let pid = std::process::id();
+        path.push(format!("tokengauge-test-{prefix}-{pid}"));
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 }

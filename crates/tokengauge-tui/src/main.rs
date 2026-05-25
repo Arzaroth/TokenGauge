@@ -15,7 +15,7 @@ use crossterm::terminal::{
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokengauge_core::{
     CostInfo, ExtraWindowRow, FetchResult, ProviderFetchError, ProviderRow, fetch_all_providers,
@@ -23,7 +23,9 @@ use tokengauge_core::{
     write_cache_full, write_default_config,
 };
 
-const BAR_WIDTH: usize = 40;
+const MIN_BAR_WIDTH: usize = 12;
+const MAX_BAR_WIDTH: usize = 200;
+const LEFT_PAD: usize = 3;
 const DIM: Color = Color::Rgb(108, 112, 134);
 const GREEN: Color = Color::Rgb(166, 227, 161);
 const YELLOW: Color = Color::Rgb(249, 226, 175);
@@ -48,6 +50,7 @@ struct AppState {
     scroll: u16,
     content_height: u16,
     viewport_height: u16,
+    active_tab: usize,
 }
 
 impl AppState {
@@ -63,6 +66,7 @@ impl AppState {
             scroll: 0,
             content_height: 0,
             viewport_height: 0,
+            active_tab: 0,
         }
     }
 
@@ -73,6 +77,32 @@ impl AppState {
     fn scroll_by(&mut self, delta: i32) {
         let new = (self.scroll as i32 + delta).max(0) as u16;
         self.scroll = new.min(self.max_scroll());
+    }
+
+    fn next_tab(&mut self) {
+        if !self.rows.is_empty() {
+            self.active_tab = (self.active_tab + 1) % self.rows.len();
+            self.scroll = 0;
+        }
+    }
+
+    fn prev_tab(&mut self) {
+        if !self.rows.is_empty() {
+            self.active_tab = if self.active_tab == 0 {
+                self.rows.len() - 1
+            } else {
+                self.active_tab - 1
+            };
+            self.scroll = 0;
+        }
+    }
+
+    fn clamp_active_tab(&mut self) {
+        if self.rows.is_empty() {
+            self.active_tab = 0;
+        } else if self.active_tab >= self.rows.len() {
+            self.active_tab = self.rows.len() - 1;
+        }
     }
 }
 
@@ -171,6 +201,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, args: &Args) -
                 KeyCode::PageUp => state.scroll_by(-(state.viewport_height as i32)),
                 KeyCode::Char('g') | KeyCode::Home => state.scroll = 0,
                 KeyCode::Char('G') | KeyCode::End => state.scroll = state.max_scroll(),
+                KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => state.next_tab(),
+                KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => state.prev_tab(),
                 _ => {}
             }
         }
@@ -199,6 +231,7 @@ fn apply_refresh_result(state: &mut AppState, result: Result<RefreshResult>) {
             state.last_error = Some(error.to_string());
         }
     }
+    state.clamp_active_tab();
     state.last_refresh = Instant::now();
     state.status_message = None;
 }
@@ -276,10 +309,11 @@ fn provider_icon(label: &str) -> (&'static str, Color) {
     }
 }
 
-fn render_bar(percent: u8) -> (String, Color) {
+fn render_bar(percent: u8, width: usize) -> (String, Color) {
     let pct = percent.min(100);
-    let filled = (pct as usize * BAR_WIDTH).div_ceil(100);
-    let empty = BAR_WIDTH.saturating_sub(filled);
+    let width = width.clamp(MIN_BAR_WIDTH, MAX_BAR_WIDTH);
+    let filled = (pct as usize * width).div_ceil(100);
+    let empty = width.saturating_sub(filled);
     let bar = format!("{}{}", "━".repeat(filled), "─".repeat(empty));
     (bar, color_for(pct))
 }
@@ -296,17 +330,18 @@ fn format_tokens(t: u64) -> String {
     }
 }
 
-fn window_section(label: &str, used: Option<u8>, reset: &str) -> Vec<Line<'static>> {
+fn window_section(label: &str, used: Option<u8>, reset: &str, bar_width: usize) -> Vec<Line<'static>> {
+    let pad = " ".repeat(LEFT_PAD);
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled(
-        format!("  {label}"),
+        format!("{pad}{label}"),
         Style::default().fg(DIM).add_modifier(Modifier::BOLD),
     )));
     match used {
         Some(pct) => {
-            let (bar, color) = render_bar(pct);
+            let (bar, color) = render_bar(pct, bar_width);
             lines.push(Line::from(vec![
-                Span::raw("  "),
+                Span::raw(pad.clone()),
                 Span::styled(bar, Style::default().fg(color)),
             ]));
             let reset_text = if reset == "—" {
@@ -315,7 +350,7 @@ fn window_section(label: &str, used: Option<u8>, reset: &str) -> Vec<Line<'stati
                 format!("resets {reset}")
             };
             lines.push(Line::from(vec![
-                Span::raw("  "),
+                Span::raw(pad.clone()),
                 Span::styled(
                     format!("{pct}% used"),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
@@ -326,57 +361,80 @@ fn window_section(label: &str, used: Option<u8>, reset: &str) -> Vec<Line<'stati
         }
         None => {
             lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled("─".repeat(BAR_WIDTH), Style::default().fg(DIM)),
+                Span::raw(pad.clone()),
+                Span::styled(
+                    "─".repeat(bar_width.clamp(MIN_BAR_WIDTH, MAX_BAR_WIDTH)),
+                    Style::default().fg(DIM),
+                ),
             ]));
-            lines.push(Line::from(Span::styled(
-                "  no data",
-                Style::default().fg(DIM),
-            )));
+            lines.push(Line::from(vec![
+                Span::raw(pad.clone()),
+                Span::styled("no data", Style::default().fg(DIM)),
+            ]));
         }
     }
     lines
 }
 
-fn extra_window_line(extra: &ExtraWindowRow) -> Line<'static> {
-    let title = format!("{:<14}", truncate(&extra.title, 14));
-    const EXTRA_BAR: usize = 20;
+fn extra_window_lines(extra: &ExtraWindowRow, bar_width: usize) -> Vec<Line<'static>> {
+    let pad = " ".repeat(LEFT_PAD);
+    let title = pango_safe_truncate(&extra.title, 32);
+    let mut lines = Vec::new();
+    lines.push(Line::from(vec![
+        Span::raw(pad.clone()),
+        Span::styled(
+            title,
+            Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+        ),
+    ]));
     match extra.used {
         Some(pct) => {
-            let pct = pct.min(100);
-            let filled = (pct as usize * EXTRA_BAR).div_ceil(100);
-            let empty = EXTRA_BAR.saturating_sub(filled);
-            let bar = format!("{}{}", "━".repeat(filled), "─".repeat(empty));
-            let color = color_for(pct);
+            let (bar, color) = render_bar(pct, bar_width);
+            lines.push(Line::from(vec![
+                Span::raw(pad.clone()),
+                Span::styled(bar, Style::default().fg(color)),
+            ]));
             let trailing = if extra.reset == "—" {
                 if pct == 0 {
                     String::new()
                 } else {
-                    "  not started".to_string()
+                    "not started".to_string()
                 }
             } else {
-                format!("  resets {}", extra.reset)
+                format!("resets {}", extra.reset)
             };
-            Line::from(vec![
-                Span::raw("  "),
-                Span::raw(title),
-                Span::styled(bar, Style::default().fg(color)),
-                Span::raw("  "),
+            let mut spans = vec![
+                Span::raw(pad.clone()),
                 Span::styled(
-                    format!("{pct:>3}%"),
+                    format!("{pct}% used"),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(trailing, Style::default().fg(DIM)),
-            ])
+            ];
+            if !trailing.is_empty() {
+                spans.push(Span::raw("   "));
+                spans.push(Span::styled(trailing, Style::default().fg(DIM)));
+            }
+            lines.push(Line::from(spans));
         }
-        None => Line::from(vec![
-            Span::raw("  "),
-            Span::raw(title),
-            Span::styled("─".repeat(EXTRA_BAR), Style::default().fg(DIM)),
-            Span::raw("    "),
-            Span::styled("no data", Style::default().fg(DIM)),
-        ]),
+        None => {
+            lines.push(Line::from(vec![
+                Span::raw(pad.clone()),
+                Span::styled(
+                    "─".repeat(bar_width.clamp(MIN_BAR_WIDTH, MAX_BAR_WIDTH)),
+                    Style::default().fg(DIM),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw(pad.clone()),
+                Span::styled("no data", Style::default().fg(DIM)),
+            ]));
+        }
     }
+    lines
+}
+
+fn pango_safe_truncate(s: &str, max: usize) -> String {
+    truncate(s, max)
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -389,9 +447,10 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
+    let pad = " ".repeat(LEFT_PAD);
     vec![
         Line::from(vec![
-            Span::raw("  "),
+            Span::raw(pad.clone()),
             Span::styled("Today", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw("      "),
             Span::styled(
@@ -404,7 +463,7 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
             ),
         ]),
         Line::from(vec![
-            Span::raw("  "),
+            Span::raw(pad.clone()),
             Span::styled("Month", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw("      "),
             Span::styled(
@@ -419,11 +478,14 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
     ]
 }
 
-fn provider_card_lines(row: &ProviderRow) -> Vec<Line<'static>> {
+fn provider_card_lines(row: &ProviderRow, inner_width: u16) -> Vec<Line<'static>> {
+    let pad = " ".repeat(LEFT_PAD);
+    let bar_width = (inner_width as usize).saturating_sub(LEFT_PAD * 2 + 2);
     let mut lines = Vec::new();
 
     let (icon, icon_color) = provider_icon(&row.provider);
     let mut header = vec![
+        Span::raw(pad.clone()),
         Span::styled(format!("{icon}  "), Style::default().fg(icon_color)),
         Span::styled(
             row.provider.clone(),
@@ -441,49 +503,68 @@ fn provider_card_lines(row: &ProviderRow) -> Vec<Line<'static>> {
     if let Some(iso) = row.updated_iso.as_deref()
         && let Some(rel) = format_updated_relative(iso)
     {
-        lines.push(Line::from(Span::styled(
-            format!("   Updated {rel}"),
-            Style::default().fg(DIM),
-        )));
+        lines.push(Line::from(vec![
+            Span::raw(pad.clone()),
+            Span::raw("   "),
+            Span::styled(format!("Updated {rel}"), Style::default().fg(DIM)),
+        ]));
     }
 
     lines.push(Line::from(""));
-    lines.extend(window_section("Session", row.session_used, &row.session_reset));
+    lines.extend(window_section(
+        "Session",
+        row.session_used,
+        &row.session_reset,
+        bar_width,
+    ));
     lines.push(Line::from(""));
-    lines.extend(window_section("Weekly", row.weekly_used, &row.weekly_reset));
+    lines.extend(window_section(
+        "Weekly",
+        row.weekly_used,
+        &row.weekly_reset,
+        bar_width,
+    ));
     if row.tertiary_used.is_some() || row.tertiary_reset != "—" {
         lines.push(Line::from(""));
         lines.extend(window_section(
             "Tertiary",
             row.tertiary_used,
             &row.tertiary_reset,
+            bar_width,
         ));
     }
 
     if !row.extra_windows.is_empty() {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  Extra usage",
-            Style::default().fg(DIM).add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(vec![
+            Span::raw(pad.clone()),
+            Span::styled(
+                "Extra usage",
+                Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+            ),
+        ]));
         for extra in &row.extra_windows {
-            lines.push(extra_window_line(extra));
+            lines.push(Line::from(""));
+            lines.extend(extra_window_lines(extra, bar_width));
         }
     }
 
     if let Some(cost) = &row.cost {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  Cost",
-            Style::default().fg(DIM).add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(vec![
+            Span::raw(pad.clone()),
+            Span::styled(
+                "Cost",
+                Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+            ),
+        ]));
         lines.extend(cost_lines(cost));
     }
 
     if row.credits != "—" && !row.credits.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::raw("  "),
+            Span::raw(pad.clone()),
             Span::styled("Credits", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw("    "),
             Span::styled(format!("${}", row.credits), Style::default().fg(GREEN)),
@@ -493,22 +574,17 @@ fn provider_card_lines(row: &ProviderRow) -> Vec<Line<'static>> {
     lines
 }
 
-fn all_cards_lines(rows: &[ProviderRow], width: u16) -> Vec<Line<'static>> {
-    let mut out = Vec::new();
-    let sep_len = (width as usize).saturating_sub(2).min(80);
-    let separator = "─".repeat(sep_len);
-    for (i, row) in rows.iter().enumerate() {
-        if i > 0 {
-            out.push(Line::from(""));
-            out.push(Line::from(Span::styled(
-                format!(" {separator}"),
-                Style::default().fg(DIM),
-            )));
-            out.push(Line::from(""));
-        }
-        out.extend(provider_card_lines(row));
-    }
-    out
+fn tab_titles(rows: &[ProviderRow]) -> Vec<Line<'static>> {
+    rows.iter()
+        .map(|row| {
+            let (icon, color) = provider_icon(&row.provider);
+            Line::from(vec![
+                Span::styled(icon.to_string(), Style::default().fg(color)),
+                Span::raw("  "),
+                Span::raw(row.provider.clone()),
+            ])
+        })
+        .collect()
 }
 
 fn draw_ui(frame: &mut ratatui::Frame, state: &mut AppState, is_refreshing: bool) {
@@ -576,9 +652,29 @@ fn draw_ui(frame: &mut ratatui::Frame, state: &mut AppState, is_refreshing: bool
         state.content_height = 0;
         state.viewport_height = body_area.height.saturating_sub(2);
     } else {
-        let inner_width = body_area.width.saturating_sub(2);
-        let inner_height = body_area.height.saturating_sub(2);
-        let lines = all_cards_lines(&state.rows, inner_width);
+        let outer = Block::default().borders(Borders::ALL).title("Usage");
+        let inner_area = outer.inner(body_area);
+        frame.render_widget(outer, body_area);
+
+        let panes = Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).split(inner_area);
+
+        let tabs = Tabs::new(tab_titles(&state.rows))
+            .select(state.active_tab)
+            .block(Block::default().borders(Borders::BOTTOM))
+            .style(Style::default().fg(DIM))
+            .highlight_style(
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .divider("  ");
+        frame.render_widget(tabs, panes[0]);
+
+        let card_area = panes[1];
+        let inner_width = card_area.width;
+        let inner_height = card_area.height;
+        let row = &state.rows[state.active_tab];
+        let lines = provider_card_lines(row, inner_width);
         state.content_height = lines.len() as u16;
         state.viewport_height = inner_height;
         if state.scroll > state.max_scroll() {
@@ -586,9 +682,8 @@ fn draw_ui(frame: &mut ratatui::Frame, state: &mut AppState, is_refreshing: bool
         }
         let paragraph = Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .scroll((state.scroll, 0))
-            .block(Block::default().borders(Borders::ALL).title("Usage"));
-        frame.render_widget(paragraph, body_area);
+            .scroll((state.scroll, 0));
+        frame.render_widget(paragraph, card_area);
     }
 
     // Render errors section if there are errors

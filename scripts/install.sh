@@ -202,7 +202,9 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
         "exec": "tokengauge-waybar",
         "return-type": "json",
         "interval": 60,
-        "on-click": "omarchy-launch-or-focus-tui tokengauge-tui"
+        "on-click": "omarchy-launch-or-focus-tui tokengauge-tui",
+        "on-scroll-up": "tokengauge-waybar --rotate=next",
+        "on-scroll-down": "tokengauge-waybar --rotate=prev"
       }
     '
   else
@@ -210,7 +212,9 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
       ."custom/tokengauge" = {
         "exec": "tokengauge-waybar",
         "return-type": "json",
-        "interval": 60
+        "interval": 60,
+        "on-scroll-up": "tokengauge-waybar --rotate=next",
+        "on-scroll-down": "tokengauge-waybar --rotate=prev"
       }
     '
   fi

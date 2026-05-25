@@ -210,11 +210,17 @@ fn maybe_refresh(
     };
 
     if stale {
+        let prior_costs = read_cache_full(&config.cache_file)
+            .map(|c| c.costs())
+            .unwrap_or_default();
         let FetchResult {
             payloads,
             errors,
-            costs,
+            mut costs,
         } = fetch_all_providers(config);
+        if costs.is_empty() && !prior_costs.is_empty() {
+            costs = prior_costs;
+        }
         write_cache_full(&config.cache_file, &payloads, &errors, &costs)?;
         Ok((payloads, costs))
     } else {

@@ -111,7 +111,7 @@ install -m 0755 "$TMP_DIR/tokengauge-tui" "$INSTALL_DIR/tokengauge-tui"
 EXISTING_PLACEMENT=""
 if [[ -f "$CONFIG_FILE" ]]; then
   EXISTING_PLACEMENT=$(grep -E '^\s*placement\s*=' "$CONFIG_FILE" 2>/dev/null \
-    | sed -E 's/.*=\s*"?([a-z]+)"?.*/\1/' | head -n1)
+    | sed -E 's/.*=\s*"?([a-z]+)"?.*/\1/' | head -n1 || true)
 fi
 PLACEMENT="${PLACEMENT_OVERRIDE:-${EXISTING_PLACEMENT:-right}}"
 info "Placement: $PLACEMENT"

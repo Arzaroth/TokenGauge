@@ -110,8 +110,12 @@ install -m 0755 "$TMP_DIR/tokengauge-tui" "$INSTALL_DIR/tokengauge-tui"
 
 EXISTING_PLACEMENT=""
 if [[ -f "$CONFIG_FILE" ]]; then
-  EXISTING_PLACEMENT=$(grep -E '^\s*placement\s*=' "$CONFIG_FILE" 2>/dev/null \
-    | sed -E 's/.*=\s*"?([a-z]+)"?.*/\1/' | head -n1 || true)
+  EXISTING_PLACEMENT=$(awk '
+    /^\s*\[/         { in_waybar = ($0 ~ /^\s*\[waybar\]\s*$/); next }
+    in_waybar && /^\s*placement\s*=/ {
+      sub(/.*=\s*"?/, ""); sub(/"?\s*(#.*)?$/, ""); print; exit
+    }
+  ' "$CONFIG_FILE" 2>/dev/null || true)
 fi
 PLACEMENT="${PLACEMENT_OVERRIDE:-${EXISTING_PLACEMENT:-right}}"
 info "Placement: $PLACEMENT"
@@ -133,12 +137,37 @@ window = "daily" # daily | weekly
 placement = "$PLACEMENT" # left | right
 TOML
 else
-  if grep -qE '^\s*placement\s*=' "$CONFIG_FILE"; then
-    sed -i -E "s@^(\s*placement\s*=).*@\1 \"$PLACEMENT\"@" "$CONFIG_FILE"
-  elif grep -qE '^\s*\[waybar\]' "$CONFIG_FILE"; then
-    sed -i -E "/^\s*\[waybar\]/a placement = \"$PLACEMENT\"" "$CONFIG_FILE"
-  else
-    printf '\n[waybar]\nplacement = "%s"\n' "$PLACEMENT" >> "$CONFIG_FILE"
+  tmp=$(mktemp)
+  PLACEMENT="$PLACEMENT" awk '
+    BEGIN { in_waybar = 0; updated = 0; have_waybar = 0 }
+    /^\s*\[waybar\]\s*$/ { in_waybar = 1; have_waybar = 1; print; next }
+    /^\s*\[/             { in_waybar = 0; print; next }
+    in_waybar && /^\s*placement\s*=/ {
+      print "placement = \"" ENVIRON["PLACEMENT"] "\""
+      updated = 1
+      next
+    }
+    { print }
+    END {
+      if (!have_waybar) {
+        print ""
+        print "[waybar]"
+        print "placement = \"" ENVIRON["PLACEMENT"] "\""
+      } else if (!updated) {
+        # [waybar] section exists but no placement line - append at EOF as a fresh section is risky
+        # Re-emit a placement line under a synthetic header is hard in single-pass; second pass handles it
+      }
+    }
+  ' "$CONFIG_FILE" > "$tmp"
+  mv "$tmp" "$CONFIG_FILE"
+  # Second pass: if [waybar] existed but lacked placement, insert after the header
+  if ! grep -qE '^\s*placement\s*=' "$CONFIG_FILE"; then
+    tmp=$(mktemp)
+    PLACEMENT="$PLACEMENT" awk '
+      /^\s*\[waybar\]\s*$/ { print; print "placement = \"" ENVIRON["PLACEMENT"] "\""; next }
+      { print }
+    ' "$CONFIG_FILE" > "$tmp"
+    mv "$tmp" "$CONFIG_FILE"
   fi
 fi
 

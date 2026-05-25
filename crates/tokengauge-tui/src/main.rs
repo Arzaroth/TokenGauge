@@ -20,7 +20,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use tokengauge_core::{
     CostInfo, ExtraWindowRow, FetchResult, ProviderFetchError, ProviderRow, fetch_all_providers,
     format_updated_relative, load_config, payload_to_rows_with_costs, read_cache_full,
-    write_cache_full, write_default_config,
+    read_waybar_state, waybar_state_path, write_cache_full, write_default_config,
 };
 
 const MIN_BAR_WIDTH: usize = 12;
@@ -51,6 +51,7 @@ struct AppState {
     content_height: u16,
     viewport_height: u16,
     active_tab: usize,
+    initial_provider: Option<String>,
 }
 
 impl AppState {
@@ -67,6 +68,7 @@ impl AppState {
             content_height: 0,
             viewport_height: 0,
             active_tab: 0,
+            initial_provider: None,
         }
     }
 
@@ -148,7 +150,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, args: &Args) -
         PathBuf::from("/tmp/tokengauge-usage.json")
     };
 
-    let mut state = AppState::new(cache_file);
+    let mut state = AppState::new(cache_file.clone());
+    state.initial_provider = read_waybar_state(&waybar_state_path(&cache_file)).selected;
     let mut pending_refresh = Some(spawn_refresh(args, false));
     let mut last_cache_poll = Instant::now();
 
@@ -229,6 +232,16 @@ fn apply_refresh_result(state: &mut AppState, result: Result<RefreshResult>) {
             state.rows.clear();
             state.errors.clear();
             state.last_error = Some(error.to_string());
+        }
+    }
+    if let Some(provider) = state.initial_provider.take() {
+        let lower = provider.to_lowercase();
+        if let Some(idx) = state
+            .rows
+            .iter()
+            .position(|r| r.provider.to_lowercase() == lower)
+        {
+            state.active_tab = idx;
         }
     }
     state.clamp_active_tab();

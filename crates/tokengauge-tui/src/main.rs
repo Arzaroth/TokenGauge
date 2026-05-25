@@ -137,21 +137,26 @@ fn main() -> Result<()> {
 }
 
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, args: &Args) -> Result<()> {
-    // Load config to get cache file path
+    // Load config for cache file path and primary provider
     let config_path = args
         .config
         .clone()
         .unwrap_or_else(tokengauge_core::default_config_path);
-    let cache_file = if config_path.exists() {
-        load_config(Some(config_path))
-            .map(|c| c.cache_file)
-            .unwrap_or_else(|_| PathBuf::from("/tmp/tokengauge-usage.json"))
+    let loaded_config = if config_path.exists() {
+        load_config(Some(config_path)).ok()
     } else {
-        PathBuf::from("/tmp/tokengauge-usage.json")
+        None
     };
+    let cache_file = loaded_config
+        .as_ref()
+        .map(|c| c.cache_file.clone())
+        .unwrap_or_else(|| PathBuf::from("/tmp/tokengauge-usage.json"));
+    let config_primary = loaded_config.and_then(|c| c.waybar.primary);
 
     let mut state = AppState::new(cache_file.clone());
-    state.initial_provider = read_waybar_state(&waybar_state_path(&cache_file)).selected;
+    state.initial_provider = read_waybar_state(&waybar_state_path(&cache_file))
+        .selected
+        .or(config_primary);
     let mut pending_refresh = Some(spawn_refresh(args, false));
     let mut last_cache_poll = Instant::now();
 

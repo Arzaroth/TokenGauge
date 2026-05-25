@@ -25,11 +25,12 @@ struct WaybarOutput {
 }
 
 fn format_bar(label: &str, value: Option<u8>) -> String {
+    let icon = provider_icon(label);
     let (bars, percent) = match value {
         Some(percent) => (bar_blocks(percent), format!("{percent}%")),
         None => ("—".to_string(), "—".to_string()),
     };
-    format!("{label} {bars} {percent}")
+    format!("{icon} {label} {bars} {percent}")
 }
 
 fn bar_blocks(percent: u8) -> String {
@@ -88,13 +89,10 @@ fn main() -> Result<()> {
             format_bar(&row.provider, used)
         })
         .collect::<Vec<_>>()
-        .join("  ");
+        .join("   ");
+    let text = format!("   {text}");
 
-    let tooltip = rows
-        .iter()
-        .map(format_provider_card)
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    let tooltip = format_tooltip_cards(&rows);
 
     let output = WaybarOutput {
         text,
@@ -147,10 +145,10 @@ fn tooltip_bar(percent: u8) -> String {
     let filled = (percent.min(100) / 10) as usize;
     let mut bar = String::with_capacity(30);
     for _ in 0..filled {
-        bar.push('█');
+        bar.push('━');
     }
     for _ in filled..10 {
-        bar.push('░');
+        bar.push('─');
     }
     bar
 }
@@ -164,6 +162,19 @@ fn color_for(percent: u8) -> &'static str {
 }
 
 const DIM_COLOR: &str = "#6c7086";
+const SEPARATOR_COLOR: &str = "#45475a";
+
+fn provider_icon(label: &str) -> &'static str {
+    match label.to_lowercase().as_str() {
+        "claude" => "✦",
+        "codex" => "◆",
+        "copilot" => "❖",
+        "kimi" | "kimi k2" => "★",
+        "z.ai" | "zai" => "▲",
+        "minimax" => "▼",
+        _ => "●",
+    }
+}
 
 fn format_provider_line(label: &str, used: Option<u8>, reset: &str) -> String {
     match used {
@@ -177,22 +188,49 @@ fn format_provider_line(label: &str, used: Option<u8>, reset: &str) -> String {
                 format!("resets {}", pango_escape(reset))
             };
             format!(
-                "  {label:<7}  [{bar}]  <span foreground=\"{color}\">{pct_cell}</span>   {reset_part}"
+                "  {label:<7}  [<span foreground=\"{color}\">{bar}</span>]  <span foreground=\"{color}\">{pct_cell}</span>   {reset_part}"
             )
         }
         None => {
             format!(
-                "  {label:<7}  <span foreground=\"{DIM_COLOR}\">[\u{2014}]</span>          no data"
+                "  {label:<7}  [<span foreground=\"{DIM_COLOR}\">──────────</span>]          no data"
             )
         }
     }
 }
 
+fn format_credits_line(credits: &str) -> Option<String> {
+    if credits == "—" || credits.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "  Credits  <span foreground=\"{DIM_COLOR}\">${}</span>",
+        pango_escape(credits)
+    ))
+}
+
 fn format_provider_card(row: &ProviderRow) -> String {
     let name = pango_escape(&row.provider);
+    let icon = provider_icon(&row.provider);
     let session = format_provider_line("Session", row.session_used, &row.session_reset);
     let weekly = format_provider_line("Weekly", row.weekly_used, &row.weekly_reset);
-    format!("<tt><b>{name}</b>\n{session}\n{weekly}</tt>")
+    let mut lines = vec![
+        format!("<b>{icon}  {name}</b>"),
+        session,
+        weekly,
+    ];
+    if let Some(credits) = format_credits_line(&row.credits) {
+        lines.push(credits);
+    }
+    format!("<tt>{}</tt>", lines.join("\n"))
+}
+
+fn format_tooltip_cards(rows: &[ProviderRow]) -> String {
+    let cards: Vec<String> = rows.iter().map(format_provider_card).collect();
+    let separator = format!(
+        "<tt><span foreground=\"{SEPARATOR_COLOR}\">────────────────────────────────────</span></tt>"
+    );
+    cards.join(&format!("\n{separator}\n"))
 }
 
 // ============================================================================
@@ -245,12 +283,13 @@ mod tests {
         assert!(result.contains("Claude"));
         assert!(result.contains("42%"));
         assert!(result.contains("▁▂▃")); // 41-60% range
+        assert!(result.starts_with("✦"));
     }
 
     #[test]
     fn format_bar_none() {
         let result = format_bar("Codex", None);
-        assert_eq!(result, "Codex — —");
+        assert_eq!(result, "◆ Codex — —");
     }
 
     // ------------------------------------------------------------------------
@@ -262,15 +301,15 @@ mod tests {
         assert_eq!(tooltip_bar(0).chars().count(), 10);
         assert_eq!(tooltip_bar(100).chars().count(), 10);
         assert_eq!(tooltip_bar(67).chars().count(), 10);
-        assert_eq!(tooltip_bar(0), "░░░░░░░░░░");
-        assert_eq!(tooltip_bar(100), "██████████");
-        assert_eq!(tooltip_bar(67), "██████░░░░");
+        assert_eq!(tooltip_bar(0), "──────────");
+        assert_eq!(tooltip_bar(100), "━━━━━━━━━━");
+        assert_eq!(tooltip_bar(67), "━━━━━━────");
     }
 
     #[test]
     fn tooltip_bar_clamps_over_100() {
         assert_eq!(tooltip_bar(200).chars().count(), 10);
-        assert_eq!(tooltip_bar(200), "██████████");
+        assert_eq!(tooltip_bar(200), "━━━━━━━━━━");
     }
 
     // ------------------------------------------------------------------------
@@ -322,12 +361,13 @@ mod tests {
     #[test]
     fn format_provider_card_full_data() {
         let card = format_provider_card(&sample_row("Claude"));
-        assert!(card.starts_with("<tt><b>Claude</b>\n"));
+        assert!(card.starts_with("<tt><b>"));
+        assert!(card.contains("Claude</b>"));
         assert!(card.ends_with("</tt>"));
         assert!(card.contains("Session"));
         assert!(card.contains("Weekly"));
-        assert!(card.contains("██████░░░░"));
-        assert!(card.contains("█░░░░░░░░░"));
+        assert!(card.contains("━━━━━━────"));
+        assert!(card.contains("━─────────"));
         assert!(card.contains("<span foreground=\"#f9e2af\"> 67%</span>"));
         assert!(card.contains("<span foreground=\"#a6e3a1\"> 19%</span>"));
         assert!(card.contains("resets in 2h 34m"));
@@ -340,10 +380,10 @@ mod tests {
         row.session_used = None;
         row.session_reset = "—".to_string();
         let card = format_provider_card(&row);
-        assert!(card.contains("<b>Codex</b>"));
-        assert!(card.contains("[\u{2014}]"));
+        assert!(card.contains("Codex</b>"));
+        assert!(card.contains("──────────"));
         assert!(card.contains("no data"));
-        assert!(card.contains("█░░░░░░░░░"));
+        assert!(card.contains("━─────────"));
         assert!(card.contains("resets in 4d 11h"));
     }
 
@@ -360,8 +400,8 @@ mod tests {
     fn format_provider_card_escapes_provider_name() {
         let row = sample_row("ev<il>");
         let card = format_provider_card(&row);
-        assert!(card.contains("<b>ev&lt;il&gt;</b>"));
-        assert!(!card.contains("<b>ev<il></b>"));
+        assert!(card.contains("ev&lt;il&gt;</b>"));
+        assert!(!card.contains("ev<il></b>"));
     }
 
     #[test]
@@ -373,13 +413,43 @@ mod tests {
     }
 
     #[test]
-    fn tooltip_joins_cards_with_blank_line() {
+    fn format_provider_card_includes_icon() {
+        let card = format_provider_card(&sample_row("Claude"));
+        assert!(card.contains("✦"));
+        let codex_card = format_provider_card(&sample_row("Codex"));
+        assert!(codex_card.contains("◆"));
+        let mut other = sample_row("Mystery");
+        other.provider = "Mystery".to_string();
+        let card = format_provider_card(&other);
+        assert!(card.contains("●"));
+    }
+
+    #[test]
+    fn format_provider_card_omits_credits_when_dash() {
+        let card = format_provider_card(&sample_row("Claude"));
+        assert!(!card.contains("Credits"));
+    }
+
+    #[test]
+    fn format_provider_card_includes_credits_when_present() {
+        let mut row = sample_row("Kimi");
+        row.credits = "42.57".to_string();
+        let card = format_provider_card(&row);
+        assert!(card.contains("Credits"));
+        assert!(card.contains("$42.57"));
+    }
+
+    #[test]
+    fn format_tooltip_cards_joins_with_separator() {
         let rows = vec![sample_row("Claude"), sample_row("Codex")];
-        let joined = rows
-            .iter()
-            .map(format_provider_card)
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        assert!(joined.contains("</tt>\n\n<tt>"));
+        let tooltip = format_tooltip_cards(&rows);
+        assert!(tooltip.contains("</tt>\n<tt>"));
+        assert!(tooltip.contains("────────────────────────────────────"));
+    }
+
+    #[test]
+    fn format_tooltip_cards_single_card_no_separator() {
+        let tooltip = format_tooltip_cards(&[sample_row("Claude")]);
+        assert!(!tooltip.contains("────────────────────────────────────"));
     }
 }

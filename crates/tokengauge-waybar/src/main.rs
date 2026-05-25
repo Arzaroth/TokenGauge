@@ -102,21 +102,20 @@ fn main() -> Result<()> {
         .selected
         .as_deref()
         .or(config.waybar.primary.as_deref());
-    let visible_rows: Vec<ProviderRow> = match selected_key {
+    let visible_rows: Vec<&ProviderRow> = match selected_key {
         Some(key) => {
             let lower = key.to_lowercase();
-            let matched: Vec<ProviderRow> = rows
+            let matched: Vec<&ProviderRow> = rows
                 .iter()
                 .filter(|r| r.provider.to_lowercase() == lower)
-                .cloned()
                 .collect();
             if matched.is_empty() {
-                rows.clone()
+                rows.iter().collect()
             } else {
                 matched
             }
         }
-        None => rows.clone(),
+        None => rows.iter().collect(),
     };
 
     let text = visible_rows
@@ -434,8 +433,8 @@ fn format_provider_card(row: &ProviderRow) -> String {
     format!("<tt>{}</tt>", lines.join("\n"))
 }
 
-fn format_tooltip_cards(rows: &[ProviderRow]) -> String {
-    let cards: Vec<String> = rows.iter().map(format_provider_card).collect();
+fn format_tooltip_cards(rows: &[&ProviderRow]) -> String {
+    let cards: Vec<String> = rows.iter().map(|row| format_provider_card(row)).collect();
     let separator = format!(
         "<tt><span foreground=\"{SEPARATOR_COLOR}\">────────────────────────────────────</span></tt>"
     );
@@ -670,14 +669,16 @@ mod tests {
     #[test]
     fn format_tooltip_cards_joins_with_separator() {
         let rows = vec![sample_row("Claude"), sample_row("Codex")];
-        let tooltip = format_tooltip_cards(&rows);
+        let refs: Vec<&ProviderRow> = rows.iter().collect();
+        let tooltip = format_tooltip_cards(&refs);
         assert!(tooltip.contains("</tt>\n<tt>"));
         assert!(tooltip.contains("────────────────────────────────────"));
     }
 
     #[test]
     fn format_tooltip_cards_single_card_no_separator() {
-        let tooltip = format_tooltip_cards(&[sample_row("Claude")]);
+        let row = sample_row("Claude");
+        let tooltip = format_tooltip_cards(&[&row]);
         assert!(!tooltip.contains("────────────────────────────────────"));
     }
 }

@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::mpsc;
+use std::process::{Command, Output};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Local, Utc};
@@ -598,6 +598,57 @@ pub fn default_config_path() -> PathBuf {
 // Fetching Logic
 // ============================================================================
 
+/// Run a subprocess with a hard timeout. On timeout, kills the child so it
+/// does not leak. Captures stdout/stderr in background threads to avoid
+/// deadlocking on full pipes.
+fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<Output> {
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to spawn subprocess")?;
+
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+    let stdout_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(ref mut s) = stdout_pipe {
+            let _ = s.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let stderr_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(ref mut s) = stderr_pipe {
+            let _ = s.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait().context("subprocess wait failed")? {
+            Some(status) => {
+                let stdout = stdout_handle.join().unwrap_or_default();
+                let stderr = stderr_handle.join().unwrap_or_default();
+                return Ok(Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(anyhow!("timeout after {:?}", timeout));
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}
+
 /// Fetch a single provider using codexbar.
 pub fn fetch_single_provider(
     codexbar_bin: &str,
@@ -625,24 +676,9 @@ pub fn fetch_single_provider(
         command.env(env_var, api_key);
     }
 
-    // Run with timeout using a separate thread
-    let (tx, rx) = mpsc::channel();
-    let child = command
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .with_context(|| format!("failed to spawn codexbar for {}", provider.name))?;
-
     let provider_name = provider.name.clone();
-    thread::spawn(move || {
-        let result = child.wait_with_output();
-        let _ = tx.send(result);
-    });
-
-    let output = rx
-        .recv_timeout(timeout)
-        .map_err(|_| anyhow!("timeout after {:?}", timeout))?
-        .with_context(|| format!("failed to run codexbar for {}", provider_name))?;
+    let output = run_with_timeout(command, timeout)
+        .with_context(|| format!("failed to run codexbar for {provider_name}"))?;
 
     if !output.status.success() {
         // Try to parse JSON error from stdout first
@@ -1087,26 +1123,9 @@ fn aggregate_ccusage(response: &CcusageDailyResponse) -> HashMap<String, (f64, u
 }
 
 fn run_ccusage(args: &[&str], timeout: Duration) -> Result<CcusageDailyResponse> {
-    let (tx, rx) = mpsc::channel();
-    let child = Command::new("npx")
-        .arg("--yes")
-        .arg("ccusage")
-        .args(args)
-        .arg("--json")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .context("failed to spawn ccusage (is npx installed?)")?;
-
-    thread::spawn(move || {
-        let result = child.wait_with_output();
-        let _ = tx.send(result);
-    });
-
-    let output = rx
-        .recv_timeout(timeout)
-        .map_err(|_| anyhow!("ccusage timeout after {:?}", timeout))?
-        .context("ccusage process failed")?;
+    let mut command = Command::new("npx");
+    command.arg("--yes").arg("ccusage").args(args).arg("--json");
+    let output = run_with_timeout(command, timeout).context("ccusage failed")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

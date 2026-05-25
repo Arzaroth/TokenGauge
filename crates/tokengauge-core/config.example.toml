@@ -16,6 +16,8 @@ cache_file = "/tmp/tokengauge-usage.json"
 [waybar]
 # Which window to show in waybar: "daily" or "weekly"
 window = "daily"
+# Where to place the module: "left" or "right"
+placement = "right"
 
 [providers]
 # OAuth providers - set to true/false to enable/disable

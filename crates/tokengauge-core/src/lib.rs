@@ -264,12 +264,14 @@ impl ProvidersConfig {
 #[serde(default)]
 pub struct WaybarConfig {
     pub window: WaybarWindow,
+    pub placement: WaybarPlacement,
 }
 
 impl Default for WaybarConfig {
     fn default() -> Self {
         Self {
             window: WaybarWindow::Daily,
+            placement: WaybarPlacement::default(),
         }
     }
 }
@@ -280,6 +282,14 @@ pub enum WaybarWindow {
     #[default]
     Daily,
     Weekly,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WaybarPlacement {
+    Left,
+    #[default]
+    Right,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -872,6 +882,8 @@ cache_file = "/tmp/tokengauge-usage.json"
 [waybar]
 # Which window to show in waybar: "daily" or "weekly"
 window = "daily"
+# Where to place the module: "left" or "right"
+placement = "right"
 
 [providers]
 # OAuth providers - set to true/false to enable/disable
@@ -1446,6 +1458,7 @@ mod tests {
     fn waybar_config_default() {
         let config = WaybarConfig::default();
         assert_eq!(config.window, WaybarWindow::Daily);
+        assert_eq!(config.placement, WaybarPlacement::Right);
     }
 
     #[test]
@@ -1455,5 +1468,29 @@ mod tests {
         assert_eq!(config.refresh_secs, 600);
         assert!(config.providers.codex.unwrap_or(false));
         assert!(config.providers.claude.unwrap_or(false));
+    }
+
+    #[test]
+    fn waybar_config_default_placement_is_right() {
+        assert_eq!(WaybarPlacement::default(), WaybarPlacement::Right);
+    }
+
+    #[test]
+    fn waybar_placement_deserializes_lowercase() {
+        let left: WaybarConfig =
+            toml::from_str(r#"placement = "left""#).expect("parse left placement");
+        assert_eq!(left.placement, WaybarPlacement::Left);
+
+        let right: WaybarConfig =
+            toml::from_str(r#"placement = "right""#).expect("parse right placement");
+        assert_eq!(right.placement, WaybarPlacement::Right);
+    }
+
+    #[test]
+    fn waybar_config_missing_placement_field_defaults_to_right() {
+        let config: WaybarConfig =
+            toml::from_str(r#"window = "daily""#).expect("parse partial waybar config");
+        assert_eq!(config.window, WaybarWindow::Daily);
+        assert_eq!(config.placement, WaybarPlacement::Right);
     }
 }

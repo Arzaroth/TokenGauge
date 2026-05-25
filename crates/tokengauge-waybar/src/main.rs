@@ -59,7 +59,7 @@ fn main() -> Result<()> {
         Err(error) => {
             let output = WaybarOutput {
                 text: "⟂".into(),
-                tooltip: format!("TokenGauge: {error}"),
+                tooltip: format!("<tt>TokenGauge: {}</tt>", pango_escape(&error.to_string())),
                 class: "tokengauge-error".into(),
             };
             println!("{}", serde_json::to_string(&output)?);
@@ -71,7 +71,7 @@ fn main() -> Result<()> {
     if rows.is_empty() {
         let output = WaybarOutput {
             text: "—".into(),
-            tooltip: "TokenGauge: no providers".into(),
+            tooltip: "<tt>TokenGauge: no providers</tt>".into(),
             class: "tokengauge-empty".into(),
         };
         println!("{}", serde_json::to_string(&output)?);
@@ -92,9 +92,9 @@ fn main() -> Result<()> {
 
     let tooltip = rows
         .iter()
-        .map(format_tooltip)
+        .map(format_provider_card)
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n\n");
 
     let output = WaybarOutput {
         text,
@@ -128,19 +128,71 @@ fn maybe_refresh(config: &TokenGaugeConfig) -> Result<Vec<ProviderPayload>> {
     }
 }
 
-fn format_tooltip(row: &ProviderRow) -> String {
-    let session = row
-        .session_used
-        .map(|used| format!("Session {used}% used"))
-        .unwrap_or_else(|| "Session —".into());
-    let weekly = row
-        .weekly_used
-        .map(|used| format!("Weekly {used}% used"))
-        .unwrap_or_else(|| "Weekly —".into());
-    format!(
-        "{}: {} (resets {}) | {} (resets {})",
-        row.provider, session, row.session_reset, weekly, row.weekly_reset
-    )
+fn pango_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn tooltip_bar(percent: u8) -> String {
+    let filled = (percent.min(100) / 10) as usize;
+    let mut bar = String::with_capacity(30);
+    for _ in 0..filled {
+        bar.push('█');
+    }
+    for _ in filled..10 {
+        bar.push('░');
+    }
+    bar
+}
+
+fn color_for(percent: u8) -> &'static str {
+    match percent {
+        0..=49 => "#a6e3a1",
+        50..=79 => "#f9e2af",
+        _ => "#f38ba8",
+    }
+}
+
+const DIM_COLOR: &str = "#6c7086";
+
+fn format_provider_line(label: &str, used: Option<u8>, reset: &str) -> String {
+    match used {
+        Some(pct) => {
+            let bar = tooltip_bar(pct);
+            let color = color_for(pct);
+            let pct_cell = format!("{pct:>3}%");
+            let reset_part = if reset == "—" {
+                "no data".to_string()
+            } else {
+                format!("resets {}", pango_escape(reset))
+            };
+            format!(
+                "  {label:<7}  [{bar}]  <span foreground=\"{color}\">{pct_cell}</span>   {reset_part}"
+            )
+        }
+        None => {
+            format!(
+                "  {label:<7}  <span foreground=\"{DIM_COLOR}\">[\u{2014}]</span>          no data"
+            )
+        }
+    }
+}
+
+fn format_provider_card(row: &ProviderRow) -> String {
+    let name = pango_escape(&row.provider);
+    let session = format_provider_line("Session", row.session_used, &row.session_reset);
+    let weekly = format_provider_line("Weekly", row.weekly_used, &row.weekly_reset);
+    format!("<tt><b>{name}</b>\n{session}\n{weekly}</tt>")
 }
 
 // ============================================================================
@@ -202,48 +254,132 @@ mod tests {
     }
 
     // ------------------------------------------------------------------------
-    // format_tooltip tests
+    // tooltip_bar tests
     // ------------------------------------------------------------------------
 
     #[test]
-    fn format_tooltip_full_data() {
-        let row = ProviderRow {
-            provider: "Claude".to_string(),
-            session_used: Some(19),
-            session_window_minutes: Some(300),
-            session_reset: "Jan 20 at 12:59PM".to_string(),
-            weekly_used: Some(12),
-            weekly_window_minutes: Some(10080),
-            weekly_reset: "Jan 26 at 8:59AM".to_string(),
-            credits: "—".to_string(),
-            source: "2.1.12 (oauth)".to_string(),
-            updated: "07:37".to_string(),
-        };
-        let tooltip = format_tooltip(&row);
-        assert!(tooltip.contains("Claude"));
-        assert!(tooltip.contains("Session 19% used"));
-        assert!(tooltip.contains("Jan 20 at 12:59PM"));
-        assert!(tooltip.contains("Weekly 12% used"));
-        assert!(tooltip.contains("Jan 26 at 8:59AM"));
+    fn tooltip_bar_lengths() {
+        assert_eq!(tooltip_bar(0).chars().count(), 10);
+        assert_eq!(tooltip_bar(100).chars().count(), 10);
+        assert_eq!(tooltip_bar(67).chars().count(), 10);
+        assert_eq!(tooltip_bar(0), "░░░░░░░░░░");
+        assert_eq!(tooltip_bar(100), "██████████");
+        assert_eq!(tooltip_bar(67), "██████░░░░");
     }
 
     #[test]
-    fn format_tooltip_missing_data() {
-        let row = ProviderRow {
-            provider: "Codex".to_string(),
-            session_used: None,
-            session_window_minutes: None,
-            session_reset: "—".to_string(),
-            weekly_used: None,
-            weekly_window_minutes: None,
-            weekly_reset: "—".to_string(),
+    fn tooltip_bar_clamps_over_100() {
+        assert_eq!(tooltip_bar(200).chars().count(), 10);
+        assert_eq!(tooltip_bar(200), "██████████");
+    }
+
+    // ------------------------------------------------------------------------
+    // color_for tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn color_for_thresholds() {
+        assert_eq!(color_for(0), "#a6e3a1");
+        assert_eq!(color_for(49), "#a6e3a1");
+        assert_eq!(color_for(50), "#f9e2af");
+        assert_eq!(color_for(79), "#f9e2af");
+        assert_eq!(color_for(80), "#f38ba8");
+        assert_eq!(color_for(100), "#f38ba8");
+    }
+
+    // ------------------------------------------------------------------------
+    // pango_escape tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn pango_escape_specials() {
+        assert_eq!(pango_escape("a & b"), "a &amp; b");
+        assert_eq!(pango_escape("<tag>"), "&lt;tag&gt;");
+        assert_eq!(pango_escape("\"quote\""), "&quot;quote&quot;");
+        assert_eq!(pango_escape("it's"), "it&apos;s");
+        assert_eq!(pango_escape("plain text 123"), "plain text 123");
+    }
+
+    // ------------------------------------------------------------------------
+    // format_provider_card tests
+    // ------------------------------------------------------------------------
+
+    fn sample_row(provider: &str) -> ProviderRow {
+        ProviderRow {
+            provider: provider.to_string(),
+            session_used: Some(67),
+            session_window_minutes: Some(300),
+            session_reset: "in 2h 34m".to_string(),
+            weekly_used: Some(19),
+            weekly_window_minutes: Some(10080),
+            weekly_reset: "in 4d 11h".to_string(),
             credits: "—".to_string(),
-            source: "—".to_string(),
-            updated: "—".to_string(),
-        };
-        let tooltip = format_tooltip(&row);
-        assert!(tooltip.contains("Codex"));
-        assert!(tooltip.contains("Session —"));
-        assert!(tooltip.contains("Weekly —"));
+            source: "oauth".to_string(),
+            updated: "07:37".to_string(),
+        }
+    }
+
+    #[test]
+    fn format_provider_card_full_data() {
+        let card = format_provider_card(&sample_row("Claude"));
+        assert!(card.starts_with("<tt><b>Claude</b>\n"));
+        assert!(card.ends_with("</tt>"));
+        assert!(card.contains("Session"));
+        assert!(card.contains("Weekly"));
+        assert!(card.contains("██████░░░░"));
+        assert!(card.contains("█░░░░░░░░░"));
+        assert!(card.contains("<span foreground=\"#f9e2af\"> 67%</span>"));
+        assert!(card.contains("<span foreground=\"#a6e3a1\"> 19%</span>"));
+        assert!(card.contains("resets in 2h 34m"));
+        assert!(card.contains("resets in 4d 11h"));
+    }
+
+    #[test]
+    fn format_provider_card_missing_session() {
+        let mut row = sample_row("Codex");
+        row.session_used = None;
+        row.session_reset = "—".to_string();
+        let card = format_provider_card(&row);
+        assert!(card.contains("<b>Codex</b>"));
+        assert!(card.contains("[\u{2014}]"));
+        assert!(card.contains("no data"));
+        assert!(card.contains("█░░░░░░░░░"));
+        assert!(card.contains("resets in 4d 11h"));
+    }
+
+    #[test]
+    fn format_provider_card_missing_reset_renders_no_data() {
+        let mut row = sample_row("Codex");
+        row.weekly_reset = "—".to_string();
+        let card = format_provider_card(&row);
+        assert!(card.contains("no data"));
+        assert!(!card.contains("resets —"));
+    }
+
+    #[test]
+    fn format_provider_card_escapes_provider_name() {
+        let row = sample_row("ev<il>");
+        let card = format_provider_card(&row);
+        assert!(card.contains("<b>ev&lt;il&gt;</b>"));
+        assert!(!card.contains("<b>ev<il></b>"));
+    }
+
+    #[test]
+    fn format_provider_card_escapes_reset_string() {
+        let mut row = sample_row("Claude");
+        row.session_reset = "a & b".to_string();
+        let card = format_provider_card(&row);
+        assert!(card.contains("resets a &amp; b"));
+    }
+
+    #[test]
+    fn tooltip_joins_cards_with_blank_line() {
+        let rows = vec![sample_row("Claude"), sample_row("Codex")];
+        let joined = rows
+            .iter()
+            .map(format_provider_card)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        assert!(joined.contains("</tt>\n\n<tt>"));
     }
 }

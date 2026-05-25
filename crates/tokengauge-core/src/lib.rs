@@ -769,12 +769,23 @@ pub fn payload_to_rows_with_costs(
         .into_iter()
         .filter(|payload| !payload.has_error())
         .map(|payload| {
-            let cost = costs.get(&payload.provider.to_lowercase()).cloned();
+            let cost = lookup_cost(&payload.provider, costs);
             let mut row = provider_to_row(payload);
             row.cost = cost;
             row
         })
         .collect()
+}
+
+fn lookup_cost(provider: &str, costs: &HashMap<String, CostInfo>) -> Option<CostInfo> {
+    let key = provider.to_lowercase();
+    if let Some(cost) = costs.get(&key) {
+        return Some(cost.clone());
+    }
+    costs
+        .iter()
+        .find(|(k, _)| key.starts_with(k.as_str()) || k.starts_with(&key))
+        .map(|(_, v)| v.clone())
 }
 
 pub fn format_window(window: Option<UsageWindow>) -> (Option<u8>, Option<u32>, String) {
@@ -1833,6 +1844,24 @@ mod tests {
         let read = read_waybar_state(&path);
         assert_eq!(read.selected.as_deref(), Some("codex"));
         assert_eq!(read.last_rotated_ms, 0);
+    }
+
+    #[test]
+    fn lookup_cost_exact_lowercase() {
+        let mut costs = HashMap::new();
+        costs.insert(
+            "claude".to_string(),
+            CostInfo {
+                today_usd: 1.0,
+                today_tokens: 100,
+                monthly_usd: 10.0,
+                monthly_tokens: 1000,
+            },
+        );
+        assert!(lookup_cost("Claude", &costs).is_some());
+        assert!(lookup_cost("claude-code", &costs).is_some());
+        assert!(lookup_cost("CLAUDE", &costs).is_some());
+        assert!(lookup_cost("zai", &costs).is_none());
     }
 
     #[test]

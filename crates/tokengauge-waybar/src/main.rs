@@ -39,21 +39,27 @@ struct WaybarOutput {
 fn format_bar(label: &str, value: Option<u8>) -> String {
     let icon = icon_markup(label);
     let escaped_label = pango_escape(label);
-    let (bars, percent) = match value {
-        Some(percent) => (bar_blocks(percent), format!("{percent}%")),
-        None => ("—".to_string(), "—".to_string()),
-    };
-    format!("{icon} {escaped_label} {bars} {percent}")
+    match value {
+        Some(percent) => {
+            let bars = bar_blocks(percent);
+            let color = color_hex_for_percent(percent);
+            format!(
+                "{icon} {escaped_label} <span foreground=\"{color}\">{bars} {percent}%</span>"
+            )
+        }
+        None => format!(
+            "{icon} {escaped_label} <span foreground=\"{DIM_HEX}\">— —</span>"
+        ),
+    }
 }
 
+const MINI_BAR_WIDTH: usize = 5;
+
 fn bar_blocks(percent: u8) -> String {
-    match percent.min(100) {
-        0..=20 => "▁".to_string(),
-        21..=40 => "▁▂".to_string(),
-        41..=60 => "▁▂▃".to_string(),
-        61..=80 => "▁▂▃▅".to_string(),
-        _ => "▁▂▃▅▇".to_string(),
-    }
+    let pct = percent.min(100) as usize;
+    let filled = (pct * MINI_BAR_WIDTH).div_ceil(100);
+    let empty = MINI_BAR_WIDTH.saturating_sub(filled);
+    format!("[{}{}]", "━".repeat(filled), "─".repeat(empty))
 }
 
 fn main() -> Result<()> {
@@ -428,30 +434,17 @@ mod tests {
 
     #[test]
     fn bar_blocks_boundaries() {
-        // 0-20%
-        assert_eq!(bar_blocks(0), "▁");
-        assert_eq!(bar_blocks(20), "▁");
-
-        // 21-40%
-        assert_eq!(bar_blocks(21), "▁▂");
-        assert_eq!(bar_blocks(40), "▁▂");
-
-        // 41-60%
-        assert_eq!(bar_blocks(41), "▁▂▃");
-        assert_eq!(bar_blocks(60), "▁▂▃");
-
-        // 61-80%
-        assert_eq!(bar_blocks(61), "▁▂▃▅");
-        assert_eq!(bar_blocks(80), "▁▂▃▅");
-
-        // 81-100%
-        assert_eq!(bar_blocks(81), "▁▂▃▅▇");
-        assert_eq!(bar_blocks(100), "▁▂▃▅▇");
+        assert_eq!(bar_blocks(0), "[─────]");
+        assert_eq!(bar_blocks(20), "[━────]");
+        assert_eq!(bar_blocks(40), "[━━───]");
+        assert_eq!(bar_blocks(60), "[━━━──]");
+        assert_eq!(bar_blocks(80), "[━━━━─]");
+        assert_eq!(bar_blocks(100), "[━━━━━]");
     }
 
     #[test]
     fn bar_blocks_clamps_over_100() {
-        assert_eq!(bar_blocks(150), "▁▂▃▅▇");
+        assert_eq!(bar_blocks(150), "[━━━━━]");
     }
 
     // ------------------------------------------------------------------------
@@ -463,18 +456,28 @@ mod tests {
         let result = format_bar("Claude", Some(42));
         assert!(result.contains("Claude"));
         assert!(result.contains("42%"));
-        assert!(result.contains("▁▂▃")); // 41-60% range
+        assert!(result.contains("[━━━──]")); // 42% -> ceil(2.1) = 3 filled
         assert!(result.contains("\u{f0721}"));
         assert!(result.contains("face=\"JetBrainsMono Nerd Font\""));
         assert!(result.contains("foreground=\"#DE7356\""));
+        // percent + bar wrapped in status color span (42% -> green)
+        assert!(result.contains("foreground=\"#a6e3a1\""));
+    }
+
+    #[test]
+    fn format_bar_with_high_percent_uses_red() {
+        let result = format_bar("Claude", Some(85));
+        assert!(result.contains("foreground=\"#f38ba8\""));
     }
 
     #[test]
     fn format_bar_none() {
         let result = format_bar("Codex", None);
-        assert!(result.contains("Codex — —"));
+        assert!(result.contains("— —"));
         assert!(result.contains("\u{f0b2b}"));
         assert!(result.contains("foreground=\"#74AA9C\""));
+        // dim color for missing data
+        assert!(result.contains("foreground=\"#6c7086\""));
     }
 
     #[test]

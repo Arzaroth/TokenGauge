@@ -18,18 +18,31 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokengauge_core::{
-    CostInfo, ExtraWindowRow, FetchResult, ProviderFetchError, ProviderRow, fetch_all_providers,
-    format_updated_relative, load_config, payload_to_rows_with_costs, read_cache_full,
-    read_waybar_state, waybar_state_path, write_cache_full, write_default_config,
+    CostInfo, DIM_HEX, ExtraWindowRow, FetchResult, GREEN_HEX, ProviderFetchError,
+    ProviderRow, color_hex_for_percent, fetch_all_providers, format_tokens,
+    format_updated_relative, load_config, parse_hex_rgb, payload_to_rows_with_costs,
+    provider_icon as core_provider_icon, read_cache_full, read_waybar_state, waybar_state_path,
+    write_cache_full, write_default_config,
 };
 
 const MIN_BAR_WIDTH: usize = 12;
 const MAX_BAR_WIDTH: usize = 200;
 const LEFT_PAD: usize = 3;
-const DIM: Color = Color::Rgb(108, 112, 134);
-const GREEN: Color = Color::Rgb(166, 227, 161);
-const YELLOW: Color = Color::Rgb(249, 226, 175);
-const RED: Color = Color::Rgb(243, 139, 168);
+
+fn hex_to_color(hex: &str) -> Color {
+    match parse_hex_rgb(hex) {
+        Some((r, g, b)) => Color::Rgb(r, g, b),
+        None => Color::White,
+    }
+}
+
+fn dim() -> Color {
+    hex_to_color(DIM_HEX)
+}
+
+fn green() -> Color {
+    hex_to_color(GREEN_HEX)
+}
 
 #[derive(Parser, Debug)]
 #[command(version, about = "TokenGauge TUI")]
@@ -310,21 +323,12 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
 }
 
 fn color_for(percent: u8) -> Color {
-    match percent {
-        0..=49 => GREEN,
-        50..=79 => YELLOW,
-        _ => RED,
-    }
+    hex_to_color(color_hex_for_percent(percent))
 }
 
-fn provider_icon(label: &str) -> (&'static str, Color) {
-    match label.to_lowercase().as_str() {
-        "claude" => ("\u{f0721}", Color::Rgb(0xDE, 0x73, 0x56)),
-        "codex" => ("\u{f0b2b}", Color::Rgb(0x74, 0xAA, 0x9C)),
-        "copilot" => ("\u{f4b8}", Color::Rgb(0x8B, 0x5C, 0xF6)),
-        "z.ai" | "zai" => ("Z", Color::Rgb(0x12, 0x6E, 0xF4)),
-        _ => ("\u{f06a9}", Color::Rgb(0xCD, 0xD6, 0xE4)),
-    }
+fn provider_icon_color(label: &str) -> (&'static str, Color) {
+    let icon = core_provider_icon(label);
+    (icon.glyph, hex_to_color(icon.color_hex))
 }
 
 fn render_bar(percent: u8, width: usize) -> (String, Color) {
@@ -336,24 +340,12 @@ fn render_bar(percent: u8, width: usize) -> (String, Color) {
     (bar, color_for(pct))
 }
 
-fn format_tokens(t: u64) -> String {
-    if t >= 1_000_000_000 {
-        format!("{:.1}B", t as f64 / 1e9)
-    } else if t >= 1_000_000 {
-        format!("{:.1}M", t as f64 / 1e6)
-    } else if t >= 1_000 {
-        format!("{:.1}K", t as f64 / 1e3)
-    } else {
-        format!("{t}")
-    }
-}
-
 fn window_section(label: &str, used: Option<u8>, reset: &str, bar_width: usize) -> Vec<Line<'static>> {
     let pad = " ".repeat(LEFT_PAD);
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled(
         format!("{pad}{label}"),
-        Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+        Style::default().fg(dim()).add_modifier(Modifier::BOLD),
     )));
     match used {
         Some(pct) => {
@@ -374,7 +366,7 @@ fn window_section(label: &str, used: Option<u8>, reset: &str, bar_width: usize) 
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("   "),
-                Span::styled(reset_text, Style::default().fg(DIM)),
+                Span::styled(reset_text, Style::default().fg(dim())),
             ]));
         }
         None => {
@@ -382,12 +374,12 @@ fn window_section(label: &str, used: Option<u8>, reset: &str, bar_width: usize) 
                 Span::raw(pad.clone()),
                 Span::styled(
                     "─".repeat(bar_width.clamp(MIN_BAR_WIDTH, MAX_BAR_WIDTH)),
-                    Style::default().fg(DIM),
+                    Style::default().fg(dim()),
                 ),
             ]));
             lines.push(Line::from(vec![
                 Span::raw(pad.clone()),
-                Span::styled("no data", Style::default().fg(DIM)),
+                Span::styled("no data", Style::default().fg(dim())),
             ]));
         }
     }
@@ -402,7 +394,7 @@ fn extra_window_lines(extra: &ExtraWindowRow, bar_width: usize) -> Vec<Line<'sta
         Span::raw(pad.clone()),
         Span::styled(
             title,
-            Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+            Style::default().fg(dim()).add_modifier(Modifier::BOLD),
         ),
     ]));
     match extra.used {
@@ -430,7 +422,7 @@ fn extra_window_lines(extra: &ExtraWindowRow, bar_width: usize) -> Vec<Line<'sta
             ];
             if !trailing.is_empty() {
                 spans.push(Span::raw("   "));
-                spans.push(Span::styled(trailing, Style::default().fg(DIM)));
+                spans.push(Span::styled(trailing, Style::default().fg(dim())));
             }
             lines.push(Line::from(spans));
         }
@@ -439,12 +431,12 @@ fn extra_window_lines(extra: &ExtraWindowRow, bar_width: usize) -> Vec<Line<'sta
                 Span::raw(pad.clone()),
                 Span::styled(
                     "─".repeat(bar_width.clamp(MIN_BAR_WIDTH, MAX_BAR_WIDTH)),
-                    Style::default().fg(DIM),
+                    Style::default().fg(dim()),
                 ),
             ]));
             lines.push(Line::from(vec![
                 Span::raw(pad.clone()),
-                Span::styled("no data", Style::default().fg(DIM)),
+                Span::styled("no data", Style::default().fg(dim())),
             ]));
         }
     }
@@ -470,11 +462,11 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
             Span::raw("      "),
             Span::styled(
                 format!("${:.2}", cost.today_usd),
-                Style::default().fg(GREEN),
+                Style::default().fg(green()),
             ),
             Span::styled(
                 format!("  ·  {} tokens", format_tokens(cost.today_tokens)),
-                Style::default().fg(DIM),
+                Style::default().fg(dim()),
             ),
         ]),
         Line::from(vec![
@@ -483,11 +475,11 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
             Span::raw("      "),
             Span::styled(
                 format!("${:.2}", cost.monthly_usd),
-                Style::default().fg(GREEN),
+                Style::default().fg(green()),
             ),
             Span::styled(
                 format!("  ·  {} tokens", format_tokens(cost.monthly_tokens)),
-                Style::default().fg(DIM),
+                Style::default().fg(dim()),
             ),
         ]),
     ]
@@ -498,7 +490,7 @@ fn provider_card_lines(row: &ProviderRow, inner_width: u16) -> Vec<Line<'static>
     let bar_width = (inner_width as usize).saturating_sub(LEFT_PAD * 2 + 2);
     let mut lines = Vec::new();
 
-    let (icon, icon_color) = provider_icon(&row.provider);
+    let (icon, icon_color) = provider_icon_color(&row.provider);
     let mut header = vec![
         Span::raw(pad.clone()),
         Span::styled(format!("{icon}  "), Style::default().fg(icon_color)),
@@ -510,7 +502,7 @@ fn provider_card_lines(row: &ProviderRow, inner_width: u16) -> Vec<Line<'static>
     if let Some(plan) = row.plan_label.as_deref().filter(|s| !s.is_empty()) {
         header.push(Span::styled(
             format!("  ·  {plan}"),
-            Style::default().fg(DIM),
+            Style::default().fg(dim()),
         ));
     }
     lines.push(Line::from(header));
@@ -521,7 +513,7 @@ fn provider_card_lines(row: &ProviderRow, inner_width: u16) -> Vec<Line<'static>
         lines.push(Line::from(vec![
             Span::raw(pad.clone()),
             Span::raw("   "),
-            Span::styled(format!("Updated {rel}"), Style::default().fg(DIM)),
+            Span::styled(format!("Updated {rel}"), Style::default().fg(dim())),
         ]));
     }
 
@@ -555,7 +547,7 @@ fn provider_card_lines(row: &ProviderRow, inner_width: u16) -> Vec<Line<'static>
             Span::raw(pad.clone()),
             Span::styled(
                 "Extra usage",
-                Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+                Style::default().fg(dim()).add_modifier(Modifier::BOLD),
             ),
         ]));
         for extra in &row.extra_windows {
@@ -570,7 +562,7 @@ fn provider_card_lines(row: &ProviderRow, inner_width: u16) -> Vec<Line<'static>
             Span::raw(pad.clone()),
             Span::styled(
                 "Cost",
-                Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+                Style::default().fg(dim()).add_modifier(Modifier::BOLD),
             ),
         ]));
         lines.extend(cost_lines(cost));
@@ -582,7 +574,7 @@ fn provider_card_lines(row: &ProviderRow, inner_width: u16) -> Vec<Line<'static>
             Span::raw(pad.clone()),
             Span::styled("Credits", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw("    "),
-            Span::styled(format!("${}", row.credits), Style::default().fg(GREEN)),
+            Span::styled(format!("${}", row.credits), Style::default().fg(green())),
         ]));
     }
 
@@ -592,7 +584,7 @@ fn provider_card_lines(row: &ProviderRow, inner_width: u16) -> Vec<Line<'static>
 fn tab_titles(rows: &[ProviderRow]) -> Vec<Line<'static>> {
     rows.iter()
         .map(|row| {
-            let (icon, color) = provider_icon(&row.provider);
+            let (icon, color) = provider_icon_color(&row.provider);
             Line::from(vec![
                 Span::styled(icon.to_string(), Style::default().fg(color)),
                 Span::raw("  "),
@@ -676,7 +668,7 @@ fn draw_ui(frame: &mut ratatui::Frame, state: &mut AppState, is_refreshing: bool
         let tabs = Tabs::new(tab_titles(&state.rows))
             .select(state.active_tab)
             .block(Block::default().borders(Borders::BOTTOM))
-            .style(Style::default().fg(DIM))
+            .style(Style::default().fg(dim()))
             .highlight_style(
                 Style::default()
                     .fg(Color::White)

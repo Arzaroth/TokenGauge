@@ -37,6 +37,16 @@ omarchy-restart-waybar
 
 Click the waybar module to open the TUI dashboard.
 
+### Placement
+
+By default the module is added to `modules-right` (before the tray on Omarchy). To put it on the left instead (right after `hyprland/workspaces`), run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oorestisime/TokenGauge/main/scripts/install.sh | bash -s -- --placement=left
+```
+
+`TOKENGAUGE_PLACEMENT=left` works too. The choice is persisted in `~/.config/tokengauge/config.toml` under `[waybar] placement`; re-running the installer with a different `--placement` migrates the module to the other side.
+
 ## Configuration
 
 Edit `~/.config/tokengauge/config.toml`:
@@ -50,6 +60,7 @@ Edit `~/.config/tokengauge/config.toml`:
 | `providers.claude` | Enable Claude (OAuth) | `true` |
 | `providers.<name>.api_key` | API key for API providers | — |
 | `waybar.window` | Show `daily` or `weekly` usage | `daily` |
+| `waybar.placement` | `left` or `right` in the waybar | `right` |
 
 > **Note:** Waybar's `interval` controls how often the UI refreshes. Keep it shorter than `refresh_secs` so the UI updates from cache without extra API calls.
 
@@ -127,7 +138,7 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
    EOF
    ```
 
-4. Add to waybar config (`~/.config/waybar/config.jsonc`):
+4. Add to waybar config (`~/.config/waybar/config.jsonc`). Add `"custom/tokengauge"` to either `modules-left` (after `"hyprland/workspaces"`) or `modules-right`:
    ```jsonc
    "modules-right": ["custom/tokengauge", ...],
    "custom/tokengauge": {

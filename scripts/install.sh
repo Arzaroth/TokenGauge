@@ -44,6 +44,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+PLACEMENT_OVERRIDE="${TOKENGAUGE_PLACEMENT:-}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --placement=*) PLACEMENT_OVERRIDE="${1#*=}" ;;
+    --placement)
+      if [[ $# -lt 2 ]]; then
+        fail "--placement requires an argument (left|right)"
+        exit 1
+      fi
+      PLACEMENT_OVERRIDE="$2"
+      shift
+      ;;
+    *) ;;
+  esac
+  shift
+done
+case "$PLACEMENT_OVERRIDE" in
+  left|right|"") ;;
+  *)
+    warn "Invalid --placement '$PLACEMENT_OVERRIDE'; ignoring"
+    PLACEMENT_OVERRIDE=""
+    ;;
+esac
+
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
 
 get_latest_tag() {
@@ -84,8 +108,16 @@ tar -xzf "$TMP_DIR/$asset" -C "$TMP_DIR"
 install -m 0755 "$TMP_DIR/tokengauge-waybar" "$INSTALL_DIR/tokengauge-waybar"
 install -m 0755 "$TMP_DIR/tokengauge-tui" "$INSTALL_DIR/tokengauge-tui"
 
+EXISTING_PLACEMENT=""
+if [[ -f "$CONFIG_FILE" ]]; then
+  EXISTING_PLACEMENT=$(grep -E '^\s*placement\s*=' "$CONFIG_FILE" 2>/dev/null \
+    | sed -E 's/.*=\s*"?([a-z]+)"?.*/\1/' | head -n1)
+fi
+PLACEMENT="${PLACEMENT_OVERRIDE:-${EXISTING_PLACEMENT:-right}}"
+info "Placement: $PLACEMENT"
+
 if [[ ! -f "$CONFIG_FILE" ]]; then
-  cat <<'TOML' > "$CONFIG_FILE"
+  cat <<TOML > "$CONFIG_FILE"
 # TokenGauge configuration
 codexbar_bin = "codexbar"
 source = "oauth"
@@ -98,7 +130,16 @@ claude = true
 
 [waybar]
 window = "daily" # daily | weekly
+placement = "$PLACEMENT" # left | right
 TOML
+else
+  if grep -qE '^\s*placement\s*=' "$CONFIG_FILE"; then
+    sed -i -E "s@^(\s*placement\s*=).*@\1 \"$PLACEMENT\"@" "$CONFIG_FILE"
+  elif grep -qE '^\s*\[waybar\]' "$CONFIG_FILE"; then
+    sed -i -E "/^\s*\[waybar\]/a placement = \"$PLACEMENT\"" "$CONFIG_FILE"
+  else
+    printf '\n[waybar]\nplacement = "%s"\n' "$PLACEMENT" >> "$CONFIG_FILE"
+  fi
 fi
 
 # Detect if omarchy is installed
@@ -147,61 +188,72 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
   backup="$WAYBAR_CONFIG.bak.tokengauge.$(date +%s)"
   BACKUP_PATH="$backup"
   cp "$WAYBAR_CONFIG" "$backup"
-  if ! grep -q 'custom/tokengauge' "$WAYBAR_CONFIG"; then
-    tmp_config=$(mktemp)
-    if $HAS_OMARCHY; then
-      # With omarchy: include on-click handler
-      jq_filter='
-        def ensure_array:
-          if . == null then []
-          elif type == "array" then .
-          else []
-          end;
-        def add_before($arr; $item; $before):
-          ($arr | index($item)) as $exists
-          | if $exists != null then $arr
-            else (
-              ($arr | index($before)) as $idx
-              | if $idx == null then ($arr + [$item])
-                else ($arr[:$idx] + [$item] + $arr[$idx:])
-                end
-            )
-            end;
-        ."custom/tokengauge" = {
-          "exec": "tokengauge-waybar",
-          "return-type": "json",
-          "interval": 60,
-          "on-click": "omarchy-launch-or-focus-tui tokengauge-tui"
-        }
-        | ."modules-right" = (
-            ."modules-right" | ensure_array | add_before(.; "custom/tokengauge"; "group/tray-expander")
-          )
-      '
-    else
-      # Without omarchy: no on-click handler
-      jq_filter='
-        def ensure_array:
-          if . == null then []
-          elif type == "array" then .
-          else []
-          end;
-        ."custom/tokengauge" = {
-          "exec": "tokengauge-waybar",
-          "return-type": "json",
-          "interval": 60
-        }
-        | ."modules-right" = (
-            ."modules-right" | ensure_array | . + ["custom/tokengauge"]
-          )
-      '
-    fi
-    if jq --indent 2 "$jq_filter" "$WAYBAR_CONFIG" > "$tmp_config"; then
-      mv "$tmp_config" "$WAYBAR_CONFIG"
-    else
-      rm -f "$tmp_config"
-      fail "Failed to patch Waybar config (invalid JSON)."
-      warn "Restore with: cp '$BACKUP_PATH' '$WAYBAR_CONFIG'"
-    fi
+  tmp_config=$(mktemp)
+
+  dedup_filter='
+    def strip: if . == null then . else map(select(. != "custom/tokengauge")) end;
+    ."modules-left" = (."modules-left" | strip)
+    | ."modules-right" = (."modules-right" | strip)
+  '
+
+  if $HAS_OMARCHY; then
+    module_filter='
+      ."custom/tokengauge" = {
+        "exec": "tokengauge-waybar",
+        "return-type": "json",
+        "interval": 60,
+        "on-click": "omarchy-launch-or-focus-tui tokengauge-tui"
+      }
+    '
+  else
+    module_filter='
+      ."custom/tokengauge" = {
+        "exec": "tokengauge-waybar",
+        "return-type": "json",
+        "interval": 60
+      }
+    '
+  fi
+
+  if [[ "$PLACEMENT" == "left" ]]; then
+    insert_filter='
+      def ensure_array: if . == null then [] elif type == "array" then . else [] end;
+      def insert_after($arr; $item; $after):
+        (($arr | index($after)) as $idx
+         | if $idx == null then ([$item] + $arr)
+           else ($arr[:$idx+1] + [$item] + $arr[$idx+1:])
+           end);
+      ."modules-left" = (
+        ."modules-left" | ensure_array | insert_after(.; "custom/tokengauge"; "hyprland/workspaces")
+      )
+    '
+  elif $HAS_OMARCHY; then
+    insert_filter='
+      def ensure_array: if . == null then [] elif type == "array" then . else [] end;
+      def add_before($arr; $item; $before):
+        (($arr | index($before)) as $idx
+         | if $idx == null then ($arr + [$item])
+           else ($arr[:$idx] + [$item] + $arr[$idx:])
+           end);
+      ."modules-right" = (
+        ."modules-right" | ensure_array | add_before(.; "custom/tokengauge"; "group/tray-expander")
+      )
+    '
+  else
+    insert_filter='
+      def ensure_array: if . == null then [] elif type == "array" then . else [] end;
+      ."modules-right" = (."modules-right" | ensure_array | . + ["custom/tokengauge"])
+    '
+  fi
+
+  jq_filter="$dedup_filter | $module_filter | $insert_filter"
+
+  if jq --indent 2 "$jq_filter" "$WAYBAR_CONFIG" > "$tmp_config"; then
+    mv "$tmp_config" "$WAYBAR_CONFIG"
+  else
+    rm -f "$tmp_config"
+    fail "Failed to patch Waybar config (invalid JSON)."
+    warn "Restore with: cp '$BACKUP_PATH' '$WAYBAR_CONFIG'"
   fi
 fi
 

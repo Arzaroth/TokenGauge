@@ -516,7 +516,7 @@ impl CachedData {
 }
 
 /// Cost info for a provider (sourced from ccusage).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostInfo {
     pub today_usd: f64,
     pub today_tokens: u64,

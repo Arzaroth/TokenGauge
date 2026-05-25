@@ -143,8 +143,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-const SCROLL_THROTTLE_MS: i64 = 250;
-
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -167,7 +165,7 @@ fn handle_rotate(config: &TokenGaugeConfig, dir: RotateDir) -> Result<()> {
     let state = read_waybar_state(&state_path);
 
     let now = now_ms();
-    if now - state.last_rotated_ms < SCROLL_THROTTLE_MS {
+    if now - state.last_rotated_ms < config.waybar.scroll_throttle_ms as i64 {
         return Ok(());
     }
 

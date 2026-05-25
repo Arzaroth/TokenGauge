@@ -281,6 +281,7 @@ pub struct WaybarConfig {
     pub window: WaybarWindow,
     pub placement: WaybarPlacement,
     pub primary: Option<String>,
+    pub scroll_throttle_ms: u64,
 }
 
 impl Default for WaybarConfig {
@@ -289,6 +290,7 @@ impl Default for WaybarConfig {
             window: WaybarWindow::Daily,
             placement: WaybarPlacement::default(),
             primary: None,
+            scroll_throttle_ms: 250,
         }
     }
 }

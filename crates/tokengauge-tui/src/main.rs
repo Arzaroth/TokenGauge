@@ -391,7 +391,7 @@ fn window_section(label: &str, used: Option<u8>, reset: &str, bar_width: usize) 
 
 fn extra_window_lines(extra: &ExtraWindowRow, bar_width: usize) -> Vec<Line<'static>> {
     let pad = " ".repeat(LEFT_PAD);
-    let title = pango_safe_truncate(&extra.title, 32);
+    let title = truncate(&extra.title, 32);
     let mut lines = Vec::new();
     lines.push(Line::from(vec![
         Span::raw(pad.clone()),
@@ -446,9 +446,6 @@ fn extra_window_lines(extra: &ExtraWindowRow, bar_width: usize) -> Vec<Line<'sta
     lines
 }
 
-fn pango_safe_truncate(s: &str, max: usize) -> String {
-    truncate(s, max)
-}
 
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {

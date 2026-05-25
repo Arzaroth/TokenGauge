@@ -327,7 +327,7 @@ impl Default for TokenGaugeConfig {
             codexbar_bin: "codexbar".to_string(),
             refresh_secs: 600,
             cache_file: PathBuf::from("/tmp/tokengauge-usage.json"),
-            timeout_secs: 2,
+            timeout_secs: 10,
             providers: ProvidersConfig {
                 codex: Some(true),
                 claude: Some(true),

@@ -25,7 +25,7 @@ struct WaybarOutput {
 }
 
 fn format_bar(label: &str, value: Option<u8>) -> String {
-    let icon = provider_icon(label);
+    let icon = icon_markup(label);
     let (bars, percent) = match value {
         Some(percent) => (bar_blocks(percent), format!("{percent}%")),
         None => ("—".to_string(), "—".to_string()),
@@ -164,16 +164,25 @@ fn color_for(percent: u8) -> &'static str {
 const DIM_COLOR: &str = "#6c7086";
 const SEPARATOR_COLOR: &str = "#45475a";
 
-fn provider_icon(label: &str) -> &'static str {
+const NERD_FONT_FACE: &str = "JetBrainsMono Nerd Font";
+
+fn provider_icon(label: &str) -> (&'static str, &'static str) {
     match label.to_lowercase().as_str() {
-        "claude" => "✦",
-        "codex" => "◆",
-        "copilot" => "❖",
-        "kimi" | "kimi k2" => "★",
-        "z.ai" | "zai" => "▲",
-        "minimax" => "▼",
-        _ => "●",
+        "claude" => ("\u{f0721}", "#DE7356"),
+        "codex" => ("\u{f0b2b}", "#74AA9C"),
+        "copilot" => ("\u{f4b8}", "#8b5cf6"),
+        "z.ai" | "zai" => ("Z", "#126EF4"),
+        "kimi" | "kimi k2" => ("\u{f06a9}", "#cdd6f4"),
+        "minimax" => ("\u{f06a9}", "#cdd6f4"),
+        _ => ("\u{f06a9}", "#cdd6f4"),
     }
+}
+
+fn icon_markup(label: &str) -> String {
+    let (glyph, color) = provider_icon(label);
+    format!(
+        "<span face=\"{NERD_FONT_FACE}\" foreground=\"{color}\">{glyph}</span>"
+    )
 }
 
 fn format_provider_line(label: &str, used: Option<u8>, reset: &str) -> String {
@@ -211,7 +220,7 @@ fn format_credits_line(credits: &str) -> Option<String> {
 
 fn format_provider_card(row: &ProviderRow) -> String {
     let name = pango_escape(&row.provider);
-    let icon = provider_icon(&row.provider);
+    let icon = icon_markup(&row.provider);
     let session = format_provider_line("Session", row.session_used, &row.session_reset);
     let weekly = format_provider_line("Weekly", row.weekly_used, &row.weekly_reset);
     let mut lines = vec![
@@ -283,13 +292,17 @@ mod tests {
         assert!(result.contains("Claude"));
         assert!(result.contains("42%"));
         assert!(result.contains("▁▂▃")); // 41-60% range
-        assert!(result.starts_with("✦"));
+        assert!(result.contains("\u{f0721}"));
+        assert!(result.contains("face=\"JetBrainsMono Nerd Font\""));
+        assert!(result.contains("foreground=\"#DE7356\""));
     }
 
     #[test]
     fn format_bar_none() {
         let result = format_bar("Codex", None);
-        assert_eq!(result, "◆ Codex — —");
+        assert!(result.contains("Codex — —"));
+        assert!(result.contains("\u{f0b2b}"));
+        assert!(result.contains("foreground=\"#74AA9C\""));
     }
 
     // ------------------------------------------------------------------------
@@ -415,13 +428,15 @@ mod tests {
     #[test]
     fn format_provider_card_includes_icon() {
         let card = format_provider_card(&sample_row("Claude"));
-        assert!(card.contains("✦"));
+        assert!(card.contains("\u{f0721}"));
+        assert!(card.contains("face=\"JetBrainsMono Nerd Font\""));
+        assert!(card.contains("foreground=\"#DE7356\""));
         let codex_card = format_provider_card(&sample_row("Codex"));
-        assert!(codex_card.contains("◆"));
+        assert!(codex_card.contains("\u{f0b2b}"));
         let mut other = sample_row("Mystery");
         other.provider = "Mystery".to_string();
         let card = format_provider_card(&other);
-        assert!(card.contains("●"));
+        assert!(card.contains("\u{f06a9}"));
     }
 
     #[test]

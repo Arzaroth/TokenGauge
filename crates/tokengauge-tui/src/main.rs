@@ -675,14 +675,28 @@ fn provider_card_lines(row: &ProviderRow, inner_width: u16) -> Vec<Line<'static>
     lines
 }
 
-fn tab_titles(rows: &[ProviderRow]) -> Vec<Line<'static>> {
+fn tab_titles(rows: &[ProviderRow], active: usize) -> Vec<Line<'static>> {
     rows.iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(i, row)| {
             let (icon, color) = provider_icon_color(&row.provider);
+            let is_active = i == active;
+            let icon_style = if is_active {
+                Style::default().fg(color)
+            } else {
+                Style::default().fg(dim())
+            };
+            let name_style = if is_active {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else {
+                Style::default().fg(dim())
+            };
             Line::from(vec![
-                Span::styled(icon.to_string(), Style::default().fg(color)),
+                Span::styled(icon.to_string(), icon_style),
                 Span::raw("  "),
-                Span::raw(row.provider.clone()),
+                Span::styled(row.provider.clone(), name_style),
             ])
         })
         .collect()
@@ -759,11 +773,9 @@ fn draw_ui(frame: &mut ratatui::Frame, state: &mut AppState, is_refreshing: bool
 
         let panes = Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).split(inner_area);
 
-        let tabs = Tabs::new(tab_titles(&state.rows))
+        let tabs = Tabs::new(tab_titles(&state.rows, state.active_tab))
             .select(state.active_tab)
             .block(Block::default().borders(Borders::BOTTOM))
-            .style(Style::default().fg(dim()))
-            .highlight_style(Style::default().add_modifier(Modifier::BOLD))
             .divider("  ");
         frame.render_widget(tabs, panes[0]);
 

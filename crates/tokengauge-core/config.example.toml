@@ -21,6 +21,17 @@ enabled = true
 # Percentages to alert on (one notification per threshold per window).
 thresholds = [50, 80, 95]
 
+[theme]
+# Built-in presets: "catppuccin" (default), "nord", "gruvbox".
+preset = "catppuccin"
+# Per-field hex overrides applied on top of the preset:
+# dim = "#6c7086"
+# separator = "#45475a"
+# green = "#a6e3a1"
+# yellow = "#f9e2af"
+# red = "#f38ba8"
+# neutral = "#cdd6f4"
+
 # Cache file location
 cache_file = "/tmp/tokengauge-usage.json"
 

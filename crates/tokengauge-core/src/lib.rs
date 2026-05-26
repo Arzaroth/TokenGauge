@@ -326,6 +326,55 @@ pub struct TokenGaugeConfig {
     pub providers: ProvidersConfig,
     pub waybar: WaybarConfig,
     pub notifications: NotificationsConfig,
+    pub theme: ThemeConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ThemeConfig {
+    /// Preset to start from: "catppuccin" (default), "nord", "gruvbox".
+    /// Individual hex fields below override the preset's values.
+    pub preset: String,
+    pub dim: Option<String>,
+    pub separator: Option<String>,
+    pub green: Option<String>,
+    pub yellow: Option<String>,
+    pub red: Option<String>,
+    pub neutral: Option<String>,
+}
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self {
+            preset: "catppuccin".into(),
+            dim: None,
+            separator: None,
+            green: None,
+            yellow: None,
+            red: None,
+            neutral: None,
+        }
+    }
+}
+
+impl ThemeConfig {
+    /// Build a concrete Theme by resolving the preset and applying any
+    /// per-field overrides on top.
+    pub fn resolve(&self) -> Theme {
+        let base = match self.preset.to_lowercase().as_str() {
+            "nord" => Theme::nord(),
+            "gruvbox" => Theme::gruvbox(),
+            _ => Theme::catppuccin(),
+        };
+        Theme {
+            dim: self.dim.clone().unwrap_or(base.dim),
+            separator: self.separator.clone().unwrap_or(base.separator),
+            green: self.green.clone().unwrap_or(base.green),
+            yellow: self.yellow.clone().unwrap_or(base.yellow),
+            red: self.red.clone().unwrap_or(base.red),
+            neutral: self.neutral.clone().unwrap_or(base.neutral),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -362,6 +411,7 @@ impl Default for TokenGaugeConfig {
             },
             waybar: WaybarConfig::default(),
             notifications: NotificationsConfig::default(),
+            theme: ThemeConfig::default(),
         }
     }
 }
@@ -1111,6 +1161,74 @@ pub const GREEN_HEX: &str = "#a6e3a1";
 pub const YELLOW_HEX: &str = "#f9e2af";
 pub const RED_HEX: &str = "#f38ba8";
 pub const NEUTRAL_HEX: &str = "#cdd6f4";
+
+/// Process-global active theme. Set once via `install_theme()` at startup.
+/// All format-string helpers read from this to colour their output.
+static ACTIVE_THEME: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
+
+pub fn theme() -> &'static Theme {
+    ACTIVE_THEME.get_or_init(Theme::catppuccin)
+}
+
+pub fn install_theme(t: Theme) {
+    let _ = ACTIVE_THEME.set(t);
+}
+
+/// Resolved color palette used by both waybar tooltip and TUI.
+/// Fields are owned `String` so the values can come from a config override.
+#[derive(Debug, Clone)]
+pub struct Theme {
+    pub dim: String,
+    pub separator: String,
+    pub green: String,
+    pub yellow: String,
+    pub red: String,
+    pub neutral: String,
+}
+
+impl Theme {
+    pub fn catppuccin() -> Self {
+        Self {
+            dim: DIM_HEX.into(),
+            separator: SEPARATOR_HEX.into(),
+            green: GREEN_HEX.into(),
+            yellow: YELLOW_HEX.into(),
+            red: RED_HEX.into(),
+            neutral: NEUTRAL_HEX.into(),
+        }
+    }
+
+    pub fn nord() -> Self {
+        Self {
+            dim: "#4c566a".into(),
+            separator: "#3b4252".into(),
+            green: "#a3be8c".into(),
+            yellow: "#ebcb8b".into(),
+            red: "#bf616a".into(),
+            neutral: "#d8dee9".into(),
+        }
+    }
+
+    pub fn gruvbox() -> Self {
+        Self {
+            dim: "#928374".into(),
+            separator: "#504945".into(),
+            green: "#b8bb26".into(),
+            yellow: "#fabd2f".into(),
+            red: "#fb4934".into(),
+            neutral: "#ebdbb2".into(),
+        }
+    }
+
+    /// Pick the color matching a usage percentage (green <50, yellow <80, red).
+    pub fn color_for_percent(&self, percent: u8) -> &str {
+        match percent {
+            0..=49 => &self.green,
+            50..=79 => &self.yellow,
+            _ => &self.red,
+        }
+    }
+}
 
 pub struct ProviderIcon {
     pub glyph: &'static str,

@@ -134,7 +134,7 @@ fn main() -> Result<()> {
         write_default_config(&config_path)?;
     }
 
-    let config = load_config(Some(config_path))?;
+    let config = load_config(Some(config_path.clone()))?;
     tokengauge_core::install_theme(config.theme.resolve());
     ensure_cache_dir(&config.cache_file)?;
 
@@ -144,7 +144,7 @@ fn main() -> Result<()> {
     }
 
     if args.daemon {
-        return run_daemon(&config);
+        return run_daemon(config, config_path);
     }
 
     if args.client_tail {
@@ -884,7 +884,7 @@ fn render_output(
     }
 }
 
-fn run_daemon(config: &TokenGaugeConfig) -> Result<()> {
+fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
     let sock_path = socket_path(&config.cache_file);
     let _ = std::fs::remove_file(&sock_path);
     if let Some(parent) = sock_path.parent() {
@@ -910,11 +910,13 @@ fn run_daemon(config: &TokenGaugeConfig) -> Result<()> {
         subscribers: Vec::new(),
     }));
 
+    let shared_config = Arc::new(Mutex::new(config));
+
     // Initial fetch + periodic refresh loop
     {
         let state = Arc::clone(&state);
-        let config = config.clone();
-        thread::spawn(move || daemon_fetch_loop(state, config));
+        let cfg = Arc::clone(&shared_config);
+        thread::spawn(move || daemon_fetch_loop(state, cfg));
     }
 
     // Signal-driven immediate fetch (preserves backward compat with pkill -RTMIN+8)
@@ -926,19 +928,69 @@ fn run_daemon(config: &TokenGaugeConfig) -> Result<()> {
         signal_hook::flag::register(SIGRTMIN_PLUS_8, Arc::clone(&signal_flag))
             .map_err(|e| anyhow::anyhow!("signal register: {e}"))?;
         let state = Arc::clone(&state);
-        let config = config.clone();
+        let cfg = Arc::clone(&shared_config);
         thread::spawn(move || {
             loop {
                 thread::sleep(Duration::from_millis(200));
                 if signal_flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
                     dlog("signal", "SIGRTMIN+8 received, forcing fetch");
                     let s = state.clone();
-                    let c = config.clone();
+                    let snapshot = cfg.lock().expect("daemon config mutex poisoned").clone();
                     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        do_fetch_and_broadcast(&s, &c);
+                        do_fetch_and_broadcast(&s, &snapshot);
                     }));
                     if let Err(payload) = res {
                         dlog("signal", &format!("panic recovered: {}", panic_message(&payload)));
+                    }
+                }
+            }
+        });
+    }
+
+    // SIGHUP: reload config + theme from disk without restart
+    {
+        let hup = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        signal_hook::flag::register(signal_hook::consts::SIGHUP, Arc::clone(&hup))?;
+        let cfg = Arc::clone(&shared_config);
+        let state = Arc::clone(&state);
+        let path = config_path.clone();
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(200));
+                if hup.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    dlog("signal", "SIGHUP received, reloading config");
+                    match load_config(Some(path.clone())) {
+                        Ok(new_cfg) => {
+                            tokengauge_core::install_theme(new_cfg.theme.resolve());
+                            let refresh_secs = new_cfg.refresh_secs.max(10);
+                            *cfg.lock().expect("daemon config mutex poisoned") = new_cfg.clone();
+                            dlog(
+                                "reload",
+                                &format!(
+                                    "config reloaded from {} (refresh every {refresh_secs}s)",
+                                    path.display()
+                                ),
+                            );
+                            // Re-render cached output with the new theme/config so
+                            // colour changes show up before the next fetch.
+                            let cached = read_cache_full(&new_cfg.cache_file).ok();
+                            let (rows, errors) = match cached {
+                                Some(c) => (
+                                    payload_to_rows_with_costs(c.payloads().to_vec(), &c.costs()),
+                                    c.errors().to_vec(),
+                                ),
+                                None => (Vec::new(), Vec::new()),
+                            };
+                            let output = render_output(&new_cfg, &rows, &errors, false);
+                            let mut s = state.lock().expect("daemon state mutex poisoned");
+                            s.output = output;
+                            s.broadcast();
+                            drop(s);
+                            signal_waybar();
+                        }
+                        Err(e) => {
+                            dlog("reload", &format!("failed: {e}; keeping previous config"));
+                        }
                     }
                 }
             }
@@ -966,10 +1018,11 @@ fn run_daemon(config: &TokenGaugeConfig) -> Result<()> {
         match stream {
             Ok(stream) => {
                 let state = Arc::clone(&state);
-                let config = config.clone();
+                let cfg = Arc::clone(&shared_config);
                 thread::spawn(move || {
+                    let snapshot = cfg.lock().expect("daemon config mutex poisoned").clone();
                     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        handle_client(stream, state, config)
+                        handle_client(stream, state, snapshot)
                     }));
                     match res {
                         Ok(Err(e)) => dlog("client", &format!("error: {e}")),
@@ -994,20 +1047,20 @@ fn dlog(tag: &str, msg: &str) {
     eprintln!("[{ts}] [{tag}] {msg}");
 }
 
-fn daemon_fetch_loop(state: Arc<Mutex<DaemonState>>, config: TokenGaugeConfig) {
+fn daemon_fetch_loop(state: Arc<Mutex<DaemonState>>, config: Arc<Mutex<TokenGaugeConfig>>) {
     loop {
+        let snapshot = config.lock().expect("daemon config mutex poisoned").clone();
         let s = state.clone();
-        let c = config.clone();
         // catch_unwind requires the closure to be UnwindSafe. Arc<Mutex> + Clone
         // values used here are safe to recover - a panic taints nothing externally.
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            do_fetch_and_broadcast(&s, &c);
+            do_fetch_and_broadcast(&s, &snapshot);
         }));
         if let Err(payload) = res {
             let msg = panic_message(&payload);
             dlog("fetch", &format!("panic recovered: {msg}"));
         }
-        thread::sleep(Duration::from_secs(config.refresh_secs.max(10)));
+        thread::sleep(Duration::from_secs(snapshot.refresh_secs.max(10)));
     }
 }
 
@@ -1857,5 +1910,242 @@ mod tests {
         let tooltip = format_tooltip_cards(&[&row], true);
         assert!(tooltip.contains("Refreshing"));
         assert!(tooltip.contains("⟳"));
+    }
+
+    // ------------------------------------------------------------------------
+    // Socket protocol tests
+    //
+    // Each test binds its own UnixListener at a unique path under /tmp,
+    // spawns a one-shot server that drives `handle_client`, and exchanges
+    // one command/reply over a connected stream. Configs disable providers
+    // and ccusage so the Refresh path doesn't shell out to external bins.
+    // ------------------------------------------------------------------------
+
+    fn unique_test_dir(tag: &str) -> PathBuf {
+        let counter = std::sync::atomic::AtomicU64::new(0);
+        let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "tokengauge-test-{tag}-{}-{}-{}",
+            std::process::id(),
+            now_ms(),
+            n,
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn test_config(cache_file: PathBuf) -> TokenGaugeConfig {
+        TokenGaugeConfig {
+            codexbar_bin: "codexbar".to_string(),
+            refresh_secs: 600,
+            timeout_secs: 10,
+            ccusage_enabled: false,
+            ccusage_timeout_secs: 15,
+            cache_file,
+            providers: Default::default(),
+            waybar: Default::default(),
+            notifications: Default::default(),
+            theme: Default::default(),
+        }
+    }
+
+    fn test_state(text: &str) -> Arc<Mutex<DaemonState>> {
+        Arc::new(Mutex::new(DaemonState {
+            output: WaybarOutput {
+                text: text.into(),
+                tooltip: "TEST_TIP".into(),
+                class: "tokengauge-test".into(),
+            },
+            subscribers: Vec::new(),
+        }))
+    }
+
+    fn send_recv(sock_path: &Path, cmd: &SocketCommand) -> SocketReply {
+        let mut stream = UnixStream::connect(sock_path).expect("connect");
+        writeln!(stream, "{}", serde_json::to_string(cmd).unwrap()).unwrap();
+        stream.flush().unwrap();
+        let mut reader = BufReader::new(&stream);
+        let mut buf = String::new();
+        reader.read_line(&mut buf).unwrap();
+        serde_json::from_str(buf.trim()).expect("parse reply")
+    }
+
+    /// Bind a one-shot listener, spawn handle_client on accept, and
+    /// return both the socket path and the server's join handle.
+    fn spawn_one_shot_server(
+        cache_file: &Path,
+        state: Arc<Mutex<DaemonState>>,
+        config: TokenGaugeConfig,
+    ) -> (PathBuf, thread::JoinHandle<Result<()>>) {
+        let sock = socket_path(cache_file);
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).expect("bind listener");
+        let handle = thread::spawn(move || {
+            let (stream, _) = listener.accept()?;
+            handle_client(stream, state, config)
+        });
+        (sock, handle)
+    }
+
+    #[test]
+    fn socket_snapshot_returns_current_output() {
+        let dir = unique_test_dir("snapshot");
+        let cache = dir.join("cache.json");
+        let state = test_state("SNAPSHOT_TEXT");
+        let config = test_config(cache.clone());
+        let (sock, server) = spawn_one_shot_server(&cache, state, config);
+
+        let reply = send_recv(&sock, &SocketCommand::Snapshot);
+        match reply {
+            SocketReply::Snapshot { output } => {
+                assert_eq!(output.text, "SNAPSHOT_TEXT");
+                assert_eq!(output.tooltip, "TEST_TIP");
+                assert_eq!(output.class, "tokengauge-test");
+            }
+            other => panic!("unexpected reply: {other:?}"),
+        }
+        server.join().unwrap().unwrap();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn socket_subscribe_returns_update_then_receives_broadcasts() {
+        let dir = unique_test_dir("subscribe");
+        let cache = dir.join("cache.json");
+        let state = test_state("INITIAL");
+        let config = test_config(cache.clone());
+        let (sock, server) =
+            spawn_one_shot_server(&cache, Arc::clone(&state), config);
+
+        let mut stream = UnixStream::connect(&sock).unwrap();
+        writeln!(
+            stream,
+            "{}",
+            serde_json::to_string(&SocketCommand::Subscribe).unwrap()
+        )
+        .unwrap();
+        stream.flush().unwrap();
+
+        let read_stream = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(read_stream);
+
+        let mut buf = String::new();
+        reader.read_line(&mut buf).unwrap();
+        let first: SocketReply = serde_json::from_str(buf.trim()).unwrap();
+        assert!(
+            matches!(&first, SocketReply::Update { output } if output.text == "INITIAL"),
+            "expected initial Update, got {first:?}"
+        );
+
+        // handle_client returns once subscriber is registered; wait for it.
+        server.join().unwrap().unwrap();
+
+        // Mutate state + broadcast. Subscriber should receive an Update.
+        {
+            let mut s = state.lock().unwrap();
+            s.output.text = "BROADCAST".into();
+            s.broadcast();
+        }
+
+        let mut buf2 = String::new();
+        reader.read_line(&mut buf2).unwrap();
+        let second: SocketReply = serde_json::from_str(buf2.trim()).unwrap();
+        assert!(
+            matches!(&second, SocketReply::Update { output } if output.text == "BROADCAST"),
+            "expected broadcast Update, got {second:?}"
+        );
+
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn socket_refresh_acks_and_writes_sentinel() {
+        let dir = unique_test_dir("refresh");
+        let cache = dir.join("cache.json");
+        let state = test_state("REFRESH_TEXT");
+        let config = test_config(cache.clone());
+        let sentinel = refresh_sentinel_path(&config.cache_file);
+        let _ = std::fs::remove_file(&sentinel);
+        let (sock, server) = spawn_one_shot_server(&cache, state, config);
+
+        let reply = send_recv(&sock, &SocketCommand::Refresh);
+        assert!(matches!(reply, SocketReply::Ack), "expected ack, got {reply:?}");
+        assert!(sentinel.exists(), "Refresh should create the sentinel file");
+
+        server.join().unwrap().unwrap();
+        // Background fetch thread may still be running; cleanup is best-effort.
+        // Wait briefly so it clears its own sentinel/cache writes.
+        thread::sleep(Duration::from_millis(200));
+        let _ = std::fs::remove_file(&sentinel);
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn socket_rotate_acks_when_no_cache() {
+        let dir = unique_test_dir("rotate");
+        let cache = dir.join("cache.json");
+        let state = test_state("ROTATE_TEXT");
+        let config = test_config(cache.clone());
+        let (sock, server) = spawn_one_shot_server(&cache, state, config);
+
+        let reply = send_recv(
+            &sock,
+            &SocketCommand::Rotate {
+                direction: "next".into(),
+            },
+        );
+        assert!(matches!(reply, SocketReply::Ack), "expected ack, got {reply:?}");
+
+        server.join().unwrap().unwrap();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn socket_open_acks_when_no_cache() {
+        let dir = unique_test_dir("open");
+        let cache = dir.join("cache.json");
+        let state = test_state("OPEN_TEXT");
+        let config = test_config(cache.clone());
+        let (sock, server) = spawn_one_shot_server(&cache, state, config);
+
+        let reply = send_recv(
+            &sock,
+            &SocketCommand::Open {
+                target: "dashboard".into(),
+            },
+        );
+        assert!(matches!(reply, SocketReply::Ack), "expected ack, got {reply:?}");
+
+        server.join().unwrap().unwrap();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn socket_snapshot_renders_refreshing_when_sentinel_present() {
+        let dir = unique_test_dir("snapshot-refreshing");
+        let cache = dir.join("cache.json");
+        let state = test_state("BASELINE_TEXT");
+        let config = test_config(cache.clone());
+
+        // Drop a sentinel before the client connects so current_snapshot()
+        // picks the refreshing render path.
+        let sentinel = refresh_sentinel_path(&config.cache_file);
+        std::fs::write(&sentinel, now_ms().to_string()).unwrap();
+
+        let (sock, server) = spawn_one_shot_server(&cache, state, config);
+        let reply = send_recv(&sock, &SocketCommand::Snapshot);
+        match reply {
+            SocketReply::Snapshot { output } => {
+                assert!(
+                    output.class.contains("tokengauge-refreshing"),
+                    "expected refreshing class, got class={}",
+                    output.class
+                );
+            }
+            other => panic!("unexpected reply: {other:?}"),
+        }
+        server.join().unwrap().unwrap();
+        let _ = std::fs::remove_file(&sentinel);
+        let _ = std::fs::remove_file(&sock);
     }
 }

@@ -1028,6 +1028,8 @@ fn run_client_tail(config: &TokenGaugeConfig) -> Result<()> {
         };
         if let SocketReply::Update { output } | SocketReply::Snapshot { output } = reply {
             println!("{}", serde_json::to_string(&output)?);
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
         }
     }
     // Daemon disconnected; exit cleanly so waybar restarts us

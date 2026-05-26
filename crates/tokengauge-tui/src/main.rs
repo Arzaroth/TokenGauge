@@ -482,7 +482,8 @@ fn truncate(s: &str, max: usize) -> String {
 
 fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
     let pad = " ".repeat(LEFT_PAD);
-    vec![
+    let sub_pad = " ".repeat(LEFT_PAD + 2);
+    let mut lines = vec![
         Line::from(vec![
             Span::raw(pad.clone()),
             Span::styled("Today", Style::default().add_modifier(Modifier::BOLD)),
@@ -496,20 +497,51 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
                 Style::default().fg(dim()),
             ),
         ]),
-        Line::from(vec![
-            Span::raw(pad.clone()),
-            Span::styled("Month", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("      "),
+    ];
+    for m in &cost.today_models {
+        lines.push(Line::from(vec![
+            Span::raw(sub_pad.clone()),
             Span::styled(
-                format!("${:.2}", cost.monthly_usd),
-                Style::default().fg(green()),
-            ),
-            Span::styled(
-                format!("  ·  {} tokens", format_tokens(cost.monthly_tokens)),
+                truncate(&m.model, 28),
                 Style::default().fg(dim()),
             ),
-        ]),
-    ]
+            Span::raw("  "),
+            Span::styled(format!("${:.2}", m.usd), Style::default().fg(green())),
+            Span::styled(
+                format!("  ·  {}", format_tokens(m.tokens)),
+                Style::default().fg(dim()),
+            ),
+        ]));
+    }
+    lines.push(Line::from(vec![
+        Span::raw(pad.clone()),
+        Span::styled("Month", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw("      "),
+        Span::styled(
+            format!("${:.2}", cost.monthly_usd),
+            Style::default().fg(green()),
+        ),
+        Span::styled(
+            format!("  ·  {} tokens", format_tokens(cost.monthly_tokens)),
+            Style::default().fg(dim()),
+        ),
+    ]));
+    for m in &cost.monthly_models {
+        lines.push(Line::from(vec![
+            Span::raw(sub_pad.clone()),
+            Span::styled(
+                truncate(&m.model, 28),
+                Style::default().fg(dim()),
+            ),
+            Span::raw("  "),
+            Span::styled(format!("${:.2}", m.usd), Style::default().fg(green())),
+            Span::styled(
+                format!("  ·  {}", format_tokens(m.tokens)),
+                Style::default().fg(dim()),
+            ),
+        ]));
+    }
+    lines
 }
 
 fn provider_card_lines(row: &ProviderRow, inner_width: u16) -> Vec<Line<'static>> {

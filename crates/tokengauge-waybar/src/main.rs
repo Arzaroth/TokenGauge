@@ -34,6 +34,9 @@ struct Args {
     /// Open the selected provider's dashboard or status page in the browser.
     #[arg(long, value_enum)]
     open: Option<OpenTarget>,
+    /// Print a diagnostic checklist (deps, config, cache, providers, waybar wiring).
+    #[arg(long)]
+    doctor: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -87,6 +90,12 @@ fn main() -> Result<()> {
         .config
         .clone()
         .unwrap_or_else(tokengauge_core::default_config_path);
+
+    if args.doctor {
+        let exit = handle_doctor(&config_path);
+        std::process::exit(exit);
+    }
+
     if !config_path.exists() {
         write_default_config(&config_path)?;
     }
@@ -372,6 +381,211 @@ fn worker_do_refresh(config: &TokenGaugeConfig) {
     let _ = std::fs::remove_file(&sentinel);
     check_and_notify(config, &payloads, &costs);
     signal_waybar();
+}
+
+struct DoctorCheck {
+    label: String,
+    ok: bool,
+    detail: String,
+}
+
+fn handle_doctor(config_path: &Path) -> i32 {
+    let isatty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    let (green, red, dim, reset) = if isatty {
+        ("\x1b[32m", "\x1b[31m", "\x1b[2m", "\x1b[0m")
+    } else {
+        ("", "", "", "")
+    };
+    let section = |title: &str| {
+        println!("\n{title}");
+        println!("{}", "─".repeat(title.chars().count()));
+    };
+    let print_check = |c: &DoctorCheck| {
+        let icon = if c.ok {
+            format!("{green}✓{reset}")
+        } else {
+            format!("{red}✗{reset}")
+        };
+        if c.detail.is_empty() {
+            println!("  {icon}  {}", c.label);
+        } else {
+            println!("  {icon}  {}  {dim}- {}{reset}", c.label, c.detail);
+        }
+    };
+
+    let mut failed = 0;
+    let mut record = |c: DoctorCheck| {
+        if !c.ok {
+            failed += 1;
+        }
+        print_check(&c);
+    };
+
+    println!("TokenGauge doctor");
+
+    // Config
+    section("Config");
+    let config = if config_path.exists() {
+        match load_config(Some(config_path.to_path_buf())) {
+            Ok(c) => {
+                record(DoctorCheck {
+                    label: format!("config loads: {}", config_path.display()),
+                    ok: true,
+                    detail: String::new(),
+                });
+                Some(c)
+            }
+            Err(e) => {
+                record(DoctorCheck {
+                    label: format!("config loads: {}", config_path.display()),
+                    ok: false,
+                    detail: e.to_string(),
+                });
+                None
+            }
+        }
+    } else {
+        record(DoctorCheck {
+            label: format!("config exists: {}", config_path.display()),
+            ok: false,
+            detail: "run any tokengauge-waybar invocation to write defaults".into(),
+        });
+        None
+    };
+
+    let cfg = config.unwrap_or_default();
+
+    // External dependencies
+    section("Dependencies");
+    record(check_binary(
+        &cfg.codexbar_bin,
+        "codexbar usage limits",
+        "install from https://github.com/steipete/CodexBar",
+    ));
+    if cfg.ccusage_enabled {
+        record(check_binary(
+            "npx",
+            "ccusage cost data",
+            "install Node.js, or set ccusage_enabled = false",
+        ));
+    } else {
+        record(DoctorCheck {
+            label: "ccusage disabled in config".into(),
+            ok: true,
+            detail: "no cost data, no npx required".into(),
+        });
+    }
+    if cfg.notifications.enabled {
+        record(check_binary(
+            "notify-send",
+            "threshold notifications",
+            "install libnotify, or set notifications.enabled = false",
+        ));
+    }
+    record(check_binary(
+        "xdg-open",
+        "open dashboard/status URLs",
+        "install xdg-utils",
+    ));
+
+    // Cache + state files
+    section("Filesystem");
+    let cache_dir = cfg.cache_file.parent().unwrap_or(Path::new("."));
+    let cache_ok = std::fs::create_dir_all(cache_dir).is_ok();
+    record(DoctorCheck {
+        label: format!("cache directory writable: {}", cache_dir.display()),
+        ok: cache_ok,
+        detail: if cache_ok {
+            String::new()
+        } else {
+            "permission denied".into()
+        },
+    });
+
+    // Providers
+    section("Providers");
+    let enabled = cfg.providers.enabled_providers();
+    if enabled.is_empty() {
+        record(DoctorCheck {
+            label: "providers enabled".into(),
+            ok: false,
+            detail: "set [providers] codex/claude = true or add an API provider".into(),
+        });
+    } else {
+        record(DoctorCheck {
+            label: format!("{} provider(s) enabled", enabled.len()),
+            ok: true,
+            detail: enabled
+                .iter()
+                .map(|p| p.name.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
+        });
+        let result = fetch_all_providers(&cfg);
+        for payload in &result.payloads {
+            record(DoctorCheck {
+                label: format!("fetch {}", payload.provider),
+                ok: true,
+                detail: payload.source.clone().unwrap_or_default(),
+            });
+        }
+        for err in &result.errors {
+            record(DoctorCheck {
+                label: format!("fetch {}", err.provider),
+                ok: false,
+                detail: err.message.clone(),
+            });
+        }
+    }
+
+    // Waybar wiring
+    section("Waybar");
+    let waybar_cfg = std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".config/waybar/config.jsonc"))
+        .unwrap_or_else(|| PathBuf::from("~/.config/waybar/config.jsonc"));
+    if waybar_cfg.exists() {
+        let contents = std::fs::read_to_string(&waybar_cfg).unwrap_or_default();
+        let wired = contents.contains("custom/tokengauge");
+        record(DoctorCheck {
+            label: format!("module wired in {}", waybar_cfg.display()),
+            ok: wired,
+            detail: if wired {
+                String::new()
+            } else {
+                "run scripts/install.sh to add the custom/tokengauge module".into()
+            },
+        });
+    } else {
+        record(DoctorCheck {
+            label: "waybar config not found".into(),
+            ok: false,
+            detail: format!("expected at {}", waybar_cfg.display()),
+        });
+    }
+
+    println!();
+    if failed == 0 {
+        println!("{green}All checks passed.{reset}");
+        0
+    } else {
+        println!("{red}{failed} check(s) failed.{reset}");
+        1
+    }
+}
+
+fn check_binary(name: &str, purpose: &str, hint: &str) -> DoctorCheck {
+    let found = Command::new("which")
+        .arg(name)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    DoctorCheck {
+        label: format!("{name} on PATH ({purpose})"),
+        ok: found,
+        detail: if found { String::new() } else { hint.into() },
+    }
 }
 
 fn handle_open(config: &TokenGaugeConfig, target: OpenTarget) {

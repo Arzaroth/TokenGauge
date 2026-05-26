@@ -11,13 +11,14 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 ## Features
 
 - **Waybar module**: bar + percentage per provider with brand-colored icons, pango-markup tooltip mirroring the TUI card layout
-- **TUI dashboard** (ratatui): per-provider tabs, Session / Weekly / Sonnet-only / Tertiary windows, Extra usage rates, cost breakdown
-- **Cost tracking via ccusage**: today, month, 7-day rolling, per-model split, current burn rate $/hr, 7-day sparkline, trend vs 7d average
+- **TUI dashboard** (ratatui): per-provider sidebar, Session / Weekly / Sonnet-only / Tertiary windows, Extra usage rates, cost breakdown
+- **Native GTK4 popover**: bundled `tokengauge-popover` (gtk4-layer-shell) gives a click-to-open GUI panel with codexbar-style provider tabs, color-tiered usage bars, monospace-aligned cost rows, and a collapsible 7-day chart. Pick `tui` or `popover` per `[waybar].click_action`.
+- **Cost tracking via ccusage**: today, month, 7-day rolling, per-model split, current burn rate $/hr, 7-day chart, trend vs 7d average
 - **Multi-provider**: Claude, Codex, Copilot, Z.ai, Kimi, MiniMax (mix OAuth + API key providers)
 - **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary
 - **Threshold notifications**: `notify-send` alerts at 50/80/95% (configurable) - one-shot per threshold, resets on window roll-over
-- **Daemon mode**: optional long-lived process for near-instant waybar polls and background notifications
-- **`--doctor`**: diagnostic checklist for codexbar, ccusage, notifications, providers, waybar wiring
+- **Daemon mode**: optional long-lived process for near-instant waybar polls, background notifications, and SIGHUP config reload
+- **`--doctor`**: diagnostic checklist for codexbar, ccusage, notifications, providers, waybar wiring, click action launcher
 - **CSS tier classes**: waybar text class flips to `tokengauge-warn` / `tokengauge-crit` past usage thresholds for theme-driven coloring
 
 ## Supported Providers
@@ -102,7 +103,9 @@ Edit `~/.config/tokengauge/config.toml`:
 | `waybar.scroll_throttle_ms` | Debounce window for scroll-rotate | `250` |
 | `waybar.click_action` | Left-click target: `tui` or `popover` | `tui` |
 | `waybar.tui_command` | Override TUI launcher (empty = auto-detect) | unset |
-| `waybar.popover_command` | Shell command run when `click_action = "popover"` | `eww open --toggle tokengauge-popup` |
+| `waybar.popover_command` | Shell command run when `click_action = "popover"` | `tokengauge-popover --toggle` |
+| `waybar.popover_margin_top` | Bundled popover's top-edge offset (px) | `4` |
+| `waybar.popover_margin_side` | Bundled popover's side-edge offset (px) | `8` |
 | `notifications.enabled` | Send desktop notifications | `true` |
 | `notifications.thresholds` | Percent thresholds to fire on | `[50, 80, 95]` |
 
@@ -148,6 +151,33 @@ When the daemon is running:
 - Threshold notifications fire from the daemon even if you never interact with waybar.
 
 Waybar config is unchanged - same `exec: tokengauge-waybar` with `interval: 60`. The binary auto-detects the socket and uses it; without the daemon it falls back to direct fetch.
+
+The daemon also reloads its config on `SIGHUP` (`pkill -HUP tokengauge-waybar`) so theme / refresh_secs / providers / click action changes take effect without a restart.
+
+## Click action: TUI vs popover
+
+Left-click goes through `tokengauge-waybar --click`, which reads
+`[waybar].click_action` and runs the matching command:
+
+- `click_action = "tui"` (default): launches `tokengauge-tui` in a terminal.
+  Auto-detects `omarchy-launch-or-focus-tui` when present, otherwise picks
+  the first of `$TERMINAL`, `ghostty`, `alacritty`, `kitty`, `wezterm`,
+  `foot`, `xterm` on `$PATH`. Override with `[waybar].tui_command`.
+
+- `click_action = "popover"`: opens the bundled GTK4 popover
+  (`tokengauge-popover --toggle`). The popover anchors under the waybar
+  using `gtk4-layer-shell`, shows codexbar-style provider tabs with
+  brand-coloured icons + tier-tinted session bars, monospace-aligned
+  cost rows, and a collapsible 7-day chart. A second click on the waybar
+  module toggles it closed. Tune `popover_margin_top` /
+  `popover_margin_side` if it doesn't sit where you want.
+
+`tokengauge-waybar --doctor` reports the resolved click target and warns
+when its leading binary isn't on `$PATH`.
+
+For users who already run [eww](https://github.com/elkowar/eww), a starter
+window definition is in [`scripts/eww-popup/`](scripts/eww-popup/); set
+`popover_command = "eww open --toggle tokengauge-popup"` to use it.
 
 ## Diagnostics
 

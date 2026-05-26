@@ -18,7 +18,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokengauge_core::{
-    CostInfo, DIM_HEX, ExtraWindowRow, FetchResult, GREEN_HEX, ProviderFetchError,
+    CostInfo, DIM_HEX, ExtraWindowRow, FetchResult, GREEN_HEX, ModelCost, ProviderFetchError,
     ProviderRow, color_hex_for_percent, fetch_all_providers, format_tokens,
     format_updated_relative, load_config, parse_hex_rgb, payload_to_rows_with_costs,
     provider_icon as core_provider_icon, provider_urls, read_cache_full, read_waybar_state,
@@ -483,7 +483,42 @@ fn truncate(s: &str, max: usize) -> String {
 fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
     let pad = " ".repeat(LEFT_PAD);
     let sub_pad = " ".repeat(LEFT_PAD + 2);
-    let mut lines = vec![];
+
+    let all_models: Vec<&ModelCost> = cost
+        .today_models
+        .iter()
+        .chain(cost.monthly_models.iter())
+        .collect();
+    let model_w = all_models
+        .iter()
+        .map(|m| truncate(&m.model, 28).chars().count())
+        .max()
+        .unwrap_or(0);
+    let model_usd_w = all_models
+        .iter()
+        .map(|m| format!("${:.2}", m.usd).chars().count())
+        .max()
+        .unwrap_or(0);
+    let model_tokens_w = all_models
+        .iter()
+        .map(|m| format_tokens(m.tokens).chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let today_usd_str = format!("${:.2}", cost.today_usd);
+    let monthly_usd_str = format!("${:.2}", cost.monthly_usd);
+    let total_usd_w = today_usd_str
+        .chars()
+        .count()
+        .max(monthly_usd_str.chars().count());
+    let today_tokens_str = format_tokens(cost.today_tokens);
+    let monthly_tokens_str = format_tokens(cost.monthly_tokens);
+    let total_tokens_w = today_tokens_str
+        .chars()
+        .count()
+        .max(monthly_tokens_str.chars().count());
+
+    let mut lines = Vec::new();
 
     if let Some(br) = &cost.burn_rate {
         let mins = br.remaining_minutes;
@@ -502,7 +537,7 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
             ),
             Span::styled(
                 format!(
-                    "  ·  projected ${:.2} in {remaining}",
+                    "  ·  cc 5h block: ${:.2} projected, {remaining} to end",
                     br.projected_cost
                 ),
                 Style::default().fg(dim()),
@@ -510,61 +545,47 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
         ]));
     }
 
-    lines.push(Line::from(vec![
-        Span::raw(pad.clone()),
-        Span::styled("Today", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw("      "),
-        Span::styled(
-            format!("${:.2}", cost.today_usd),
-            Style::default().fg(green()),
-        ),
-        Span::styled(
-            format!("  ·  {} tokens", format_tokens(cost.today_tokens)),
-            Style::default().fg(dim()),
-        ),
-    ]));
+    let totals_line = |label: &str, usd_str: &str, tokens_str: &str| {
+        Line::from(vec![
+            Span::raw(pad.clone()),
+            Span::styled(label.to_string(), Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("      "),
+            Span::styled(
+                format!("{usd_str:>total_usd_w$}"),
+                Style::default().fg(green()),
+            ),
+            Span::styled(
+                format!("  ·  {tokens_str:>total_tokens_w$} tokens"),
+                Style::default().fg(dim()),
+            ),
+        ])
+    };
+    let model_line = |m: &ModelCost| {
+        let name = truncate(&m.model, 28);
+        let usd = format!("${:.2}", m.usd);
+        let tokens = format_tokens(m.tokens);
+        Line::from(vec![
+            Span::raw(sub_pad.clone()),
+            Span::styled(format!("{name:<model_w$}"), Style::default().fg(dim())),
+            Span::raw("  "),
+            Span::styled(
+                format!("{usd:>model_usd_w$}"),
+                Style::default().fg(green()),
+            ),
+            Span::styled(
+                format!("  ·  {tokens:>model_tokens_w$}"),
+                Style::default().fg(dim()),
+            ),
+        ])
+    };
+
+    lines.push(totals_line("Today", &today_usd_str, &today_tokens_str));
     for m in &cost.today_models {
-        lines.push(Line::from(vec![
-            Span::raw(sub_pad.clone()),
-            Span::styled(
-                truncate(&m.model, 28),
-                Style::default().fg(dim()),
-            ),
-            Span::raw("  "),
-            Span::styled(format!("${:.2}", m.usd), Style::default().fg(green())),
-            Span::styled(
-                format!("  ·  {}", format_tokens(m.tokens)),
-                Style::default().fg(dim()),
-            ),
-        ]));
+        lines.push(model_line(m));
     }
-    lines.push(Line::from(vec![
-        Span::raw(pad.clone()),
-        Span::styled("Month", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw("      "),
-        Span::styled(
-            format!("${:.2}", cost.monthly_usd),
-            Style::default().fg(green()),
-        ),
-        Span::styled(
-            format!("  ·  {} tokens", format_tokens(cost.monthly_tokens)),
-            Style::default().fg(dim()),
-        ),
-    ]));
+    lines.push(totals_line("Month", &monthly_usd_str, &monthly_tokens_str));
     for m in &cost.monthly_models {
-        lines.push(Line::from(vec![
-            Span::raw(sub_pad.clone()),
-            Span::styled(
-                truncate(&m.model, 28),
-                Style::default().fg(dim()),
-            ),
-            Span::raw("  "),
-            Span::styled(format!("${:.2}", m.usd), Style::default().fg(green())),
-            Span::styled(
-                format!("  ·  {}", format_tokens(m.tokens)),
-                Style::default().fg(dim()),
-            ),
-        ]));
+        lines.push(model_line(m));
     }
     lines
 }

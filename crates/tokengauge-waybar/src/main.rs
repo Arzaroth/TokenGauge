@@ -1,9 +1,13 @@
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, SystemTime};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Serialize;
 use tokengauge_core::{
@@ -38,6 +42,16 @@ struct Args {
     /// Print a diagnostic checklist (deps, config, cache, providers, waybar wiring).
     #[arg(long)]
     doctor: bool,
+    /// Run as a long-lived daemon serving state over a Unix socket. The waybar
+    /// custom module should use --client-tail to subscribe (push-based) instead
+    /// of polling on an interval.
+    #[arg(long)]
+    daemon: bool,
+    /// Connect to the daemon socket, subscribe, and stream JSON updates to
+    /// stdout (one line per change). Designed for waybar's `exec` with no
+    /// `interval` set.
+    #[arg(long)]
+    client_tail: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -52,7 +66,7 @@ enum RotateDir {
     Prev,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 struct WaybarOutput {
     text: String,
     tooltip: String,
@@ -109,18 +123,53 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if args.daemon {
+        return run_daemon(&config);
+    }
+
+    if args.client_tail {
+        return run_client_tail(&config);
+    }
+
     if args.refresh {
+        if try_send_command(&config, &SocketCommand::Refresh).is_ok() {
+            return Ok(());
+        }
         handle_refresh_quick(&config);
         return Ok(());
     }
 
     if let Some(dir) = args.rotate {
+        let cmd = SocketCommand::Rotate {
+            direction: match dir {
+                RotateDir::Next => "next".into(),
+                RotateDir::Prev => "prev".into(),
+            },
+        };
+        if try_send_command(&config, &cmd).is_ok() {
+            return Ok(());
+        }
         handle_rotate(&config, dir)?;
         return Ok(());
     }
 
     if let Some(target) = args.open {
+        let cmd = SocketCommand::Open {
+            target: match target {
+                OpenTarget::Dashboard => "dashboard".into(),
+                OpenTarget::Status => "status".into(),
+            },
+        };
+        if try_send_command(&config, &cmd).is_ok() {
+            return Ok(());
+        }
         handle_open(&config, target);
+        return Ok(());
+    }
+
+    // One-shot snapshot mode: try daemon first
+    if let Ok(snapshot) = try_get_snapshot(&config) {
+        println!("{snapshot}");
         return Ok(());
     }
 
@@ -639,6 +688,350 @@ fn check_binary(name: &str, purpose: &str, hint: &str) -> DoctorCheck {
         ok: found,
         detail: if found { String::new() } else { hint.into() },
     }
+}
+
+// ============================================================================
+// Daemon + client (Unix socket)
+// ============================================================================
+
+fn socket_path(cache_file: &Path) -> PathBuf {
+    let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
+    parent.join("tokengauge.sock")
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+enum SocketCommand {
+    Snapshot,
+    Subscribe,
+    Refresh,
+    Rotate { direction: String },
+    Open { target: String },
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SocketReply {
+    Snapshot { output: WaybarOutput },
+    Update { output: WaybarOutput },
+    Ack,
+    Error { message: String },
+}
+
+fn connect_socket(config: &TokenGaugeConfig) -> std::io::Result<UnixStream> {
+    let path = socket_path(&config.cache_file);
+    UnixStream::connect(&path)
+}
+
+fn try_send_command(config: &TokenGaugeConfig, cmd: &SocketCommand) -> Result<()> {
+    let mut stream = connect_socket(config).map_err(|e| anyhow::anyhow!(e))?;
+    let line = serde_json::to_string(cmd)?;
+    writeln!(stream, "{line}")?;
+    stream.flush()?;
+    // Read one reply line for ack
+    let mut reader = BufReader::new(&stream);
+    let mut buf = String::new();
+    reader.read_line(&mut buf)?;
+    Ok(())
+}
+
+fn try_get_snapshot(config: &TokenGaugeConfig) -> Result<String> {
+    let mut stream = connect_socket(config).map_err(|e| anyhow::anyhow!(e))?;
+    let line = serde_json::to_string(&SocketCommand::Snapshot)?;
+    writeln!(stream, "{line}")?;
+    stream.flush()?;
+    let mut reader = BufReader::new(&stream);
+    let mut buf = String::new();
+    reader.read_line(&mut buf)?;
+    let reply: SocketReply = serde_json::from_str(buf.trim())?;
+    match reply {
+        SocketReply::Snapshot { output } => Ok(serde_json::to_string(&output)?),
+        SocketReply::Error { message } => Err(anyhow::anyhow!(message)),
+        _ => Err(anyhow::anyhow!("unexpected reply from daemon")),
+    }
+}
+
+struct DaemonState {
+    output: WaybarOutput,
+    subscribers: Vec<UnixStream>,
+}
+
+impl DaemonState {
+    fn broadcast(&mut self) {
+        let line = match serde_json::to_string(&SocketReply::Update {
+            output: self.output.clone(),
+        }) {
+            Ok(s) => format!("{s}\n"),
+            Err(_) => return,
+        };
+        self.subscribers.retain_mut(|s| s.write_all(line.as_bytes()).is_ok());
+    }
+}
+
+fn render_output(
+    config: &TokenGaugeConfig,
+    rows: &[ProviderRow],
+    errors: &[ProviderFetchError],
+    refreshing: bool,
+) -> WaybarOutput {
+    if rows.is_empty() && errors.is_empty() && !refreshing {
+        return WaybarOutput {
+            text: "—".into(),
+            tooltip: "<tt>TokenGauge: no providers</tt>".into(),
+            class: "tokengauge-empty".into(),
+        };
+    }
+    let text_inner = build_text_for_rows_with_errors(rows, errors, config);
+    let text = if refreshing {
+        if rows.is_empty() && errors.is_empty() {
+            format!("   <span foreground=\"{YELLOW_HEX}\">⟳ Refreshing...</span>")
+        } else {
+            format!("   <span foreground=\"{YELLOW_HEX}\">⟳</span> {text_inner}")
+        }
+    } else {
+        format!("   {text_inner}")
+    };
+    let selected = selected_provider_for_tooltip(config, rows);
+    let tooltip_rows: Vec<&ProviderRow> = match selected {
+        Some(idx) => vec![&rows[idx]],
+        None => rows.iter().collect(),
+    };
+    let tooltip = format_tooltip_with_errors(&tooltip_rows, errors, refreshing);
+    let class = if refreshing {
+        "tokengauge tokengauge-refreshing".to_string()
+    } else if errors.is_empty() {
+        "tokengauge".to_string()
+    } else if rows.is_empty() {
+        "tokengauge tokengauge-error".to_string()
+    } else {
+        "tokengauge tokengauge-partial-error".to_string()
+    };
+    WaybarOutput {
+        text,
+        tooltip,
+        class,
+    }
+}
+
+fn run_daemon(config: &TokenGaugeConfig) -> Result<()> {
+    let sock_path = socket_path(&config.cache_file);
+    let _ = std::fs::remove_file(&sock_path);
+    if let Some(parent) = sock_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let listener = UnixListener::bind(&sock_path)
+        .with_context(|| format!("failed to bind socket {}", sock_path.display()))?;
+
+    let state = Arc::new(Mutex::new(DaemonState {
+        output: WaybarOutput {
+            text: "   <span foreground=\"#f9e2af\">⟳ Starting...</span>".into(),
+            tooltip: "<tt>TokenGauge daemon starting...</tt>".into(),
+            class: "tokengauge tokengauge-refreshing".into(),
+        },
+        subscribers: Vec::new(),
+    }));
+
+    // Initial fetch + periodic refresh loop
+    {
+        let state = Arc::clone(&state);
+        let config = config.clone();
+        thread::spawn(move || daemon_fetch_loop(state, config));
+    }
+
+    // Signal-driven immediate fetch (preserves backward compat with pkill -RTMIN+8)
+    {
+        let signal_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // SIGRTMIN+8 on Linux glibc = 42. Preserves backward compat with the
+        // older waybar `signal: 8` + `pkill -RTMIN+8 waybar` invocations.
+        const SIGRTMIN_PLUS_8: i32 = 42;
+        signal_hook::flag::register(SIGRTMIN_PLUS_8, Arc::clone(&signal_flag))
+            .map_err(|e| anyhow::anyhow!("signal register: {e}"))?;
+        let state = Arc::clone(&state);
+        let config = config.clone();
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(200));
+                if signal_flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    do_fetch_and_broadcast(&state, &config);
+                }
+            }
+        });
+    }
+
+    let sock_path_clone = sock_path.clone();
+    // Graceful shutdown on SIGTERM/SIGINT
+    {
+        let term = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term))?;
+        signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term))?;
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_millis(200));
+            if term.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = std::fs::remove_file(&sock_path_clone);
+                std::process::exit(0);
+            }
+        });
+    }
+
+    // Accept connections
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                let state = Arc::clone(&state);
+                let config = config.clone();
+                thread::spawn(move || {
+                    let _ = handle_client(stream, state, config);
+                });
+            }
+            Err(e) => {
+                eprintln!("accept failed: {e}");
+            }
+        }
+    }
+    let _ = std::fs::remove_file(&sock_path);
+    Ok(())
+}
+
+fn daemon_fetch_loop(state: Arc<Mutex<DaemonState>>, config: TokenGaugeConfig) {
+    loop {
+        do_fetch_and_broadcast(&state, &config);
+        thread::sleep(Duration::from_secs(config.refresh_secs.max(10)));
+    }
+}
+
+fn do_fetch_and_broadcast(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) {
+    let prior_costs = read_cache_full(&config.cache_file)
+        .map(|c| c.costs())
+        .unwrap_or_default();
+    let FetchResult {
+        payloads,
+        errors,
+        mut costs,
+    } = fetch_all_providers(config);
+    if costs.is_empty() && !prior_costs.is_empty() {
+        costs = prior_costs;
+    }
+    let _ = write_cache_full(&config.cache_file, &payloads, &errors, &costs);
+    check_and_notify(config, &payloads, &costs);
+    let rows = payload_to_rows_with_costs(payloads, &costs);
+    let output = render_output(config, &rows, &errors, false);
+    let mut s = state.lock().unwrap();
+    s.output = output;
+    s.broadcast();
+}
+
+fn handle_client(
+    mut stream: UnixStream,
+    state: Arc<Mutex<DaemonState>>,
+    config: TokenGaugeConfig,
+) -> Result<()> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut buf = String::new();
+    if reader.read_line(&mut buf)? == 0 {
+        return Ok(());
+    }
+    let cmd: SocketCommand = serde_json::from_str(buf.trim())?;
+    match cmd {
+        SocketCommand::Snapshot => {
+            let output = state.lock().unwrap().output.clone();
+            let reply = SocketReply::Snapshot { output };
+            writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
+            stream.flush()?;
+        }
+        SocketCommand::Subscribe => {
+            // Send current state, register as subscriber, keep stream alive
+            let output = state.lock().unwrap().output.clone();
+            let reply = SocketReply::Update { output };
+            writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
+            stream.flush()?;
+            state.lock().unwrap().subscribers.push(stream);
+            // Don't close - daemon broadcast will push updates
+        }
+        SocketCommand::Refresh => {
+            do_fetch_and_broadcast(&state, &config);
+            writeln!(stream, "{}", serde_json::to_string(&SocketReply::Ack)?)?;
+            stream.flush()?;
+        }
+        SocketCommand::Rotate { direction } => {
+            let dir = match direction.as_str() {
+                "prev" => RotateDir::Prev,
+                _ => RotateDir::Next,
+            };
+            let _ = handle_rotate(&config, dir);
+            // Re-render from current cache + rotation
+            let cached = read_cache_full(&config.cache_file).ok();
+            let (rows, errors) = match cached {
+                Some(c) => (
+                    payload_to_rows_with_costs(c.payloads().to_vec(), &c.costs()),
+                    c.errors().to_vec(),
+                ),
+                None => (Vec::new(), Vec::new()),
+            };
+            let output = render_output(&config, &rows, &errors, false);
+            let mut s = state.lock().unwrap();
+            s.output = output;
+            s.broadcast();
+            writeln!(stream, "{}", serde_json::to_string(&SocketReply::Ack)?)?;
+            stream.flush()?;
+        }
+        SocketCommand::Open { target } => {
+            let t = match target.as_str() {
+                "status" => OpenTarget::Status,
+                _ => OpenTarget::Dashboard,
+            };
+            handle_open(&config, t);
+            writeln!(stream, "{}", serde_json::to_string(&SocketReply::Ack)?)?;
+            stream.flush()?;
+        }
+    }
+    Ok(())
+}
+
+fn run_client_tail(config: &TokenGaugeConfig) -> Result<()> {
+    // Retry connect briefly if daemon not yet up
+    let stream = loop {
+        match connect_socket(config) {
+            Ok(s) => break s,
+            Err(_) => {
+                thread::sleep(Duration::from_millis(500));
+                if !socket_path(&config.cache_file).exists() {
+                    // No daemon running - fall through to a one-shot snapshot
+                    let result = (|| {
+                        let sentinel = refresh_sentinel_path(&config.cache_file);
+                        let refreshing = refresh_in_progress(&sentinel);
+                        let (rows, errors, costs) = maybe_refresh(config)?;
+                        let rows_v = payload_to_rows_with_costs(rows, &costs);
+                        Ok::<_, anyhow::Error>(render_output(config, &rows_v, &errors, refreshing))
+                    })();
+                    if let Ok(out) = result {
+                        println!("{}", serde_json::to_string(&out)?);
+                    }
+                    // Wait + retry
+                    thread::sleep(Duration::from_secs(60));
+                    continue;
+                }
+            }
+        }
+    };
+    let mut writer = stream.try_clone()?;
+    writeln!(writer, "{}", serde_json::to_string(&SocketCommand::Subscribe)?)?;
+    writer.flush()?;
+    let reader = BufReader::new(stream);
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        let reply: SocketReply = match serde_json::from_str(&line) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        if let SocketReply::Update { output } | SocketReply::Snapshot { output } = reply {
+            println!("{}", serde_json::to_string(&output)?);
+        }
+    }
+    // Daemon disconnected; exit cleanly so waybar restarts us
+    Ok(())
 }
 
 fn handle_open(config: &TokenGaugeConfig, target: OpenTarget) {

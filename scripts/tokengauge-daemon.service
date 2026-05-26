@@ -1,0 +1,11 @@
+[Unit]
+Description=TokenGauge daemon (long-lived fetcher + socket server)
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/tokengauge-waybar --daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

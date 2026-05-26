@@ -829,6 +829,7 @@ name = "tokengauge-tui"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "crossterm",
  "ratatui",

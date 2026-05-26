@@ -10,3 +10,4 @@ clap = { workspace = true }
 ratatui = { version = "0.29", features = ["crossterm"] }
 serde = { workspace = true }
 crossterm = "0.28"
+chrono = { workspace = true }

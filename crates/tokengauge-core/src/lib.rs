@@ -550,6 +550,18 @@ pub struct CostInfo {
     pub today_tokens: u64,
     pub monthly_usd: f64,
     pub monthly_tokens: u64,
+    #[serde(default)]
+    pub today_models: Vec<ModelCost>,
+    #[serde(default)]
+    pub monthly_models: Vec<ModelCost>,
+}
+
+/// Per-model cost slice (ccusage modelBreakdowns).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCost {
+    pub model: String,
+    pub usd: f64,
+    pub tokens: u64,
 }
 
 // ============================================================================
@@ -1326,14 +1338,44 @@ fn ccusage_total_tokens(b: &CcusageModelBreakdown) -> u64 {
     b.input_tokens + b.output_tokens + b.cache_creation_tokens + b.cache_read_tokens
 }
 
-fn aggregate_ccusage(response: &CcusageDailyResponse) -> HashMap<String, (f64, u64)> {
-    let mut totals: HashMap<String, (f64, u64)> = HashMap::new();
+struct AggregatedProvider {
+    total_usd: f64,
+    total_tokens: u64,
+    /// per-model: model_name -> (usd, tokens)
+    models: HashMap<String, (f64, u64)>,
+}
+
+impl AggregatedProvider {
+    fn into_model_costs(self) -> (f64, u64, Vec<ModelCost>) {
+        let mut models: Vec<ModelCost> = self
+            .models
+            .into_iter()
+            .map(|(model, (usd, tokens))| ModelCost { model, usd, tokens })
+            .collect();
+        models.sort_by(|a, b| b.usd.partial_cmp(&a.usd).unwrap_or(std::cmp::Ordering::Equal));
+        (self.total_usd, self.total_tokens, models)
+    }
+}
+
+fn aggregate_ccusage(response: &CcusageDailyResponse) -> HashMap<String, AggregatedProvider> {
+    let mut totals: HashMap<String, AggregatedProvider> = HashMap::new();
     for day in &response.daily {
         for b in &day.model_breakdowns {
             if let Some(provider) = model_to_provider(&b.model_name) {
-                let entry = totals.entry(provider.to_string()).or_insert((0.0, 0));
-                entry.0 += b.cost;
-                entry.1 += ccusage_total_tokens(b);
+                let entry = totals.entry(provider.to_string()).or_insert_with(|| AggregatedProvider {
+                    total_usd: 0.0,
+                    total_tokens: 0,
+                    models: HashMap::new(),
+                });
+                let tokens = ccusage_total_tokens(b);
+                entry.total_usd += b.cost;
+                entry.total_tokens += tokens;
+                let model_entry = entry
+                    .models
+                    .entry(b.model_name.clone())
+                    .or_insert((0.0, 0));
+                model_entry.0 += b.cost;
+                model_entry.1 += tokens;
             }
         }
     }
@@ -1368,22 +1410,33 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
         Err(_) => return HashMap::new(),
     };
 
-    let today_agg = aggregate_ccusage(&daily);
-    let monthly_agg = aggregate_ccusage(&monthly);
+    let mut today_agg = aggregate_ccusage(&daily);
+    let mut monthly_agg = aggregate_ccusage(&monthly);
 
     let mut result = HashMap::new();
-    let providers: std::collections::HashSet<String> =
-        today_agg.keys().chain(monthly_agg.keys()).cloned().collect();
+    let providers: std::collections::HashSet<String> = today_agg
+        .keys()
+        .chain(monthly_agg.keys())
+        .cloned()
+        .collect();
     for provider in providers {
-        let today = today_agg.get(&provider).copied().unwrap_or((0.0, 0));
-        let monthly = monthly_agg.get(&provider).copied().unwrap_or((0.0, 0));
+        let (today_usd, today_tokens, today_models) = today_agg
+            .remove(&provider)
+            .map(|a| a.into_model_costs())
+            .unwrap_or((0.0, 0, Vec::new()));
+        let (monthly_usd, monthly_tokens, monthly_models) = monthly_agg
+            .remove(&provider)
+            .map(|a| a.into_model_costs())
+            .unwrap_or((0.0, 0, Vec::new()));
         result.insert(
             provider,
             CostInfo {
-                today_usd: today.0,
-                today_tokens: today.1,
-                monthly_usd: monthly.0,
-                monthly_tokens: monthly.1,
+                today_usd,
+                today_tokens,
+                monthly_usd,
+                monthly_tokens,
+                today_models,
+                monthly_models,
             },
         );
     }
@@ -2153,6 +2206,8 @@ mod tests {
                 today_tokens: 100,
                 monthly_usd: 10.0,
                 monthly_tokens: 1000,
+                today_models: Vec::new(),
+                monthly_models: Vec::new(),
             },
         );
         assert!(lookup_cost("Claude", &costs).is_some());

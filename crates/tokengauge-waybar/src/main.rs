@@ -1268,9 +1268,9 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
         .max(monthly_tokens.chars().count());
     let mut lines = Vec::new();
     if let Some(br) = &cost.burn_rate {
+        let rate_str = format!("${:.2}", br.cost_per_hour);
         lines.push(format!(
-            "  Rate      <span foreground=\"{DIM_HEX}\">${:.2}/hr</span>",
-            br.cost_per_hour
+            "  Rate      <span foreground=\"{DIM_HEX}\">{rate_str:>usd_width$}/hr</span>"
         ));
     }
     let mut any_window = false;

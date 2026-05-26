@@ -18,11 +18,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokengauge_core::{
-    CostInfo, DIM_HEX, ExtraWindowRow, FetchResult, GREEN_HEX, ModelCost, ProviderFetchError,
-    ProviderRow, YELLOW_HEX, color_hex_for_percent, fetch_all_providers, format_tokens,
-    format_updated_relative, load_config, parse_hex_rgb, payload_to_rows_with_costs,
-    provider_icon as core_provider_icon, provider_urls, read_cache_full, read_waybar_state,
-    sparkline, waybar_state_path, window_labels, write_cache_full, write_default_config,
+    CostInfo, ExtraWindowRow, FetchResult, ModelCost, ProviderFetchError, ProviderRow,
+    fetch_all_providers, format_tokens, format_updated_relative, load_config, parse_hex_rgb,
+    payload_to_rows_with_costs, provider_icon as core_provider_icon, provider_urls, read_cache_full,
+    read_waybar_state, sparkline, theme, waybar_state_path, window_labels, write_cache_full,
+    write_default_config,
 };
 
 const MIN_BAR_WIDTH: usize = 12;
@@ -37,11 +37,11 @@ fn hex_to_color(hex: &str) -> Color {
 }
 
 fn dim() -> Color {
-    hex_to_color(DIM_HEX)
+    hex_to_color(&theme().dim)
 }
 
 fn green() -> Color {
-    hex_to_color(GREEN_HEX)
+    hex_to_color(&theme().green)
 }
 
 #[derive(Parser, Debug)]
@@ -156,7 +156,11 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, args: &Args) -
         .clone()
         .unwrap_or_else(tokengauge_core::default_config_path);
     let loaded_config = if config_path.exists() {
-        load_config(Some(config_path)).ok()
+        let cfg = load_config(Some(config_path)).ok();
+        if let Some(c) = &cfg {
+            tokengauge_core::install_theme(c.theme.resolve());
+        }
+        cfg
     } else {
         None
     };
@@ -350,7 +354,7 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
 }
 
 fn color_for(percent: u8) -> Color {
-    hex_to_color(color_hex_for_percent(percent))
+    hex_to_color(theme().color_for_percent(percent))
 }
 
 fn provider_icon_color(label: &str) -> (&'static str, Color) {
@@ -551,7 +555,7 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
             let trend_color = if pct >= 25.0 {
                 Color::Rgb(0xf3, 0x8b, 0xa8) // red
             } else if pct >= -10.0 {
-                hex_to_color(YELLOW_HEX)
+                hex_to_color(&theme().yellow)
             } else {
                 green()
             };

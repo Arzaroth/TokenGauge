@@ -11,14 +11,32 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Serialize;
 use tokengauge_core::{
-    CostInfo, DIM_HEX, ExtraWindowRow, FetchResult, ProviderFetchError, ProviderPayload,
-    ProviderRow, RED_HEX, SEPARATOR_HEX, TokenGaugeConfig, WaybarState, WaybarWindow, YELLOW_HEX,
-    color_hex_for_percent, ensure_cache_dir, fetch_all_providers, format_tokens,
-    format_updated_relative, load_config, notify_state_path, payload_to_rows_with_costs,
-    provider_icon, read_cache_full, read_notify_state, read_waybar_state, thresholds_to_fire,
-    waybar_state_path, window_labels, write_cache_full, write_default_config, write_notify_state,
-    write_waybar_state,
+    CostInfo, ExtraWindowRow, FetchResult, ProviderFetchError, ProviderPayload, ProviderRow, Theme,
+    TokenGaugeConfig, WaybarState, WaybarWindow, ensure_cache_dir, fetch_all_providers,
+    format_tokens, format_updated_relative, load_config, notify_state_path,
+    payload_to_rows_with_costs, provider_icon, read_cache_full, read_notify_state,
+    read_waybar_state, theme, thresholds_to_fire, waybar_state_path, window_labels,
+    write_cache_full, write_default_config, write_notify_state, write_waybar_state,
 };
+
+fn theme_palette() -> (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+) {
+    let t: &Theme = theme();
+    (
+        t.dim.as_str(),
+        t.separator.as_str(),
+        t.green.as_str(),
+        t.yellow.as_str(),
+        t.red.as_str(),
+        t.neutral.as_str(),
+    )
+}
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Waybar module for TokenGauge")]
@@ -74,18 +92,19 @@ struct WaybarOutput {
 }
 
 fn format_bar(label: &str, value: Option<u8>) -> String {
+    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
     let icon = icon_markup(label);
     let escaped_label = pango_escape(label);
     match value {
         Some(percent) => {
             let bar_inner = bar_blocks(percent);
-            let color = color_hex_for_percent(percent);
+            let color = theme().color_for_percent(percent);
             format!(
                 "{icon} {escaped_label} [<span foreground=\"{color}\">{bar_inner}</span>] <span foreground=\"{color}\">{percent}%</span>"
             )
         }
         None => format!(
-            "{icon} {escaped_label} [<span foreground=\"{DIM_HEX}\">─────</span>] <span foreground=\"{DIM_HEX}\">—</span>"
+            "{icon} {escaped_label} [<span foreground=\"{dim}\">─────</span>] <span foreground=\"{dim}\">—</span>"
         ),
     }
 }
@@ -116,6 +135,7 @@ fn main() -> Result<()> {
     }
 
     let config = load_config(Some(config_path))?;
+    tokengauge_core::install_theme(config.theme.resolve());
     ensure_cache_dir(&config.cache_file)?;
 
     if args.internal_refresh_worker {
@@ -177,6 +197,7 @@ fn main() -> Result<()> {
     let refreshing = refresh_in_progress(&sentinel);
 
     if refreshing {
+        let yellow = theme().yellow.as_str();
         let cached = read_cache_full(&config.cache_file).ok();
         let (rows, errors) = match cached {
             Some(c) => (
@@ -192,10 +213,10 @@ fn main() -> Result<()> {
         };
         let tooltip = format_tooltip_with_errors(&tooltip_refs, &errors, true);
         let text = if rows.is_empty() && errors.is_empty() {
-            format!("   <span foreground=\"{YELLOW_HEX}\">⟳ Refreshing...</span>")
+            format!("   <span foreground=\"{yellow}\">⟳ Refreshing...</span>")
         } else {
             format!(
-                "   <span foreground=\"{YELLOW_HEX}\">⟳</span> {}",
+                "   <span foreground=\"{yellow}\">⟳</span> {}",
                 build_text_for_rows_with_errors(&rows, &errors, &config)
             )
         };
@@ -331,10 +352,11 @@ fn build_text_for_rows_with_errors(
 }
 
 fn format_bar_error(label: &str) -> String {
+    let (_dim, _separator, _green, _yellow, red, _neutral) = theme_palette();
     let icon = icon_markup(label);
     let escaped_label = pango_escape(label);
     format!(
-        "{icon} {escaped_label} <span foreground=\"{RED_HEX}\">⚠</span>"
+        "{icon} {escaped_label} <span foreground=\"{red}\">⚠</span>"
     )
 }
 
@@ -832,12 +854,13 @@ fn render_output(
             class: "tokengauge-empty".into(),
         };
     }
+    let yellow = theme().yellow.as_str();
     let text_inner = build_text_for_rows_with_errors(rows, errors, config);
     let text = if refreshing {
         if rows.is_empty() && errors.is_empty() {
-            format!("   <span foreground=\"{YELLOW_HEX}\">⟳ Refreshing...</span>")
+            format!("   <span foreground=\"{yellow}\">⟳ Refreshing...</span>")
         } else {
-            format!("   <span foreground=\"{YELLOW_HEX}\">⟳</span> {text_inner}")
+            format!("   <span foreground=\"{yellow}\">⟳</span> {text_inner}")
         }
     } else {
         format!("   {text_inner}")
@@ -1305,10 +1328,11 @@ fn icon_markup(label: &str) -> String {
 }
 
 fn format_provider_line(label: &str, used: Option<u8>, reset: &str) -> String {
+    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
     match used {
         Some(pct) => {
             let bar = tooltip_bar(pct);
-            let color = color_hex_for_percent(pct);
+            let color = theme().color_for_percent(pct);
             let pct_cell = format!("{pct:>3}%");
             let reset_part = if reset == "—" {
                 "not started".to_string()
@@ -1321,7 +1345,7 @@ fn format_provider_line(label: &str, used: Option<u8>, reset: &str) -> String {
         }
         None => {
             format!(
-                "  {label:<16}  [<span foreground=\"{DIM_HEX}\">──────────</span>]          no data"
+                "  {label:<16}  [<span foreground=\"{dim}\">──────────</span>]          no data"
             )
         }
     }
@@ -1331,19 +1355,21 @@ fn format_credits_line(credits: &str) -> Option<String> {
     if credits == "—" || credits.is_empty() {
         return None;
     }
+    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
     Some(format!(
-        "  Credits  <span foreground=\"{DIM_HEX}\">${}</span>",
+        "  Credits  <span foreground=\"{dim}\">${}</span>",
         pango_escape(credits)
     ))
 }
 
 fn format_extra_window(extra: &ExtraWindowRow) -> String {
+    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
     let title = pango_escape(&extra.title);
     let title_padded = format!("{title:<14}");
     match extra.used {
         Some(pct) => {
             let bar = tooltip_bar(pct);
-            let color = color_hex_for_percent(pct);
+            let color = theme().color_for_percent(pct);
             let pct_cell = format!("{pct:>3}%");
             let reset_part = if extra.reset == "—" {
                 "not started".to_string()
@@ -1355,12 +1381,13 @@ fn format_extra_window(extra: &ExtraWindowRow) -> String {
             )
         }
         None => format!(
-            "  {title_padded}  <span foreground=\"{DIM_HEX}\">[──────────]</span>          no data"
+            "  {title_padded}  <span foreground=\"{dim}\">[──────────]</span>          no data"
         ),
     }
 }
 
 fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
+    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
     let today_usd = format!("${:.2}", cost.today_usd);
     let monthly_usd = format!("${:.2}", cost.monthly_usd);
     let session_usd = format!("${:.2}", cost.session_usd);
@@ -1392,26 +1419,26 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
                     "#a6e3a1"
                 };
                 format!(
-                    "  <span foreground=\"{color}\">{arrow}{:.0}%</span> <span foreground=\"{DIM_HEX}\">vs 7d avg</span>",
+                    "  <span foreground=\"{color}\">{arrow}{:.0}%</span> <span foreground=\"{dim}\">vs 7d avg</span>",
                     pct.abs()
                 )
             }
             _ => String::new(),
         };
         lines.push(format!(
-            "  Rate      <span foreground=\"{DIM_HEX}\">{rate_str:>usd_width$}/hr</span>{trend}"
+            "  Rate      <span foreground=\"{dim}\">{rate_str:>usd_width$}/hr</span>{trend}"
         ));
     }
     let mut any_window = false;
     if cost.session_usd > 0.0 {
         lines.push(format!(
-            "  Session   <span foreground=\"{DIM_HEX}\">{session_usd:>usd_width$}</span>"
+            "  Session   <span foreground=\"{dim}\">{session_usd:>usd_width$}</span>"
         ));
         any_window = true;
     }
     if cost.weekly_usd > 0.0 {
         lines.push(format!(
-            "  Weekly    <span foreground=\"{DIM_HEX}\">{weekly_usd:>usd_width$}</span>"
+            "  Weekly    <span foreground=\"{dim}\">{weekly_usd:>usd_width$}</span>"
         ));
         any_window = true;
     }
@@ -1419,21 +1446,22 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
         lines.push(String::new());
     }
     lines.push(format!(
-        "  Today     <span foreground=\"{DIM_HEX}\">{today_usd:>usd_width$}  ·  {today_tokens:>tokens_width$} tokens</span>"
+        "  Today     <span foreground=\"{dim}\">{today_usd:>usd_width$}  ·  {today_tokens:>tokens_width$} tokens</span>"
     ));
     lines.push(format!(
-        "  Month     <span foreground=\"{DIM_HEX}\">{monthly_usd:>usd_width$}  ·  {monthly_tokens:>tokens_width$} tokens</span>"
+        "  Month     <span foreground=\"{dim}\">{monthly_usd:>usd_width$}  ·  {monthly_tokens:>tokens_width$} tokens</span>"
     ));
     lines
 }
 
 fn format_header(row: &ProviderRow) -> String {
+    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
     let icon = icon_markup(&row.provider);
     let name = pango_escape(&row.provider);
     let plan = row.plan_label.as_deref().filter(|s| !s.is_empty());
     let badge = match plan {
         Some(p) => format!(
-            "  <span foreground=\"{DIM_HEX}\">·  {}</span>",
+            "  <span foreground=\"{dim}\">·  {}</span>",
             pango_escape(p)
         ),
         None => String::new(),
@@ -1442,13 +1470,14 @@ fn format_header(row: &ProviderRow) -> String {
 }
 
 fn format_provider_card(row: &ProviderRow) -> String {
+    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
     let mut lines = vec![format_header(row)];
 
     if let Some(iso) = row.updated_iso.as_deref()
         && let Some(rel) = format_updated_relative(iso)
     {
         lines.push(format!(
-            "  <span foreground=\"{DIM_HEX}\">Updated {}</span>",
+            "  <span foreground=\"{dim}\">Updated {}</span>",
             pango_escape(&rel)
         ));
     }
@@ -1475,7 +1504,7 @@ fn format_provider_card(row: &ProviderRow) -> String {
     if !row.extra_windows.is_empty() {
         lines.push(String::new());
         lines.push(format!(
-            "  <span foreground=\"{DIM_HEX}\">Extra usage</span>"
+            "  <span foreground=\"{dim}\">Extra usage</span>"
         ));
         for extra in &row.extra_windows {
             lines.push(format_extra_window(extra));
@@ -1484,7 +1513,7 @@ fn format_provider_card(row: &ProviderRow) -> String {
 
     if let Some(cost) = &row.cost {
         lines.push(String::new());
-        lines.push(format!("  <span foreground=\"{DIM_HEX}\">Cost</span>"));
+        lines.push(format!("  <span foreground=\"{dim}\">Cost</span>"));
         lines.extend(format_cost_lines(cost));
     }
 
@@ -1496,11 +1525,12 @@ fn format_provider_card(row: &ProviderRow) -> String {
 }
 
 fn format_error_card(err: &ProviderFetchError) -> String {
+    let (_dim, _separator, _green, _yellow, red, _neutral) = theme_palette();
     let icon = icon_markup(&err.provider);
     let name = pango_escape(&err.provider);
     let msg = pango_escape(&err.message);
     format!(
-        "<tt><b>{icon}  {name}</b>  <span foreground=\"{RED_HEX}\">⚠ {msg}</span></tt>"
+        "<tt><b>{icon}  {name}</b>  <span foreground=\"{red}\">⚠ {msg}</span></tt>"
     )
 }
 
@@ -1518,13 +1548,14 @@ fn format_tooltip_with_errors(
 }
 
 fn format_tooltip_from_cards(cards: &[&str], refreshing: bool) -> String {
+    let (dim, separator, _green, yellow, _red, _neutral) = theme_palette();
     let separator = format!(
-        "<tt><span foreground=\"{SEPARATOR_HEX}\">────────────────────────────────────</span></tt>"
+        "<tt><span foreground=\"{separator}\">────────────────────────────────────</span></tt>"
     );
     let body = cards.join(&format!("\n{separator}\n"));
     let status_line = if refreshing {
         format!(
-            "\n<tt><b><span foreground=\"{YELLOW_HEX}\">⟳ Refreshing...</span></b></tt>"
+            "\n<tt><b><span foreground=\"{yellow}\">⟳ Refreshing...</span></b></tt>"
         )
     } else {
         String::new()
@@ -1545,7 +1576,7 @@ fn format_tooltip_from_cards(cards: &[&str], refreshing: bool) -> String {
         })
         .collect();
     let hint = format!(
-        "\n\n<tt><span foreground=\"{DIM_HEX}\">{}</span></tt>",
+        "\n\n<tt><span foreground=\"{dim}\">{}</span></tt>",
         hint_lines.join("\n")
     );
     format!("{body}{status_line}{hint}")

@@ -860,13 +860,16 @@ fn format_reset_time(resets_at: Option<&str>, description: Option<String>) -> St
 
             if duration.num_seconds() > 0 {
                 let total_minutes = duration.num_minutes();
-                let hours = total_minutes / 60;
+                let days = total_minutes / (60 * 24);
+                let hours = (total_minutes / 60) % 24;
                 let mins = total_minutes % 60;
 
-                return if hours > 0 {
-                    format!("in {}h {}m", hours, mins)
+                return if days > 0 {
+                    format!("in {days}d {hours}h {mins}m")
+                } else if hours > 0 {
+                    format!("in {hours}h {mins}m")
                 } else {
-                    format!("in {}m", mins)
+                    format!("in {mins}m")
                 };
             }
         }
@@ -1362,6 +1365,22 @@ mod tests {
             reset.starts_with("in 2h 2") || reset.starts_with("in 2h 30"),
             "unexpected reset: {}",
             reset
+        );
+    }
+
+    #[test]
+    fn format_window_with_days() {
+        let future = Utc::now() + chrono::Duration::days(3) + chrono::Duration::hours(16) + chrono::Duration::minutes(41);
+        let window = UsageWindow {
+            used_percent: Some(5),
+            reset_description: Some("ignored".to_string()),
+            resets_at: Some(future.to_rfc3339()),
+            window_minutes: Some(10080),
+        };
+        let (_, _, reset) = format_window(Some(window));
+        assert!(
+            reset.starts_with("in 3d 16h 4"),
+            "unexpected reset: {reset}"
         );
     }
 

@@ -610,10 +610,10 @@ fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
         String::new()
     };
     let pairs: &[(&str, &str)] = &[
-        ("scroll", "rotate"),
         ("left", "open TUI"),
         ("middle", "dashboard"),
         ("right", "refresh"),
+        ("scroll", "rotate"),
         ("back", "status"),
     ];
     let cell = |k: &str, v: &str| format!("{k:<6} {v:<10}");

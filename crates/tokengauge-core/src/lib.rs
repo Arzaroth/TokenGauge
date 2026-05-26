@@ -1162,16 +1162,31 @@ pub const YELLOW_HEX: &str = "#f9e2af";
 pub const RED_HEX: &str = "#f38ba8";
 pub const NEUTRAL_HEX: &str = "#cdd6f4";
 
-/// Process-global active theme. Set once via `install_theme()` at startup.
-/// All format-string helpers read from this to colour their output.
-static ACTIVE_THEME: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
+/// Process-global active theme.
+/// `install_theme` may be called more than once (e.g. on a daemon SIGHUP
+/// reload); each installation `Box::leak`s a fresh `Theme` so existing
+/// `&'static Theme` references stay valid. The leaked memory is a few
+/// hundred bytes per reload and is never reclaimed; acceptable because
+/// reloads are user-initiated and rare.
+static ACTIVE_THEME: std::sync::RwLock<Option<&'static Theme>> =
+    std::sync::RwLock::new(None);
 
 pub fn theme() -> &'static Theme {
-    ACTIVE_THEME.get_or_init(Theme::catppuccin)
+    if let Some(t) = *ACTIVE_THEME.read().expect("theme lock poisoned") {
+        return t;
+    }
+    let mut w = ACTIVE_THEME.write().expect("theme lock poisoned");
+    if let Some(t) = *w {
+        return t;
+    }
+    let default: &'static Theme = Box::leak(Box::new(Theme::catppuccin()));
+    *w = Some(default);
+    default
 }
 
 pub fn install_theme(t: Theme) {
-    let _ = ACTIVE_THEME.set(t);
+    let leaked: &'static Theme = Box::leak(Box::new(t));
+    *ACTIVE_THEME.write().expect("theme lock poisoned") = Some(leaked);
 }
 
 /// Resolved color palette used by both waybar tooltip and TUI.

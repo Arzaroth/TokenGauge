@@ -604,8 +604,19 @@ fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
     } else {
         String::new()
     };
+    let hint_lines = [
+        ("scroll", "rotate provider"),
+        ("left  ", "open TUI"),
+        ("middle", "open dashboard"),
+        ("right ", "refresh"),
+        ("back  ", "open status"),
+    ]
+    .iter()
+    .map(|(k, v)| format!("  {k}   {v}"))
+    .collect::<Vec<_>>()
+    .join("\n");
     let hint = format!(
-        "\n\n<tt><span foreground=\"{DIM_HEX}\">scroll rotate · left TUI · middle dashboard · right refresh · back status</span></tt>"
+        "\n\n<tt><span foreground=\"{DIM_HEX}\">{hint_lines}</span></tt>"
     );
     format!("{body}{status_line}{hint}")
 }

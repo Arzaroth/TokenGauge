@@ -589,14 +589,26 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
         .chars()
         .count()
         .max(monthly_tokens.chars().count());
-    vec![
-        format!(
-            "  Today     <span foreground=\"{DIM_HEX}\">{today_usd:>usd_width$}  ·  {today_tokens:>tokens_width$} tokens</span>"
-        ),
-        format!(
-            "  Month     <span foreground=\"{DIM_HEX}\">{monthly_usd:>usd_width$}  ·  {monthly_tokens:>tokens_width$} tokens</span>"
-        ),
-    ]
+    let mut lines = Vec::new();
+    if let Some(br) = &cost.burn_rate {
+        let mins = br.remaining_minutes;
+        let remaining = if mins >= 60 {
+            format!("{}h {}m", mins / 60, mins % 60)
+        } else {
+            format!("{mins}m")
+        };
+        lines.push(format!(
+            "  Rate      <span foreground=\"{DIM_HEX}\">${:.2}/hr  ·  projected ${:.2} in {remaining}</span>",
+            br.cost_per_hour, br.projected_cost
+        ));
+    }
+    lines.push(format!(
+        "  Today     <span foreground=\"{DIM_HEX}\">{today_usd:>usd_width$}  ·  {today_tokens:>tokens_width$} tokens</span>"
+    ));
+    lines.push(format!(
+        "  Month     <span foreground=\"{DIM_HEX}\">{monthly_usd:>usd_width$}  ·  {monthly_tokens:>tokens_width$} tokens</span>"
+    ));
+    lines
 }
 
 fn format_header(row: &ProviderRow) -> String {

@@ -511,14 +511,19 @@ fn format_extra_window(extra: &ExtraWindowRow) -> String {
 fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
     let today_usd = format!("${:.2}", cost.today_usd);
     let monthly_usd = format!("${:.2}", cost.monthly_usd);
+    let usd_width = today_usd.chars().count().max(monthly_usd.chars().count());
     let today_tokens = format_tokens(cost.today_tokens);
     let monthly_tokens = format_tokens(cost.monthly_tokens);
+    let tokens_width = today_tokens
+        .chars()
+        .count()
+        .max(monthly_tokens.chars().count());
     vec![
         format!(
-            "  Today     <span foreground=\"{DIM_HEX}\">{today_usd}  ·  {today_tokens} tokens</span>"
+            "  Today     <span foreground=\"{DIM_HEX}\">{today_usd:>usd_width$}  ·  {today_tokens:>tokens_width$} tokens</span>"
         ),
         format!(
-            "  Month     <span foreground=\"{DIM_HEX}\">{monthly_usd}  ·  {monthly_tokens} tokens</span>"
+            "  Month     <span foreground=\"{DIM_HEX}\">{monthly_usd:>usd_width$}  ·  {monthly_tokens:>tokens_width$} tokens</span>"
         ),
     ]
 }

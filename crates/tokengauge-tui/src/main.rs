@@ -507,10 +507,14 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
 
     let today_usd_str = format!("${:.2}", cost.today_usd);
     let monthly_usd_str = format!("${:.2}", cost.monthly_usd);
+    let session_usd_str = format!("${:.2}", cost.session_usd);
+    let weekly_usd_str = format!("${:.2}", cost.weekly_usd);
     let total_usd_w = today_usd_str
         .chars()
         .count()
-        .max(monthly_usd_str.chars().count());
+        .max(monthly_usd_str.chars().count())
+        .max(session_usd_str.chars().count())
+        .max(weekly_usd_str.chars().count());
     let today_tokens_str = format_tokens(cost.today_tokens);
     let monthly_tokens_str = format_tokens(cost.monthly_tokens);
     let total_tokens_w = today_tokens_str
@@ -532,11 +536,15 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
         ]));
     }
 
+    let label_w = 7usize;
     let totals_line = |label: &str, usd_str: &str, tokens_str: &str| {
         Line::from(vec![
             Span::raw(pad.clone()),
-            Span::styled(label.to_string(), Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("      "),
+            Span::styled(
+                format!("{label:<label_w$}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   "),
             Span::styled(
                 format!("{usd_str:>total_usd_w$}"),
                 Style::default().fg(green()),
@@ -566,20 +574,29 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
         ])
     };
 
-    let window_line = |label: &str, usd: f64| {
+    let window_line = |label: &str, usd_str: &str| {
         Line::from(vec![
             Span::raw(pad.clone()),
-            Span::styled(label.to_string(), Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("    "),
-            Span::styled(format!("${usd:.2}"), Style::default().fg(green())),
+            Span::styled(
+                format!("{label:<label_w$}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   "),
+            Span::styled(format!("{usd_str:>total_usd_w$}"), Style::default().fg(green())),
         ])
     };
 
+    let mut any_window = false;
     if cost.session_usd > 0.0 {
-        lines.push(window_line("Session", cost.session_usd));
+        lines.push(window_line("Session", &session_usd_str));
+        any_window = true;
     }
     if cost.weekly_usd > 0.0 {
-        lines.push(window_line("Weekly", cost.weekly_usd));
+        lines.push(window_line("Weekly", &weekly_usd_str));
+        any_window = true;
+    }
+    if any_window {
+        lines.push(Line::from(""));
     }
     lines.push(totals_line("Today", &today_usd_str, &today_tokens_str));
     for m in &cost.today_models {

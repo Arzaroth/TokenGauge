@@ -234,6 +234,8 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
         "signal": 8,
         "on-click": "omarchy-launch-or-focus-tui tokengauge-tui",
         "on-click-right": "tokengauge-waybar --refresh",
+        "on-click-middle": "tokengauge-waybar --open=dashboard",
+        "on-click-backward": "tokengauge-waybar --open=status",
         "on-scroll-up": "tokengauge-waybar --rotate=next",
         "on-scroll-down": "tokengauge-waybar --rotate=prev"
       }
@@ -246,6 +248,8 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
         "interval": 60,
         "signal": 8,
         "on-click-right": "tokengauge-waybar --refresh",
+        "on-click-middle": "tokengauge-waybar --open=dashboard",
+        "on-click-backward": "tokengauge-waybar --open=status",
         "on-scroll-up": "tokengauge-waybar --rotate=next",
         "on-scroll-down": "tokengauge-waybar --rotate=prev"
       }

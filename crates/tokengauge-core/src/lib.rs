@@ -1430,14 +1430,46 @@ struct CcusageProjection {
     total_cost: f64,
 }
 
+/// Resolve which command launches ccusage on this host.
+/// Order: direct `ccusage` (global npm/bun/AUR install) → `bunx ccusage` →
+/// `npx --yes ccusage` (Node.js fallback). First one whose binary is on PATH
+/// is used. Returns None if no runner is available.
+fn resolve_ccusage_runner() -> Option<Vec<String>> {
+    if binary_on_path("ccusage") {
+        return Some(vec!["ccusage".into()]);
+    }
+    if binary_on_path("bunx") {
+        return Some(vec!["bunx".into(), "ccusage".into()]);
+    }
+    if binary_on_path("npx") {
+        return Some(vec!["npx".into(), "--yes".into(), "ccusage".into()]);
+    }
+    None
+}
+
+pub fn ccusage_runner_description() -> Option<String> {
+    resolve_ccusage_runner().map(|parts| parts.join(" "))
+}
+
+fn binary_on_path(name: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| {
+        let candidate = dir.join(name);
+        std::fs::metadata(&candidate)
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+    })
+}
+
 fn run_ccusage_blocks(timeout: Duration) -> Result<CcusageBlocksResponse> {
-    let mut command = Command::new("npx");
-    command
-        .arg("--yes")
-        .arg("ccusage")
-        .arg("blocks")
-        .arg("--active")
-        .arg("--json");
+    let runner = resolve_ccusage_runner().ok_or_else(|| anyhow!("no ccusage runner on PATH"))?;
+    let mut command = Command::new(&runner[0]);
+    for part in &runner[1..] {
+        command.arg(part);
+    }
+    command.arg("blocks").arg("--active").arg("--json");
     let output = run_with_timeout(command, timeout).context("ccusage blocks failed")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1475,8 +1507,12 @@ fn fetch_burn_rates(timeout: Duration) -> HashMap<String, BurnRate> {
 }
 
 fn run_ccusage(args: &[&str], timeout: Duration) -> Result<CcusageDailyResponse> {
-    let mut command = Command::new("npx");
-    command.arg("--yes").arg("ccusage").args(args).arg("--json");
+    let runner = resolve_ccusage_runner().ok_or_else(|| anyhow!("no ccusage runner on PATH"))?;
+    let mut command = Command::new(&runner[0]);
+    for part in &runner[1..] {
+        command.arg(part);
+    }
+    command.args(args).arg("--json");
     let output = run_with_timeout(command, timeout).context("ccusage failed")?;
 
     if !output.status.success() {

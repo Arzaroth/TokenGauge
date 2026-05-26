@@ -463,16 +463,23 @@ fn handle_doctor(config_path: &Path) -> i32 {
         "install from https://github.com/steipete/CodexBar",
     ));
     if cfg.ccusage_enabled {
-        record(check_binary(
-            "npx",
-            "ccusage cost data",
-            "install Node.js, or set ccusage_enabled = false",
-        ));
+        match tokengauge_core::ccusage_runner_description() {
+            Some(cmd) => record(DoctorCheck {
+                label: "ccusage runner available".into(),
+                ok: true,
+                detail: cmd,
+            }),
+            None => record(DoctorCheck {
+                label: "ccusage runner".into(),
+                ok: false,
+                detail: "install ccusage (npm i -g ccusage / bun i -g ccusage / npx fallback) or set ccusage_enabled = false".into(),
+            }),
+        }
     } else {
         record(DoctorCheck {
             label: "ccusage disabled in config".into(),
             ok: true,
-            detail: "no cost data, no npx required".into(),
+            detail: "no cost data".into(),
         });
     }
     if cfg.notifications.enabled {

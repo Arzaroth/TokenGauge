@@ -325,6 +325,25 @@ pub struct TokenGaugeConfig {
     pub ccusage_timeout_secs: u64,
     pub providers: ProvidersConfig,
     pub waybar: WaybarConfig,
+    pub notifications: NotificationsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct NotificationsConfig {
+    /// Enable desktop notifications (via `notify-send`) when usage crosses thresholds.
+    pub enabled: bool,
+    /// Percentage thresholds at which to notify. Applied per (provider, window).
+    pub thresholds: Vec<u8>,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            thresholds: vec![50, 80, 95],
+        }
+    }
 }
 
 impl Default for TokenGaugeConfig {
@@ -342,6 +361,7 @@ impl Default for TokenGaugeConfig {
                 ..Default::default()
             },
             waybar: WaybarConfig::default(),
+            notifications: NotificationsConfig::default(),
         }
     }
 }
@@ -1182,6 +1202,74 @@ pub fn write_waybar_state(path: &Path, state: &WaybarState) -> Result<()> {
         .with_context(|| format!("failed to write waybar state {}", path.display()))
 }
 
+/// State for one-shot threshold notifications: tracks which thresholds we
+/// already fired notifications for, per `(provider, window)` key, so we
+/// don't spam the user on every refresh while above the limit.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NotifyState {
+    #[serde(default)]
+    pub entries: HashMap<String, NotifyEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NotifyEntry {
+    #[serde(default)]
+    pub notified: Vec<u8>,
+}
+
+pub fn notify_state_path(cache_file: &Path) -> PathBuf {
+    let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
+    parent.join("tokengauge-notify-state.json")
+}
+
+pub fn read_notify_state(path: &Path) -> NotifyState {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return NotifyState::default();
+    };
+    serde_json::from_str(&contents).unwrap_or_default()
+}
+
+pub fn write_notify_state(path: &Path, state: &NotifyState) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    let contents = serde_json::to_string(state)?;
+    fs::write(path, contents)
+        .with_context(|| format!("failed to write notify state {}", path.display()))
+}
+
+/// Pure decision logic: given current pct and previously-notified thresholds,
+/// returns (thresholds_to_fire, updated_notified_list).
+///
+/// Reset: if pct dropped 10+ points below the highest previously-notified
+/// threshold, treat as window roll-over and clear the notified list before
+/// considering thresholds. Avoids needing to track raw reset timestamps.
+pub fn thresholds_to_fire(
+    pct: u8,
+    thresholds: &[u8],
+    notified: &[u8],
+) -> (Vec<u8>, Vec<u8>) {
+    let mut current = notified.to_vec();
+    if let Some(&max_notified) = current.iter().max()
+        && (pct + 10) < max_notified
+    {
+        current.clear();
+    }
+    let mut sorted = thresholds.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut to_fire = Vec::new();
+    for &t in &sorted {
+        if pct >= t && !current.contains(&t) {
+            to_fire.push(t);
+            current.push(t);
+        }
+    }
+    current.sort_unstable();
+    current.dedup();
+    (to_fire, current)
+}
+
 // ============================================================================
 // ccusage Integration
 // ============================================================================
@@ -1339,6 +1427,12 @@ cache_file = "/tmp/tokengauge-usage.json"
 ccusage_enabled = true
 # Timeout in seconds for each ccusage call (cold starts can be slow)
 ccusage_timeout_secs = 15
+
+[notifications]
+# Fire desktop notifications (notify-send) when usage crosses thresholds.
+enabled = true
+# Percentages to alert on (one notification per threshold per window).
+thresholds = [50, 80, 95]
 
 [waybar]
 # Which window to show in waybar: "daily" or "weekly"
@@ -2065,6 +2159,65 @@ mod tests {
         assert!(lookup_cost("claude-code", &costs).is_some());
         assert!(lookup_cost("CLAUDE", &costs).is_some());
         assert!(lookup_cost("zai", &costs).is_none());
+    }
+
+    #[test]
+    fn thresholds_to_fire_below_no_trigger() {
+        let (fire, notified) = thresholds_to_fire(40, &[50, 80, 95], &[]);
+        assert!(fire.is_empty());
+        assert!(notified.is_empty());
+    }
+
+    #[test]
+    fn thresholds_to_fire_crosses_50_once() {
+        let (fire, notified) = thresholds_to_fire(55, &[50, 80, 95], &[]);
+        assert_eq!(fire, vec![50]);
+        assert_eq!(notified, vec![50]);
+    }
+
+    #[test]
+    fn thresholds_to_fire_already_notified_50_now_at_60() {
+        let (fire, notified) = thresholds_to_fire(60, &[50, 80, 95], &[50]);
+        assert!(fire.is_empty());
+        assert_eq!(notified, vec![50]);
+    }
+
+    #[test]
+    fn thresholds_to_fire_jumps_past_two() {
+        let (fire, notified) = thresholds_to_fire(82, &[50, 80, 95], &[]);
+        assert_eq!(fire, vec![50, 80]);
+        assert_eq!(notified, vec![50, 80]);
+    }
+
+    #[test]
+    fn thresholds_to_fire_resets_on_pct_drop() {
+        // notified up to 80, but pct dropped to 5 (window rolled over)
+        let (fire, notified) = thresholds_to_fire(5, &[50, 80, 95], &[50, 80]);
+        assert!(fire.is_empty());
+        assert!(notified.is_empty(), "drop below 80-10=70 must clear");
+    }
+
+    #[test]
+    fn thresholds_to_fire_resets_then_recrosses() {
+        // dropped to 0, then climbed to 60
+        let (fire, notified) = thresholds_to_fire(60, &[50, 80, 95], &[50, 80]);
+        assert_eq!(fire, vec![50]);
+        assert_eq!(notified, vec![50]);
+    }
+
+    #[test]
+    fn thresholds_to_fire_small_fluctuation_no_reset() {
+        // notified 80, pct dipped to 75 (within 10) - shouldn't reset
+        let (fire, notified) = thresholds_to_fire(75, &[50, 80], &[50, 80]);
+        assert!(fire.is_empty());
+        assert_eq!(notified, vec![50, 80]);
+    }
+
+    #[test]
+    fn notify_state_path_lives_next_to_cache() {
+        let cache = PathBuf::from("/tmp/foo/bar.json");
+        let p = notify_state_path(&cache);
+        assert_eq!(p, PathBuf::from("/tmp/foo/tokengauge-notify-state.json"));
     }
 
     #[test]

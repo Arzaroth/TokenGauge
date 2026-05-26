@@ -303,52 +303,42 @@ fn build_text_for_rows_with_errors(
         .as_deref()
         .or(config.waybar.primary.as_deref())
         .map(|s| s.to_lowercase());
-    let show_all = selected_key.is_none();
 
-    let mut parts: Vec<String> = Vec::new();
-    for row in rows {
-        let pick = match &selected_key {
-            None => true,
-            Some(k) => &row.provider.to_lowercase() == k,
+    let used_for = |row: &ProviderRow| match config.waybar.window {
+        WaybarWindow::Daily => row.session_used,
+        WaybarWindow::Weekly => row.weekly_used,
+    };
+    let matches_key = |provider: &str| {
+        selected_key
+            .as_deref()
+            .is_none_or(|k| provider.to_lowercase() == k)
+    };
+
+    let success_parts = rows
+        .iter()
+        .filter(|r| matches_key(&r.provider))
+        .map(|r| format_bar(&r.provider, used_for(r)));
+    let error_parts = errors
+        .iter()
+        .filter(|e| matches_key(&e.provider))
+        .map(|e| format_bar_error(&e.provider));
+    let parts: Vec<String> = success_parts.chain(error_parts).collect();
+
+    if !parts.is_empty() {
+        return if selected_key.is_some() {
+            // Show only the matched provider, drop secondary matches.
+            parts.into_iter().next().unwrap_or_default()
+        } else {
+            parts.join("   ")
         };
-        if !pick && !show_all {
-            continue;
-        }
-        let used = match config.waybar.window {
-            WaybarWindow::Daily => row.session_used,
-            WaybarWindow::Weekly => row.weekly_used,
-        };
-        parts.push(format_bar(&row.provider, used));
-        if !show_all && pick {
-            return parts.join("   ");
-        }
     }
-    for err in errors {
-        let pick = match &selected_key {
-            None => true,
-            Some(k) => &err.provider.to_lowercase() == k,
-        };
-        if !pick && !show_all {
-            continue;
-        }
-        parts.push(format_bar_error(&err.provider));
-        if !show_all && pick {
-            break;
-        }
-    }
-    if parts.is_empty() {
-        // Selected provider exists in neither success nor error sets - fall back to first row
-        if let Some(row) = rows.first() {
-            let used = match config.waybar.window {
-                WaybarWindow::Daily => row.session_used,
-                WaybarWindow::Weekly => row.weekly_used,
-            };
-            parts.push(format_bar(&row.provider, used));
-        } else if let Some(err) = errors.first() {
-            parts.push(format_bar_error(&err.provider));
-        }
-    }
-    parts.join("   ")
+
+    // Selected provider exists in neither set; fall back to the first row,
+    // or the first error if there are no successes.
+    rows.first()
+        .map(|r| format_bar(&r.provider, used_for(r)))
+        .or_else(|| errors.first().map(|e| format_bar_error(&e.provider)))
+        .unwrap_or_default()
 }
 
 fn format_bar_error(label: &str) -> String {
@@ -464,21 +454,17 @@ fn signal_waybar() {
 }
 
 fn find_waybar_pids() -> Vec<libc::pid_t> {
-    let mut pids = Vec::new();
     let Ok(entries) = std::fs::read_dir("/proc") else {
-        return pids;
+        return Vec::new();
     };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name_str) = name.to_str() else { continue };
-        let Ok(pid) = name_str.parse::<libc::pid_t>() else { continue };
-        let cmdline_path = entry.path().join("comm");
-        let Ok(comm) = std::fs::read_to_string(&cmdline_path) else { continue };
-        if comm.trim() == "waybar" {
-            pids.push(pid);
-        }
-    }
-    pids
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid: libc::pid_t = entry.file_name().to_str()?.parse().ok()?;
+            let comm = std::fs::read_to_string(entry.path().join("comm")).ok()?;
+            (comm.trim() == "waybar").then_some(pid)
+        })
+        .collect()
 }
 
 /// Front-half of refresh: write sentinel, signal waybar, fork detached worker
@@ -547,12 +533,10 @@ fn handle_doctor(config_path: &Path) -> i32 {
         }
     };
 
-    let mut failed = 0;
-    let mut record = |c: DoctorCheck| {
-        if !c.ok {
-            failed += 1;
-        }
+    let checks: std::cell::RefCell<Vec<DoctorCheck>> = std::cell::RefCell::new(Vec::new());
+    let record = |c: DoctorCheck| {
         print_check(&c);
+        checks.borrow_mut().push(c);
     };
 
     println!("TokenGauge doctor");
@@ -705,6 +689,7 @@ fn handle_doctor(config_path: &Path) -> i32 {
     }
 
     println!();
+    let failed = checks.borrow().iter().filter(|c| !c.ok).count();
     if failed == 0 {
         println!("{green}All checks passed.{reset}");
         0
@@ -807,7 +792,7 @@ fn current_snapshot(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) 
         };
         return render_output(config, &rows, &errors, true);
     }
-    state.lock().unwrap().output.clone()
+    state.lock().expect("daemon state mutex poisoned").output.clone()
 }
 
 struct DaemonState {
@@ -1056,7 +1041,7 @@ fn do_fetch_and_broadcast(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeCo
     let rows = payload_to_rows_with_costs(payloads, &costs);
     let output = render_output(config, &rows, &errors, false);
     let subscriber_count = {
-        let mut s = state.lock().unwrap();
+        let mut s = state.lock().expect("daemon state mutex poisoned");
         s.output = output;
         s.broadcast();
         s.subscribers.len()
@@ -1098,7 +1083,7 @@ fn handle_client(
             let reply = SocketReply::Update { output };
             writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
             stream.flush()?;
-            state.lock().unwrap().subscribers.push(stream);
+            state.lock().expect("daemon state mutex poisoned").subscribers.push(stream);
             // Don't close - daemon broadcast will push updates
         }
         SocketCommand::Refresh => {
@@ -1145,7 +1130,7 @@ fn handle_client(
                 None => (Vec::new(), Vec::new()),
             };
             let output = render_output(&config, &rows, &errors, false);
-            let mut s = state.lock().unwrap();
+            let mut s = state.lock().expect("daemon state mutex poisoned");
             s.output = output;
             s.broadcast();
             writeln!(stream, "{}", serde_json::to_string(&SocketReply::Ack)?)?;
@@ -1447,11 +1432,12 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
         .chars()
         .count()
         .max(monthly_tokens.chars().count());
-    let mut lines = Vec::new();
-    if let Some(br) = &cost.burn_rate {
+    let rate_line = cost.burn_rate.as_ref().map(|br| {
         let rate_str = format!("${:.2}", br.cost_per_hour);
-        let trend = match cost.avg_hourly_cost() {
-            Some(avg) if avg > 0.0 => {
+        let trend = cost
+            .avg_hourly_cost()
+            .filter(|avg| *avg > 0.0)
+            .map(|avg| {
                 let pct = ((br.cost_per_hour - avg) / avg) * 100.0;
                 let arrow = if pct >= 0.0 { "↑" } else { "↓" };
                 let color = if pct >= 25.0 {
@@ -1465,36 +1451,30 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
                     "  <span foreground=\"{color}\">{arrow}{:.0}%</span> <span foreground=\"{dim}\">vs 7d avg</span>",
                     pct.abs()
                 )
-            }
-            _ => String::new(),
-        };
-        lines.push(format!(
-            "  Rate      <span foreground=\"{dim}\">{rate_str:>usd_width$}/hr</span>{trend}"
-        ));
-    }
-    let mut any_window = false;
-    if cost.session_usd > 0.0 {
-        lines.push(format!(
-            "  Session   <span foreground=\"{dim}\">{session_usd:>usd_width$}</span>"
-        ));
-        any_window = true;
-    }
-    if cost.weekly_usd > 0.0 {
-        lines.push(format!(
-            "  Weekly    <span foreground=\"{dim}\">{weekly_usd:>usd_width$}</span>"
-        ));
-        any_window = true;
-    }
-    if any_window {
-        lines.push(String::new());
-    }
-    lines.push(format!(
+            })
+            .unwrap_or_default();
+        format!("  Rate      <span foreground=\"{dim}\">{rate_str:>usd_width$}/hr</span>{trend}")
+    });
+
+    let session_line = (cost.session_usd > 0.0).then(|| {
+        format!("  Session   <span foreground=\"{dim}\">{session_usd:>usd_width$}</span>")
+    });
+    let weekly_line = (cost.weekly_usd > 0.0).then(|| {
+        format!("  Weekly    <span foreground=\"{dim}\">{weekly_usd:>usd_width$}</span>")
+    });
+    let blank = (session_line.is_some() || weekly_line.is_some()).then(String::new);
+
+    let today_line = format!(
         "  Today     <span foreground=\"{dim}\">{today_usd:>usd_width$}  ·  {today_tokens:>tokens_width$} tokens</span>"
-    ));
-    lines.push(format!(
+    );
+    let month_line = format!(
         "  Month     <span foreground=\"{dim}\">{monthly_usd:>usd_width$}  ·  {monthly_tokens:>tokens_width$} tokens</span>"
-    ));
-    lines
+    );
+
+    [rate_line, session_line, weekly_line, blank, Some(today_line), Some(month_line)]
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 fn format_header(row: &ProviderRow) -> String {
@@ -1514,55 +1494,65 @@ fn format_header(row: &ProviderRow) -> String {
 
 fn format_provider_card(row: &ProviderRow) -> String {
     let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
-    let mut lines = vec![format_header(row)];
 
-    if let Some(iso) = row.updated_iso.as_deref()
-        && let Some(rel) = format_updated_relative(iso)
-    {
-        lines.push(format!(
-            "  <span foreground=\"{dim}\">Updated {}</span>",
-            pango_escape(&rel)
-        ));
-    }
+    let updated_line = row
+        .updated_iso
+        .as_deref()
+        .and_then(format_updated_relative)
+        .map(|rel| {
+            format!(
+                "  <span foreground=\"{dim}\">Updated {}</span>",
+                pango_escape(&rel)
+            )
+        });
 
     let (session_label, weekly_label, tertiary_label) = window_labels(&row.provider);
-    lines.push(format_provider_line(
-        session_label,
-        row.session_used,
-        &row.session_reset,
-    ));
-    lines.push(format_provider_line(
-        weekly_label,
-        row.weekly_used,
-        &row.weekly_reset,
-    ));
-    if row.tertiary_used.is_some() || row.tertiary_reset != "—" {
-        lines.push(format_provider_line(
-            tertiary_label,
-            row.tertiary_used,
-            &row.tertiary_reset,
-        ));
-    }
+    let window_lines = [
+        Some(format_provider_line(
+            session_label,
+            row.session_used,
+            &row.session_reset,
+        )),
+        Some(format_provider_line(
+            weekly_label,
+            row.weekly_used,
+            &row.weekly_reset,
+        )),
+        (row.tertiary_used.is_some() || row.tertiary_reset != "—").then(|| {
+            format_provider_line(tertiary_label, row.tertiary_used, &row.tertiary_reset)
+        }),
+    ];
 
-    if !row.extra_windows.is_empty() {
-        lines.push(String::new());
-        lines.push(format!(
-            "  <span foreground=\"{dim}\">Extra usage</span>"
-        ));
-        for extra in &row.extra_windows {
-            lines.push(format_extra_window(extra));
-        }
-    }
+    let extras_section: Vec<String> = if row.extra_windows.is_empty() {
+        Vec::new()
+    } else {
+        std::iter::once(String::new())
+            .chain(std::iter::once(format!(
+                "  <span foreground=\"{dim}\">Extra usage</span>"
+            )))
+            .chain(row.extra_windows.iter().map(format_extra_window))
+            .collect()
+    };
 
-    if let Some(cost) = &row.cost {
-        lines.push(String::new());
-        lines.push(format!("  <span foreground=\"{dim}\">Cost</span>"));
-        lines.extend(format_cost_lines(cost));
-    }
+    let cost_section: Vec<String> = match &row.cost {
+        Some(cost) => std::iter::once(String::new())
+            .chain(std::iter::once(format!(
+                "  <span foreground=\"{dim}\">Cost</span>"
+            )))
+            .chain(format_cost_lines(cost))
+            .collect(),
+        None => Vec::new(),
+    };
 
-    if let Some(credits) = format_credits_line(&row.credits) {
-        lines.push(credits);
-    }
+    let credits_line = format_credits_line(&row.credits);
+
+    let lines: Vec<String> = std::iter::once(format_header(row))
+        .chain(updated_line)
+        .chain(window_lines.into_iter().flatten())
+        .chain(extras_section)
+        .chain(cost_section)
+        .chain(credits_line)
+        .collect();
 
     format!("<tt>{}</tt>", lines.join("\n"))
 }
@@ -1582,11 +1572,12 @@ fn format_tooltip_with_errors(
     errors: &[ProviderFetchError],
     refreshing: bool,
 ) -> String {
-    let mut cards: Vec<String> = rows.iter().map(|row| format_provider_card(row)).collect();
-    for err in errors {
-        cards.push(format_error_card(err));
-    }
-    let cards_refs: Vec<&str> = cards.iter().map(|s| s.as_str()).collect();
+    let cards: Vec<String> = rows
+        .iter()
+        .map(|row| format_provider_card(row))
+        .chain(errors.iter().map(format_error_card))
+        .collect();
+    let cards_refs: Vec<&str> = cards.iter().map(String::as_str).collect();
     format_tooltip_from_cards(&cards_refs, refreshing)
 }
 

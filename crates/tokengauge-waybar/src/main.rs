@@ -30,6 +30,15 @@ struct Args {
     /// Not for direct use.
     #[arg(long, hide = true)]
     internal_refresh_worker: bool,
+    /// Open the selected provider's dashboard or status page in the browser.
+    #[arg(long, value_enum)]
+    open: Option<OpenTarget>,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum OpenTarget {
+    Dashboard,
+    Status,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -96,6 +105,11 @@ fn main() -> Result<()> {
 
     if let Some(dir) = args.rotate {
         handle_rotate(&config, dir)?;
+        return Ok(());
+    }
+
+    if let Some(target) = args.open {
+        handle_open(&config, target);
         return Ok(());
     }
 
@@ -288,6 +302,38 @@ fn worker_do_refresh(config: &TokenGaugeConfig) {
     let _ = write_cache_full(&config.cache_file, &payloads, &errors, &costs);
     let _ = std::fs::remove_file(&sentinel);
     signal_waybar();
+}
+
+fn handle_open(config: &TokenGaugeConfig, target: OpenTarget) {
+    let cached = match read_cache_full(&config.cache_file) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let rows = payload_to_rows_with_costs(cached.payloads().to_vec(), &cached.costs());
+    let Some(idx) = selected_provider_for_tooltip(config, &rows) else {
+        // No selection: use first row if any.
+        if rows.is_empty() {
+            return;
+        }
+        return open_url_for_provider(&rows[0].provider, target);
+    };
+    open_url_for_provider(&rows[idx].provider, target);
+}
+
+fn open_url_for_provider(provider: &str, target: OpenTarget) {
+    let urls = tokengauge_core::provider_urls(provider);
+    let url = match target {
+        OpenTarget::Dashboard => urls.dashboard,
+        OpenTarget::Status => urls.status,
+    };
+    if let Some(url) = url {
+        let _ = Command::new("xdg-open")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
 }
 
 fn handle_rotate(config: &TokenGaugeConfig, dir: RotateDir) -> Result<()> {
@@ -559,7 +605,7 @@ fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
         String::new()
     };
     let hint = format!(
-        "\n\n<tt><span foreground=\"{DIM_HEX}\">scroll: rotate · left-click: TUI · right-click: refresh</span></tt>"
+        "\n\n<tt><span foreground=\"{DIM_HEX}\">scroll rotate · left TUI · middle dashboard · right refresh · back status</span></tt>"
     );
     format!("{body}{status_line}{hint}")
 }

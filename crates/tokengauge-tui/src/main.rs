@@ -21,8 +21,8 @@ use tokengauge_core::{
     CostInfo, DIM_HEX, ExtraWindowRow, FetchResult, GREEN_HEX, ProviderFetchError,
     ProviderRow, color_hex_for_percent, fetch_all_providers, format_tokens,
     format_updated_relative, load_config, parse_hex_rgb, payload_to_rows_with_costs,
-    provider_icon as core_provider_icon, read_cache_full, read_waybar_state, waybar_state_path,
-    window_labels, write_cache_full, write_default_config,
+    provider_icon as core_provider_icon, provider_urls, read_cache_full, read_waybar_state,
+    waybar_state_path, window_labels, write_cache_full, write_default_config,
 };
 
 const MIN_BAR_WIDTH: usize = 12;
@@ -224,6 +224,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, args: &Args) -
                 KeyCode::Char('G') | KeyCode::End => state.scroll = state.max_scroll(),
                 KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => state.next_tab(),
                 KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => state.prev_tab(),
+                KeyCode::Char('u') => open_active_url(&state, OpenWhich::Dashboard),
+                KeyCode::Char('s') => open_active_url(&state, OpenWhich::Status),
                 _ => {}
             }
         }
@@ -277,6 +279,31 @@ fn spawn_refresh(args: &Args, force: bool) -> Receiver<Result<RefreshResult>> {
     });
 
     receiver
+}
+
+#[derive(Clone, Copy)]
+enum OpenWhich {
+    Dashboard,
+    Status,
+}
+
+fn open_active_url(state: &AppState, which: OpenWhich) {
+    let Some(row) = state.rows.get(state.active_tab) else {
+        return;
+    };
+    let urls = provider_urls(&row.provider);
+    let url = match which {
+        OpenWhich::Dashboard => urls.dashboard,
+        OpenWhich::Status => urls.status,
+    };
+    let Some(url) = url else { return };
+    use std::process::{Command, Stdio};
+    let _ = Command::new("xdg-open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
 }
 
 fn should_exit(key: KeyEvent) -> bool {
@@ -737,23 +764,27 @@ fn draw_ui(frame: &mut ratatui::Frame, state: &mut AppState, is_refreshing: bool
         Color::DarkGray
     };
 
+    let key_style = Style::default()
+        .fg(Color::LightCyan)
+        .add_modifier(Modifier::BOLD);
+    let dim_style = Style::default().fg(Color::Gray);
+    let sep_style = Style::default().fg(Color::DarkGray);
     let footer_line = Line::from(vec![
-        Span::styled(
-            "r",
-            Style::default()
-                .fg(Color::LightCyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" refresh", Style::default().fg(Color::Gray)),
-        Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            "q/esc",
-            Style::default()
-                .fg(Color::LightCyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" quit", Style::default().fg(Color::Gray)),
-        Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+        Span::styled("r", key_style),
+        Span::styled(" refresh", dim_style),
+        Span::styled(" | ", sep_style),
+        Span::styled("h/l", key_style),
+        Span::styled(" tabs", dim_style),
+        Span::styled(" | ", sep_style),
+        Span::styled("u", key_style),
+        Span::styled(" dashboard", dim_style),
+        Span::styled(" | ", sep_style),
+        Span::styled("s", key_style),
+        Span::styled(" status", dim_style),
+        Span::styled(" | ", sep_style),
+        Span::styled("q/esc", key_style),
+        Span::styled(" quit", dim_style),
+        Span::styled(" | ", sep_style),
         Span::styled(
             status_text,
             Style::default()

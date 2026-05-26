@@ -1082,6 +1082,37 @@ pub fn window_labels(provider: &str) -> (&'static str, &'static str, &'static st
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderUrls {
+    pub dashboard: Option<&'static str>,
+    pub status: Option<&'static str>,
+}
+
+pub fn provider_urls(provider: &str) -> ProviderUrls {
+    match provider.to_lowercase().as_str() {
+        "claude" => ProviderUrls {
+            dashboard: Some("https://claude.ai/settings/usage"),
+            status: Some("https://status.anthropic.com"),
+        },
+        "codex" => ProviderUrls {
+            dashboard: Some("https://platform.openai.com/usage"),
+            status: Some("https://status.openai.com"),
+        },
+        "copilot" => ProviderUrls {
+            dashboard: Some("https://github.com/settings/copilot"),
+            status: Some("https://www.githubstatus.com"),
+        },
+        "z.ai" | "zai" => ProviderUrls {
+            dashboard: Some("https://z.ai/manage-apikey"),
+            status: Some("https://status.z.ai"),
+        },
+        _ => ProviderUrls {
+            dashboard: None,
+            status: None,
+        },
+    }
+}
+
 pub fn color_hex_for_percent(percent: u8) -> &'static str {
     match percent {
         0..=49 => GREEN_HEX,

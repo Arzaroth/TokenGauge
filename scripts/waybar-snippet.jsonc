@@ -5,6 +5,8 @@
   "signal": 8,
   "on-click": "ghostty -e tokengauge-tui",
   "on-click-right": "tokengauge-waybar --refresh",
+  "on-click-middle": "tokengauge-waybar --open=dashboard",
+  "on-click-backward": "tokengauge-waybar --open=status",
   "on-scroll-up": "tokengauge-waybar --rotate=next",
   "on-scroll-down": "tokengauge-waybar --rotate=prev"
 }

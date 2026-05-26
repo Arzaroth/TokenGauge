@@ -841,6 +841,14 @@ fn run_daemon(config: &TokenGaugeConfig) -> Result<()> {
     }
     let listener = UnixListener::bind(&sock_path)
         .with_context(|| format!("failed to bind socket {}", sock_path.display()))?;
+    dlog(
+        "daemon",
+        &format!(
+            "listening on {} (refresh every {}s)",
+            sock_path.display(),
+            config.refresh_secs.max(10)
+        ),
+    );
 
     let state = Arc::new(Mutex::new(DaemonState {
         output: WaybarOutput {
@@ -872,7 +880,15 @@ fn run_daemon(config: &TokenGaugeConfig) -> Result<()> {
             loop {
                 thread::sleep(Duration::from_millis(200));
                 if signal_flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                    do_fetch_and_broadcast(&state, &config);
+                    dlog("signal", "SIGRTMIN+8 received, forcing fetch");
+                    let s = state.clone();
+                    let c = config.clone();
+                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        do_fetch_and_broadcast(&s, &c);
+                    }));
+                    if let Err(payload) = res {
+                        dlog("signal", &format!("panic recovered: {}", panic_message(&payload)));
+                    }
                 }
             }
         });
@@ -887,6 +903,7 @@ fn run_daemon(config: &TokenGaugeConfig) -> Result<()> {
         thread::spawn(move || loop {
             thread::sleep(Duration::from_millis(200));
             if term.load(std::sync::atomic::Ordering::SeqCst) {
+                dlog("daemon", "SIGTERM/SIGINT received, shutting down");
                 let _ = std::fs::remove_file(&sock_path_clone);
                 std::process::exit(0);
             }
@@ -900,11 +917,20 @@ fn run_daemon(config: &TokenGaugeConfig) -> Result<()> {
                 let state = Arc::clone(&state);
                 let config = config.clone();
                 thread::spawn(move || {
-                    let _ = handle_client(stream, state, config);
+                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        handle_client(stream, state, config)
+                    }));
+                    match res {
+                        Ok(Err(e)) => dlog("client", &format!("error: {e}")),
+                        Err(payload) => {
+                            dlog("client", &format!("panic recovered: {}", panic_message(&payload)))
+                        }
+                        Ok(Ok(())) => {}
+                    }
                 });
             }
             Err(e) => {
-                eprintln!("accept failed: {e}");
+                dlog("accept", &format!("failed: {e}"));
             }
         }
     }
@@ -912,14 +938,40 @@ fn run_daemon(config: &TokenGaugeConfig) -> Result<()> {
     Ok(())
 }
 
+fn dlog(tag: &str, msg: &str) {
+    let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    eprintln!("[{ts}] [{tag}] {msg}");
+}
+
 fn daemon_fetch_loop(state: Arc<Mutex<DaemonState>>, config: TokenGaugeConfig) {
     loop {
-        do_fetch_and_broadcast(&state, &config);
+        let s = state.clone();
+        let c = config.clone();
+        // catch_unwind requires the closure to be UnwindSafe. Arc<Mutex> + Clone
+        // values used here are safe to recover - a panic taints nothing externally.
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            do_fetch_and_broadcast(&s, &c);
+        }));
+        if let Err(payload) = res {
+            let msg = panic_message(&payload);
+            dlog("fetch", &format!("panic recovered: {msg}"));
+        }
         thread::sleep(Duration::from_secs(config.refresh_secs.max(10)));
     }
 }
 
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        s.to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
+}
+
 fn do_fetch_and_broadcast(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) {
+    let started = std::time::Instant::now();
     let prior_costs = read_cache_full(&config.cache_file)
         .map(|c| c.costs())
         .unwrap_or_default();
@@ -931,13 +983,29 @@ fn do_fetch_and_broadcast(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeCo
     if costs.is_empty() && !prior_costs.is_empty() {
         costs = prior_costs;
     }
-    let _ = write_cache_full(&config.cache_file, &payloads, &errors, &costs);
+    if let Err(e) = write_cache_full(&config.cache_file, &payloads, &errors, &costs) {
+        dlog("cache", &format!("write failed: {e}"));
+    }
     check_and_notify(config, &payloads, &costs);
     let rows = payload_to_rows_with_costs(payloads, &costs);
     let output = render_output(config, &rows, &errors, false);
-    let mut s = state.lock().unwrap();
-    s.output = output;
-    s.broadcast();
+    let subscriber_count = {
+        let mut s = state.lock().unwrap();
+        s.output = output;
+        s.broadcast();
+        s.subscribers.len()
+    };
+    dlog(
+        "fetch",
+        &format!(
+            "rows={} errors={} costs={} subscribers={} elapsed={:?}",
+            rows.len(),
+            errors.len(),
+            costs.len(),
+            subscriber_count,
+            started.elapsed()
+        ),
+    );
 }
 
 fn handle_client(

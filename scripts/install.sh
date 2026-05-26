@@ -260,22 +260,12 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
     | ."modules-right" = (."modules-right" | strip)
   '
 
-  if $HAS_SYSTEMD_USER; then
-    # Push mode: daemon owns fetch, waybar subscribes via socket. No interval.
-    exec_cmd="tokengauge-waybar --client-tail"
-    interval_field=""
-  else
-    # Poll mode: each tick spawns a fresh fetch. 60s interval keeps it sane.
-    exec_cmd="tokengauge-waybar"
-    interval_field='"interval": 60,'
-  fi
-
   if $HAS_OMARCHY; then
-    module_filter=$(cat <<JQ
+    module_filter='
       ."custom/tokengauge" = {
-        "exec": "$exec_cmd",
+        "exec": "tokengauge-waybar",
         "return-type": "json",
-        $interval_field
+        "interval": 60,
         "signal": 8,
         "on-click": "omarchy-launch-or-focus-tui tokengauge-tui",
         "on-click-right": "tokengauge-waybar --refresh",
@@ -284,14 +274,13 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
         "on-scroll-up": "tokengauge-waybar --rotate=next",
         "on-scroll-down": "tokengauge-waybar --rotate=prev"
       }
-JQ
-)
+    '
   else
-    module_filter=$(cat <<JQ
+    module_filter='
       ."custom/tokengauge" = {
-        "exec": "$exec_cmd",
+        "exec": "tokengauge-waybar",
         "return-type": "json",
-        $interval_field
+        "interval": 60,
         "signal": 8,
         "on-click-right": "tokengauge-waybar --refresh",
         "on-click-middle": "tokengauge-waybar --open=dashboard",
@@ -299,8 +288,7 @@ JQ
         "on-scroll-up": "tokengauge-waybar --rotate=next",
         "on-scroll-down": "tokengauge-waybar --rotate=prev"
       }
-JQ
-)
+    '
   fi
 
   common_helpers='

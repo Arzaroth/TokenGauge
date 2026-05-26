@@ -47,10 +47,10 @@ struct Args {
     /// of polling on an interval.
     #[arg(long)]
     daemon: bool,
-    /// Connect to the daemon socket, subscribe, and stream JSON updates to
-    /// stdout (one line per change). Designed for waybar's `exec` with no
-    /// `interval` set.
-    #[arg(long)]
+    /// Experimental: connect to the daemon socket, subscribe, and stream JSON
+    /// updates to stdout (one line per change). Most waybar versions don't
+    /// pick up streaming exec output - use the standard polling config instead.
+    #[arg(long, hide = true)]
     client_tail: bool,
 }
 

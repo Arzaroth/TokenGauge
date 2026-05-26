@@ -84,9 +84,7 @@ Run `tokengauge-tui` or click the waybar module.
 
 ## Daemon mode (optional, faster)
 
-Run TokenGauge as a long-lived daemon to eliminate per-tick subprocess spawn and ccusage cold starts. The waybar module subscribes to a Unix socket and gets pushed updates instead of polling.
-
-Install the user systemd unit and enable:
+Run TokenGauge as a long-lived daemon to skip ccusage cold starts on every waybar tick and to centralise periodic fetches:
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -95,19 +93,13 @@ systemctl --user daemon-reload
 systemctl --user enable --now tokengauge-daemon
 ```
 
-Switch waybar to push mode (edit `~/.config/waybar/config.jsonc`):
+When the daemon is running:
 
-```jsonc
-"custom/tokengauge": {
-  "exec": "tokengauge-waybar --client-tail",
-  "return-type": "json",
-  // remove the `interval` key - updates are pushed
-  "on-click": "...",
-  // other on-click-* / on-scroll-* unchanged - they auto-route through the socket
-}
-```
+- The 60-second waybar polls become near-instant: the bare `tokengauge-waybar` binary fetches the daemon's in-memory state via a Unix socket instead of spawning codexbar/ccusage on every tick.
+- Right-click refresh, scroll rotate, and middle/back click for dashboard/status all route through the daemon so the next waybar snapshot reflects the new state immediately.
+- Threshold notifications are fired by the daemon even if you never interact with waybar.
 
-Without the daemon, the binary still works (one-shot fetch on every waybar tick) and `--client-tail` falls back to a 60s self-poll, so the module degrades gracefully.
+Waybar config is unchanged - same `exec: tokengauge-waybar` with `interval: 60`. The binary auto-detects the socket and uses it; without the daemon it falls back to direct fetch.
 
 ## Updates
 

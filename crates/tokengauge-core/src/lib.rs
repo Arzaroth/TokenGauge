@@ -554,6 +554,8 @@ pub struct CostInfo {
     pub today_models: Vec<ModelCost>,
     #[serde(default)]
     pub monthly_models: Vec<ModelCost>,
+    #[serde(default)]
+    pub burn_rate: Option<BurnRate>,
 }
 
 /// Per-model cost slice (ccusage modelBreakdowns).
@@ -562,6 +564,15 @@ pub struct ModelCost {
     pub model: String,
     pub usd: f64,
     pub tokens: u64,
+}
+
+/// Current burn rate + 5h-block projection from ccusage `blocks --active`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BurnRate {
+    pub cost_per_hour: f64,
+    pub tokens_per_minute: u64,
+    pub remaining_minutes: u32,
+    pub projected_cost: f64,
 }
 
 // ============================================================================
@@ -1382,6 +1393,87 @@ fn aggregate_ccusage(response: &CcusageDailyResponse) -> HashMap<String, Aggrega
     totals
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CcusageBlocksResponse {
+    #[serde(default)]
+    blocks: Vec<CcusageBlock>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CcusageBlock {
+    #[serde(default)]
+    is_active: bool,
+    #[serde(default)]
+    models: Vec<String>,
+    #[serde(default)]
+    burn_rate: Option<CcusageBurnRate>,
+    #[serde(default)]
+    projection: Option<CcusageProjection>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CcusageBurnRate {
+    cost_per_hour: f64,
+    #[serde(default)]
+    tokens_per_minute: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CcusageProjection {
+    #[serde(default)]
+    remaining_minutes: u32,
+    #[serde(default)]
+    total_cost: f64,
+}
+
+fn run_ccusage_blocks(timeout: Duration) -> Result<CcusageBlocksResponse> {
+    let mut command = Command::new("npx");
+    command
+        .arg("--yes")
+        .arg("ccusage")
+        .arg("blocks")
+        .arg("--active")
+        .arg("--json");
+    let output = run_with_timeout(command, timeout).context("ccusage blocks failed")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("ccusage blocks exit non-zero: {}", stderr.trim()));
+    }
+    serde_json::from_slice(&output.stdout).context("ccusage blocks output was not valid JSON")
+}
+
+fn fetch_burn_rates(timeout: Duration) -> HashMap<String, BurnRate> {
+    let resp = match run_ccusage_blocks(timeout) {
+        Ok(r) => r,
+        Err(_) => return HashMap::new(),
+    };
+    let mut by_provider: HashMap<String, BurnRate> = HashMap::new();
+    for block in resp.blocks.into_iter().filter(|b| b.is_active) {
+        let (Some(rate), Some(proj)) = (block.burn_rate, block.projection) else {
+            continue;
+        };
+        let provider = block
+            .models
+            .iter()
+            .find_map(|m| model_to_provider(m))
+            .unwrap_or("claude");
+        by_provider.insert(
+            provider.to_string(),
+            BurnRate {
+                cost_per_hour: rate.cost_per_hour,
+                tokens_per_minute: rate.tokens_per_minute as u64,
+                remaining_minutes: proj.remaining_minutes,
+                projected_cost: proj.total_cost,
+            },
+        );
+    }
+    by_provider
+}
+
 fn run_ccusage(args: &[&str], timeout: Duration) -> Result<CcusageDailyResponse> {
     let mut command = Command::new("npx");
     command.arg("--yes").arg("ccusage").args(args).arg("--json");
@@ -1412,11 +1504,13 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
 
     let mut today_agg = aggregate_ccusage(&daily);
     let mut monthly_agg = aggregate_ccusage(&monthly);
+    let mut burn_rates = fetch_burn_rates(timeout);
 
     let mut result = HashMap::new();
     let providers: std::collections::HashSet<String> = today_agg
         .keys()
         .chain(monthly_agg.keys())
+        .chain(burn_rates.keys())
         .cloned()
         .collect();
     for provider in providers {
@@ -1428,6 +1522,7 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
             .remove(&provider)
             .map(|a| a.into_model_costs())
             .unwrap_or((0.0, 0, Vec::new()));
+        let burn_rate = burn_rates.remove(&provider);
         result.insert(
             provider,
             CostInfo {
@@ -1437,6 +1532,7 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
                 monthly_tokens,
                 today_models,
                 monthly_models,
+                burn_rate,
             },
         );
     }
@@ -2208,6 +2304,7 @@ mod tests {
                 monthly_tokens: 1000,
                 today_models: Vec::new(),
                 monthly_models: Vec::new(),
+                burn_rate: None,
             },
         );
         assert!(lookup_cost("Claude", &costs).is_some());

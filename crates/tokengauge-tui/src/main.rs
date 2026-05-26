@@ -483,21 +483,46 @@ fn truncate(s: &str, max: usize) -> String {
 fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
     let pad = " ".repeat(LEFT_PAD);
     let sub_pad = " ".repeat(LEFT_PAD + 2);
-    let mut lines = vec![
-        Line::from(vec![
+    let mut lines = vec![];
+
+    if let Some(br) = &cost.burn_rate {
+        let mins = br.remaining_minutes;
+        let remaining = if mins >= 60 {
+            format!("{}h {}m", mins / 60, mins % 60)
+        } else {
+            format!("{mins}m")
+        };
+        lines.push(Line::from(vec![
             Span::raw(pad.clone()),
-            Span::styled("Today", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("      "),
+            Span::styled("Rate", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("       "),
             Span::styled(
-                format!("${:.2}", cost.today_usd),
+                format!("${:.2}/hr", br.cost_per_hour),
                 Style::default().fg(green()),
             ),
             Span::styled(
-                format!("  ·  {} tokens", format_tokens(cost.today_tokens)),
+                format!(
+                    "  ·  projected ${:.2} in {remaining}",
+                    br.projected_cost
+                ),
                 Style::default().fg(dim()),
             ),
-        ]),
-    ];
+        ]));
+    }
+
+    lines.push(Line::from(vec![
+        Span::raw(pad.clone()),
+        Span::styled("Today", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw("      "),
+        Span::styled(
+            format!("${:.2}", cost.today_usd),
+            Style::default().fg(green()),
+        ),
+        Span::styled(
+            format!("  ·  {} tokens", format_tokens(cost.today_tokens)),
+            Style::default().fg(dim()),
+        ),
+    ]));
     for m in &cost.today_models {
         lines.push(Line::from(vec![
             Span::raw(sub_pad.clone()),

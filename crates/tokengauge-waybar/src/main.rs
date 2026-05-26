@@ -604,19 +604,25 @@ fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
     } else {
         String::new()
     };
-    let hint_lines = [
-        ("scroll", "rotate provider"),
-        ("left  ", "open TUI"),
-        ("middle", "open dashboard"),
-        ("right ", "refresh"),
-        ("back  ", "open status"),
-    ]
-    .iter()
-    .map(|(k, v)| format!("  {k}   {v}"))
-    .collect::<Vec<_>>()
-    .join("\n");
+    let pairs: &[(&str, &str)] = &[
+        ("scroll", "rotate"),
+        ("left", "open TUI"),
+        ("middle", "dashboard"),
+        ("right", "refresh"),
+        ("back", "status"),
+    ];
+    let cell = |k: &str, v: &str| format!("{k:<6} {v:<10}");
+    let hint_lines: Vec<String> = pairs
+        .chunks(2)
+        .map(|pair| match pair {
+            [(k1, v1), (k2, v2)] => format!("  {}  ·  {}", cell(k1, v1), cell(k2, v2)),
+            [(k1, v1)] => format!("  {}", cell(k1, v1)),
+            _ => String::new(),
+        })
+        .collect();
     let hint = format!(
-        "\n\n<tt><span foreground=\"{DIM_HEX}\">{hint_lines}</span></tt>"
+        "\n\n<tt><span foreground=\"{DIM_HEX}\">{}</span></tt>",
+        hint_lines.join("\n")
     );
     format!("{body}{status_line}{hint}")
 }

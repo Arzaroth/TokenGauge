@@ -1,0 +1,53 @@
+;; ===========================================================================
+;; TokenGauge eww popover skeleton.
+;;
+;; Drop into your eww config (~/.config/eww/), customise to taste. Activate it
+;; by setting in ~/.config/tokengauge/config.toml:
+;;
+;;   [waybar]
+;;   click_action = "popover"
+;;   popover_command = "eww open --toggle tokengauge-popup"
+;;
+;; The popover polls `tokengauge-waybar` for its rendered output (same JSON
+;; the waybar bar consumes) and shows the tooltip pango markup verbatim plus
+;; a couple of action buttons. Tweak the layout below to suit your style.
+;; ===========================================================================
+
+(defpoll tg_json :interval "10s" `tokengauge-waybar 2>/dev/null || echo '{}'`)
+
+(defwidget tg-content []
+  (box :class "tg-content"
+       :orientation "v"
+       :spacing 8
+       :space-evenly false
+    (label :class "tg-text"
+           :text { jq(tg_json, '.text // ""') }
+           :xalign 0
+           :use-markup true)
+    (label :class "tg-tooltip"
+           :text { jq(tg_json, '.tooltip // ""') }
+           :xalign 0
+           :use-markup true)
+    (box :class "tg-actions"
+         :orientation "h"
+         :space-evenly true
+      (button :class "tg-btn"
+              :onclick "tokengauge-waybar --refresh"
+              "↻ Refresh")
+      (button :class "tg-btn"
+              :onclick `sh -c 'eww close tokengauge-popup; ${TERMINAL:-ghostty} -e tokengauge-tui'`
+              "  Open TUI")
+      (button :class "tg-btn"
+              :onclick "tokengauge-waybar --open=dashboard"
+              "↗ Dashboard"))))
+
+(defwindow tokengauge-popup
+  :monitor 0
+  :geometry (geometry :x "8px"
+                      :y "44px"
+                      :width "520px"
+                      :height "auto"
+                      :anchor "top right")
+  :stacking "overlay"
+  :focusable true
+  (tg-content))

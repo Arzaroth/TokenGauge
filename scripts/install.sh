@@ -109,6 +109,9 @@ tar -xzf "$TMP_DIR/$asset" -C "$TMP_DIR"
 
 install -m 0755 "$TMP_DIR/tokengauge-waybar" "$INSTALL_DIR/tokengauge-waybar"
 install -m 0755 "$TMP_DIR/tokengauge-tui" "$INSTALL_DIR/tokengauge-tui"
+if [[ -f "$TMP_DIR/tokengauge-popover" ]]; then
+  install -m 0755 "$TMP_DIR/tokengauge-popover" "$INSTALL_DIR/tokengauge-popover"
+fi
 
 EXISTING_PLACEMENT=""
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -260,36 +263,22 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
     | ."modules-right" = (."modules-right" | strip)
   '
 
-  if $HAS_OMARCHY; then
-    module_filter='
-      ."custom/tokengauge" = {
-        "exec": "tokengauge-waybar",
-        "return-type": "json",
-        "interval": 60,
-        "signal": 8,
-        "on-click": "omarchy-launch-or-focus-tui tokengauge-tui",
-        "on-click-right": "tokengauge-waybar --refresh",
-        "on-click-middle": "tokengauge-waybar --open=dashboard",
-        "on-click-backward": "tokengauge-waybar --open=status",
-        "on-scroll-up": "tokengauge-waybar --rotate=next",
-        "on-scroll-down": "tokengauge-waybar --rotate=prev"
-      }
-    '
-  else
-    module_filter='
-      ."custom/tokengauge" = {
-        "exec": "tokengauge-waybar",
-        "return-type": "json",
-        "interval": 60,
-        "signal": 8,
-        "on-click-right": "tokengauge-waybar --refresh",
-        "on-click-middle": "tokengauge-waybar --open=dashboard",
-        "on-click-backward": "tokengauge-waybar --open=status",
-        "on-scroll-up": "tokengauge-waybar --rotate=next",
-        "on-scroll-down": "tokengauge-waybar --rotate=prev"
-      }
-    '
-  fi
+  # on-click goes through `tokengauge-waybar --click`, which dispatches
+  # based on [waybar].click_action in the user's config (tui vs popover).
+  module_filter='
+    ."custom/tokengauge" = {
+      "exec": "tokengauge-waybar",
+      "return-type": "json",
+      "interval": 60,
+      "signal": 8,
+      "on-click": "tokengauge-waybar --click",
+      "on-click-right": "tokengauge-waybar --refresh",
+      "on-click-middle": "tokengauge-waybar --open=dashboard",
+      "on-click-backward": "tokengauge-waybar --open=status",
+      "on-scroll-up": "tokengauge-waybar --rotate=next",
+      "on-scroll-down": "tokengauge-waybar --rotate=prev"
+    }
+  '
 
   common_helpers='
       def ensure_array: if . == null then [] elif type == "array" then . else [] end;

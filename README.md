@@ -57,11 +57,17 @@ curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/in
 
 | Action | Binding |
 |--------|---------|
-| Open TUI | left click |
+| Run click action (TUI by default; configurable, see below) | left click |
 | Refresh now (forced) | right click |
 | Open provider dashboard | middle click |
 | Open provider status page | back button (mouse 8) |
 | Rotate selected provider | scroll up / down |
+
+Left-click goes through `tokengauge-waybar --click`, which reads
+`[waybar].click_action` (`"tui"` or `"popover"`) and spawns the matching
+command. Pick the popover path to render a GUI window instead of opening the
+terminal TUI - see [scripts/eww-popup/](scripts/eww-popup/) for a starter eww
+config.
 
 ### TUI keys
 
@@ -94,6 +100,9 @@ Edit `~/.config/tokengauge/config.toml`:
 | `waybar.placement` | `left` or `right` in the waybar | `right` |
 | `waybar.primary` | Provider key shown in the bar text (unset = stack all) | unset |
 | `waybar.scroll_throttle_ms` | Debounce window for scroll-rotate | `250` |
+| `waybar.click_action` | Left-click target: `tui` or `popover` | `tui` |
+| `waybar.tui_command` | Override TUI launcher (empty = auto-detect) | unset |
+| `waybar.popover_command` | Shell command run when `click_action = "popover"` | `eww open --toggle tokengauge-popup` |
 | `notifications.enabled` | Send desktop notifications | `true` |
 | `notifications.thresholds` | Percent thresholds to fire on | `[50, 80, 95]` |
 
@@ -164,11 +173,10 @@ curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/up
 curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/update-codexbar.sh | bash
 ```
 
-## Without Omarchy
+## Manual waybar wiring
 
-The install script detects Omarchy automatically. Without it, you'll need to configure the TUI click handler manually.
-
-Edit `~/.config/waybar/config.jsonc` and add `on-click` to the tokengauge module:
+The install script writes the snippet below automatically. To wire it manually,
+add this to `~/.config/waybar/config.jsonc`:
 
 ```jsonc
 "custom/tokengauge": {
@@ -176,7 +184,7 @@ Edit `~/.config/waybar/config.jsonc` and add `on-click` to the tokengauge module
   "return-type": "json",
   "interval": 60,
   "signal": 8,
-  "on-click": "ghostty -e tokengauge-tui",
+  "on-click": "tokengauge-waybar --click",
   "on-click-right": "tokengauge-waybar --refresh",
   "on-click-middle": "tokengauge-waybar --open=dashboard",
   "on-click-backward": "tokengauge-waybar --open=status",
@@ -184,6 +192,11 @@ Edit `~/.config/waybar/config.jsonc` and add `on-click` to the tokengauge module
   "on-scroll-down": "tokengauge-waybar --rotate=prev"
 }
 ```
+
+`tokengauge-waybar --click` resolves the launcher itself: it prefers
+`omarchy-launch-or-focus-tui` when present, otherwise auto-picks a terminal
+from `$TERMINAL` / ghostty / alacritty / kitty / wezterm / foot / xterm. To
+override, set `[waybar].tui_command` in `config.toml`.
 
 Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot tokengauge-tui`.
 

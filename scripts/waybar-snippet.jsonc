@@ -3,7 +3,7 @@
   "return-type": "json",
   "interval": 60,
   "signal": 8,
-  "on-click": "ghostty -e tokengauge-tui",
+  "on-click": "tokengauge-waybar --click",
   "on-click-right": "tokengauge-waybar --refresh",
   "on-click-middle": "tokengauge-waybar --open=dashboard",
   "on-click-backward": "tokengauge-waybar --open=status",

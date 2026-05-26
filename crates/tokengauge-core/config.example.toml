@@ -50,9 +50,8 @@ click_action = "tui"
 # Optional explicit launcher for click_action = "tui". Empty = auto-detect
 # (omarchy-launch-or-focus-tui if present, else $TERMINAL -e tokengauge-tui).
 # tui_command = "ghostty -e tokengauge-tui"
-# Shell command used when click_action = "popover".
-# Default is the bundled native GTK4 popover (tokengauge-popover --toggle);
-# any shell command works (e.g. an eww window).
+# Shell command used when click_action = "popover". Defaults to the
+# bundled native GTK4 popover; any shell command works.
 popover_command = "tokengauge-popover --toggle"
 
 [providers]

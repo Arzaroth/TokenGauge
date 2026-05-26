@@ -72,7 +72,8 @@ struct Args {
     client_tail: bool,
     /// Handle a waybar on-click event. Dispatches based on `[waybar]
     /// click_action` in the config: "tui" launches the terminal TUI,
-    /// "popover" runs `popover_command` (e.g. an eww window).
+    /// "popover" runs `popover_command` (defaults to the bundled
+    /// `tokengauge-popover --toggle`).
     #[arg(long)]
     click: bool,
 }
@@ -2267,8 +2268,8 @@ mod tests {
     fn resolve_click_command_popover_uses_popover_command() {
         let mut cfg = test_config(PathBuf::from("/tmp/x"));
         cfg.waybar.click_action = tokengauge_core::ClickAction::Popover;
-        cfg.waybar.popover_command = "  eww open --toggle foo  ".into();
-        assert_eq!(resolve_click_command(&cfg), "eww open --toggle foo");
+        cfg.waybar.popover_command = "  my-popover --toggle  ".into();
+        assert_eq!(resolve_click_command(&cfg), "my-popover --toggle");
     }
 
     #[test]

@@ -66,9 +66,8 @@ curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/in
 
 Left-click goes through `tokengauge-waybar --click`, which reads
 `[waybar].click_action` (`"tui"` or `"popover"`) and spawns the matching
-command. Pick the popover path to render a GUI window instead of opening the
-terminal TUI - see [scripts/eww-popup/](scripts/eww-popup/) for a starter eww
-config.
+command. Pick the popover path to render a native GTK4 window
+(`tokengauge-popover`) instead of opening the terminal TUI.
 
 ### TUI keys
 
@@ -173,11 +172,9 @@ Left-click goes through `tokengauge-waybar --click`, which reads
   `popover_margin_side` if it doesn't sit where you want.
 
 `tokengauge-waybar --doctor` reports the resolved click target and warns
-when its leading binary isn't on `$PATH`.
-
-For users who already run [eww](https://github.com/elkowar/eww), a starter
-window definition is in [`scripts/eww-popup/`](scripts/eww-popup/); set
-`popover_command = "eww open --toggle tokengauge-popup"` to use it.
+when its leading binary isn't on `$PATH`. `popover_command` accepts any
+shell command, so you can point it at another window toolkit if you'd
+rather not use the bundled GTK4 popover.
 
 ## Diagnostics
 

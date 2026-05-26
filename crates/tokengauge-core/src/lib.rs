@@ -283,12 +283,14 @@ pub struct WaybarConfig {
     pub primary: Option<String>,
     pub scroll_throttle_ms: u64,
     /// What happens on left-click on the waybar module:
-    /// "tui" launches the terminal TUI, "popover" runs `popover_command`.
+    /// "tui" launches the terminal TUI, "popover" runs `popover_command`
+    /// (defaults to the bundled GTK4 panel).
     pub click_action: ClickAction,
     /// Shell command used when `click_action = "tui"`. Empty = auto-detect
     /// (omarchy-launch-or-focus-tui if available, else $TERMINAL -e tokengauge-tui).
     pub tui_command: String,
-    /// Shell command used when `click_action = "popover"`.
+    /// Shell command used when `click_action = "popover"`. Defaults to the
+    /// bundled `tokengauge-popover --toggle`.
     pub popover_command: String,
     /// Top-edge offset in pixels for the bundled `tokengauge-popover` window.
     pub popover_margin_top: i32,
@@ -1895,8 +1897,8 @@ placement = "right"
 # Provider key shown in the waybar text. Unset = show all providers stacked.
 # Mouse scroll over the module rotates the selection (overrides this until restart).
 # primary = "claude"
-# Left-click action: "tui" opens the terminal TUI, "popover" runs popover_command
-# (e.g. an eww window).
+# Left-click action: "tui" opens the terminal TUI, "popover" runs
+# popover_command (defaults to the bundled GTK4 panel).
 click_action = "tui"
 # Optional explicit launcher for click_action = "tui". Empty = auto-detect
 # (omarchy-launch-or-focus-tui if present, else $TERMINAL -e tokengauge-tui).

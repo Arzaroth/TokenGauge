@@ -2,7 +2,7 @@
 
 [![GitHub release](https://img.shields.io/github/v/release/oorestisime/TokenGauge)](https://github.com/oorestisime/TokenGauge/releases)
 
-Monitor token usage from your Waybar. Powered by [CodexBar](https://github.com/steipete/CodexBar). Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
+Monitor token usage, costs, and limits for AI coding assistants from your Waybar and TUI. Powered by [CodexBar](https://github.com/steipete/CodexBar) for usage limits and [ccusage](https://github.com/ryoppippi/ccusage) for cost breakdown. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
 
 | Waybar | TUI |
 |--------|-----|
@@ -10,11 +10,15 @@ Monitor token usage from your Waybar. Powered by [CodexBar](https://github.com/s
 
 ## Features
 
-- Per-provider usage bars in Waybar
-- TUI dashboard with colored progress bars and reset times
-- Show daily or weekly usage (configurable)
-- Smart caching to minimize API calls
-- Click waybar module to open TUI
+- **Waybar module**: bar + percentage per provider with brand-colored icons, pango-markup tooltip mirroring the TUI card layout
+- **TUI dashboard** (ratatui): per-provider tabs, Session / Weekly / Sonnet-only / Tertiary windows, Extra usage rates, cost breakdown
+- **Cost tracking via ccusage**: today, month, 7-day rolling, per-model split, current burn rate $/hr, 7-day sparkline, trend vs 7d average
+- **Multi-provider**: Claude, Codex, Copilot, Z.ai, Kimi, MiniMax (mix OAuth + API key providers)
+- **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary
+- **Threshold notifications**: `notify-send` alerts at 50/80/95% (configurable) - one-shot per threshold, resets on window roll-over
+- **Daemon mode**: optional long-lived process for near-instant waybar polls and background notifications
+- **`--doctor`**: diagnostic checklist for codexbar, ccusage, notifications, providers, waybar wiring
+- **CSS tier classes**: waybar text class flips to `tokengauge-warn` / `tokengauge-crit` past usage thresholds for theme-driven coloring
 
 ## Supported Providers
 
@@ -35,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/oorestisime/TokenGauge/main/scripts
 omarchy-restart-waybar
 ```
 
-Click the waybar module to open the TUI dashboard.
+The installer detects `systemd --user`, drops in a `tokengauge-daemon.service`, and enables it. Pass `--no-daemon` to opt out and run in plain polling mode.
 
 ### Placement
 
@@ -45,7 +49,31 @@ By default the module is added to `modules-right` (before the tray on Omarchy). 
 curl -fsSL https://raw.githubusercontent.com/oorestisime/TokenGauge/main/scripts/install.sh | bash -s -- --placement=left
 ```
 
-`TOKENGAUGE_PLACEMENT=left` works too. The choice is persisted in `~/.config/tokengauge/config.toml` under `[waybar] placement`; re-running the installer with a different `--placement` migrates the module to the other side.
+`TOKENGAUGE_PLACEMENT=left` also works. The choice is persisted in `~/.config/tokengauge/config.toml` under `[waybar] placement`; re-running the installer with a different `--placement` migrates the module to the other side.
+
+## Mouse + keyboard
+
+### Waybar mouse buttons
+
+| Action | Binding |
+|--------|---------|
+| Open TUI | left click |
+| Refresh now (forced) | right click |
+| Open provider dashboard | middle click |
+| Open provider status page | back button (mouse 8) |
+| Rotate selected provider | scroll up / down |
+
+### TUI keys
+
+| Key | Action |
+|-----|--------|
+| `r` | Refresh now |
+| `h` / `l` / arrows / Tab / Shift-Tab | Previous / next provider tab |
+| `j` / `k` / arrows | Scroll body |
+| `g` / `G` / Home / End | Top / bottom |
+| `u` | Open active provider's usage dashboard |
+| `s` | Open active provider's status page |
+| `q` / `Esc` | Quit |
 
 ## Configuration
 
@@ -56,31 +84,40 @@ Edit `~/.config/tokengauge/config.toml`:
 | `codexbar_bin` | Path to CodexBar CLI | `codexbar` |
 | `refresh_secs` | Cache refresh interval (seconds) | `600` |
 | `cache_file` | Cache file location | `/tmp/tokengauge-usage.json` |
+| `timeout_secs` | Per-provider codexbar timeout | `10` |
+| `ccusage_enabled` | Fetch cost data via `ccusage` | `true` |
+| `ccusage_timeout_secs` | Per-call ccusage timeout (cold starts are slow) | `15` |
 | `providers.codex` | Enable Codex (OAuth) | `true` |
 | `providers.claude` | Enable Claude (OAuth) | `true` |
 | `providers.<name>.api_key` | API key for API providers | — |
-| `waybar.window` | Show `daily` or `weekly` usage | `daily` |
+| `waybar.window` | Show `daily` or `weekly` usage in the bar | `daily` |
 | `waybar.placement` | `left` or `right` in the waybar | `right` |
-| `waybar.primary` | Provider key shown in the bar text (unset = show all) | unset |
+| `waybar.primary` | Provider key shown in the bar text (unset = stack all) | unset |
+| `waybar.scroll_throttle_ms` | Debounce window for scroll-rotate | `250` |
+| `notifications.enabled` | Send desktop notifications | `true` |
+| `notifications.thresholds` | Percent thresholds to fire on | `[50, 80, 95]` |
 
-> **Note:** Waybar's `interval` controls how often the UI refreshes. Keep it shorter than `refresh_secs` so the UI updates from cache without extra API calls.
+`ccusage` is auto-detected on PATH (preferring a global install, then `bunx`, then `npx`).
 
-## Usage
+## CSS tier classes (waybar theming)
 
-### Waybar
+In addition to the base `tokengauge` class, the module sets one of these based on state:
 
-The module displays per-provider usage bars. Hover for detailed tooltip with reset times.
+| Class | When |
+|-------|------|
+| `tokengauge-refreshing` | A manual refresh is in flight |
+| `tokengauge-error` | All providers failed to fetch |
+| `tokengauge-partial-error` | At least one provider failed |
+| `tokengauge-crit` | Max session usage ≥ 80% |
+| `tokengauge-warn` | Max session usage ≥ 50% (< 80%) |
 
-Set `waybar.primary` (e.g. `primary = "claude"`) to show only one provider in the bar text and tooltip. Unset = show all providers stacked. Scrolling on the module rotates the visible provider; that choice is persisted in `<cache_dir>/tokengauge-waybar-state.json` and overrides `primary` until you scroll again. Click opens the TUI on the same provider.
+Style them in `~/.config/waybar/style.css`:
 
-### TUI
-
-Run `tokengauge-tui` or click the waybar module.
-
-| Key | Action |
-|-----|--------|
-| `r` | Refresh |
-| `q` / `Esc` | Quit |
+```css
+#custom-tokengauge.tokengauge-warn  { background: #f9e2af; color: black; }
+#custom-tokengauge.tokengauge-crit  { background: #f38ba8; color: black; }
+#custom-tokengauge.tokengauge-error { background: #45475a; color: #f38ba8; }
+```
 
 ## Daemon mode (optional, faster)
 
@@ -93,13 +130,29 @@ systemctl --user daemon-reload
 systemctl --user enable --now tokengauge-daemon
 ```
 
+(The bundled installer does this automatically when `systemctl --user` is available.)
+
 When the daemon is running:
 
 - The 60-second waybar polls become near-instant: the bare `tokengauge-waybar` binary fetches the daemon's in-memory state via a Unix socket instead of spawning codexbar/ccusage on every tick.
 - Right-click refresh, scroll rotate, and middle/back click for dashboard/status all route through the daemon so the next waybar snapshot reflects the new state immediately.
-- Threshold notifications are fired by the daemon even if you never interact with waybar.
+- Threshold notifications fire from the daemon even if you never interact with waybar.
 
 Waybar config is unchanged - same `exec: tokengauge-waybar` with `interval: 60`. The binary auto-detects the socket and uses it; without the daemon it falls back to direct fetch.
+
+## Diagnostics
+
+Run `tokengauge-waybar --doctor` to print a grouped checklist:
+
+```
+Config        config loads
+Dependencies  codexbar, ccusage runner, notify-send, xdg-open on PATH
+Filesystem    cache directory writable
+Providers     enabled list + per-provider live fetch result
+Waybar        module wired in ~/.config/waybar/config.jsonc
+```
+
+Exit 0 if all pass, 1 if any fails - CI-friendly.
 
 ## Updates
 
@@ -122,11 +175,17 @@ Edit `~/.config/waybar/config.jsonc` and add `on-click` to the tokengauge module
   "exec": "tokengauge-waybar",
   "return-type": "json",
   "interval": 60,
-  "on-click": "ghostty -e tokengauge-tui"
+  "signal": 8,
+  "on-click": "ghostty -e tokengauge-tui",
+  "on-click-right": "tokengauge-waybar --refresh",
+  "on-click-middle": "tokengauge-waybar --open=dashboard",
+  "on-click-backward": "tokengauge-waybar --open=status",
+  "on-scroll-up": "tokengauge-waybar --rotate=next",
+  "on-scroll-down": "tokengauge-waybar --rotate=prev"
 }
 ```
 
-Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot tokengauge-tui`
+Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot tokengauge-tui`.
 
 ## Manual Installation
 
@@ -142,7 +201,7 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 3. Create config:
    ```bash
    mkdir -p ~/.config/tokengauge
-   cat > ~/.config/tokengauge/config.toml << 'EOF'
+   cat > ~/.config/tokengauge/config.toml <<'EOF'
    codexbar_bin = "codexbar"
    refresh_secs = 600
    cache_file = "/tmp/tokengauge-usage.json"
@@ -151,26 +210,20 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
    codex = true
    claude = true
 
-   # API providers (uncomment and add your API key)
-   # [providers.kimik2]
-   # api_key = "your-api-key"
-
    [waybar]
    window = "daily"
+   placement = "right"
+
+   [notifications]
+   enabled = true
+   thresholds = [50, 80, 95]
    EOF
    ```
 
-4. Add to waybar config (`~/.config/waybar/config.jsonc`). Add `"custom/tokengauge"` to either `modules-left` (after `"hyprland/workspaces"`) or `modules-right`:
-   ```jsonc
-   "modules-right": ["custom/tokengauge", ...],
-   "custom/tokengauge": {
-     "exec": "tokengauge-waybar",
-     "return-type": "json",
-     "interval": 60,
-     "on-click": "ghostty -e tokengauge-tui"
-   }
-   ```
+4. Add the module to `~/.config/waybar/config.jsonc` (see the **Without Omarchy** section for the full JSON snippet). Place `"custom/tokengauge"` in either `modules-left` (after `"hyprland/workspaces"`) or `modules-right`.
 
-5. Install [CodexBar CLI](https://github.com/steipete/CodexBar) if not already installed
+5. Install [CodexBar CLI](https://github.com/steipete/CodexBar) if not already installed. Optionally install [ccusage](https://github.com/ryoppippi/ccusage) globally (`npm i -g ccusage` or `bun i -g ccusage`) for faster cost fetches.
 
-6. Restart Waybar
+6. (Optional) Set up the daemon - see **Daemon mode** above.
+
+7. Restart Waybar.

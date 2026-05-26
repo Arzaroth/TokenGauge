@@ -252,9 +252,12 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
     '
   fi
 
-  if [[ "$PLACEMENT" == "left" ]]; then
-    insert_filter='
+  common_helpers='
       def ensure_array: if . == null then [] elif type == "array" then . else [] end;
+  '
+
+  if [[ "$PLACEMENT" == "left" ]]; then
+    insert_filter="$common_helpers"'
       def insert_after($arr; $item; $after):
         (($arr | index($after)) as $idx
          | if $idx == null then ([$item] + $arr)
@@ -265,8 +268,7 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
       )
     '
   elif $HAS_OMARCHY; then
-    insert_filter='
-      def ensure_array: if . == null then [] elif type == "array" then . else [] end;
+    insert_filter="$common_helpers"'
       def add_before($arr; $item; $before):
         (($arr | index($before)) as $idx
          | if $idx == null then ($arr + [$item])
@@ -277,8 +279,7 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
       )
     '
   else
-    insert_filter='
-      def ensure_array: if . == null then [] elif type == "array" then . else [] end;
+    insert_filter="$common_helpers"'
       ."modules-right" = (."modules-right" | ensure_array | . + ["custom/tokengauge"])
     '
   fi

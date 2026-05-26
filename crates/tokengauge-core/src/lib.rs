@@ -556,6 +556,9 @@ pub struct CostInfo {
     pub monthly_models: Vec<ModelCost>,
     #[serde(default)]
     pub burn_rate: Option<BurnRate>,
+    /// Last N days of total cost per day (oldest -> newest). N = up to 7.
+    #[serde(default)]
+    pub weekly_cost_history: Vec<f64>,
 }
 
 /// Per-model cost slice (ccusage modelBreakdowns).
@@ -1164,6 +1167,27 @@ pub fn color_hex_for_percent(percent: u8) -> &'static str {
     }
 }
 
+/// Render a 1-row sparkline from `values`, using the standard 8 block chars
+/// scaled relative to the max value. Empty input or all-zero input returns
+/// the lowest-block character repeated.
+pub fn sparkline(values: &[f64]) -> String {
+    if values.is_empty() {
+        return String::new();
+    }
+    let chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let max = values.iter().cloned().fold(0.0_f64, f64::max);
+    if max <= 0.0 {
+        return chars[0].to_string().repeat(values.len());
+    }
+    values
+        .iter()
+        .map(|v| {
+            let idx = ((v.max(0.0) / max) * 7.0).round() as usize;
+            chars[idx.min(7)]
+        })
+        .collect()
+}
+
 pub fn format_tokens(t: u64) -> String {
     if t >= 1_000_000_000 {
         format!("{:.1}B", t as f64 / 1e9)
@@ -1327,6 +1351,8 @@ struct CcusageDailyResponse {
 struct CcusageDay {
     #[serde(default)]
     model_breakdowns: Vec<CcusageModelBreakdown>,
+    #[serde(default)]
+    period: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1366,6 +1392,44 @@ impl AggregatedProvider {
         models.sort_by(|a, b| b.usd.partial_cmp(&a.usd).unwrap_or(std::cmp::Ordering::Equal));
         (self.total_usd, self.total_tokens, models)
     }
+}
+
+/// Last `n` days of cost per provider, oldest first. Pads with 0.0 for any
+/// days missing from the response so the sparkline has consistent length.
+fn last_n_days_by_provider(
+    response: &CcusageDailyResponse,
+    n: usize,
+) -> HashMap<String, Vec<f64>> {
+    // (provider, period) -> usd
+    let mut per_day: HashMap<String, HashMap<String, f64>> = HashMap::new();
+    let mut periods: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for day in &response.daily {
+        if day.period.is_empty() {
+            continue;
+        }
+        periods.insert(day.period.clone());
+        for b in &day.model_breakdowns {
+            if let Some(provider) = model_to_provider(&b.model_name) {
+                *per_day
+                    .entry(provider.to_string())
+                    .or_default()
+                    .entry(day.period.clone())
+                    .or_insert(0.0) += b.cost;
+            }
+        }
+    }
+    let periods: Vec<String> = periods.into_iter().rev().take(n).collect();
+    let periods: Vec<String> = periods.into_iter().rev().collect();
+    per_day
+        .into_iter()
+        .map(|(provider, days)| {
+            let series: Vec<f64> = periods
+                .iter()
+                .map(|p| days.get(p).copied().unwrap_or(0.0))
+                .collect();
+            (provider, series)
+        })
+        .collect()
 }
 
 fn aggregate_ccusage(response: &CcusageDailyResponse) -> HashMap<String, AggregatedProvider> {
@@ -1541,6 +1605,7 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
     let mut today_agg = aggregate_ccusage(&daily);
     let mut monthly_agg = aggregate_ccusage(&monthly);
     let mut burn_rates = fetch_burn_rates(timeout);
+    let mut weekly_history = last_n_days_by_provider(&monthly, 7);
 
     let mut result = HashMap::new();
     let providers: std::collections::HashSet<String> = today_agg
@@ -1559,6 +1624,7 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
             .map(|a| a.into_model_costs())
             .unwrap_or((0.0, 0, Vec::new()));
         let burn_rate = burn_rates.remove(&provider);
+        let weekly_cost_history = weekly_history.remove(&provider).unwrap_or_default();
         result.insert(
             provider,
             CostInfo {
@@ -1569,6 +1635,7 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
                 today_models,
                 monthly_models,
                 burn_rate,
+                weekly_cost_history,
             },
         );
     }
@@ -2329,6 +2396,23 @@ mod tests {
     }
 
     #[test]
+    fn sparkline_basic_ramp() {
+        assert_eq!(sparkline(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]).chars().count(), 8);
+        assert_eq!(sparkline(&[0.0, 7.0]), "▁█");
+        assert_eq!(sparkline(&[3.5, 7.0]), "▅█");
+    }
+
+    #[test]
+    fn sparkline_all_zero() {
+        assert_eq!(sparkline(&[0.0, 0.0, 0.0]), "▁▁▁");
+    }
+
+    #[test]
+    fn sparkline_empty() {
+        assert_eq!(sparkline(&[]), "");
+    }
+
+    #[test]
     fn lookup_cost_exact_lowercase() {
         let mut costs = HashMap::new();
         costs.insert(
@@ -2341,6 +2425,7 @@ mod tests {
                 today_models: Vec::new(),
                 monthly_models: Vec::new(),
                 burn_rate: None,
+                weekly_cost_history: Vec::new(),
             },
         );
         assert!(lookup_cost("Claude", &costs).is_some());

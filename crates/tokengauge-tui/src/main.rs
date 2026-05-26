@@ -22,7 +22,7 @@ use tokengauge_core::{
     ProviderRow, color_hex_for_percent, fetch_all_providers, format_tokens,
     format_updated_relative, load_config, parse_hex_rgb, payload_to_rows_with_costs,
     provider_icon as core_provider_icon, provider_urls, read_cache_full, read_waybar_state,
-    waybar_state_path, window_labels, write_cache_full, write_default_config,
+    sparkline, waybar_state_path, window_labels, write_cache_full, write_default_config,
 };
 
 const MIN_BAR_WIDTH: usize = 12;
@@ -573,6 +573,24 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
     lines.push(totals_line("Month", &monthly_usd_str, &monthly_tokens_str));
     for m in &cost.monthly_models {
         lines.push(model_line(m));
+    }
+    if !cost.weekly_cost_history.is_empty() {
+        let spark = sparkline(&cost.weekly_cost_history);
+        let max = cost
+            .weekly_cost_history
+            .iter()
+            .cloned()
+            .fold(0.0_f64, f64::max);
+        lines.push(Line::from(vec![
+            Span::raw(pad.clone()),
+            Span::styled("7d", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("         "),
+            Span::styled(spark, Style::default().fg(green())),
+            Span::styled(
+                format!("  peak ${max:.2}"),
+                Style::default().fg(dim()),
+            ),
+        ]));
     }
     lines
 }

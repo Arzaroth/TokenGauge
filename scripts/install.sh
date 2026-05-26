@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${TOKENGAUGE_REPO:-oorestisime/TokenGauge}"
+REPO="${TOKENGAUGE_REPO:-Arzaroth/TokenGauge}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tokengauge"
 CONFIG_FILE="$CONFIG_DIR/config.toml"

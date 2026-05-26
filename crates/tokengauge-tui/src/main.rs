@@ -373,105 +373,111 @@ fn render_bar(percent: u8, width: usize) -> (String, Color) {
 
 fn window_section(label: &str, used: Option<u8>, reset: &str, bar_width: usize) -> Vec<Line<'static>> {
     let pad = " ".repeat(LEFT_PAD);
-    let mut lines = Vec::new();
-    lines.push(Line::from(Span::styled(
+    let title = Line::from(Span::styled(
         format!("{pad}{label}"),
         Style::default().fg(dim()).add_modifier(Modifier::BOLD),
-    )));
-    match used {
+    ));
+    let body: Vec<Line<'static>> = match used {
         Some(pct) => {
             let (bar, color) = render_bar(pct, bar_width);
-            lines.push(Line::from(vec![
-                Span::raw(pad.clone()),
-                Span::styled(bar, Style::default().fg(color)),
-            ]));
             let reset_text = if reset == "—" {
                 "not started".to_string()
             } else {
                 format!("resets {reset}")
             };
-            lines.push(Line::from(vec![
-                Span::raw(pad.clone()),
-                Span::styled(
-                    format!("{pct}% used"),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("   "),
-                Span::styled(reset_text, Style::default().fg(dim())),
-            ]));
+            vec![
+                Line::from(vec![
+                    Span::raw(pad.clone()),
+                    Span::styled(bar, Style::default().fg(color)),
+                ]),
+                Line::from(vec![
+                    Span::raw(pad.clone()),
+                    Span::styled(
+                        format!("{pct}% used"),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("   "),
+                    Span::styled(reset_text, Style::default().fg(dim())),
+                ]),
+            ]
         }
-        None => {
-            lines.push(Line::from(vec![
+        None => vec![
+            Line::from(vec![
                 Span::raw(pad.clone()),
                 Span::styled(
                     "─".repeat(bar_width.clamp(MIN_BAR_WIDTH, MAX_BAR_WIDTH)),
                     Style::default().fg(dim()),
                 ),
-            ]));
-            lines.push(Line::from(vec![
+            ]),
+            Line::from(vec![
                 Span::raw(pad.clone()),
                 Span::styled("no data", Style::default().fg(dim())),
-            ]));
-        }
-    }
-    lines
+            ]),
+        ],
+    };
+    std::iter::once(title).chain(body).collect()
 }
 
 fn extra_window_lines(extra: &ExtraWindowRow, bar_width: usize) -> Vec<Line<'static>> {
     let pad = " ".repeat(LEFT_PAD);
-    let title = truncate(&extra.title, 32);
-    let mut lines = Vec::new();
-    lines.push(Line::from(vec![
+    let title_line = Line::from(vec![
         Span::raw(pad.clone()),
         Span::styled(
-            title,
+            truncate(&extra.title, 32),
             Style::default().fg(dim()).add_modifier(Modifier::BOLD),
         ),
-    ]));
-    match extra.used {
+    ]);
+    let body: Vec<Line<'static>> = match extra.used {
         Some(pct) => {
             let (bar, color) = render_bar(pct, bar_width);
-            lines.push(Line::from(vec![
-                Span::raw(pad.clone()),
-                Span::styled(bar, Style::default().fg(color)),
-            ]));
-            let trailing = if extra.reset == "—" {
-                if pct == 0 {
-                    String::new()
-                } else {
-                    "not started".to_string()
-                }
-            } else {
-                format!("resets {}", extra.reset)
+            let trailing = match (extra.reset.as_str(), pct) {
+                ("—", 0) => None,
+                ("—", _) => Some("not started".to_string()),
+                (other, _) => Some(format!("resets {other}")),
             };
-            let mut spans = vec![
+            let trailing_spans = trailing
+                .map(|text| {
+                    vec![
+                        Span::raw("   "),
+                        Span::styled(text, Style::default().fg(dim())),
+                    ]
+                })
+                .unwrap_or_default();
+            let percent_spans = [
                 Span::raw(pad.clone()),
                 Span::styled(
                     format!("{pct}% used"),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ),
             ];
-            if !trailing.is_empty() {
-                spans.push(Span::raw("   "));
-                spans.push(Span::styled(trailing, Style::default().fg(dim())));
-            }
-            lines.push(Line::from(spans));
+            vec![
+                Line::from(vec![
+                    Span::raw(pad.clone()),
+                    Span::styled(bar, Style::default().fg(color)),
+                ]),
+                Line::from(
+                    percent_spans
+                        .into_iter()
+                        .chain(trailing_spans)
+                        .collect::<Vec<_>>(),
+                ),
+            ]
         }
-        None => {
-            lines.push(Line::from(vec![
+        None => vec![
+            Line::from(vec![
                 Span::raw(pad.clone()),
                 Span::styled(
                     "─".repeat(bar_width.clamp(MIN_BAR_WIDTH, MAX_BAR_WIDTH)),
                     Style::default().fg(dim()),
                 ),
-            ]));
-            lines.push(Line::from(vec![
+            ]),
+            Line::from(vec![
                 Span::raw(pad.clone()),
                 Span::styled("no data", Style::default().fg(dim())),
-            ]));
-        }
-    }
-    lines
+            ]),
+        ],
+    };
+    std::iter::once(title_line).chain(body).collect()
 }
 
 
@@ -526,51 +532,7 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
         .count()
         .max(monthly_tokens_str.chars().count());
 
-    let mut lines = Vec::new();
-
-    // emit rate after label_w is computed (below)
-    let burn_rate = cost.burn_rate.as_ref();
-
     let label_w = 7usize;
-
-    if let Some(br) = burn_rate {
-        let rate_str = format!("${:.2}", br.cost_per_hour);
-        let mut spans = vec![
-            Span::raw(pad.clone()),
-            Span::styled(
-                format!("{:<label_w$}", "Rate"),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("   "),
-            Span::styled(
-                format!("{rate_str:>total_usd_w$}/hr"),
-                Style::default().fg(green()),
-            ),
-        ];
-        if let Some(avg) = cost.avg_hourly_cost()
-            && avg > 0.0
-        {
-            let pct = ((br.cost_per_hour - avg) / avg) * 100.0;
-            let arrow = if pct >= 0.0 { "↑" } else { "↓" };
-            let trend_color = if pct >= 25.0 {
-                Color::Rgb(0xf3, 0x8b, 0xa8) // red
-            } else if pct >= -10.0 {
-                hex_to_color(&theme().yellow)
-            } else {
-                green()
-            };
-            spans.push(Span::raw("  "));
-            spans.push(Span::styled(
-                format!("{arrow}{:.0}%", pct.abs()),
-                Style::default().fg(trend_color),
-            ));
-            spans.push(Span::styled(
-                " vs 7d avg".to_string(),
-                Style::default().fg(dim()),
-            ));
-        }
-        lines.push(Line::from(spans));
-    }
 
     let totals_line = |label: &str, usd_str: &str, tokens_str: &str| {
         Line::from(vec![
@@ -608,7 +570,6 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
             ),
         ])
     };
-
     let window_line = |label: &str, usd_str: &str| {
         Line::from(vec![
             Span::raw(pad.clone()),
@@ -617,147 +578,212 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::raw("   "),
-            Span::styled(format!("{usd_str:>total_usd_w$}"), Style::default().fg(green())),
+            Span::styled(
+                format!("{usd_str:>total_usd_w$}"),
+                Style::default().fg(green()),
+            ),
         ])
     };
 
-    let mut any_window = false;
-    if cost.session_usd > 0.0 {
-        lines.push(window_line("Session", &session_usd_str));
-        any_window = true;
-    }
-    if cost.weekly_usd > 0.0 {
-        lines.push(window_line("Weekly", &weekly_usd_str));
-        any_window = true;
-    }
-    if any_window {
-        lines.push(Line::from(""));
-    }
-    lines.push(totals_line("Today", &today_usd_str, &today_tokens_str));
-    for m in &cost.today_models {
-        lines.push(model_line(m));
-    }
-    lines.push(totals_line("Month", &monthly_usd_str, &monthly_tokens_str));
-    for m in &cost.monthly_models {
-        lines.push(model_line(m));
-    }
-    if !cost.weekly_cost_history.is_empty() {
+    let rate_line = cost.burn_rate.as_ref().map(|br| {
+        let rate_str = format!("${:.2}", br.cost_per_hour);
+        let base = vec![
+            Span::raw(pad.clone()),
+            Span::styled(
+                format!("{:<label_w$}", "Rate"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   "),
+            Span::styled(
+                format!("{rate_str:>total_usd_w$}/hr"),
+                Style::default().fg(green()),
+            ),
+        ];
+        let trend_spans = cost
+            .avg_hourly_cost()
+            .filter(|avg| *avg > 0.0)
+            .map(|avg| {
+                let pct = ((br.cost_per_hour - avg) / avg) * 100.0;
+                let arrow = if pct >= 0.0 { "↑" } else { "↓" };
+                let trend_color = if pct >= 25.0 {
+                    Color::Rgb(0xf3, 0x8b, 0xa8)
+                } else if pct >= -10.0 {
+                    hex_to_color(&theme().yellow)
+                } else {
+                    green()
+                };
+                vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("{arrow}{:.0}%", pct.abs()),
+                        Style::default().fg(trend_color),
+                    ),
+                    Span::styled(" vs 7d avg".to_string(), Style::default().fg(dim())),
+                ]
+            })
+            .unwrap_or_default();
+        Line::from(base.into_iter().chain(trend_spans).collect::<Vec<_>>())
+    });
+
+    let session_line =
+        (cost.session_usd > 0.0).then(|| window_line("Session", &session_usd_str));
+    let weekly_line = (cost.weekly_usd > 0.0).then(|| window_line("Weekly", &weekly_usd_str));
+    let blank = (session_line.is_some() || weekly_line.is_some()).then(|| Line::from(""));
+
+    let today_block = std::iter::once(totals_line(
+        "Today",
+        &today_usd_str,
+        &today_tokens_str,
+    ))
+    .chain(cost.today_models.iter().map(&model_line));
+    let month_block = std::iter::once(totals_line(
+        "Month",
+        &monthly_usd_str,
+        &monthly_tokens_str,
+    ))
+    .chain(cost.monthly_models.iter().map(&model_line));
+
+    let spark_line = (!cost.weekly_cost_history.is_empty()).then(|| {
         let spark = sparkline(&cost.weekly_cost_history);
         let max = cost
             .weekly_cost_history
             .iter()
-            .cloned()
+            .copied()
             .fold(0.0_f64, f64::max);
-        lines.push(Line::from(vec![
+        Line::from(vec![
             Span::raw(pad.clone()),
             Span::styled("7d", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw("         "),
             Span::styled(spark, Style::default().fg(green())),
-            Span::styled(
-                format!("  peak ${max:.2}"),
-                Style::default().fg(dim()),
-            ),
-        ]));
-    }
-    lines
+            Span::styled(format!("  peak ${max:.2}"), Style::default().fg(dim())),
+        ])
+    });
+
+    rate_line
+        .into_iter()
+        .chain(session_line)
+        .chain(weekly_line)
+        .chain(blank)
+        .chain(today_block)
+        .chain(month_block)
+        .chain(spark_line)
+        .collect()
 }
 
 fn provider_card_lines(row: &ProviderRow, inner_width: u16) -> Vec<Line<'static>> {
     let pad = " ".repeat(LEFT_PAD);
     let bar_width = (inner_width as usize).saturating_sub(LEFT_PAD * 2 + 2);
-    let mut lines = Vec::new();
 
     let (icon, icon_color) = provider_icon_color(&row.provider);
-    let mut header = vec![
-        Span::raw(pad.clone()),
-        Span::styled(format!("{icon}  "), Style::default().fg(icon_color)),
-        Span::styled(
-            row.provider.clone(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-    ];
-    if let Some(plan) = row.plan_label.as_deref().filter(|s| !s.is_empty()) {
-        header.push(Span::styled(
-            format!("  ·  {plan}"),
-            Style::default().fg(dim()),
-        ));
-    }
-    lines.push(Line::from(header));
-
-    if let Some(iso) = row.updated_iso.as_deref()
-        && let Some(rel) = format_updated_relative(iso)
-    {
-        lines.push(Line::from(vec![
+    let plan_span = row
+        .plan_label
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|plan| Span::styled(format!("  ·  {plan}"), Style::default().fg(dim())));
+    let header_line = Line::from(
+        [
             Span::raw(pad.clone()),
-            Span::raw("   "),
-            Span::styled(format!("Updated {rel}"), Style::default().fg(dim())),
-        ]));
-    }
+            Span::styled(format!("{icon}  "), Style::default().fg(icon_color)),
+            Span::styled(
+                row.provider.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]
+        .into_iter()
+        .chain(plan_span)
+        .collect::<Vec<_>>(),
+    );
+
+    let updated_line = row
+        .updated_iso
+        .as_deref()
+        .and_then(format_updated_relative)
+        .map(|rel| {
+            Line::from(vec![
+                Span::raw(pad.clone()),
+                Span::raw("   "),
+                Span::styled(format!("Updated {rel}"), Style::default().fg(dim())),
+            ])
+        });
 
     let (session_label, weekly_label, tertiary_label) = window_labels(&row.provider);
+    let window_block = |label: &'static str, used: Option<u8>, reset: &str| {
+        std::iter::once(Line::from("")).chain(window_section(label, used, reset, bar_width))
+    };
+    let session_block = window_block(session_label, row.session_used, &row.session_reset);
+    let weekly_block = window_block(weekly_label, row.weekly_used, &row.weekly_reset);
+    let tertiary_block: Box<dyn Iterator<Item = Line<'static>>> =
+        if row.tertiary_used.is_some() || row.tertiary_reset != "—" {
+            Box::new(window_block(
+                tertiary_label,
+                row.tertiary_used,
+                &row.tertiary_reset,
+            ))
+        } else {
+            Box::new(std::iter::empty())
+        };
 
-    lines.push(Line::from(""));
-    lines.extend(window_section(
-        session_label,
-        row.session_used,
-        &row.session_reset,
-        bar_width,
-    ));
-    lines.push(Line::from(""));
-    lines.extend(window_section(
-        weekly_label,
-        row.weekly_used,
-        &row.weekly_reset,
-        bar_width,
-    ));
-    if row.tertiary_used.is_some() || row.tertiary_reset != "—" {
-        lines.push(Line::from(""));
-        lines.extend(window_section(
-            tertiary_label,
-            row.tertiary_used,
-            &row.tertiary_reset,
-            bar_width,
-        ));
-    }
-
-    if !row.extra_windows.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::raw(pad.clone()),
+    let extras_block: Box<dyn Iterator<Item = Line<'static>>> = if row.extra_windows.is_empty() {
+        Box::new(std::iter::empty())
+    } else {
+        let pad_for_extras = pad.clone();
+        let header = std::iter::once(Line::from("")).chain(std::iter::once(Line::from(vec![
+            Span::raw(pad_for_extras),
             Span::styled(
                 "Extra usage",
                 Style::default().fg(dim()).add_modifier(Modifier::BOLD),
             ),
-        ]));
-        for extra in &row.extra_windows {
-            lines.push(Line::from(""));
-            lines.extend(extra_window_lines(extra, bar_width));
+        ])));
+        let entries: Vec<Line<'static>> = row
+            .extra_windows
+            .iter()
+            .flat_map(|extra| {
+                std::iter::once(Line::from("")).chain(extra_window_lines(extra, bar_width))
+            })
+            .collect();
+        Box::new(header.chain(entries))
+    };
+
+    let cost_block: Box<dyn Iterator<Item = Line<'static>>> = match &row.cost {
+        Some(cost) => {
+            let pad_for_cost = pad.clone();
+            let head = std::iter::once(Line::from("")).chain(std::iter::once(Line::from(vec![
+                Span::raw(pad_for_cost),
+                Span::styled(
+                    "Cost",
+                    Style::default().fg(dim()).add_modifier(Modifier::BOLD),
+                ),
+            ])));
+            Box::new(head.chain(cost_lines(cost)))
         }
-    }
+        None => Box::new(std::iter::empty()),
+    };
 
-    if let Some(cost) = &row.cost {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::raw(pad.clone()),
-            Span::styled(
-                "Cost",
-                Style::default().fg(dim()).add_modifier(Modifier::BOLD),
-            ),
-        ]));
-        lines.extend(cost_lines(cost));
-    }
+    let credits_block: Box<dyn Iterator<Item = Line<'static>>> =
+        if row.credits != "—" && !row.credits.is_empty() {
+            let pad_for_credits = pad.clone();
+            let credits = row.credits.clone();
+            Box::new(
+                std::iter::once(Line::from("")).chain(std::iter::once(Line::from(vec![
+                    Span::raw(pad_for_credits),
+                    Span::styled("Credits", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw("    "),
+                    Span::styled(format!("${credits}"), Style::default().fg(green())),
+                ]))),
+            )
+        } else {
+            Box::new(std::iter::empty())
+        };
 
-    if row.credits != "—" && !row.credits.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::raw(pad.clone()),
-            Span::styled("Credits", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("    "),
-            Span::styled(format!("${}", row.credits), Style::default().fg(green())),
-        ]));
-    }
-
-    lines
+    std::iter::once(header_line)
+        .chain(updated_line)
+        .chain(session_block)
+        .chain(weekly_block)
+        .chain(tertiary_block)
+        .chain(extras_block)
+        .chain(cost_block)
+        .chain(credits_block)
+        .collect()
 }
 
 fn tab_titles(rows: &[ProviderRow], active: usize) -> Vec<Line<'static>> {
@@ -883,7 +909,7 @@ fn draw_ui(frame: &mut ratatui::Frame, state: &mut AppState, is_refreshing: bool
 
     // Render errors section if there are errors
     if has_errors {
-        let mut error_lines: Vec<Line> = state
+        let error_lines: Vec<Line> = state
             .errors
             .iter()
             .map(|err| {
@@ -898,13 +924,11 @@ fn draw_ui(frame: &mut ratatui::Frame, state: &mut AppState, is_refreshing: bool
                     ),
                 ])
             })
+            .chain(std::iter::once(Line::from(Span::styled(
+                format!("Full details: {}", state.cache_file.display()),
+                Style::default().fg(Color::DarkGray),
+            ))))
             .collect();
-
-        // Add hint about where to find full error details
-        error_lines.push(Line::from(Span::styled(
-            format!("Full details: {}", state.cache_file.display()),
-            Style::default().fg(Color::DarkGray),
-        )));
 
         let errors_widget = Paragraph::new(error_lines).block(
             Block::default()

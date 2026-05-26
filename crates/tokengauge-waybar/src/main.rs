@@ -1252,7 +1252,14 @@ fn format_extra_window(extra: &ExtraWindowRow) -> String {
 fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
     let today_usd = format!("${:.2}", cost.today_usd);
     let monthly_usd = format!("${:.2}", cost.monthly_usd);
-    let usd_width = today_usd.chars().count().max(monthly_usd.chars().count());
+    let session_usd = format!("${:.2}", cost.session_usd);
+    let weekly_usd = format!("${:.2}", cost.weekly_usd);
+    let usd_width = today_usd
+        .chars()
+        .count()
+        .max(monthly_usd.chars().count())
+        .max(session_usd.chars().count())
+        .max(weekly_usd.chars().count());
     let today_tokens = format_tokens(cost.today_tokens);
     let monthly_tokens = format_tokens(cost.monthly_tokens);
     let tokens_width = today_tokens
@@ -1266,17 +1273,21 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
             br.cost_per_hour
         ));
     }
+    let mut any_window = false;
     if cost.session_usd > 0.0 {
         lines.push(format!(
-            "  Session   <span foreground=\"{DIM_HEX}\">${:.2}</span>",
-            cost.session_usd
+            "  Session   <span foreground=\"{DIM_HEX}\">{session_usd:>usd_width$}</span>"
         ));
+        any_window = true;
     }
     if cost.weekly_usd > 0.0 {
         lines.push(format!(
-            "  Weekly    <span foreground=\"{DIM_HEX}\">${:.2}</span>",
-            cost.weekly_usd
+            "  Weekly    <span foreground=\"{DIM_HEX}\">{weekly_usd:>usd_width$}</span>"
         ));
+        any_window = true;
+    }
+    if any_window {
+        lines.push(String::new());
     }
     lines.push(format!(
         "  Today     <span foreground=\"{DIM_HEX}\">{today_usd:>usd_width$}  ·  {today_tokens:>tokens_width$} tokens</span>"

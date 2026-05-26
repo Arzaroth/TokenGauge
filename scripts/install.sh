@@ -45,6 +45,7 @@ cleanup() {
 trap cleanup EXIT
 
 PLACEMENT_OVERRIDE="${TOKENGAUGE_PLACEMENT:-}"
+INSTALL_DAEMON=true
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --placement=*) PLACEMENT_OVERRIDE="${1#*=}" ;;
@@ -56,6 +57,7 @@ while [[ $# -gt 0 ]]; do
       PLACEMENT_OVERRIDE="$2"
       shift
       ;;
+    --no-daemon) INSTALL_DAEMON=false ;;
     *) ;;
   esac
   shift
@@ -177,6 +179,33 @@ if command -v omarchy-launch-or-focus-tui >/dev/null 2>&1; then
   HAS_OMARCHY=true
 fi
 
+# Detect systemd user session (for daemon mode)
+HAS_SYSTEMD_USER=false
+if $INSTALL_DAEMON && command -v systemctl >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; then
+  HAS_SYSTEMD_USER=true
+fi
+
+install_daemon_unit() {
+  local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  mkdir -p "$unit_dir"
+  cat > "$unit_dir/tokengauge-daemon.service" <<UNIT
+[Unit]
+Description=TokenGauge daemon (long-lived fetcher + socket server)
+After=graphical-session.target
+
+[Service]
+ExecStart=$INSTALL_DIR/tokengauge-waybar --daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+UNIT
+  systemctl --user daemon-reload
+  systemctl --user enable --now tokengauge-daemon.service
+  success "tokengauge-daemon enabled via systemd --user"
+}
+
 install_codexbar() {
   local codex_repo="steipete/CodexBar"
   local codex_latest
@@ -213,6 +242,12 @@ if ! command -v codexbar >/dev/null 2>&1; then
   fi
 fi
 
+if $HAS_SYSTEMD_USER; then
+  install_daemon_unit
+elif $INSTALL_DAEMON; then
+  warn "systemd --user not available; skipping daemon setup. waybar will poll every 60s."
+fi
+
 if [[ -f "$WAYBAR_CONFIG" ]]; then
   backup="$WAYBAR_CONFIG.bak.tokengauge.$(date +%s)"
   BACKUP_PATH="$backup"
@@ -225,12 +260,22 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
     | ."modules-right" = (."modules-right" | strip)
   '
 
+  if $HAS_SYSTEMD_USER; then
+    # Push mode: daemon owns fetch, waybar subscribes via socket. No interval.
+    exec_cmd="tokengauge-waybar --client-tail"
+    interval_field=""
+  else
+    # Poll mode: each tick spawns a fresh fetch. 60s interval keeps it sane.
+    exec_cmd="tokengauge-waybar"
+    interval_field='"interval": 60,'
+  fi
+
   if $HAS_OMARCHY; then
-    module_filter='
+    module_filter=$(cat <<JQ
       ."custom/tokengauge" = {
-        "exec": "tokengauge-waybar",
+        "exec": "$exec_cmd",
         "return-type": "json",
-        "interval": 60,
+        $interval_field
         "signal": 8,
         "on-click": "omarchy-launch-or-focus-tui tokengauge-tui",
         "on-click-right": "tokengauge-waybar --refresh",
@@ -239,13 +284,14 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
         "on-scroll-up": "tokengauge-waybar --rotate=next",
         "on-scroll-down": "tokengauge-waybar --rotate=prev"
       }
-    '
+JQ
+)
   else
-    module_filter='
+    module_filter=$(cat <<JQ
       ."custom/tokengauge" = {
-        "exec": "tokengauge-waybar",
+        "exec": "$exec_cmd",
         "return-type": "json",
-        "interval": 60,
+        $interval_field
         "signal": 8,
         "on-click-right": "tokengauge-waybar --refresh",
         "on-click-middle": "tokengauge-waybar --open=dashboard",
@@ -253,7 +299,8 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
         "on-scroll-up": "tokengauge-waybar --rotate=next",
         "on-scroll-down": "tokengauge-waybar --rotate=prev"
       }
-    '
+JQ
+)
   fi
 
   common_helpers='

@@ -1,0 +1,42 @@
+/* TokenGauge eww popover - starter stylesheet (catppuccin-ish). Adjust to
+ * match your wider eww theme. */
+
+* {
+  all: unset;
+  font-family: "JetBrainsMono Nerd Font", monospace;
+}
+
+.tg-content {
+  background-color: #1e1e2e;
+  border: 1px solid #45475a;
+  border-radius: 10px;
+  padding: 14px 16px;
+  color: #cdd6f4;
+  min-width: 480px;
+}
+
+.tg-text {
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.tg-tooltip {
+  font-size: 12px;
+  color: #bac2de;
+}
+
+.tg-actions {
+  margin-top: 8px;
+}
+
+.tg-btn {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background-color: #313244;
+  color: #cdd6f4;
+  transition: background-color 120ms ease-in;
+}
+
+.tg-btn:hover {
+  background-color: #45475a;
+}

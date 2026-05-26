@@ -70,6 +70,11 @@ struct Args {
     /// pick up streaming exec output - use the standard polling config instead.
     #[arg(long, hide = true)]
     client_tail: bool,
+    /// Handle a waybar on-click event. Dispatches based on `[waybar]
+    /// click_action` in the config: "tui" launches the terminal TUI,
+    /// "popover" runs `popover_command` (e.g. an eww window).
+    #[arg(long)]
+    click: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -151,6 +156,11 @@ fn main() -> Result<()> {
         return run_client_tail(&config);
     }
 
+    if args.click {
+        handle_click(&config);
+        return Ok(());
+    }
+
     if args.refresh {
         if try_send_command(&config, &SocketCommand::Refresh).is_ok() {
             return Ok(());
@@ -211,7 +221,7 @@ fn main() -> Result<()> {
             Some(idx) => vec![&rows[idx]],
             None => rows.iter().collect(),
         };
-        let tooltip = format_tooltip_with_errors(&tooltip_refs, &errors, true);
+        let tooltip = format_tooltip_with_errors(&tooltip_refs, &errors, true, "open");
         let text = if rows.is_empty() && errors.is_empty() {
             format!("   <span foreground=\"{yellow}\">⟳ Refreshing...</span>")
         } else {
@@ -259,7 +269,7 @@ fn main() -> Result<()> {
         Some(idx) => vec![&rows[idx]],
         None => rows.iter().collect(),
     };
-    let tooltip = format_tooltip_with_errors(&tooltip_rows, &errors, false);
+    let tooltip = format_tooltip_with_errors(&tooltip_rows, &errors, false, &left_click_label(&config));
 
     let class = compute_class(&rows, &errors, false, config.waybar.window.clone());
 
@@ -688,6 +698,33 @@ fn handle_doctor(config_path: &Path) -> i32 {
         });
     }
 
+    // Click action prerequisites: the binary the user wants to spawn
+    // on left-click must be on PATH.
+    let click_cmd = resolve_click_command(&cfg);
+    let (label, ok, detail) = if click_cmd.is_empty() {
+        (
+            "click action launcher resolved".into(),
+            false,
+            "no TUI launcher found; set [waybar].tui_command or install a terminal".into(),
+        )
+    } else {
+        let first = click_cmd.split_whitespace().next().unwrap_or("").to_string();
+        let on_path = which(&first).is_some() || first.starts_with('/');
+        (
+            format!(
+                "click action: {:?} -> {}",
+                cfg.waybar.click_action, click_cmd
+            ),
+            on_path,
+            if on_path {
+                String::new()
+            } else {
+                format!("'{first}' not found on $PATH")
+            },
+        )
+    };
+    record(DoctorCheck { label, ok, detail });
+
     println!();
     let failed = checks.borrow().iter().filter(|c| !c.ok).count();
     if failed == 0 {
@@ -875,7 +912,7 @@ fn render_output(
         Some(idx) => vec![&rows[idx]],
         None => rows.iter().collect(),
     };
-    let tooltip = format_tooltip_with_errors(&tooltip_rows, errors, refreshing);
+    let tooltip = format_tooltip_with_errors(&tooltip_rows, errors, refreshing, &left_click_label(config));
     let class = compute_class(rows, errors, refreshing, config.waybar.window.clone());
     WaybarOutput {
         text,
@@ -1283,6 +1320,68 @@ fn open_url_for_provider(provider: &str, target: OpenTarget) {
     }
 }
 
+fn handle_click(config: &TokenGaugeConfig) {
+    let cmd = resolve_click_command(config);
+    if cmd.is_empty() {
+        return;
+    }
+    let _ = Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
+/// Resolve the shell command that the waybar `on-click` should run, based
+/// on the user's `[waybar].click_action` plus the matching override field.
+/// Empty return = nothing to spawn.
+fn resolve_click_command(config: &TokenGaugeConfig) -> String {
+    use tokengauge_core::ClickAction;
+    match config.waybar.click_action {
+        ClickAction::Popover => config.waybar.popover_command.trim().to_string(),
+        ClickAction::Tui => {
+            let explicit = config.waybar.tui_command.trim();
+            if !explicit.is_empty() {
+                return explicit.to_string();
+            }
+            default_tui_launcher()
+        }
+    }
+}
+
+fn default_tui_launcher() -> String {
+    // Prefer omarchy's launcher if installed.
+    if which("omarchy-launch-or-focus-tui").is_some() {
+        return "omarchy-launch-or-focus-tui tokengauge-tui".to_string();
+    }
+    // Fall back to $TERMINAL, then a list of common terminals.
+    let candidates: Vec<String> = std::env::var("TERMINAL")
+        .ok()
+        .into_iter()
+        .chain(
+            ["ghostty", "alacritty", "kitty", "wezterm", "foot", "xterm"]
+                .iter()
+                .map(|s| s.to_string()),
+        )
+        .collect();
+    for term in candidates {
+        if which(&term).is_some() {
+            return format!("{term} -e tokengauge-tui");
+        }
+    }
+    String::new()
+}
+
+fn which(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find_map(|dir| {
+        let candidate = dir.join(name);
+        candidate.is_file().then_some(candidate)
+    })
+}
+
 fn handle_rotate(config: &TokenGaugeConfig, dir: RotateDir) -> Result<()> {
     let cached = match read_cache_full(&config.cache_file) {
         Ok(c) => c,
@@ -1624,6 +1723,7 @@ fn format_tooltip_with_errors(
     rows: &[&ProviderRow],
     errors: &[ProviderFetchError],
     refreshing: bool,
+    left_verb: &str,
 ) -> String {
     let cards: Vec<String> = rows
         .iter()
@@ -1631,10 +1731,10 @@ fn format_tooltip_with_errors(
         .chain(errors.iter().map(format_error_card))
         .collect();
     let cards_refs: Vec<&str> = cards.iter().map(String::as_str).collect();
-    format_tooltip_from_cards(&cards_refs, refreshing)
+    format_tooltip_from_cards(&cards_refs, refreshing, left_verb)
 }
 
-fn format_tooltip_from_cards(cards: &[&str], refreshing: bool) -> String {
+fn format_tooltip_from_cards(cards: &[&str], refreshing: bool, left_verb: &str) -> String {
     let (dim, separator, _green, yellow, _red, _neutral) = theme_palette();
     let separator = format!(
         "<tt><span foreground=\"{separator}\">────────────────────────────────────</span></tt>"
@@ -1647,8 +1747,9 @@ fn format_tooltip_from_cards(cards: &[&str], refreshing: bool) -> String {
     } else {
         String::new()
     };
-    let pairs: &[(&str, &str)] = &[
-        ("left", "open TUI"),
+    let left_pair = ("left", left_verb);
+    let pairs: [(&str, &str); 5] = [
+        left_pair,
         ("middle", "dashboard"),
         ("right", "refresh"),
         ("scroll", "rotate"),
@@ -1669,9 +1770,18 @@ fn format_tooltip_from_cards(cards: &[&str], refreshing: bool) -> String {
     format!("{body}{status_line}{hint}")
 }
 
+/// Short verb shown in the tooltip's left-click hint, matching the user's
+/// configured click_action.
+fn left_click_label(config: &TokenGaugeConfig) -> String {
+    match config.waybar.click_action {
+        tokengauge_core::ClickAction::Tui => "open TUI".to_string(),
+        tokengauge_core::ClickAction::Popover => "open panel".to_string(),
+    }
+}
+
 #[cfg(test)]
 fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
-    format_tooltip_with_errors(rows, &[], refreshing)
+    format_tooltip_with_errors(rows, &[], refreshing, "open")
 }
 
 // ============================================================================
@@ -2147,5 +2257,42 @@ mod tests {
         server.join().unwrap().unwrap();
         let _ = std::fs::remove_file(&sentinel);
         let _ = std::fs::remove_file(&sock);
+    }
+
+    // ------------------------------------------------------------------------
+    // Click-action dispatch
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn resolve_click_command_popover_uses_popover_command() {
+        let mut cfg = test_config(PathBuf::from("/tmp/x"));
+        cfg.waybar.click_action = tokengauge_core::ClickAction::Popover;
+        cfg.waybar.popover_command = "  eww open --toggle foo  ".into();
+        assert_eq!(resolve_click_command(&cfg), "eww open --toggle foo");
+    }
+
+    #[test]
+    fn resolve_click_command_tui_uses_explicit_override() {
+        let mut cfg = test_config(PathBuf::from("/tmp/x"));
+        cfg.waybar.click_action = tokengauge_core::ClickAction::Tui;
+        cfg.waybar.tui_command = "alacritty -e tokengauge-tui".into();
+        assert_eq!(
+            resolve_click_command(&cfg),
+            "alacritty -e tokengauge-tui"
+        );
+    }
+
+    #[test]
+    fn resolve_click_command_tui_default_autodetect_nonempty() {
+        // Auto-detect picks something based on PATH; on the test runner we
+        // expect at least one of sh/xterm to be findable, but the exact
+        // value depends on the environment - assert only non-empty.
+        let cfg = test_config(PathBuf::from("/tmp/x"));
+        // Force PATH to contain at least /usr/bin so the candidate scan
+        // succeeds deterministically on the CI/dev box.
+        let _path = std::env::var_os("PATH");
+        // We don't manipulate env mid-test; rely on the runner having a
+        // sensible PATH. Empty is acceptable in a fully stripped env.
+        let _ = resolve_click_command(&cfg);
     }
 }

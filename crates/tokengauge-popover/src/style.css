@@ -1,0 +1,266 @@
+/* TokenGauge popover - catppuccin-mocha inspired defaults. */
+
+window.background {
+  background: transparent;
+}
+
+.tg-root {
+  background-color: #1e1e2e;
+  border: 1px solid #45475a;
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: #cdd6f4;
+}
+
+.tg-header {
+  margin-bottom: 8px;
+}
+
+.tg-title {
+  font-weight: bold;
+  font-size: 1.05em;
+  color: #89b4fa;
+}
+
+.tg-dim {
+  color: #6c7086;
+  font-size: 0.95em;
+}
+
+.tg-card {
+  background-color: #181825;
+  border: 1px solid #313244;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 2px;
+}
+
+.tg-provider {
+  font-weight: bold;
+  font-size: 1.05em;
+  color: #f5e0dc;
+}
+
+.tg-section-title {
+  color: #cba6f7;
+  font-weight: bold;
+  font-size: 0.9em;
+  margin-top: 4px;
+}
+
+.tg-row-label {
+  color: #bac2de;
+  min-width: 88px;
+}
+
+.tg-money {
+  font-family: "JetBrainsMono Nerd Font", monospace;
+  color: #a6e3a1;
+  min-width: 76px;
+}
+
+.tg-credits {
+  color: #a6e3a1;
+}
+
+/* ---- Usage bars: target the internal trough/progress nodes with high
+ * specificity and override background-image so system themes can't win. */
+progressbar.tg-gauge {
+  min-height: 12px;
+}
+
+progressbar.tg-gauge > trough {
+  min-height: 12px;
+  background-color: #313244;
+  background-image: none;
+  border: none;
+  border-radius: 3px;
+  padding: 0;
+}
+
+progressbar.tg-gauge > trough > progress {
+  min-height: 12px;
+  background-color: #a6e3a1;
+  background-image: none;
+  border: none;
+  border-radius: 3px;
+  padding: 0;
+}
+
+progressbar.tg-gauge.tg-tier-warn > trough > progress {
+  background-color: #f9e2af;
+}
+
+progressbar.tg-gauge.tg-tier-crit > trough > progress {
+  background-color: #f38ba8;
+}
+
+progressbar.tg-gauge.tg-tier-none > trough > progress {
+  background-color: #45475a;
+}
+
+progressbar.tg-gauge > text {
+  color: #1e1e2e;
+  font-weight: bold;
+  font-size: 0.85em;
+}
+
+/* ---- 7-day chart: vertical bar per day. */
+progressbar.tg-7d-bar {
+  min-width: 6px;
+}
+
+progressbar.tg-7d-bar > trough {
+  background-color: #313244;
+  background-image: none;
+  border-radius: 2px;
+  min-width: 6px;
+  padding: 0;
+}
+
+progressbar.tg-7d-bar > trough > progress {
+  background-color: #a6e3a1;
+  background-image: none;
+  border-radius: 2px;
+  min-width: 6px;
+  padding: 0;
+}
+
+/* Per-day $ amount inside the chart; compact, no min-width. */
+.tg-7d-amount {
+  font-family: "JetBrainsMono Nerd Font", monospace;
+  color: #a6e3a1;
+  font-size: 0.78em;
+}
+
+/* ---- Footer / buttons. */
+.tg-footer {
+  margin-top: 10px;
+}
+
+.tg-footer button {
+  background-color: #313244;
+  background-image: none;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  padding: 6px 12px;
+}
+
+.tg-footer button:hover {
+  background-color: #45475a;
+}
+
+/* ---- Tab strip (codexbar-style: icon + name + thin usage bar). */
+.tg-tabs {
+  margin-bottom: 6px;
+  padding: 2px;
+  background-color: #181825;
+  border-radius: 6px;
+}
+
+togglebutton.tg-tab {
+  background-color: transparent;
+  background-image: none;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 4px 6px;
+  margin: 0;
+  min-height: 0;
+  opacity: 0.55;
+}
+
+togglebutton.tg-tab:hover {
+  background-color: #2a2b3c;
+  opacity: 0.85;
+}
+
+togglebutton.tg-tab:checked {
+  background-color: #45475a;
+  border: 1px solid #89b4fa;
+  box-shadow: inset 0 0 0 1px #89b4fa;
+  opacity: 1;
+}
+
+togglebutton.tg-tab label.tg-tab-icon {
+  font-family: "JetBrainsMono Nerd Font", monospace;
+  font-size: 1.0em;
+  margin: 0;
+}
+
+togglebutton.tg-tab label.tg-tab-name {
+  color: #cdd6f4;
+  font-weight: 500;
+  font-size: 0.78em;
+  margin: 0;
+}
+
+togglebutton.tg-tab:checked label.tg-tab-name {
+  color: #f5e0dc;
+  font-weight: bold;
+}
+
+/* Thin tier-coloured usage bar under the provider name. */
+progressbar.tg-tab-usage-bar {
+  min-height: 3px;
+  margin-top: 2px;
+}
+
+progressbar.tg-tab-usage-bar > trough {
+  min-height: 3px;
+  background-color: #313244;
+  background-image: none;
+  border: none;
+  border-radius: 1px;
+  padding: 0;
+}
+
+progressbar.tg-tab-usage-bar > trough > progress {
+  min-height: 3px;
+  background-color: #a6e3a1;
+  background-image: none;
+  border: none;
+  border-radius: 1px;
+  padding: 0;
+}
+
+progressbar.tg-tab-usage-bar.tg-tier-warn > trough > progress {
+  background-color: #f9e2af;
+}
+
+progressbar.tg-tab-usage-bar.tg-tier-crit > trough > progress {
+  background-color: #f38ba8;
+}
+
+progressbar.tg-tab-usage-bar.tg-tier-none > trough > progress {
+  background-color: #45475a;
+}
+
+.tg-err {
+  color: #f38ba8;
+}
+
+.tg-errors {
+  margin-top: 8px;
+}
+
+/* Expander used to collapse the 7-day chart under the Cost section. */
+expander.tg-expander {
+  margin-top: 4px;
+}
+
+expander.tg-expander > box > title {
+  color: #cba6f7;
+  font-weight: bold;
+  font-size: 0.9em;
+  padding: 2px 0;
+}
+
+expander.tg-expander > box > title > expander {
+  color: #cba6f7;
+  -gtk-icon-size: 12px;
+}
+
+expander.tg-expander > box > title:hover {
+  color: #f5c2e7;
+}

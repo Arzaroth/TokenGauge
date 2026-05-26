@@ -282,6 +282,18 @@ pub struct WaybarConfig {
     pub placement: WaybarPlacement,
     pub primary: Option<String>,
     pub scroll_throttle_ms: u64,
+    /// What happens on left-click on the waybar module:
+    /// "tui" launches the terminal TUI, "popover" runs `popover_command`.
+    pub click_action: ClickAction,
+    /// Shell command used when `click_action = "tui"`. Empty = auto-detect
+    /// (omarchy-launch-or-focus-tui if available, else $TERMINAL -e tokengauge-tui).
+    pub tui_command: String,
+    /// Shell command used when `click_action = "popover"`.
+    pub popover_command: String,
+    /// Top-edge offset in pixels for the bundled `tokengauge-popover` window.
+    pub popover_margin_top: i32,
+    /// Side-edge (left/right matching `placement`) offset in pixels.
+    pub popover_margin_side: i32,
 }
 
 impl Default for WaybarConfig {
@@ -291,6 +303,13 @@ impl Default for WaybarConfig {
             placement: WaybarPlacement::default(),
             primary: None,
             scroll_throttle_ms: 250,
+            click_action: ClickAction::default(),
+            tui_command: String::new(),
+            popover_command: "tokengauge-popover --toggle".to_string(),
+            // Top edge: 0 sits flush under waybar when waybar reserves its
+            // own exclusive zone; bump up if you want a gap.
+            popover_margin_top: 4,
+            popover_margin_side: 8,
         }
     }
 }
@@ -309,6 +328,14 @@ pub enum WaybarPlacement {
     Left,
     #[default]
     Right,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ClickAction {
+    #[default]
+    Tui,
+    Popover,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1868,6 +1895,14 @@ placement = "right"
 # Provider key shown in the waybar text. Unset = show all providers stacked.
 # Mouse scroll over the module rotates the selection (overrides this until restart).
 # primary = "claude"
+# Left-click action: "tui" opens the terminal TUI, "popover" runs popover_command
+# (e.g. an eww window).
+click_action = "tui"
+# Optional explicit launcher for click_action = "tui". Empty = auto-detect
+# (omarchy-launch-or-focus-tui if present, else $TERMINAL -e tokengauge-tui).
+# tui_command = "ghostty -e tokengauge-tui"
+# Shell command used when click_action = "popover".
+popover_command = "tokengauge-popover --toggle"
 
 [providers]
 # OAuth providers - set to true/false to enable/disable

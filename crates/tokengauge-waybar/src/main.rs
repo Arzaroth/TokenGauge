@@ -427,13 +427,36 @@ fn fire_notification(provider: &str, window: &str, pct: u8, threshold: u8, reset
         .spawn();
 }
 
+/// Send SIGRTMIN+8 to every running `waybar` process.
+/// Replaces the previous `pkill -RTMIN+8 waybar` shell-out: no subprocess
+/// fork, no PATH dependency on pkill, no race window where the process
+/// list could change between match and send.
 fn signal_waybar() {
-    let _ = Command::new("pkill")
-        .arg("-RTMIN+8")
-        .arg("waybar")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    const SIGRTMIN_PLUS_8: libc::c_int = 42;
+    let pids = find_waybar_pids();
+    for pid in pids {
+        // SAFETY: kill(2) is a syscall; passing a stale PID is a no-op or
+        // would target a recycled pid (acceptable - we no-op on EPERM/ESRCH).
+        let _ = unsafe { libc::kill(pid, SIGRTMIN_PLUS_8) };
+    }
+}
+
+fn find_waybar_pids() -> Vec<libc::pid_t> {
+    let mut pids = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return pids;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else { continue };
+        let Ok(pid) = name_str.parse::<libc::pid_t>() else { continue };
+        let cmdline_path = entry.path().join("comm");
+        let Ok(comm) = std::fs::read_to_string(&cmdline_path) else { continue };
+        if comm.trim() == "waybar" {
+            pids.push(pid);
+        }
+    }
+    pids
 }
 
 /// Front-half of refresh: write sentinel, signal waybar, fork detached worker

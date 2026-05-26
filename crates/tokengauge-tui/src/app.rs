@@ -28,6 +28,7 @@ pub struct AppState {
     pub viewport_height: u16,
     pub active_tab: usize,
     pub initial_provider: Option<String>,
+    pub show_help: bool,
 }
 
 impl AppState {
@@ -45,6 +46,7 @@ impl AppState {
             viewport_height: 0,
             active_tab: 0,
             initial_provider: None,
+            show_help: false,
         }
     }
 
@@ -202,6 +204,15 @@ impl App {
         let Event::Key(key) = event::read()? else {
             return Ok(());
         };
+        // If help popup is open, any key closes it (except quit).
+        if self.state.show_help {
+            if should_exit(key) {
+                self.should_quit = true;
+            } else {
+                self.state.show_help = false;
+            }
+            return Ok(());
+        }
         if should_exit(key) {
             self.should_quit = true;
             return Ok(());
@@ -211,14 +222,19 @@ impl App {
             self.pending_refresh = Some(spawn_refresh(self.config_override.clone(), true));
         }
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => self.state.scroll_by(1),
-            KeyCode::Char('k') | KeyCode::Up => self.state.scroll_by(-1),
+            KeyCode::Char('?') => self.state.show_help = true,
+            KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => self.state.next_tab(),
+            KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => self.state.prev_tab(),
+            KeyCode::Char('l') | KeyCode::Right => self.state.next_tab(),
+            KeyCode::Char('h') | KeyCode::Left => self.state.prev_tab(),
             KeyCode::PageDown => self.state.scroll_by(self.state.viewport_height as i32),
             KeyCode::PageUp => self.state.scroll_by(-(self.state.viewport_height as i32)),
-            KeyCode::Char('g') | KeyCode::Home => self.state.scroll = 0,
-            KeyCode::Char('G') | KeyCode::End => self.state.scroll = self.state.max_scroll(),
-            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => self.state.next_tab(),
-            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.state.prev_tab(),
+            KeyCode::Char('g') | KeyCode::Home if !self.state.rows.is_empty() => {
+                self.state.active_tab = 0;
+            }
+            KeyCode::Char('G') | KeyCode::End if !self.state.rows.is_empty() => {
+                self.state.active_tab = self.state.rows.len() - 1;
+            }
             KeyCode::Char('u') => self.open_active_url(OpenWhich::Dashboard),
             KeyCode::Char('s') => self.open_active_url(OpenWhich::Status),
             _ => {}

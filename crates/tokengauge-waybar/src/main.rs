@@ -11,7 +11,7 @@ use tokengauge_core::{
     TokenGaugeConfig, WaybarState, WaybarWindow, YELLOW_HEX, color_hex_for_percent,
     ensure_cache_dir, fetch_all_providers, format_tokens, format_updated_relative, load_config,
     payload_to_rows_with_costs, provider_icon, read_cache_full, read_waybar_state,
-    waybar_state_path, write_cache_full, write_default_config, write_waybar_state,
+    waybar_state_path, window_labels, write_cache_full, write_default_config, write_waybar_state,
 };
 
 #[derive(Parser, Debug)]
@@ -418,12 +418,12 @@ fn format_provider_line(label: &str, used: Option<u8>, reset: &str) -> String {
                 format!("resets {}", pango_escape(reset))
             };
             format!(
-                "  {label:<8}  [<span foreground=\"{color}\">{bar}</span>]  <span foreground=\"{color}\">{pct_cell}</span>   {reset_part}"
+                "  {label:<16}  [<span foreground=\"{color}\">{bar}</span>]  <span foreground=\"{color}\">{pct_cell}</span>   {reset_part}"
             )
         }
         None => {
             format!(
-                "  {label:<8}  [<span foreground=\"{DIM_HEX}\">──────────</span>]          no data"
+                "  {label:<16}  [<span foreground=\"{DIM_HEX}\">──────────</span>]          no data"
             )
         }
     }
@@ -503,19 +503,20 @@ fn format_provider_card(row: &ProviderRow) -> String {
         ));
     }
 
+    let (session_label, weekly_label, tertiary_label) = window_labels(&row.provider);
     lines.push(format_provider_line(
-        "Session",
+        session_label,
         row.session_used,
         &row.session_reset,
     ));
     lines.push(format_provider_line(
-        "Weekly",
+        weekly_label,
         row.weekly_used,
         &row.weekly_reset,
     ));
     if row.tertiary_used.is_some() || row.tertiary_reset != "—" {
         lines.push(format_provider_line(
-            "Tertiary",
+            tertiary_label,
             row.tertiary_used,
             &row.tertiary_reset,
         ));

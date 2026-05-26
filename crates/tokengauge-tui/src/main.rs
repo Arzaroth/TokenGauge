@@ -22,7 +22,7 @@ use tokengauge_core::{
     ProviderRow, color_hex_for_percent, fetch_all_providers, format_tokens,
     format_updated_relative, load_config, parse_hex_rgb, payload_to_rows_with_costs,
     provider_icon as core_provider_icon, read_cache_full, read_waybar_state, waybar_state_path,
-    write_cache_full, write_default_config,
+    window_labels, write_cache_full, write_default_config,
 };
 
 const MIN_BAR_WIDTH: usize = 12;
@@ -517,16 +517,18 @@ fn provider_card_lines(row: &ProviderRow, inner_width: u16) -> Vec<Line<'static>
         ]));
     }
 
+    let (session_label, weekly_label, tertiary_label) = window_labels(&row.provider);
+
     lines.push(Line::from(""));
     lines.extend(window_section(
-        "Session",
+        session_label,
         row.session_used,
         &row.session_reset,
         bar_width,
     ));
     lines.push(Line::from(""));
     lines.extend(window_section(
-        "Weekly",
+        weekly_label,
         row.weekly_used,
         &row.weekly_reset,
         bar_width,
@@ -534,7 +536,7 @@ fn provider_card_lines(row: &ProviderRow, inner_width: u16) -> Vec<Line<'static>
     if row.tertiary_used.is_some() || row.tertiary_reset != "—" {
         lines.push(Line::from(""));
         lines.extend(window_section(
-            "Tertiary",
+            tertiary_label,
             row.tertiary_used,
             &row.tertiary_reset,
             bar_width,

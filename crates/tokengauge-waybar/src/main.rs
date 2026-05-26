@@ -1266,6 +1266,18 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
             br.cost_per_hour
         ));
     }
+    if cost.session_usd > 0.0 {
+        lines.push(format!(
+            "  Session   <span foreground=\"{DIM_HEX}\">${:.2}</span>",
+            cost.session_usd
+        ));
+    }
+    if cost.weekly_usd > 0.0 {
+        lines.push(format!(
+            "  Weekly    <span foreground=\"{DIM_HEX}\">${:.2}</span>",
+            cost.weekly_usd
+        ));
+    }
     lines.push(format!(
         "  Today     <span foreground=\"{DIM_HEX}\">{today_usd:>usd_width$}  ·  {today_tokens:>tokens_width$} tokens</span>"
     ));

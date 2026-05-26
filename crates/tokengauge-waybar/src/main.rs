@@ -598,7 +598,7 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
             format!("{mins}m")
         };
         lines.push(format!(
-            "  Rate      <span foreground=\"{DIM_HEX}\">${:.2}/hr  ·  projected ${:.2} in {remaining}</span>",
+            "  Rate      <span foreground=\"{DIM_HEX}\">${:.2}/hr  ·  cc 5h block: ${:.2} projected, {remaining} to end</span>",
             br.cost_per_hour, br.projected_cost
         ));
     }

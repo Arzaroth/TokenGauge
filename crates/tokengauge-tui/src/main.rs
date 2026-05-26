@@ -776,6 +776,7 @@ fn draw_ui(frame: &mut ratatui::Frame, state: &mut AppState, is_refreshing: bool
         let tabs = Tabs::new(tab_titles(&state.rows, state.active_tab))
             .select(state.active_tab)
             .block(Block::default().borders(Borders::BOTTOM))
+            .highlight_style(Style::default())
             .divider("  ");
         frame.render_widget(tabs, panes[0]);
 

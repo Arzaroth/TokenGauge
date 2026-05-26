@@ -566,6 +566,21 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
         ])
     };
 
+    let window_line = |label: &str, usd: f64| {
+        Line::from(vec![
+            Span::raw(pad.clone()),
+            Span::styled(label.to_string(), Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("    "),
+            Span::styled(format!("${usd:.2}"), Style::default().fg(green())),
+        ])
+    };
+
+    if cost.session_usd > 0.0 {
+        lines.push(window_line("Session", cost.session_usd));
+    }
+    if cost.weekly_usd > 0.0 {
+        lines.push(window_line("Weekly", cost.weekly_usd));
+    }
     lines.push(totals_line("Today", &today_usd_str, &today_tokens_str));
     for m in &cost.today_models {
         lines.push(model_line(m));

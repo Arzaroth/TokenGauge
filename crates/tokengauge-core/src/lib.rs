@@ -556,6 +556,13 @@ pub struct CostInfo {
     pub monthly_models: Vec<ModelCost>,
     #[serde(default)]
     pub burn_rate: Option<BurnRate>,
+    /// Cost accrued in the current ccusage 5h session block (matches the
+    /// Session usage row anchored to claude.ai's reset, approximately).
+    #[serde(default)]
+    pub session_usd: f64,
+    /// Sum of the last 7 days of cost (rolling weekly cost).
+    #[serde(default)]
+    pub weekly_usd: f64,
     /// Last N days of total cost per day (oldest -> newest). N = up to 7.
     #[serde(default)]
     pub weekly_cost_history: Vec<f64>,
@@ -1475,6 +1482,8 @@ struct CcusageBlock {
     burn_rate: Option<CcusageBurnRate>,
     #[serde(default)]
     projection: Option<CcusageProjection>,
+    #[serde(default, rename = "costUSD")]
+    cost_usd: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1542,28 +1551,38 @@ fn run_ccusage_blocks(timeout: Duration) -> Result<CcusageBlocksResponse> {
     serde_json::from_slice(&output.stdout).context("ccusage blocks output was not valid JSON")
 }
 
-fn fetch_burn_rates(timeout: Duration) -> HashMap<String, BurnRate> {
+struct ActiveBlockInfo {
+    burn: Option<BurnRate>,
+    session_usd: f64,
+}
+
+fn fetch_active_blocks(timeout: Duration) -> HashMap<String, ActiveBlockInfo> {
     let resp = match run_ccusage_blocks(timeout) {
         Ok(r) => r,
         Err(_) => return HashMap::new(),
     };
-    let mut by_provider: HashMap<String, BurnRate> = HashMap::new();
+    let mut by_provider: HashMap<String, ActiveBlockInfo> = HashMap::new();
     for block in resp.blocks.into_iter().filter(|b| b.is_active) {
-        let (Some(rate), Some(proj)) = (block.burn_rate, block.projection) else {
-            continue;
-        };
         let provider = block
             .models
             .iter()
             .find_map(|m| model_to_provider(m))
-            .unwrap_or("claude");
-        by_provider.insert(
-            provider.to_string(),
-            BurnRate {
+            .unwrap_or("claude")
+            .to_string();
+        let burn = match (block.burn_rate, block.projection) {
+            (Some(rate), Some(proj)) => Some(BurnRate {
                 cost_per_hour: rate.cost_per_hour,
                 tokens_per_minute: rate.tokens_per_minute as u64,
                 remaining_minutes: proj.remaining_minutes,
                 projected_cost: proj.total_cost,
+            }),
+            _ => None,
+        };
+        by_provider.insert(
+            provider,
+            ActiveBlockInfo {
+                burn,
+                session_usd: block.cost_usd,
             },
         );
     }
@@ -1604,14 +1623,14 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
 
     let mut today_agg = aggregate_ccusage(&daily);
     let mut monthly_agg = aggregate_ccusage(&monthly);
-    let mut burn_rates = fetch_burn_rates(timeout);
+    let mut active_blocks = fetch_active_blocks(timeout);
     let mut weekly_history = last_n_days_by_provider(&monthly, 7);
 
     let mut result = HashMap::new();
     let providers: std::collections::HashSet<String> = today_agg
         .keys()
         .chain(monthly_agg.keys())
-        .chain(burn_rates.keys())
+        .chain(active_blocks.keys())
         .cloned()
         .collect();
     for provider in providers {
@@ -1623,8 +1642,12 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
             .remove(&provider)
             .map(|a| a.into_model_costs())
             .unwrap_or((0.0, 0, Vec::new()));
-        let burn_rate = burn_rates.remove(&provider);
+        let (burn_rate, session_usd) = active_blocks
+            .remove(&provider)
+            .map(|a| (a.burn, a.session_usd))
+            .unwrap_or((None, 0.0));
         let weekly_cost_history = weekly_history.remove(&provider).unwrap_or_default();
+        let weekly_usd = weekly_cost_history.iter().sum();
         result.insert(
             provider,
             CostInfo {
@@ -1635,6 +1658,8 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
                 today_models,
                 monthly_models,
                 burn_rate,
+                session_usd,
+                weekly_usd,
                 weekly_cost_history,
             },
         );
@@ -2425,6 +2450,8 @@ mod tests {
                 today_models: Vec::new(),
                 monthly_models: Vec::new(),
                 burn_rate: None,
+                session_usd: 0.0,
+                weekly_usd: 0.0,
                 weekly_cost_history: Vec::new(),
             },
         );

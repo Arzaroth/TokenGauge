@@ -1112,13 +1112,13 @@ fn handle_rotate(config: &TokenGaugeConfig, dir: RotateDir) -> Result<()> {
     Ok(())
 }
 
-fn maybe_refresh(
-    config: &TokenGaugeConfig,
-) -> Result<(
+type RefreshSnapshot = (
     Vec<ProviderPayload>,
     Vec<ProviderFetchError>,
     HashMap<String, CostInfo>,
-)> {
+);
+
+fn maybe_refresh(config: &TokenGaugeConfig) -> Result<RefreshSnapshot> {
     let now = SystemTime::now();
     let stale = match std::fs::metadata(&config.cache_file) {
         Ok(metadata) => metadata
@@ -1643,7 +1643,7 @@ mod tests {
 
     #[test]
     fn format_tooltip_cards_joins_with_separator() {
-        let rows = vec![sample_row("Claude"), sample_row("Codex")];
+        let rows = [sample_row("Claude"), sample_row("Codex")];
         let refs: Vec<&ProviderRow> = rows.iter().collect();
         let tooltip = format_tooltip_cards(&refs, false);
         assert!(tooltip.contains("</tt>\n<tt>"));

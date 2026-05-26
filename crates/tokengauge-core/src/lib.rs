@@ -905,26 +905,26 @@ pub fn format_window(window: Option<UsageWindow>) -> (Option<u8>, Option<u32>, S
 /// Format reset time as relative duration (e.g., "in 2h 30m") if possible,
 /// otherwise fall back to the description (e.g., "Jan 22 at 5:59PM").
 fn format_reset_time(resets_at: Option<&str>, description: Option<String>) -> String {
-    if let Some(resets_at) = resets_at {
-        if let Ok(reset_time) = DateTime::parse_from_rfc3339(resets_at) {
-            let now = Utc::now();
-            let reset_utc = reset_time.with_timezone(&Utc);
-            let duration = reset_utc.signed_duration_since(now);
+    if let Some(resets_at) = resets_at
+        && let Ok(reset_time) = DateTime::parse_from_rfc3339(resets_at)
+    {
+        let now = Utc::now();
+        let reset_utc = reset_time.with_timezone(&Utc);
+        let duration = reset_utc.signed_duration_since(now);
 
-            if duration.num_seconds() > 0 {
-                let total_minutes = duration.num_minutes();
-                let days = total_minutes / (60 * 24);
-                let hours = (total_minutes / 60) % 24;
-                let mins = total_minutes % 60;
+        if duration.num_seconds() > 0 {
+            let total_minutes = duration.num_minutes();
+            let days = total_minutes / (60 * 24);
+            let hours = (total_minutes / 60) % 24;
+            let mins = total_minutes % 60;
 
-                return if days > 0 {
-                    format!("in {days}d {hours}h {mins}m")
-                } else if hours > 0 {
-                    format!("in {hours}h {mins}m")
-                } else {
-                    format!("in {mins}m")
-                };
-            }
+            return if days > 0 {
+                format!("in {days}d {hours}h {mins}m")
+            } else if hours > 0 {
+                format!("in {hours}h {mins}m")
+            } else {
+                format!("in {mins}m")
+            };
         }
     }
     // Fall back to description if we can't compute relative time

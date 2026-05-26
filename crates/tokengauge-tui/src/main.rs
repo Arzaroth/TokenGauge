@@ -866,7 +866,7 @@ fn draw_ui(frame: &mut ratatui::Frame, state: &mut AppState, is_refreshing: bool
                         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        truncate_string(&err.message, 60),
+                        truncate(&err.message, 60),
                         Style::default().fg(Color::LightRed),
                     ),
                 ])
@@ -929,10 +929,3 @@ fn draw_ui(frame: &mut ratatui::Frame, state: &mut AppState, is_refreshing: bool
     frame.render_widget(footer, layout[footer_index]);
 }
 
-fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max_len - 1])
-    }
-}

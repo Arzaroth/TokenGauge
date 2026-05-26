@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
@@ -7,8 +8,8 @@ use clap::Parser;
 use serde::Serialize;
 use tokengauge_core::{
     CostInfo, DIM_HEX, ExtraWindowRow, FetchResult, ProviderPayload, ProviderRow, SEPARATOR_HEX,
-    TokenGaugeConfig, WaybarState, WaybarWindow, color_hex_for_percent, ensure_cache_dir,
-    fetch_all_providers, format_tokens, format_updated_relative, load_config,
+    TokenGaugeConfig, WaybarState, WaybarWindow, YELLOW_HEX, color_hex_for_percent,
+    ensure_cache_dir, fetch_all_providers, format_tokens, format_updated_relative, load_config,
     payload_to_rows_with_costs, provider_icon, read_cache_full, read_waybar_state,
     waybar_state_path, write_cache_full, write_default_config, write_waybar_state,
 };
@@ -21,6 +22,14 @@ struct Args {
     /// Rotate the provider shown in the waybar text and exit (no JSON output).
     #[arg(long, value_enum)]
     rotate: Option<RotateDir>,
+    /// Wipe the cache file and exit. Next render will re-fetch from codexbar
+    /// and ccusage. Pair with a waybar signal so the bar repolls immediately.
+    #[arg(long)]
+    refresh: bool,
+    /// Internal: run the actual fetch in a detached worker spawned by --refresh.
+    /// Not for direct use.
+    #[arg(long, hide = true)]
+    internal_refresh_worker: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -41,14 +50,14 @@ fn format_bar(label: &str, value: Option<u8>) -> String {
     let escaped_label = pango_escape(label);
     match value {
         Some(percent) => {
-            let bars = bar_blocks(percent);
+            let bar_inner = bar_blocks(percent);
             let color = color_hex_for_percent(percent);
             format!(
-                "{icon} {escaped_label} <span foreground=\"{color}\">{bars} {percent}%</span>"
+                "{icon} {escaped_label} [<span foreground=\"{color}\">{bar_inner}</span>] <span foreground=\"{color}\">{percent}%</span>"
             )
         }
         None => format!(
-            "{icon} {escaped_label} <span foreground=\"{DIM_HEX}\">— —</span>"
+            "{icon} {escaped_label} [<span foreground=\"{DIM_HEX}\">─────</span>] <span foreground=\"{DIM_HEX}\">—</span>"
         ),
     }
 }
@@ -59,7 +68,7 @@ fn bar_blocks(percent: u8) -> String {
     let pct = percent.min(100) as usize;
     let filled = (pct * MINI_BAR_WIDTH).div_ceil(100);
     let empty = MINI_BAR_WIDTH.saturating_sub(filled);
-    format!("[{}{}]", "━".repeat(filled), "─".repeat(empty))
+    format!("{}{}", "━".repeat(filled), "─".repeat(empty))
 }
 
 fn main() -> Result<()> {
@@ -75,8 +84,50 @@ fn main() -> Result<()> {
     let config = load_config(Some(config_path))?;
     ensure_cache_dir(&config.cache_file)?;
 
+    if args.internal_refresh_worker {
+        worker_do_refresh(&config);
+        return Ok(());
+    }
+
+    if args.refresh {
+        handle_refresh_quick(&config);
+        return Ok(());
+    }
+
     if let Some(dir) = args.rotate {
         handle_rotate(&config, dir)?;
+        return Ok(());
+    }
+
+    let sentinel = refresh_sentinel_path(&config.cache_file);
+    let refreshing = refresh_in_progress(&sentinel);
+
+    if refreshing {
+        let cached = read_cache_full(&config.cache_file).ok();
+        let rows = match cached {
+            Some(c) => payload_to_rows_with_costs(c.payloads().to_vec(), &c.costs()),
+            None => Vec::new(),
+        };
+        let selected = selected_provider_for_tooltip(&config, &rows);
+        let tooltip_refs: Vec<&ProviderRow> = match selected {
+            Some(idx) => vec![&rows[idx]],
+            None => rows.iter().collect(),
+        };
+        let tooltip = format_tooltip_cards(&tooltip_refs, true);
+        let text = if rows.is_empty() {
+            format!("   <span foreground=\"{YELLOW_HEX}\">⟳ Refreshing...</span>")
+        } else {
+            format!(
+                "   <span foreground=\"{YELLOW_HEX}\">⟳</span> {}",
+                build_text_for_rows(&rows, &config)
+            )
+        };
+        let output = WaybarOutput {
+            text,
+            tooltip,
+            class: "tokengauge tokengauge-refreshing".into(),
+        };
+        println!("{}", serde_json::to_string(&output)?);
         return Ok(());
     }
 
@@ -104,41 +155,13 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let state = read_waybar_state(&waybar_state_path(&config.cache_file));
-    let selected_key = state
-        .selected
-        .as_deref()
-        .or(config.waybar.primary.as_deref());
-    let visible_rows: Vec<&ProviderRow> = match selected_key {
-        Some(key) => {
-            let lower = key.to_lowercase();
-            let matched: Vec<&ProviderRow> = rows
-                .iter()
-                .filter(|r| r.provider.to_lowercase() == lower)
-                .collect();
-            if matched.is_empty() {
-                rows.iter().collect()
-            } else {
-                matched
-            }
-        }
+    let text = format!("   {}", build_text_for_rows(&rows, &config));
+    let selected = selected_provider_for_tooltip(&config, &rows);
+    let tooltip_rows: Vec<&ProviderRow> = match selected {
+        Some(idx) => vec![&rows[idx]],
         None => rows.iter().collect(),
     };
-
-    let text = visible_rows
-        .iter()
-        .map(|row| {
-            let used = match config.waybar.window {
-                WaybarWindow::Daily => row.session_used,
-                WaybarWindow::Weekly => row.weekly_used,
-            };
-            format_bar(&row.provider, used)
-        })
-        .collect::<Vec<_>>()
-        .join("   ");
-    let text = format!("   {text}");
-
-    let tooltip = format_tooltip_cards(&visible_rows);
+    let tooltip = format_tooltip_cards(&tooltip_rows, false);
 
     let output = WaybarOutput {
         text,
@@ -156,6 +179,115 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn selected_provider_for_tooltip(config: &TokenGaugeConfig, rows: &[ProviderRow]) -> Option<usize> {
+    let state = read_waybar_state(&waybar_state_path(&config.cache_file));
+    let key = state
+        .selected
+        .as_deref()
+        .or(config.waybar.primary.as_deref())?
+        .to_lowercase();
+    rows.iter()
+        .position(|r| r.provider.to_lowercase() == key)
+}
+
+fn build_text_for_rows(rows: &[ProviderRow], config: &TokenGaugeConfig) -> String {
+    let state = read_waybar_state(&waybar_state_path(&config.cache_file));
+    let selected_key = state
+        .selected
+        .as_deref()
+        .or(config.waybar.primary.as_deref());
+    let text_rows: Vec<&ProviderRow> = match selected_key {
+        Some(key) => {
+            let lower = key.to_lowercase();
+            let matched: Vec<&ProviderRow> = rows
+                .iter()
+                .filter(|r| r.provider.to_lowercase() == lower)
+                .collect();
+            if matched.is_empty() {
+                rows.iter().collect()
+            } else {
+                matched
+            }
+        }
+        None => rows.iter().collect(),
+    };
+    text_rows
+        .iter()
+        .map(|row| {
+            let used = match config.waybar.window {
+                WaybarWindow::Daily => row.session_used,
+                WaybarWindow::Weekly => row.weekly_used,
+            };
+            format_bar(&row.provider, used)
+        })
+        .collect::<Vec<_>>()
+        .join("   ")
+}
+
+fn refresh_sentinel_path(cache_file: &Path) -> PathBuf {
+    let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
+    parent.join("tokengauge-refreshing")
+}
+
+const REFRESH_SENTINEL_TTL_MS: i64 = 30_000;
+
+fn refresh_in_progress(sentinel: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(sentinel) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    let Ok(age) = SystemTime::now().duration_since(modified) else {
+        return false;
+    };
+    age.as_millis() < REFRESH_SENTINEL_TTL_MS as u128
+}
+
+fn signal_waybar() {
+    let _ = Command::new("pkill")
+        .arg("-RTMIN+8")
+        .arg("waybar")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Front-half of refresh: write sentinel, signal waybar, fork detached worker
+/// for the actual fetch, return immediately so waybar's on-click-right
+/// handler unblocks fast and waybar services the signal.
+fn handle_refresh_quick(config: &TokenGaugeConfig) {
+    let sentinel = refresh_sentinel_path(&config.cache_file);
+    let _ = std::fs::write(&sentinel, now_ms().to_string());
+    signal_waybar();
+
+    if let Ok(exe) = std::env::current_exe() {
+        let mut cmd = Command::new(exe);
+        cmd.arg("--internal-refresh-worker")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if let Some(path) = std::env::var_os("TOKENGAUGE_CONFIG") {
+            cmd.env("TOKENGAUGE_CONFIG", path);
+        }
+        let _ = cmd.spawn();
+    }
+}
+
+/// Detached worker: do the actual fetch + clear sentinel + signal waybar.
+fn worker_do_refresh(config: &TokenGaugeConfig) {
+    let sentinel = refresh_sentinel_path(&config.cache_file);
+    let _ = std::fs::remove_file(&config.cache_file);
+    let FetchResult {
+        payloads,
+        errors,
+        costs,
+    } = fetch_all_providers(config);
+    let _ = write_cache_full(&config.cache_file, &payloads, &errors, &costs);
+    let _ = std::fs::remove_file(&sentinel);
+    signal_waybar();
 }
 
 fn handle_rotate(config: &TokenGaugeConfig, dir: RotateDir) -> Result<()> {
@@ -412,12 +544,23 @@ fn format_provider_card(row: &ProviderRow) -> String {
     format!("<tt>{}</tt>", lines.join("\n"))
 }
 
-fn format_tooltip_cards(rows: &[&ProviderRow]) -> String {
+fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
     let cards: Vec<String> = rows.iter().map(|row| format_provider_card(row)).collect();
     let separator = format!(
         "<tt><span foreground=\"{SEPARATOR_HEX}\">────────────────────────────────────</span></tt>"
     );
-    cards.join(&format!("\n{separator}\n"))
+    let body = cards.join(&format!("\n{separator}\n"));
+    let status_line = if refreshing {
+        format!(
+            "\n<tt><b><span foreground=\"{YELLOW_HEX}\">⟳ Refreshing...</span></b></tt>"
+        )
+    } else {
+        String::new()
+    };
+    let hint = format!(
+        "\n<tt><span foreground=\"{DIM_HEX}\">scroll: rotate · left-click: TUI · right-click: refresh</span></tt>"
+    );
+    format!("{body}{status_line}{hint}")
 }
 
 // ============================================================================
@@ -434,17 +577,17 @@ mod tests {
 
     #[test]
     fn bar_blocks_boundaries() {
-        assert_eq!(bar_blocks(0), "[─────]");
-        assert_eq!(bar_blocks(20), "[━────]");
-        assert_eq!(bar_blocks(40), "[━━───]");
-        assert_eq!(bar_blocks(60), "[━━━──]");
-        assert_eq!(bar_blocks(80), "[━━━━─]");
-        assert_eq!(bar_blocks(100), "[━━━━━]");
+        assert_eq!(bar_blocks(0), "─────");
+        assert_eq!(bar_blocks(20), "━────");
+        assert_eq!(bar_blocks(40), "━━───");
+        assert_eq!(bar_blocks(60), "━━━──");
+        assert_eq!(bar_blocks(80), "━━━━─");
+        assert_eq!(bar_blocks(100), "━━━━━");
     }
 
     #[test]
     fn bar_blocks_clamps_over_100() {
-        assert_eq!(bar_blocks(150), "[━━━━━]");
+        assert_eq!(bar_blocks(150), "━━━━━");
     }
 
     // ------------------------------------------------------------------------
@@ -456,7 +599,9 @@ mod tests {
         let result = format_bar("Claude", Some(42));
         assert!(result.contains("Claude"));
         assert!(result.contains("42%"));
-        assert!(result.contains("[━━━──]")); // 42% -> ceil(2.1) = 3 filled
+        assert!(result.contains("━━━──")); // 42% -> ceil(2.1) = 3 filled
+        assert!(result.contains("[<span"));
+        assert!(result.contains("</span>]"));
         assert!(result.contains("\u{f0721}"));
         assert!(result.contains("face=\"JetBrainsMono Nerd Font\""));
         assert!(result.contains("foreground=\"#DE7356\""));
@@ -473,7 +618,9 @@ mod tests {
     #[test]
     fn format_bar_none() {
         let result = format_bar("Codex", None);
-        assert!(result.contains("— —"));
+        assert!(result.contains("Codex"));
+        assert!(result.contains("─────"));
+        assert!(result.contains("—"));
         assert!(result.contains("\u{f0b2b}"));
         assert!(result.contains("foreground=\"#74AA9C\""));
         // dim color for missing data
@@ -634,7 +781,7 @@ mod tests {
     fn format_tooltip_cards_joins_with_separator() {
         let rows = vec![sample_row("Claude"), sample_row("Codex")];
         let refs: Vec<&ProviderRow> = rows.iter().collect();
-        let tooltip = format_tooltip_cards(&refs);
+        let tooltip = format_tooltip_cards(&refs, false);
         assert!(tooltip.contains("</tt>\n<tt>"));
         assert!(tooltip.contains("────────────────────────────────────"));
     }
@@ -642,7 +789,15 @@ mod tests {
     #[test]
     fn format_tooltip_cards_single_card_no_separator() {
         let row = sample_row("Claude");
-        let tooltip = format_tooltip_cards(&[&row]);
+        let tooltip = format_tooltip_cards(&[&row], false);
         assert!(!tooltip.contains("────────────────────────────────────"));
+    }
+
+    #[test]
+    fn format_tooltip_cards_refreshing_shows_indicator() {
+        let row = sample_row("Claude");
+        let tooltip = format_tooltip_cards(&[&row], true);
+        assert!(tooltip.contains("Refreshing"));
+        assert!(tooltip.contains("⟳"));
     }
 }

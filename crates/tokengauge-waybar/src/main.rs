@@ -618,11 +618,10 @@ fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
     ];
     let cell = |k: &str, v: &str| format!("{k:<6} {v:<10}");
     let hint_lines: Vec<String> = pairs
-        .chunks(2)
-        .map(|pair| match pair {
-            [(k1, v1), (k2, v2)] => format!("  {}  ·  {}", cell(k1, v1), cell(k2, v2)),
-            [(k1, v1)] => format!("  {}", cell(k1, v1)),
-            _ => String::new(),
+        .chunks(3)
+        .map(|chunk| {
+            let cells: Vec<String> = chunk.iter().map(|(k, v)| cell(k, v)).collect();
+            format!("  {}", cells.join("  ·  "))
         })
         .collect();
     let hint = format!(

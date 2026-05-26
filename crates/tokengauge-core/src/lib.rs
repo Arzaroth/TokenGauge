@@ -1073,6 +1073,15 @@ pub fn provider_icon(label: &str) -> ProviderIcon {
     }
 }
 
+/// Provider-specific labels for the three usage windows.
+/// Defaults to generic "Session"/"Weekly"/"Tertiary" for unknown providers.
+pub fn window_labels(provider: &str) -> (&'static str, &'static str, &'static str) {
+    match provider.to_lowercase().as_str() {
+        "claude" => ("Session", "Weekly (all)", "Weekly (Sonnet)"),
+        _ => ("Session", "Weekly", "Tertiary"),
+    }
+}
+
 pub fn color_hex_for_percent(percent: u8) -> &'static str {
     match percent {
         0..=49 => GREEN_HEX,

@@ -7,12 +7,13 @@ use anyhow::Result;
 use clap::Parser;
 use serde::Serialize;
 use tokengauge_core::{
-    CostInfo, DIM_HEX, ExtraWindowRow, FetchResult, ProviderPayload, ProviderRow, SEPARATOR_HEX,
-    TokenGaugeConfig, WaybarState, WaybarWindow, YELLOW_HEX, color_hex_for_percent,
-    ensure_cache_dir, fetch_all_providers, format_tokens, format_updated_relative, load_config,
-    notify_state_path, payload_to_rows_with_costs, provider_icon, read_cache_full,
-    read_notify_state, read_waybar_state, thresholds_to_fire, waybar_state_path, window_labels,
-    write_cache_full, write_default_config, write_notify_state, write_waybar_state,
+    CostInfo, DIM_HEX, ExtraWindowRow, FetchResult, ProviderFetchError, ProviderPayload,
+    ProviderRow, RED_HEX, SEPARATOR_HEX, TokenGaugeConfig, WaybarState, WaybarWindow, YELLOW_HEX,
+    color_hex_for_percent, ensure_cache_dir, fetch_all_providers, format_tokens,
+    format_updated_relative, load_config, notify_state_path, payload_to_rows_with_costs,
+    provider_icon, read_cache_full, read_notify_state, read_waybar_state, thresholds_to_fire,
+    waybar_state_path, window_labels, write_cache_full, write_default_config, write_notify_state,
+    write_waybar_state,
 };
 
 #[derive(Parser, Debug)]
@@ -128,22 +129,25 @@ fn main() -> Result<()> {
 
     if refreshing {
         let cached = read_cache_full(&config.cache_file).ok();
-        let rows = match cached {
-            Some(c) => payload_to_rows_with_costs(c.payloads().to_vec(), &c.costs()),
-            None => Vec::new(),
+        let (rows, errors) = match cached {
+            Some(c) => (
+                payload_to_rows_with_costs(c.payloads().to_vec(), &c.costs()),
+                c.errors().to_vec(),
+            ),
+            None => (Vec::new(), Vec::new()),
         };
         let selected = selected_provider_for_tooltip(&config, &rows);
         let tooltip_refs: Vec<&ProviderRow> = match selected {
             Some(idx) => vec![&rows[idx]],
             None => rows.iter().collect(),
         };
-        let tooltip = format_tooltip_cards(&tooltip_refs, true);
-        let text = if rows.is_empty() {
+        let tooltip = format_tooltip_with_errors(&tooltip_refs, &errors, true);
+        let text = if rows.is_empty() && errors.is_empty() {
             format!("   <span foreground=\"{YELLOW_HEX}\">⟳ Refreshing...</span>")
         } else {
             format!(
                 "   <span foreground=\"{YELLOW_HEX}\">⟳</span> {}",
-                build_text_for_rows(&rows, &config)
+                build_text_for_rows_with_errors(&rows, &errors, &config)
             )
         };
         let output = WaybarOutput {
@@ -155,8 +159,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let (payloads, costs) = match maybe_refresh(&config) {
-        Ok(pair) => pair,
+    let (payloads, errors, costs) = match maybe_refresh(&config) {
+        Ok(triple) => triple,
         Err(error) => {
             let output = WaybarOutput {
                 text: "⟂".into(),
@@ -169,7 +173,7 @@ fn main() -> Result<()> {
     };
 
     let rows = payload_to_rows_with_costs(payloads, &costs);
-    if rows.is_empty() {
+    if rows.is_empty() && errors.is_empty() {
         let output = WaybarOutput {
             text: "—".into(),
             tooltip: "<tt>TokenGauge: no providers</tt>".into(),
@@ -179,18 +183,26 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let text = format!("   {}", build_text_for_rows(&rows, &config));
+    let text = format!("   {}", build_text_for_rows_with_errors(&rows, &errors, &config));
     let selected = selected_provider_for_tooltip(&config, &rows);
     let tooltip_rows: Vec<&ProviderRow> = match selected {
         Some(idx) => vec![&rows[idx]],
         None => rows.iter().collect(),
     };
-    let tooltip = format_tooltip_cards(&tooltip_rows, false);
+    let tooltip = format_tooltip_with_errors(&tooltip_rows, &errors, false);
+
+    let class = if errors.is_empty() {
+        "tokengauge".to_string()
+    } else if rows.is_empty() {
+        "tokengauge tokengauge-error".to_string()
+    } else {
+        "tokengauge tokengauge-partial-error".to_string()
+    };
 
     let output = WaybarOutput {
         text,
         tooltip,
-        class: "tokengauge".into(),
+        class,
     };
 
     println!("{}", serde_json::to_string(&output)?);
@@ -216,39 +228,73 @@ fn selected_provider_for_tooltip(config: &TokenGaugeConfig, rows: &[ProviderRow]
         .position(|r| r.provider.to_lowercase() == key)
 }
 
-fn build_text_for_rows(rows: &[ProviderRow], config: &TokenGaugeConfig) -> String {
+fn build_text_for_rows_with_errors(
+    rows: &[ProviderRow],
+    errors: &[ProviderFetchError],
+    config: &TokenGaugeConfig,
+) -> String {
     let state = read_waybar_state(&waybar_state_path(&config.cache_file));
     let selected_key = state
         .selected
         .as_deref()
-        .or(config.waybar.primary.as_deref());
-    let text_rows: Vec<&ProviderRow> = match selected_key {
-        Some(key) => {
-            let lower = key.to_lowercase();
-            let matched: Vec<&ProviderRow> = rows
-                .iter()
-                .filter(|r| r.provider.to_lowercase() == lower)
-                .collect();
-            if matched.is_empty() {
-                rows.iter().collect()
-            } else {
-                matched
-            }
+        .or(config.waybar.primary.as_deref())
+        .map(|s| s.to_lowercase());
+    let show_all = selected_key.is_none();
+
+    let mut parts: Vec<String> = Vec::new();
+    for row in rows {
+        let pick = match &selected_key {
+            None => true,
+            Some(k) => &row.provider.to_lowercase() == k,
+        };
+        if !pick && !show_all {
+            continue;
         }
-        None => rows.iter().collect(),
-    };
-    text_rows
-        .iter()
-        .map(|row| {
+        let used = match config.waybar.window {
+            WaybarWindow::Daily => row.session_used,
+            WaybarWindow::Weekly => row.weekly_used,
+        };
+        parts.push(format_bar(&row.provider, used));
+        if !show_all && pick {
+            return parts.join("   ");
+        }
+    }
+    for err in errors {
+        let pick = match &selected_key {
+            None => true,
+            Some(k) => &err.provider.to_lowercase() == k,
+        };
+        if !pick && !show_all {
+            continue;
+        }
+        parts.push(format_bar_error(&err.provider));
+        if !show_all && pick {
+            break;
+        }
+    }
+    if parts.is_empty() {
+        // Selected provider exists in neither success nor error sets - fall back to first row
+        if let Some(row) = rows.first() {
             let used = match config.waybar.window {
                 WaybarWindow::Daily => row.session_used,
                 WaybarWindow::Weekly => row.weekly_used,
             };
-            format_bar(&row.provider, used)
-        })
-        .collect::<Vec<_>>()
-        .join("   ")
+            parts.push(format_bar(&row.provider, used));
+        } else if let Some(err) = errors.first() {
+            parts.push(format_bar_error(&err.provider));
+        }
+    }
+    parts.join("   ")
 }
+
+fn format_bar_error(label: &str) -> String {
+    let icon = icon_markup(label);
+    let escaped_label = pango_escape(label);
+    format!(
+        "{icon} {escaped_label} <span foreground=\"{RED_HEX}\">⚠</span>"
+    )
+}
+
 
 fn refresh_sentinel_path(cache_file: &Path) -> PathBuf {
     let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
@@ -673,7 +719,11 @@ fn handle_rotate(config: &TokenGaugeConfig, dir: RotateDir) -> Result<()> {
 
 fn maybe_refresh(
     config: &TokenGaugeConfig,
-) -> Result<(Vec<ProviderPayload>, HashMap<String, CostInfo>)> {
+) -> Result<(
+    Vec<ProviderPayload>,
+    Vec<ProviderFetchError>,
+    HashMap<String, CostInfo>,
+)> {
     let now = SystemTime::now();
     let stale = match std::fs::metadata(&config.cache_file) {
         Ok(metadata) => metadata
@@ -699,11 +749,15 @@ fn maybe_refresh(
         }
         write_cache_full(&config.cache_file, &payloads, &errors, &costs)?;
         check_and_notify(config, &payloads, &costs);
-        Ok((payloads, costs))
+        Ok((payloads, errors, costs))
     } else {
         let cached = read_cache_full(&config.cache_file)?;
         let costs = cached.costs();
-        Ok((cached.payloads().to_vec(), costs))
+        Ok((
+            cached.payloads().to_vec(),
+            cached.errors().to_vec(),
+            costs,
+        ))
     }
 }
 
@@ -894,8 +948,29 @@ fn format_provider_card(row: &ProviderRow) -> String {
     format!("<tt>{}</tt>", lines.join("\n"))
 }
 
-fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
-    let cards: Vec<String> = rows.iter().map(|row| format_provider_card(row)).collect();
+fn format_error_card(err: &ProviderFetchError) -> String {
+    let icon = icon_markup(&err.provider);
+    let name = pango_escape(&err.provider);
+    let msg = pango_escape(&err.message);
+    format!(
+        "<tt><b>{icon}  {name}</b>  <span foreground=\"{RED_HEX}\">⚠ {msg}</span></tt>"
+    )
+}
+
+fn format_tooltip_with_errors(
+    rows: &[&ProviderRow],
+    errors: &[ProviderFetchError],
+    refreshing: bool,
+) -> String {
+    let mut cards: Vec<String> = rows.iter().map(|row| format_provider_card(row)).collect();
+    for err in errors {
+        cards.push(format_error_card(err));
+    }
+    let cards_refs: Vec<&str> = cards.iter().map(|s| s.as_str()).collect();
+    format_tooltip_from_cards(&cards_refs, refreshing)
+}
+
+fn format_tooltip_from_cards(cards: &[&str], refreshing: bool) -> String {
     let separator = format!(
         "<tt><span foreground=\"{SEPARATOR_HEX}\">────────────────────────────────────</span></tt>"
     );
@@ -927,6 +1002,11 @@ fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
         hint_lines.join("\n")
     );
     format!("{body}{status_line}{hint}")
+}
+
+#[cfg(test)]
+fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
+    format_tooltip_with_errors(rows, &[], refreshing)
 }
 
 // ============================================================================

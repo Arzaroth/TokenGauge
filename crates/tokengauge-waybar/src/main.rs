@@ -559,7 +559,7 @@ fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
         String::new()
     };
     let hint = format!(
-        "\n<tt><span foreground=\"{DIM_HEX}\">scroll: rotate · left-click: TUI · right-click: refresh</span></tt>"
+        "\n\n<tt><span foreground=\"{DIM_HEX}\">scroll: rotate · left-click: TUI · right-click: refresh</span></tt>"
     );
     format!("{body}{status_line}{hint}")
 }

@@ -1,6 +1,6 @@
 # TokenGauge
 
-[![GitHub release](https://img.shields.io/github/v/release/oorestisime/TokenGauge)](https://github.com/oorestisime/TokenGauge/releases)
+[![GitHub release](https://img.shields.io/github/v/release/Arzaroth/TokenGauge)](https://github.com/Arzaroth/TokenGauge/releases)
 
 Monitor token usage, costs, and limits for AI coding assistants from your Waybar and TUI. Powered by [CodexBar](https://github.com/steipete/CodexBar) for usage limits and [ccusage](https://github.com/ryoppippi/ccusage) for cost breakdown. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
 
@@ -35,7 +35,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oorestisime/TokenGauge/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/install.sh | bash
 omarchy-restart-waybar
 ```
 
@@ -46,7 +46,7 @@ The installer detects `systemd --user`, drops in a `tokengauge-daemon.service`, 
 By default the module is added to `modules-right` (before the tray on Omarchy). To put it on the left instead (right after `hyprland/workspaces`), run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oorestisime/TokenGauge/main/scripts/install.sh | bash -s -- --placement=left
+curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/install.sh | bash -s -- --placement=left
 ```
 
 `TOKENGAUGE_PLACEMENT=left` also works. The choice is persisted in `~/.config/tokengauge/config.toml` under `[waybar] placement`; re-running the installer with a different `--placement` migrates the module to the other side.
@@ -158,10 +158,10 @@ Exit 0 if all pass, 1 if any fails - CI-friendly.
 
 ```bash
 # Update TokenGauge
-curl -fsSL https://raw.githubusercontent.com/oorestisime/TokenGauge/main/scripts/update.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/update.sh | bash
 
 # Update CodexBar CLI
-curl -fsSL https://raw.githubusercontent.com/oorestisime/TokenGauge/main/scripts/update-codexbar.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/update-codexbar.sh | bash
 ```
 
 ## Without Omarchy
@@ -189,7 +189,7 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 
 ## Manual Installation
 
-1. Download the latest release from [GitHub Releases](https://github.com/oorestisime/TokenGauge/releases)
+1. Download the latest release from [GitHub Releases](https://github.com/Arzaroth/TokenGauge/releases)
 
 2. Extract and install:
    ```bash

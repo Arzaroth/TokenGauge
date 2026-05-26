@@ -524,19 +524,27 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
 
     let mut lines = Vec::new();
 
-    if let Some(br) = &cost.burn_rate {
+    // emit rate after label_w is computed (below)
+    let burn_rate = cost.burn_rate.as_ref();
+
+    let label_w = 7usize;
+
+    if let Some(br) = burn_rate {
+        let rate_str = format!("${:.2}", br.cost_per_hour);
         lines.push(Line::from(vec![
             Span::raw(pad.clone()),
-            Span::styled("Rate", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("       "),
             Span::styled(
-                format!("${:.2}/hr", br.cost_per_hour),
+                format!("{:<label_w$}", "Rate"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   "),
+            Span::styled(
+                format!("{rate_str:>total_usd_w$}/hr"),
                 Style::default().fg(green()),
             ),
         ]));
     }
 
-    let label_w = 7usize;
     let totals_line = |label: &str, usd_str: &str, tokens_str: &str| {
         Line::from(vec![
             Span::raw(pad.clone()),

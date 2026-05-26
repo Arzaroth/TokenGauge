@@ -763,11 +763,7 @@ fn draw_ui(frame: &mut ratatui::Frame, state: &mut AppState, is_refreshing: bool
             .select(state.active_tab)
             .block(Block::default().borders(Borders::BOTTOM))
             .style(Style::default().fg(dim()))
-            .highlight_style(
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )
+            .highlight_style(Style::default().add_modifier(Modifier::BOLD))
             .divider("  ");
         frame.render_widget(tabs, panes[0]);
 

@@ -521,12 +521,6 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     if let Some(br) = &cost.burn_rate {
-        let mins = br.remaining_minutes;
-        let remaining = if mins >= 60 {
-            format!("{}h {}m", mins / 60, mins % 60)
-        } else {
-            format!("{mins}m")
-        };
         lines.push(Line::from(vec![
             Span::raw(pad.clone()),
             Span::styled("Rate", Style::default().add_modifier(Modifier::BOLD)),
@@ -534,13 +528,6 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
             Span::styled(
                 format!("${:.2}/hr", br.cost_per_hour),
                 Style::default().fg(green()),
-            ),
-            Span::styled(
-                format!(
-                    "  ·  cc 5h block: ${:.2} projected, {remaining} to end",
-                    br.projected_cost
-                ),
-                Style::default().fg(dim()),
             ),
         ]));
     }

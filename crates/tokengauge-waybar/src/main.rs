@@ -591,15 +591,9 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
         .max(monthly_tokens.chars().count());
     let mut lines = Vec::new();
     if let Some(br) = &cost.burn_rate {
-        let mins = br.remaining_minutes;
-        let remaining = if mins >= 60 {
-            format!("{}h {}m", mins / 60, mins % 60)
-        } else {
-            format!("{mins}m")
-        };
         lines.push(format!(
-            "  Rate      <span foreground=\"{DIM_HEX}\">${:.2}/hr  ·  cc 5h block: ${:.2} projected, {remaining} to end</span>",
-            br.cost_per_hour, br.projected_cost
+            "  Rate      <span foreground=\"{DIM_HEX}\">${:.2}/hr</span>",
+            br.cost_per_hour
         ));
     }
     lines.push(format!(

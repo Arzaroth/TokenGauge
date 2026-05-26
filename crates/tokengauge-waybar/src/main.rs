@@ -790,6 +790,26 @@ fn try_get_snapshot(config: &TokenGaugeConfig) -> Result<String> {
     }
 }
 
+/// Snapshot the daemon's current output, re-rendering with the refreshing
+/// indicator when the sentinel file is present (i.e. a manual refresh is
+/// still in flight). Lets snapshot clients (the standard waybar poll path)
+/// pick up the ⟳ state without subscribing.
+fn current_snapshot(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) -> WaybarOutput {
+    let sentinel = refresh_sentinel_path(&config.cache_file);
+    if refresh_in_progress(&sentinel) {
+        let cached = read_cache_full(&config.cache_file).ok();
+        let (rows, errors) = match cached {
+            Some(c) => (
+                payload_to_rows_with_costs(c.payloads().to_vec(), &c.costs()),
+                c.errors().to_vec(),
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
+        return render_output(config, &rows, &errors, true);
+    }
+    state.lock().unwrap().output.clone()
+}
+
 struct DaemonState {
     output: WaybarOutput,
     subscribers: Vec<UnixStream>,
@@ -1067,14 +1087,14 @@ fn handle_client(
     let cmd: SocketCommand = serde_json::from_str(buf.trim())?;
     match cmd {
         SocketCommand::Snapshot => {
-            let output = state.lock().unwrap().output.clone();
+            let output = current_snapshot(&state, &config);
             let reply = SocketReply::Snapshot { output };
             writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
             stream.flush()?;
         }
         SocketCommand::Subscribe => {
             // Send current state, register as subscriber, keep stream alive
-            let output = state.lock().unwrap().output.clone();
+            let output = current_snapshot(&state, &config);
             let reply = SocketReply::Update { output };
             writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
             stream.flush()?;
@@ -1082,9 +1102,32 @@ fn handle_client(
             // Don't close - daemon broadcast will push updates
         }
         SocketCommand::Refresh => {
-            do_fetch_and_broadcast(&state, &config);
+            // Write the sentinel so subsequent snapshots render the refreshing
+            // state, signal waybar to re-poll immediately, then ack the client
+            // and kick off the actual fetch in a background thread. Matches
+            // the standalone --refresh path's UX (⟳ visible for the fetch
+            // duration) without waiting for the fetch to complete.
+            let sentinel = refresh_sentinel_path(&config.cache_file);
+            let _ = std::fs::write(&sentinel, now_ms().to_string());
+            signal_waybar();
             writeln!(stream, "{}", serde_json::to_string(&SocketReply::Ack)?)?;
             stream.flush()?;
+
+            let state = state.clone();
+            let config = config.clone();
+            thread::spawn(move || {
+                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    do_fetch_and_broadcast(&state, &config);
+                }));
+                if let Err(payload) = res {
+                    dlog(
+                        "refresh",
+                        &format!("panic recovered: {}", panic_message(&payload)),
+                    );
+                }
+                let _ = std::fs::remove_file(refresh_sentinel_path(&config.cache_file));
+                signal_waybar();
+            });
         }
         SocketCommand::Rotate { direction } => {
             let dir = match direction.as_str() {

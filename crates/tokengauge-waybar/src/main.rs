@@ -240,13 +240,7 @@ fn main() -> Result<()> {
     };
     let tooltip = format_tooltip_with_errors(&tooltip_rows, &errors, false);
 
-    let class = if errors.is_empty() {
-        "tokengauge".to_string()
-    } else if rows.is_empty() {
-        "tokengauge tokengauge-error".to_string()
-    } else {
-        "tokengauge tokengauge-partial-error".to_string()
-    };
+    let class = compute_class(&rows, &errors, false, config.waybar.window.clone());
 
     let output = WaybarOutput {
         text,
@@ -768,6 +762,40 @@ impl DaemonState {
     }
 }
 
+/// Pick the strongest CSS class tier based on current state.
+/// Order of precedence (strongest first): refreshing > error > partial-error >
+/// crit (>=80%) > warn (>=50%) > base.
+fn compute_class(
+    rows: &[ProviderRow],
+    errors: &[ProviderFetchError],
+    refreshing: bool,
+    window: WaybarWindow,
+) -> String {
+    if refreshing {
+        return "tokengauge tokengauge-refreshing".to_string();
+    }
+    if !errors.is_empty() {
+        return if rows.is_empty() {
+            "tokengauge tokengauge-error".to_string()
+        } else {
+            "tokengauge tokengauge-partial-error".to_string()
+        };
+    }
+    let max_pct = rows
+        .iter()
+        .filter_map(|r| match window {
+            WaybarWindow::Daily => r.session_used,
+            WaybarWindow::Weekly => r.weekly_used,
+        })
+        .max()
+        .unwrap_or(0);
+    match max_pct {
+        80..=u8::MAX => "tokengauge tokengauge-crit".to_string(),
+        50..=79 => "tokengauge tokengauge-warn".to_string(),
+        _ => "tokengauge".to_string(),
+    }
+}
+
 fn render_output(
     config: &TokenGaugeConfig,
     rows: &[ProviderRow],
@@ -797,15 +825,7 @@ fn render_output(
         None => rows.iter().collect(),
     };
     let tooltip = format_tooltip_with_errors(&tooltip_rows, errors, refreshing);
-    let class = if refreshing {
-        "tokengauge tokengauge-refreshing".to_string()
-    } else if errors.is_empty() {
-        "tokengauge".to_string()
-    } else if rows.is_empty() {
-        "tokengauge tokengauge-error".to_string()
-    } else {
-        "tokengauge tokengauge-partial-error".to_string()
-    };
+    let class = compute_class(rows, errors, refreshing, config.waybar.window.clone());
     WaybarOutput {
         text,
         tooltip,
@@ -1269,8 +1289,26 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(br) = &cost.burn_rate {
         let rate_str = format!("${:.2}", br.cost_per_hour);
+        let trend = match cost.avg_hourly_cost() {
+            Some(avg) if avg > 0.0 => {
+                let pct = ((br.cost_per_hour - avg) / avg) * 100.0;
+                let arrow = if pct >= 0.0 { "↑" } else { "↓" };
+                let color = if pct >= 25.0 {
+                    "#f38ba8"
+                } else if pct >= -10.0 {
+                    "#f9e2af"
+                } else {
+                    "#a6e3a1"
+                };
+                format!(
+                    "  <span foreground=\"{color}\">{arrow}{:.0}%</span> <span foreground=\"{DIM_HEX}\">vs 7d avg</span>",
+                    pct.abs()
+                )
+            }
+            _ => String::new(),
+        };
         lines.push(format!(
-            "  Rate      <span foreground=\"{DIM_HEX}\">{rate_str:>usd_width$}/hr</span>"
+            "  Rate      <span foreground=\"{DIM_HEX}\">{rate_str:>usd_width$}/hr</span>{trend}"
         ));
     }
     let mut any_window = false;

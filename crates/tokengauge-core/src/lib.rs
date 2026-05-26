@@ -568,6 +568,22 @@ pub struct CostInfo {
     pub weekly_cost_history: Vec<f64>,
 }
 
+impl CostInfo {
+    /// Average hourly cost over the available days of history.
+    /// Returns None if history is empty or sum is zero.
+    pub fn avg_hourly_cost(&self) -> Option<f64> {
+        if self.weekly_cost_history.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.weekly_cost_history.iter().sum();
+        if sum <= 0.0 {
+            return None;
+        }
+        let hours = self.weekly_cost_history.len() as f64 * 24.0;
+        Some(sum / hours)
+    }
+}
+
 /// Per-model cost slice (ccusage modelBreakdowns).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCost {

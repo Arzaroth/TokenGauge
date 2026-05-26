@@ -19,7 +19,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokengauge_core::{
     CostInfo, DIM_HEX, ExtraWindowRow, FetchResult, GREEN_HEX, ModelCost, ProviderFetchError,
-    ProviderRow, color_hex_for_percent, fetch_all_providers, format_tokens,
+    ProviderRow, YELLOW_HEX, color_hex_for_percent, fetch_all_providers, format_tokens,
     format_updated_relative, load_config, parse_hex_rgb, payload_to_rows_with_costs,
     provider_icon as core_provider_icon, provider_urls, read_cache_full, read_waybar_state,
     sparkline, waybar_state_path, window_labels, write_cache_full, write_default_config,
@@ -531,7 +531,7 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
 
     if let Some(br) = burn_rate {
         let rate_str = format!("${:.2}", br.cost_per_hour);
-        lines.push(Line::from(vec![
+        let mut spans = vec![
             Span::raw(pad.clone()),
             Span::styled(
                 format!("{:<label_w$}", "Rate"),
@@ -542,7 +542,30 @@ fn cost_lines(cost: &CostInfo) -> Vec<Line<'static>> {
                 format!("{rate_str:>total_usd_w$}/hr"),
                 Style::default().fg(green()),
             ),
-        ]));
+        ];
+        if let Some(avg) = cost.avg_hourly_cost()
+            && avg > 0.0
+        {
+            let pct = ((br.cost_per_hour - avg) / avg) * 100.0;
+            let arrow = if pct >= 0.0 { "↑" } else { "↓" };
+            let trend_color = if pct >= 25.0 {
+                Color::Rgb(0xf3, 0x8b, 0xa8) // red
+            } else if pct >= -10.0 {
+                hex_to_color(YELLOW_HEX)
+            } else {
+                green()
+            };
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                format!("{arrow}{:.0}%", pct.abs()),
+                Style::default().fg(trend_color),
+            ));
+            spans.push(Span::styled(
+                " vs 7d avg".to_string(),
+                Style::default().fg(dim()),
+            ));
+        }
+        lines.push(Line::from(spans));
     }
 
     let totals_line = |label: &str, usd_str: &str, tokens_str: &str| {

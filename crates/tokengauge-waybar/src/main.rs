@@ -10,8 +10,9 @@ use tokengauge_core::{
     CostInfo, DIM_HEX, ExtraWindowRow, FetchResult, ProviderPayload, ProviderRow, SEPARATOR_HEX,
     TokenGaugeConfig, WaybarState, WaybarWindow, YELLOW_HEX, color_hex_for_percent,
     ensure_cache_dir, fetch_all_providers, format_tokens, format_updated_relative, load_config,
-    payload_to_rows_with_costs, provider_icon, read_cache_full, read_waybar_state,
-    waybar_state_path, window_labels, write_cache_full, write_default_config, write_waybar_state,
+    notify_state_path, payload_to_rows_with_costs, provider_icon, read_cache_full,
+    read_notify_state, read_waybar_state, thresholds_to_fire, waybar_state_path, window_labels,
+    write_cache_full, write_default_config, write_notify_state, write_waybar_state,
 };
 
 #[derive(Parser, Debug)]
@@ -260,6 +261,74 @@ fn refresh_in_progress(sentinel: &Path) -> bool {
     age.as_millis() < REFRESH_SENTINEL_TTL_MS as u128
 }
 
+fn check_and_notify(
+    config: &TokenGaugeConfig,
+    payloads: &[ProviderPayload],
+    costs: &HashMap<String, CostInfo>,
+) {
+    if !config.notifications.enabled || config.notifications.thresholds.is_empty() {
+        return;
+    }
+    let rows = payload_to_rows_with_costs(payloads.to_vec(), costs);
+    if rows.is_empty() {
+        return;
+    }
+
+    let path = notify_state_path(&config.cache_file);
+    let mut state = read_notify_state(&path);
+    let thresholds = &config.notifications.thresholds;
+
+    for row in &rows {
+        let (s_label, w_label, t_label) =
+            tokengauge_core::window_labels(&row.provider);
+        let windows: [(&str, Option<u8>, &str, &str); 3] = [
+            ("session", row.session_used, &row.session_reset, s_label),
+            ("weekly", row.weekly_used, &row.weekly_reset, w_label),
+            ("tertiary", row.tertiary_used, &row.tertiary_reset, t_label),
+        ];
+        for (slot, used_opt, reset, label) in windows {
+            let Some(pct) = used_opt else { continue };
+            let key = format!("{}:{}", row.provider.to_lowercase(), slot);
+            let entry = state.entries.entry(key).or_default();
+            let (to_fire, new_notified) = thresholds_to_fire(pct, thresholds, &entry.notified);
+            entry.notified = new_notified;
+            for threshold in to_fire {
+                fire_notification(&row.provider, label, pct, threshold, reset);
+            }
+        }
+    }
+
+    let _ = write_notify_state(&path, &state);
+}
+
+fn fire_notification(provider: &str, window: &str, pct: u8, threshold: u8, reset: &str) {
+    let title = format!("TokenGauge: {provider} {window} at {pct}%");
+    let body = if reset == "—" {
+        String::new()
+    } else {
+        format!("resets {reset}")
+    };
+    let urgency = if threshold >= 90 {
+        "critical"
+    } else if threshold >= 70 {
+        "normal"
+    } else {
+        "low"
+    };
+    let _ = Command::new("notify-send")
+        .arg("--urgency")
+        .arg(urgency)
+        .arg("--app-name")
+        .arg("tokengauge")
+        .arg(format!("--hint=int:transient:{}", if threshold < 90 { 1 } else { 0 }))
+        .arg(&title)
+        .arg(&body)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
 fn signal_waybar() {
     let _ = Command::new("pkill")
         .arg("-RTMIN+8")
@@ -301,6 +370,7 @@ fn worker_do_refresh(config: &TokenGaugeConfig) {
     } = fetch_all_providers(config);
     let _ = write_cache_full(&config.cache_file, &payloads, &errors, &costs);
     let _ = std::fs::remove_file(&sentinel);
+    check_and_notify(config, &payloads, &costs);
     signal_waybar();
 }
 
@@ -407,6 +477,7 @@ fn maybe_refresh(
             costs = prior_costs;
         }
         write_cache_full(&config.cache_file, &payloads, &errors, &costs)?;
+        check_and_notify(config, &payloads, &costs);
         Ok((payloads, costs))
     } else {
         let cached = read_cache_full(&config.cache_file)?;

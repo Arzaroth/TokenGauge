@@ -430,7 +430,7 @@ impl Default for TokenGaugeConfig {
             codexbar_bin: "codexbar".to_string(),
             refresh_secs: 600,
             cache_file: PathBuf::from("/tmp/tokengauge-usage.json"),
-            timeout_secs: 10,
+            timeout_secs: 20,
             ccusage_enabled: true,
             ccusage_timeout_secs: 15,
             providers: ProvidersConfig {
@@ -914,7 +914,9 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
                 }
             }
             Ok((provider_name, Err(e))) => {
-                errors.push(ProviderFetchError::new(provider_name, &e.to_string()));
+                // {:#} prints the full anyhow cause chain ("ctx: cause1: cause2");
+                // {} alone drops everything after the topmost context wrap.
+                errors.push(ProviderFetchError::new(provider_name, &format!("{e:#}")));
             }
             Err(_) => {
                 // Thread panicked - shouldn't happen normally

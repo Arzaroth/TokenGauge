@@ -292,13 +292,28 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn selected_provider_for_tooltip(config: &TokenGaugeConfig, rows: &[ProviderRow]) -> Option<usize> {
+/// Resolve which provider key the waybar text + tooltip should show.
+/// Priority: persisted scroll selection > config primary > first row's
+/// provider > first error's provider. Always returns Some unless both
+/// rows and errors are empty - so the bar is single-provider by default
+/// instead of stacking everything on first boot.
+fn resolved_selection_key(
+    config: &TokenGaugeConfig,
+    rows: &[ProviderRow],
+    errors: &[ProviderFetchError],
+) -> Option<String> {
     let state = read_waybar_state(&waybar_state_path(&config.cache_file));
-    let key = state
+    state
         .selected
-        .as_deref()
-        .or(config.waybar.primary.as_deref())?
-        .to_lowercase();
+        .clone()
+        .or_else(|| config.waybar.primary.clone())
+        .or_else(|| rows.first().map(|r| r.provider.clone()))
+        .or_else(|| errors.first().map(|e| e.provider.clone()))
+        .map(|s| s.to_lowercase())
+}
+
+fn selected_provider_for_tooltip(config: &TokenGaugeConfig, rows: &[ProviderRow]) -> Option<usize> {
+    let key = resolved_selection_key(config, rows, &[])?;
     rows.iter()
         .position(|r| r.provider.to_lowercase() == key)
 }
@@ -308,12 +323,7 @@ fn build_text_for_rows_with_errors(
     errors: &[ProviderFetchError],
     config: &TokenGaugeConfig,
 ) -> String {
-    let state = read_waybar_state(&waybar_state_path(&config.cache_file));
-    let selected_key = state
-        .selected
-        .as_deref()
-        .or(config.waybar.primary.as_deref())
-        .map(|s| s.to_lowercase());
+    let selected_key = resolved_selection_key(config, rows, errors);
 
     let used_for = |row: &ProviderRow| match config.waybar.window {
         WaybarWindow::Daily => row.session_used,
@@ -336,12 +346,9 @@ fn build_text_for_rows_with_errors(
     let parts: Vec<String> = success_parts.chain(error_parts).collect();
 
     if !parts.is_empty() {
-        return if selected_key.is_some() {
-            // Show only the matched provider, drop secondary matches.
-            parts.into_iter().next().unwrap_or_default()
-        } else {
-            parts.join("   ")
-        };
+        // Always one provider in the bar text now that selected_key
+        // defaults to the first row / error.
+        return parts.into_iter().next().unwrap_or_default();
     }
 
     // Selected provider exists in neither set; fall back to the first row,

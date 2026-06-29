@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and release (e.g. v0.6.3)'
+        required: true
 
 permissions:
   contents: write
@@ -15,6 +20,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -36,11 +43,13 @@ jobs:
         run: cross build --release --target x86_64-unknown-linux-gnu
 
       - name: Package
+        env:
+          REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           mkdir -p dist
           cp target/x86_64-unknown-linux-gnu/release/tokengauge-waybar dist/
           cp target/x86_64-unknown-linux-gnu/release/tokengauge-tui dist/
-          tar -czf dist/tokengauge-${GITHUB_REF_NAME}-linux-x86_64.tar.gz -C dist tokengauge-waybar tokengauge-tui
+          tar -czf dist/tokengauge-${REF_NAME}-linux-x86_64.tar.gz -C dist tokengauge-waybar tokengauge-tui
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -54,6 +63,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -75,11 +86,13 @@ jobs:
         run: cross build --release --target aarch64-unknown-linux-gnu
 
       - name: Package
+        env:
+          REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           mkdir -p dist
           cp target/aarch64-unknown-linux-gnu/release/tokengauge-waybar dist/
           cp target/aarch64-unknown-linux-gnu/release/tokengauge-tui dist/
-          tar -czf dist/tokengauge-${GITHUB_REF_NAME}-linux-aarch64.tar.gz -C dist tokengauge-waybar tokengauge-tui
+          tar -czf dist/tokengauge-${REF_NAME}-linux-aarch64.tar.gz -C dist tokengauge-waybar tokengauge-tui
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -106,4 +119,5 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: dist/*.tar.gz

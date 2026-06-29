@@ -185,15 +185,12 @@ fn main() -> Result<()> {
     }
 
     if let Some(target) = args.open {
-        let cmd = SocketCommand::Open {
-            target: match target {
-                OpenTarget::Dashboard => "dashboard".into(),
-                OpenTarget::Status => "status".into(),
-            },
-        };
-        if try_send_command(&config, &cmd).is_ok() {
-            return Ok(());
-        }
+        // Open in *this* process, never via the daemon socket. waybar invokes
+        // us with the full graphical session env (DISPLAY/WAYLAND_DISPLAY/
+        // DBUS/BROWSER); the daemon is started from a stripped systemd env, so
+        // a browser it spawns can't reach the running instance and silently
+        // opens nothing. handle_open reads the cache directly - no daemon
+        // needed to resolve the selected provider's URL.
         handle_open(&config, target);
         return Ok(());
     }

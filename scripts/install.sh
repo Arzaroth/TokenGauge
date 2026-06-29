@@ -195,6 +195,7 @@ install_daemon_unit() {
 [Unit]
 Description=TokenGauge daemon (long-lived fetcher + socket server)
 After=graphical-session.target
+PartOf=graphical-session.target
 
 [Service]
 ExecStart=$INSTALL_DIR/tokengauge-waybar --daemon
@@ -202,10 +203,15 @@ Restart=on-failure
 RestartSec=5
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
 UNIT
   systemctl --user daemon-reload
-  systemctl --user enable --now tokengauge-daemon.service
+  # reenable (not enable) so an upgrade from the old WantedBy=default.target
+  # drops the stale early-start symlink. Binding to graphical-session.target
+  # makes the daemon start *after* the compositor imports WAYLAND/DBUS/BROWSER
+  # into the systemd --user env, so notify-send + xdg-open reach the session.
+  systemctl --user reenable tokengauge-daemon.service
+  systemctl --user restart tokengauge-daemon.service
   success "tokengauge-daemon enabled via systemd --user"
 }
 

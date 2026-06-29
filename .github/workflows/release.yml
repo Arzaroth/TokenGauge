@@ -40,7 +40,9 @@ jobs:
         run: cargo install cross
 
       - name: Build
-        run: cross build --release --target x86_64-unknown-linux-gnu
+        # Only the two shipped binaries; tokengauge-popover pulls GTK4/glib
+        # system libs the cross image doesn't have, and it isn't packaged here.
+        run: cross build --release --target x86_64-unknown-linux-gnu -p tokengauge-waybar -p tokengauge-tui
 
       - name: Package
         env:
@@ -83,7 +85,9 @@ jobs:
         run: cargo install cross
 
       - name: Build
-        run: cross build --release --target aarch64-unknown-linux-gnu
+        # Only the two shipped binaries; tokengauge-popover pulls GTK4/glib
+        # system libs the cross image doesn't have, and it isn't packaged here.
+        run: cross build --release --target aarch64-unknown-linux-gnu -p tokengauge-waybar -p tokengauge-tui
 
       - name: Package
         env:

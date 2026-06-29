@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "tokengauge-core"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1337,7 +1337,7 @@ dependencies = [
 
 [[package]]
 name = "tokengauge-popover"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1350,7 +1350,7 @@ dependencies = [
 
 [[package]]
 name = "tokengauge-tui"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1363,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "tokengauge-waybar"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "chrono",

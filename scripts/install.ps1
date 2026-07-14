@@ -67,7 +67,10 @@ Write-Info "Installing TokenGauge $Version"
 # ---------------------------------------------------------------------------
 # Download + extract the Windows zip
 # ---------------------------------------------------------------------------
-$asset = "tokengauge-$Version-windows-x86_64.zip"
+# The release job sanitizes the tag when naming the archive, so mirror that here
+# (the download path still uses the raw tag, which is the actual release/tag name).
+$assetVersion = $Version -replace '[^A-Za-z0-9._-]', '_'
+$asset = "tokengauge-$assetVersion-windows-x86_64.zip"
 $url   = "https://github.com/$Repo/releases/download/$Version/$asset"
 $tmp   = Join-Path ([System.IO.Path]::GetTempPath()) ("tokengauge-install-" + [System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null

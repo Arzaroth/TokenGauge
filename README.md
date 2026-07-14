@@ -91,6 +91,7 @@ Edit `~/.config/tokengauge/config.toml`:
 | `refresh_secs` | Cache refresh interval (seconds) | `600` |
 | `cache_file` | Cache file location | `/tmp/tokengauge-usage.json` |
 | `timeout_secs` | Per-provider codexbar timeout | `10` |
+| `stagger_ms` | Delay (ms) between provider fetch starts, to avoid 429 bursts (0 = all at once) | `0` |
 | `ccusage_enabled` | Fetch cost data via `ccusage` | `true` |
 | `ccusage_timeout_secs` | Per-call ccusage timeout (cold starts are slow) | `15` |
 | `providers.codex` | Enable Codex (OAuth) | `true` |

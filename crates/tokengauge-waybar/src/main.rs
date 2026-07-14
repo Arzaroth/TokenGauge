@@ -15,9 +15,9 @@ use tokengauge_core::{
     TokenGaugeConfig, WaybarState, WaybarWindow, config_set_oauth_provider, config_set_primary,
     ensure_cache_dir, fetch_all_providers, format_tokens, format_updated_relative, load_config,
     notify_state_path, payload_to_rows_with_costs, provider_icon, provider_icon_svg_path,
-    provider_label, read_cache_full, read_notify_state, read_waybar_state, theme,
-    thresholds_to_fire, waybar_state_path, window_labels, write_cache_full, write_default_config,
-    write_notify_state, write_waybar_state,
+    provider_label, read_cache_full, read_notify_state, read_waybar_state, signal_daemon_reload,
+    theme, thresholds_to_fire, waybar_state_path, window_labels, write_cache_full,
+    write_default_config, write_notify_state, write_waybar_state,
 };
 
 fn theme_palette() -> (
@@ -307,25 +307,14 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Ask a running daemon to reload its config without a restart. No-op when no
-/// daemon is running. Mirrors the popover settings pane.
-fn signal_daemon_reload() {
-    let _ = Command::new("pkill")
-        .arg("-HUP")
-        .arg("tokengauge-waybar")
-        .spawn();
-}
-
 /// Emit the full snapshot as one JSON object for non-waybar frontends (KDE
-/// Plasma applet, etc.). Reuses the popover's data path: serve the last-good
-/// cache the daemon / waybar polls keep fresh, fetching only when nothing is
-/// cached yet. Each row is enriched with the display label, brand SVG path,
-/// glyph, and brand colour so the QML frontend needs no provider knowledge.
+/// Plasma applet, etc.). Uses maybe_refresh so a standalone plasmoid (no daemon
+/// or waybar keeping the cache warm) still refetches when the cache is stale
+/// instead of serving it forever. Each row is enriched with the display label,
+/// brand SVG path, glyph, and brand colour so the QML frontend needs no
+/// provider knowledge.
 fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
-    let (payloads, errors, costs) = match read_cache_full(&config.cache_file) {
-        Ok(c) => c.into_parts(),
-        Err(_) => maybe_refresh(config)?,
-    };
+    let (payloads, errors, costs) = maybe_refresh(config)?;
     let rows = payload_to_rows_with_costs(payloads, &costs);
 
     let enabled: Vec<String> = config
@@ -338,7 +327,7 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
     let row_values: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
-            let mut v = serde_json::to_value(r).unwrap_or(serde_json::Value::Null);
+            let mut v = serde_json::to_value(r).unwrap_or_default();
             if let serde_json::Value::Object(map) = &mut v {
                 let icon = provider_icon(&r.provider);
                 let (wl_s, wl_w, wl_t) = window_labels(&r.provider);

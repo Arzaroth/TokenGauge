@@ -100,7 +100,7 @@ PlasmoidItem {
 
     // Run a tokengauge-waybar action flag, then refresh the snapshot.
     function action(flag) {
-        exec.connectSource(cmd(root.waybarBin + " " + flag + "; " + root.waybarBin + " --json"))
+        exec.connectSource(cmd(root.waybarBin + " " + flag + " && " + root.waybarBin + " --json"))
     }
 
     function shellQuote(s) {

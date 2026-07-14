@@ -21,7 +21,8 @@ use tokengauge_core::{
     ClickAction, CostInfo, ProviderRow, TokenGaugeConfig, WaybarPlacement, config_set_oauth_provider,
     config_set_primary, format_tokens, format_updated_relative, load_config,
     payload_to_rows_with_costs, provider_icon, provider_icon_svg_path, provider_label,
-    read_cache_full, read_waybar_state, theme, waybar_state_path, window_labels,
+    read_cache_full, read_waybar_state, signal_daemon_reload, theme, waybar_state_path,
+    window_labels,
 };
 
 const APP_ID: &str = "io.arzaroth.tokengauge.popover";
@@ -295,19 +296,6 @@ fn header_bar() -> GBox {
     bar.append(&title);
     bar.append(&stamp);
     bar
-}
-
-/// Ask a running daemon to reload its config (theme / providers / primary /
-/// click action) without a restart. No-op when no daemon is running.
-fn signal_daemon_reload() {
-    // Match the full command line: the 17-char binary name exceeds procps'
-    // 15-char comm cap, so a bare `pkill tokengauge-waybar` matches nothing.
-    // `--daemon` keeps us from signalling short-lived one-shot invocations.
-    let _ = Command::new("pkill")
-        .arg("-HUP")
-        .arg("-f")
-        .arg("tokengauge-waybar --daemon")
-        .status();
 }
 
 fn settings_section(text: &str) -> Label {

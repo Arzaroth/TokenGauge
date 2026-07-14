@@ -73,9 +73,11 @@ PlasmoidItem {
         connectedSources: []
         onNewData: (source, data) => {
             exec.disconnectSource(source)
-            // Any command completing (refresh or update) clears the in-flight
-            // update state so the Update button recovers on success or failure.
-            root.updating = false
+            // Clear the in-flight update state only when the update command
+            // itself completes, so a periodic refresh finishing mid-update
+            // doesn't re-enable the button while --update is still running.
+            if (source.indexOf("--update") !== -1)
+                root.updating = false
             if (data["exit code"] === 0) {
                 try {
                     var parsed = JSON.parse(data.stdout)
@@ -117,7 +119,9 @@ PlasmoidItem {
     // reaches onNewData's JSON.parse.
     function applyUpdate() {
         root.updating = true
-        exec.connectSource(cmd(root.waybarBin + " --update >/dev/null 2>&1 && " + root.waybarBin + " --json"))
+        // Discard --update's stdout (keeps the JSON refresh parseable) but keep
+        // stderr so a failed update surfaces its error via root.lastError.
+        exec.connectSource(cmd(root.waybarBin + " --update >/dev/null && " + root.waybarBin + " --json"))
     }
 
     function shellQuote(s) {

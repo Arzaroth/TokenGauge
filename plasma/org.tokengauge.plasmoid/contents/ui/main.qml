@@ -28,9 +28,37 @@ PlasmoidItem {
     readonly property string waybarBin: Plasmoid.configuration.waybarBinary || "tokengauge-waybar"
     readonly property int refreshSecs: Math.max(15, Plasmoid.configuration.refreshInterval)
 
+    // Row shown in the panel / hovered.
+    readonly property var selRow: rows.length > 0
+        ? rows[Math.min(selectedIndex, rows.length - 1)]
+        : null
+
     Plasmoid.icon: "utilities-system-monitor"
-    toolTipMainText: "TokenGauge"
-    toolTipSubText: lastError !== "" ? lastError : (rows.length + " provider(s)")
+    toolTipMainText: selRow ? (selRow.label || selRow.provider) : "TokenGauge"
+    toolTipTextFormat: Text.RichText
+    toolTipSubText: tooltipSub(selRow)
+
+    // Per-window limits (session / weekly / tertiary / extras) with tier colour,
+    // like the Waybar tooltip minus the ASCII bars.
+    function tooltipSub(r) {
+        if (!r)
+            return lastError !== "" ? lastError : i18n("No provider data yet.")
+        var wl = r.window_labels || ["Session", "Weekly", "Tertiary"]
+        var lines = []
+        function add(name, v) {
+            if (v === null || v === undefined) return
+            lines.push(name + ":&nbsp;<font color=\"" + root.tierColor(v) + "\"><b>" + v + "%</b></font>")
+        }
+        add(wl[0], r.session_used)
+        add(wl[1], r.weekly_used)
+        add(wl[2], r.tertiary_used)
+        var ex = r.extra_windows || []
+        for (var i = 0; i < ex.length; i++)
+            add(ex[i].title, ex[i].used)
+        if (r.cost)
+            lines.push(i18n("Today") + ":&nbsp;<b>" + root.fmtUsd(r.cost.today_usd) + "</b>")
+        return lines.join("<br>")
+    }
 
     // ---- data ----------------------------------------------------------------
     Plasma5Support.DataSource {

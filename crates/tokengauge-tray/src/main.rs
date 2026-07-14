@@ -14,8 +14,8 @@ fn main() {
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([460.0, 380.0])
-            .with_min_inner_size([340.0, 220.0])
+            .with_inner_size([500.0, 440.0])
+            .with_min_inner_size([380.0, 260.0])
             .with_title("TokenGauge"),
         ..Default::default()
     };
@@ -32,7 +32,7 @@ mod win {
     use std::thread;
     use std::time::Duration;
 
-    use eframe::egui::{self, Color32, ProgressBar, ViewportCommand};
+    use eframe::egui::{self, Color32, ProgressBar, RichText, ViewportCommand};
     use tokengauge_core::{
         ProviderRow, default_config_path, fetch_all_providers, load_config,
         payload_to_rows_with_costs, read_cache_full, write_cache_full, write_default_config,
@@ -42,8 +42,21 @@ mod win {
 
     type DynErr = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-    /// A rendered provider row (decoupled from core's `ProviderRow` so we don't
-    /// depend on its `Clone`/internal shape).
+    // Catppuccin Mocha palette.
+    const BG: Color32 = Color32::from_rgb(0x1e, 0x1e, 0x2e);
+    const CARD: Color32 = Color32::from_rgb(0x31, 0x32, 0x44);
+    const BORDER: Color32 = Color32::from_rgb(0x45, 0x47, 0x5a);
+    const TEXT: Color32 = Color32::from_rgb(0xcd, 0xd6, 0xf4);
+    const SUB: Color32 = Color32::from_rgb(0xa6, 0xad, 0xc8);
+    const BLUE: Color32 = Color32::from_rgb(0x89, 0xb4, 0xfa);
+    const MAUVE: Color32 = Color32::from_rgb(0xcb, 0xa6, 0xf7);
+    const GREEN: Color32 = Color32::from_rgb(0xa6, 0xe3, 0xa1);
+    const YELLOW: Color32 = Color32::from_rgb(0xf9, 0xe2, 0xaf);
+    const PEACH: Color32 = Color32::from_rgb(0xfa, 0xb3, 0x87);
+    const RED: Color32 = Color32::from_rgb(0xf3, 0x8b, 0xa8);
+    const BAR_TEXT: Color32 = Color32::from_rgb(0x11, 0x11, 0x1b);
+
+    /// A rendered provider row (decoupled from core's `ProviderRow`).
     #[derive(Clone, Default)]
     struct Row {
         provider: String,
@@ -79,14 +92,18 @@ mod win {
         refresh_tx: mpsc::Sender<()>,
         _tray: TrayIcon,
         _items: Vec<MenuItem>,
-        show_id: MenuId,
-        refresh_id: MenuId,
-        quit_id: MenuId,
     }
 
     impl TrayApp {
         pub fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, DynErr> {
             let ctx = cc.egui_ctx.clone();
+
+            let mut visuals = egui::Visuals::dark();
+            visuals.panel_fill = BG;
+            visuals.window_fill = BG;
+            visuals.override_text_color = Some(TEXT);
+            ctx.set_visuals(visuals);
+
             let shared = Arc::new(Mutex::new(Snapshot::default()));
             let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
 
@@ -119,7 +136,7 @@ mod win {
                 thread::spawn(move || fetch_loop(ctx, shared, refresh_rx, cfg_path));
             }
 
-            // Tray icon + menu.
+            // Tray icon + menu. Left-click shows the window (not the menu).
             let menu = Menu::new();
             let show_i = MenuItem::new("Show TokenGauge", true, None);
             let refresh_i = MenuItem::new("Refresh now", true, None);
@@ -127,135 +144,190 @@ mod win {
             menu.append(&show_i)?;
             menu.append(&refresh_i)?;
             menu.append(&quit_i)?;
-            let (show_id, refresh_id, quit_id) = (
-                show_i.id().clone(),
-                refresh_i.id().clone(),
-                quit_i.id().clone(),
-            );
 
             let tray = TrayIconBuilder::new()
                 .with_tooltip("TokenGauge")
                 .with_icon(make_icon())
                 .with_menu(Box::new(menu))
+                .with_menu_on_left_click(false)
                 .build()?;
+
+            // Handle tray/menu events on their own thread so they work even
+            // while the window is hidden (the egui loop may not tick then).
+            {
+                let ctx = ctx.clone();
+                let refresh_tx = refresh_tx.clone();
+                let (show_id, refresh_id, quit_id) = (
+                    show_i.id().clone(),
+                    refresh_i.id().clone(),
+                    quit_i.id().clone(),
+                );
+                thread::spawn(move || {
+                    tray_event_loop(ctx, refresh_tx, show_id, refresh_id, quit_id)
+                });
+            }
 
             Ok(Self {
                 shared,
                 refresh_tx,
                 _tray: tray,
                 _items: vec![show_i, refresh_i, quit_i],
-                show_id,
-                refresh_id,
-                quit_id,
             })
-        }
-
-        fn show_window(ctx: &egui::Context) {
-            ctx.send_viewport_cmd(ViewportCommand::Visible(true));
-            ctx.send_viewport_cmd(ViewportCommand::Focus);
         }
     }
 
     impl eframe::App for TrayApp {
-        // Runs before each `ui`, and (thanks to request_repaint) even while the
-        // window is hidden - so tray clicks/menu still work when minimized.
+        fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+            BG.to_normalized_gamma_f32()
+        }
+
+        // Runs before each `ui`. We only handle close-to-tray here; tray clicks
+        // are serviced by the dedicated thread so they work while hidden too.
         fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-            while let Ok(ev) = MenuEvent::receiver().try_recv() {
-                if ev.id == self.show_id {
-                    Self::show_window(ctx);
-                } else if ev.id == self.refresh_id {
-                    let _ = self.refresh_tx.send(());
-                } else if ev.id == self.quit_id {
-                    std::process::exit(0);
-                }
-            }
-            while let Ok(ev) = TrayIconEvent::receiver().try_recv() {
-                if let TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    ..
-                } = ev
-                {
-                    Self::show_window(ctx);
-                }
-            }
-            // Close button hides to tray instead of quitting.
             if ctx.input(|i| i.viewport().close_requested()) {
                 ctx.send_viewport_cmd(ViewportCommand::CancelClose);
                 ctx.send_viewport_cmd(ViewportCommand::Visible(false));
             }
-            // Keep polling tray events a few times per second, even when hidden.
-            ctx.request_repaint_after(Duration::from_millis(300));
+            // Refresh the view periodically while visible.
+            ctx.request_repaint_after(Duration::from_millis(750));
         }
 
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
             let snap = self.shared.lock().unwrap().clone();
 
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.heading("TokenGauge");
-                if snap.fetching {
-                    ui.spinner();
-                    ui.weak("refreshing…");
-                }
+                ui.label(RichText::new("TokenGauge").size(22.0).strong().color(BLUE));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Refresh").clicked() {
+                    if ui.button(RichText::new("⟳ Refresh").color(TEXT)).clicked() {
                         let _ = self.refresh_tx.send(());
+                    }
+                    if snap.fetching {
+                        ui.spinner();
                     }
                 });
             });
+            ui.add_space(2.0);
             ui.separator();
+            ui.add_space(4.0);
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                if snap.rows.is_empty() {
-                    ui.weak("No usage data yet. Make sure codexbar_bin is set and signed in.");
-                }
-                for row in &snap.rows {
-                    ui.group(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.strong(&row.provider);
-                            if let Some(plan) = &row.plan {
-                                ui.weak(plan);
-                            }
-                            if row.stale {
-                                ui.weak("(stale)");
-                            }
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    if snap.rows.is_empty() {
+                        ui.add_space(24.0);
+                        ui.vertical_centered(|ui| {
+                            ui.label(RichText::new("No usage data yet").size(15.0).color(SUB));
+                            ui.label(
+                                RichText::new("Set codexbar_bin and sign in to Win-CodexBar.")
+                                    .small()
+                                    .color(SUB),
+                            );
                         });
-                        usage_bar(ui, "Session", row.session_used, &row.session_reset);
-                        usage_bar(ui, "Weekly", row.weekly_used, &row.weekly_reset);
-                    });
-                    ui.add_space(4.0);
-                }
-
-                if !snap.errors.is_empty() {
-                    ui.separator();
-                    ui.colored_label(Color32::from_rgb(0xf3, 0x8b, 0xa8), "Errors");
-                    for e in &snap.errors {
-                        ui.weak(e);
                     }
-                }
-            });
+
+                    for row in &snap.rows {
+                        card(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(cap(&row.provider)).size(16.0).strong());
+                                if row.stale {
+                                    ui.label(RichText::new("stale").small().color(PEACH));
+                                }
+                                if let Some(plan) = &row.plan {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(RichText::new(plan).small().color(MAUVE));
+                                        },
+                                    );
+                                }
+                            });
+                            ui.add_space(6.0);
+                            usage_row(ui, "Session", row.session_used, &row.session_reset);
+                            usage_row(ui, "Weekly", row.weekly_used, &row.weekly_reset);
+                        });
+                        ui.add_space(6.0);
+                    }
+
+                    if !snap.errors.is_empty() {
+                        egui::Frame::group(ui.style())
+                            .fill(Color32::from_rgb(0x2a, 0x1e, 0x26))
+                            .stroke(egui::Stroke::new(1.0, RED))
+                            .corner_radius(10)
+                            .inner_margin(egui::Margin::same(12))
+                            .show(ui, |ui| {
+                                ui.label(RichText::new("Errors").strong().color(RED));
+                                ui.add_space(4.0);
+                                for e in &snap.errors {
+                                    ui.label(RichText::new(e).small().color(SUB));
+                                }
+                            });
+                    }
+                });
         }
     }
 
-    fn usage_bar(ui: &mut egui::Ui, label: &str, used: Option<u8>, reset: &str) {
+    fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) {
+        egui::Frame::group(ui.style())
+            .fill(CARD)
+            .stroke(egui::Stroke::new(1.0, BORDER))
+            .corner_radius(10)
+            .inner_margin(egui::Margin::same(12))
+            .show(ui, add);
+    }
+
+    fn usage_row(ui: &mut egui::Ui, label: &str, used: Option<u8>, reset: &str) {
         ui.horizontal(|ui| {
-            ui.add_sized([64.0, 16.0], egui::Label::new(label));
+            ui.add_sized(
+                [58.0, 18.0],
+                egui::Label::new(RichText::new(label).color(SUB)),
+            );
             match used {
                 Some(p) => {
-                    let frac = (p as f32 / 100.0).clamp(0.0, 1.0);
                     ui.add(
-                        ProgressBar::new(frac)
-                            .desired_width(230.0)
-                            .text(format!("{p}%")),
+                        ProgressBar::new((p as f32 / 100.0).clamp(0.0, 1.0))
+                            .desired_width(190.0)
+                            .corner_radius(6)
+                            .fill(usage_color(p))
+                            .text(
+                                RichText::new(format!("{p}%"))
+                                    .small()
+                                    .strong()
+                                    .color(BAR_TEXT),
+                            ),
                     );
                 }
                 None => {
-                    ui.weak("no data");
+                    ui.add_sized(
+                        [190.0, 18.0],
+                        egui::Label::new(RichText::new("no data").weak()),
+                    );
                 }
             }
             if !reset.is_empty() && reset != "—" {
-                ui.weak(format!("· resets {reset}"));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(format!("resets {reset}")).small().color(SUB));
+                });
             }
         });
+    }
+
+    fn usage_color(p: u8) -> Color32 {
+        match p {
+            0..=49 => GREEN,
+            50..=79 => YELLOW,
+            80..=94 => PEACH,
+            _ => RED,
+        }
+    }
+
+    fn cap(s: &str) -> String {
+        let mut chars = s.chars();
+        match chars.next() {
+            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        }
     }
 
     /// A flat teal 32x32 icon (kept simple so we don't ship an asset).
@@ -263,9 +335,47 @@ mod win {
         let (w, h) = (32u32, 32u32);
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
         for _ in 0..(w * h) {
-            rgba.extend_from_slice(&[0x2e, 0xa0, 0x9b, 0xff]);
+            rgba.extend_from_slice(&[0x89, 0xb4, 0xfa, 0xff]);
         }
         Icon::from_rgba(rgba, w, h).expect("valid icon")
+    }
+
+    fn show_window(ctx: &egui::Context) {
+        ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(ViewportCommand::Focus);
+        ctx.request_repaint();
+    }
+
+    fn tray_event_loop(
+        ctx: egui::Context,
+        refresh_tx: mpsc::Sender<()>,
+        show_id: MenuId,
+        refresh_id: MenuId,
+        quit_id: MenuId,
+    ) {
+        let menu_rx = MenuEvent::receiver();
+        let tray_rx = TrayIconEvent::receiver();
+        loop {
+            while let Ok(ev) = menu_rx.try_recv() {
+                if ev.id == show_id {
+                    show_window(&ctx);
+                } else if ev.id == refresh_id {
+                    let _ = refresh_tx.send(());
+                } else if ev.id == quit_id {
+                    std::process::exit(0);
+                }
+            }
+            while let Ok(ev) = tray_rx.try_recv() {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    ..
+                } = ev
+                {
+                    show_window(&ctx);
+                }
+            }
+            thread::sleep(Duration::from_millis(120));
+        }
     }
 
     fn fetch_loop(
@@ -309,7 +419,6 @@ mod win {
             }
             ctx.request_repaint();
 
-            // Wait for the refresh interval, or wake early on a manual refresh.
             let _ = refresh_rx.recv_timeout(Duration::from_secs(refresh_secs));
         }
     }

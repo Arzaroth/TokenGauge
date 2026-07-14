@@ -32,6 +32,7 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(windows)]
 mod win {
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
     use std::time::Duration;
@@ -94,6 +95,7 @@ mod win {
     pub struct TrayApp {
         shared: Arc<Mutex<Snapshot>>,
         refresh_tx: mpsc::Sender<()>,
+        quit: Arc<AtomicBool>,
         tray: TrayIcon,
         _items: Vec<MenuItem>,
         last_tip: String,
@@ -126,7 +128,7 @@ mod win {
                     .iter()
                     .map(to_row)
                     .collect();
-                let mut s = shared.lock().unwrap();
+                let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
                 s.rows = rows;
                 s.errors = errors
                     .iter()
@@ -157,24 +159,28 @@ mod win {
                 .with_menu_on_left_click(false)
                 .build()?;
 
+            let quit = Arc::new(AtomicBool::new(false));
+
             // Handle tray/menu events on their own thread so they work even
             // while the window is hidden (the egui loop may not tick then).
             {
                 let ctx = ctx.clone();
                 let refresh_tx = refresh_tx.clone();
+                let quit = quit.clone();
                 let (show_id, refresh_id, quit_id) = (
                     show_i.id().clone(),
                     refresh_i.id().clone(),
                     quit_i.id().clone(),
                 );
                 thread::spawn(move || {
-                    tray_event_loop(ctx, refresh_tx, show_id, refresh_id, quit_id)
+                    tray_event_loop(ctx, refresh_tx, quit, show_id, refresh_id, quit_id)
                 });
             }
 
             Ok(Self {
                 shared,
                 refresh_tx,
+                quit,
                 tray,
                 _items: vec![show_i, refresh_i, quit_i],
                 last_tip: String::new(),
@@ -201,10 +207,17 @@ mod win {
         // Runs before each `ui`. Handles close-to-tray and keeps the tray icon
         // fresh; tray clicks are serviced by the dedicated thread.
         fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-            let snap = self.shared.lock().unwrap().clone();
+            let snap = self
+                .shared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             self.sync_tray(&snap);
 
-            if ctx.input(|i| i.viewport().close_requested()) {
+            // On real quit, let the close proceed so run_native returns and
+            // TrayApp/TrayIcon drop cleanly (removing the tray icon). Otherwise
+            // the window just hides to the tray.
+            if ctx.input(|i| i.viewport().close_requested()) && !self.quit.load(Ordering::SeqCst) {
                 ctx.send_viewport_cmd(ViewportCommand::CancelClose);
                 ctx.send_viewport_cmd(ViewportCommand::Visible(false));
             }
@@ -212,7 +225,11 @@ mod win {
         }
 
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-            let snap = self.shared.lock().unwrap().clone();
+            let snap = self
+                .shared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
 
             // Outer padding so content doesn't touch the window edges.
             egui::Frame::group(ui.style())
@@ -467,6 +484,7 @@ mod win {
     fn tray_event_loop(
         ctx: egui::Context,
         refresh_tx: mpsc::Sender<()>,
+        quit: Arc<AtomicBool>,
         show_id: MenuId,
         refresh_id: MenuId,
         quit_id: MenuId,
@@ -480,7 +498,11 @@ mod win {
                 } else if ev.id == refresh_id {
                     let _ = refresh_tx.send(());
                 } else if ev.id == quit_id {
-                    std::process::exit(0);
+                    // Ask the app to close so Drop runs (removes the tray icon)
+                    // instead of exiting the process abruptly.
+                    quit.store(true, Ordering::SeqCst);
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                    ctx.request_repaint();
                 }
             }
             while let Ok(ev) = tray_rx.try_recv() {
@@ -504,36 +526,44 @@ mod win {
     ) {
         loop {
             {
-                shared.lock().unwrap().fetching = true;
+                shared.lock().unwrap_or_else(|e| e.into_inner()).fetching = true;
             }
             ctx.request_repaint();
 
             let mut refresh_secs = 600u64;
-            if let Ok(config) = load_config(Some(cfg_path.clone())) {
-                refresh_secs = config.refresh_secs.max(30);
-                let result = fetch_all_providers(&config);
-                let _ = write_cache_full(
-                    &config.cache_file,
-                    &result.payloads,
-                    &result.errors,
-                    &result.costs,
-                );
-                let errors = result
-                    .errors
-                    .iter()
-                    .map(|e| format!("{}: {}", e.provider, e.message))
-                    .collect();
-                let rows = payload_to_rows_with_costs(result.payloads, &result.costs)
-                    .iter()
-                    .map(to_row)
-                    .collect();
-                let mut s = shared.lock().unwrap();
-                s.rows = rows;
-                s.errors = errors;
+            match load_config(Some(cfg_path.clone())) {
+                Ok(config) => {
+                    refresh_secs = config.refresh_secs.max(30);
+                    let result = fetch_all_providers(&config);
+                    let _ = write_cache_full(
+                        &config.cache_file,
+                        &result.payloads,
+                        &result.errors,
+                        &result.costs,
+                    );
+                    let errors = result
+                        .errors
+                        .iter()
+                        .map(|e| format!("{}: {}", e.provider, e.message))
+                        .collect();
+                    let rows = payload_to_rows_with_costs(result.payloads, &result.costs)
+                        .iter()
+                        .map(to_row)
+                        .collect();
+                    let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
+                    s.rows = rows;
+                    s.errors = errors;
+                }
+                // Surface a bad config instead of silently showing stale data -
+                // there's no console to see the failure otherwise.
+                Err(e) => {
+                    let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
+                    s.errors = vec![format!("config: {e}")];
+                }
             }
 
             {
-                shared.lock().unwrap().fetching = false;
+                shared.lock().unwrap_or_else(|e| e.into_inner()).fetching = false;
             }
             ctx.request_repaint();
 

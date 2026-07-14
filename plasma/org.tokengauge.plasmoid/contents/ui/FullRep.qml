@@ -134,9 +134,15 @@ Item {
                     : i18n("Update available")
             }
             PlasmaComponents.Button {
+                id: updateButton
                 icon.name: "system-software-update"
-                text: i18n("Update")
-                onClicked: root.applyUpdate()
+                text: enabled ? i18n("Update") : i18n("Updating…")
+                // Disable after click so a double-trigger can't race a second
+                // --update against the first (matches the popover).
+                onClicked: {
+                    enabled = false
+                    root.applyUpdate()
+                }
             }
         }
 

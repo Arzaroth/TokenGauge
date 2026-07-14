@@ -182,14 +182,39 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
                 None => "⬆  Update".to_string(),
             };
             let btn_update = Button::builder()
-                .label(label)
+                .label(&label)
                 .css_classes(vec!["tg-update".to_string()])
                 .build();
             let btn = btn_update.clone();
+            let cfg = Rc::clone(&config);
             btn_update.connect_clicked(move |_| {
                 spawn_update();
                 btn.set_label("⬆  Updating...");
                 btn.set_sensitive(false);
+
+                // spawn_update is fire-and-forget: poll the cached status so the
+                // button recovers if the update fails/exits without clearing it,
+                // instead of staying stuck on "Updating...".
+                let cfg = Rc::clone(&cfg);
+                let btn = btn.clone();
+                let orig = label.clone();
+                let ticks = Rc::new(RefCell::new(0u32));
+                source::timeout_add_local(Duration::from_secs(3), move || {
+                    *ticks.borrow_mut() += 1;
+                    let cleared = read_update_status(&cfg.cache_file)
+                        .map(|s| !s.available)
+                        .unwrap_or(false);
+                    if cleared {
+                        btn.set_label("✓  Updated - restart");
+                        ControlFlow::Break
+                    } else if *ticks.borrow() >= 40 {
+                        btn.set_label(&orig);
+                        btn.set_sensitive(true);
+                        ControlFlow::Break
+                    } else {
+                        ControlFlow::Continue
+                    }
+                });
             });
             footer.prepend(&btn_update);
         }

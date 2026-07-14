@@ -1695,7 +1695,9 @@ pub struct UpdateStatus {
     /// Currently-installed version (no leading `v`).
     #[serde(default)]
     pub current: String,
-    /// Latest release tag seen on GitHub (e.g. `v0.9.0`), if a check succeeded.
+    /// Latest release version seen on GitHub (no leading `v` - self_update
+    /// normalizes the tag, e.g. `0.9.0`), if a check succeeded. Display sites
+    /// prepend their own `v`.
     #[serde(default)]
     pub latest: Option<String>,
     /// True when `latest` is newer than `current`.

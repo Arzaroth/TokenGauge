@@ -433,7 +433,7 @@ cargo build --release -p tokengauge-tray
 - Left-click the tray icon (near the clock) to show the window; closing the
   window hides it back to the tray.
 - Right-click the tray icon for **Show / Refresh now / Update TokenGauge / Quit**
-  (**Update** runs `tokengauge-tui --update`; restart the tray afterwards).
+  (**Update** runs `tokengauge-tui --update`; restart the tray afterward).
 - It reads limits from the same `codexbar_bin` as the TUI, so set that up first
   (see **Limits on Windows** below). This crate is Windows-only.
 

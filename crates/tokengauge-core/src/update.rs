@@ -5,7 +5,7 @@
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -21,6 +21,35 @@ const BINARIES: &[&str] = &["tokengauge-waybar", "tokengauge-tui", "tokengauge-p
 
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// Exclusive lock so concurrent `--update` invocations (CLI, tray menu, Plasma
+/// button) don't race on the shared staging dir. Atomic create-new; removed on
+/// drop (normal return and unwind).
+struct UpdateLock(PathBuf);
+
+impl UpdateLock {
+    fn acquire(install_dir: &Path) -> Result<Self> {
+        let path = install_dir.join(".tg-update.lock");
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => Ok(UpdateLock(path)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => bail!(
+                "update already in progress ({} exists; remove it if stale)",
+                path.display()
+            ),
+            Err(e) => Err(e).context("failed to acquire update lock"),
+        }
+    }
+}
+
+impl Drop for UpdateLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 fn now_ms() -> i64 {
@@ -138,6 +167,10 @@ pub fn apply(cache_file: &Path) -> Result<String> {
         .parent()
         .ok_or_else(|| anyhow!("cannot resolve install directory"))?
         .to_path_buf();
+
+    // Held for the whole download/extract/replace so a second invocation fails
+    // fast instead of corrupting the shared staging dir.
+    let _lock = UpdateLock::acquire(&install_dir)?;
 
     // Stage inside the install dir so the final move is same-filesystem.
     let tmp = install_dir.join(".tg-update.tmp");

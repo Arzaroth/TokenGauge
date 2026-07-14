@@ -14,6 +14,16 @@ use serde::{Deserialize, Serialize};
 // Codexbar Payload Types
 // ============================================================================
 
+/// Deserialize a percentage that may arrive as an integer (upstream codexbar)
+/// or a float (e.g. Win-CodexBar sends `100.0`), rounding/clamping to `0..=100`.
+fn de_opt_percent<'de, D>(deserializer: D) -> Result<Option<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<f64>::deserialize(deserializer)?;
+    Ok(opt.map(|v| v.round().clamp(0.0, 100.0) as u8))
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageSnapshot {
@@ -21,10 +31,13 @@ pub struct UsageSnapshot {
     pub secondary: Option<UsageWindow>,
     #[serde(default)]
     pub tertiary: Option<UsageWindow>,
+    // Accept snake_case too, so third-party codexbar ports (e.g. Win-CodexBar,
+    // which serializes snake_case) parse alongside the upstream camelCase CLI.
+    #[serde(default, alias = "updated_at")]
     pub updated_at: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "login_method")]
     pub login_method: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "extra_rate_windows")]
     pub extra_rate_windows: Vec<ExtraRateWindow>,
 }
 
@@ -39,9 +52,15 @@ pub struct ExtraRateWindow {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageWindow {
+    // `alias` accepts snake_case (Win-CodexBar); `de_opt_percent` also tolerates
+    // a float percent like `100.0` in addition to an integer.
+    #[serde(default, alias = "used_percent", deserialize_with = "de_opt_percent")]
     pub used_percent: Option<u8>,
+    #[serde(default, alias = "reset_description")]
     pub reset_description: Option<String>,
+    #[serde(default, alias = "resets_at")]
     pub resets_at: Option<String>,
+    #[serde(default, alias = "window_minutes")]
     pub window_minutes: Option<u32>,
 }
 
@@ -2243,6 +2262,29 @@ pub fn config_set_primary(path: &Path, primary: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------------------
+    // Third-party codexbar (Win-CodexBar) snake_case + float-percent parsing
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn parses_win_codexbar_snake_case_usage() {
+        // Real output from Win-CodexBar's codexbar-cli: snake_case field names
+        // and a float `used_percent`, unlike upstream codexbar's camelCase/int.
+        let json = br#"[{"cost":null,"provider":"claude","source":"oauth","usage":{"extra_rate_windows":[{"id":"claude-weekly-scoped-fable","title":"Fable only","window":{"used_percent":0.0,"window_minutes":10080}}],"login_method":"Claude Max 5x","primary":{"reset_description":"Jul 14 at 8:49PM","resets_at":"2026-07-14T20:49:59.922430Z","used_percent":100.0,"window_minutes":300},"secondary":{"reset_description":"Jul 18 at 9:59AM","resets_at":"2026-07-18T09:59:59.922452Z","used_percent":21.0,"window_minutes":10080},"updated_at":"2026-07-14T15:57:20.912196200Z"}}]"#;
+
+        let payloads = parse_payload_bytes(json).expect("Win-CodexBar JSON should parse");
+        assert_eq!(payloads.len(), 1);
+        let usage = payloads[0].usage.as_ref().expect("usage present");
+        assert_eq!(usage.primary.as_ref().unwrap().used_percent, Some(100));
+        assert_eq!(usage.secondary.as_ref().unwrap().used_percent, Some(21));
+        assert_eq!(usage.login_method.as_deref(), Some("Claude Max 5x"));
+        assert_eq!(usage.extra_rate_windows.len(), 1);
+
+        let rows = payload_to_rows(payloads);
+        assert_eq!(rows[0].session_used, Some(100));
+        assert_eq!(rows[0].weekly_used, Some(21));
+    }
 
     // ------------------------------------------------------------------------
     // Windows executable discovery / command construction

@@ -2065,6 +2065,62 @@ claude = true
     Ok(())
 }
 
+/// Apply an in-place edit to the config file, preserving comments/formatting
+/// and writing atomically (temp file + rename) so a crash mid-write can't
+/// truncate the user's config. Creates a default config first if none exists.
+pub fn edit_config_file<F>(path: &Path, edit: F) -> Result<()>
+where
+    F: FnOnce(&mut toml_edit::DocumentMut),
+{
+    if !path.exists() {
+        write_default_config(path)?;
+    }
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("failed to read config {}", path.display()))?;
+    let mut doc = text
+        .parse::<toml_edit::DocumentMut>()
+        .with_context(|| format!("config at {} is not valid TOML", path.display()))?;
+
+    edit(&mut doc);
+
+    let tmp = path.with_extension("toml.tmp");
+    fs::write(&tmp, doc.to_string())
+        .with_context(|| format!("failed to write {}", tmp.display()))?;
+    fs::rename(&tmp, path)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    Ok(())
+}
+
+fn ensure_table<'a>(doc: &'a mut toml_edit::DocumentMut, key: &str) -> &'a mut toml_edit::Table {
+    if doc.get(key).and_then(|i| i.as_table()).is_none() {
+        doc.insert(key, toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    doc[key].as_table_mut().expect("just ensured table")
+}
+
+/// Enable/disable an OAuth provider (codex, claude) in the config file.
+pub fn config_set_oauth_provider(path: &Path, name: &str, enabled: bool) -> Result<()> {
+    let name = name.to_string();
+    edit_config_file(path, |doc| {
+        let providers = ensure_table(doc, "providers");
+        providers[&name] = toml_edit::value(enabled);
+    })
+}
+
+/// Set (or clear, when `None`) the pinned `[waybar].primary` provider.
+pub fn config_set_primary(path: &Path, primary: Option<&str>) -> Result<()> {
+    let primary = primary.map(|s| s.to_string());
+    edit_config_file(path, |doc| {
+        let waybar = ensure_table(doc, "waybar");
+        match &primary {
+            Some(p) => waybar["primary"] = toml_edit::value(p.as_str()),
+            None => {
+                waybar.remove("primary");
+            }
+        }
+    })
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -2127,6 +2183,51 @@ mod tests {
         // codex had no fallback -> error retained.
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].provider, "codex");
+    }
+
+    #[test]
+    fn config_edits_preserve_comments_and_toggle_values() {
+        let dir = std::env::temp_dir().join(format!("tg-cfgtest-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("config.toml");
+        fs::write(
+            &path,
+            "# my config\n[providers]\n# oauth\ncodex = true\nclaude = true\n\n[waybar]\nwindow = \"daily\"\n",
+        )
+        .unwrap();
+
+        config_set_oauth_provider(&path, "claude", false).unwrap();
+        config_set_primary(&path, Some("codex")).unwrap();
+
+        let out = fs::read_to_string(&path).unwrap();
+        assert!(out.contains("# my config"), "top comment lost: {out}");
+        assert!(out.contains("# oauth"), "section comment lost: {out}");
+        assert!(out.contains("claude = false"), "toggle not applied: {out}");
+        assert!(out.contains("codex = true"), "other provider changed: {out}");
+        assert!(out.contains("primary = \"codex\""), "primary not set: {out}");
+
+        // Clearing primary removes the key, keeps the rest.
+        config_set_primary(&path, None).unwrap();
+        let out = fs::read_to_string(&path).unwrap();
+        assert!(!out.contains("primary ="), "primary not cleared: {out}");
+        assert!(out.contains("window = \"daily\""));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_edit_creates_default_when_missing() {
+        let dir = std::env::temp_dir().join(format!("tg-cfgtest2-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("config.toml");
+        assert!(!path.exists());
+
+        config_set_oauth_provider(&path, "codex", false).unwrap();
+        assert!(path.exists());
+        let out = fs::read_to_string(&path).unwrap();
+        assert!(out.contains("codex = false"), "{out}");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

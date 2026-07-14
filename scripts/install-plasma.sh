@@ -36,7 +36,13 @@ done
 
 info "Installing provider logos to $ICON_DIR"
 mkdir -p "$ICON_DIR"
-install -m 0644 "$REPO_DIR"/assets/providers/ProviderIcon-*.svg "$ICON_DIR/"
+shopt -s nullglob
+icons=("$REPO_DIR"/assets/providers/ProviderIcon-*.svg)
+shopt -u nullglob
+if [[ ${#icons[@]} -eq 0 ]]; then
+  fail "No provider icons found in $REPO_DIR/assets/providers"; exit 1
+fi
+install -m 0644 "${icons[@]}" "$ICON_DIR/"
 
 info "Registering the Plasma applet..."
 if kpackagetool6 --type Plasma/Applet --show org.tokengauge.plasmoid >/dev/null 2>&1; then

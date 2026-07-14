@@ -2118,6 +2118,21 @@ fn ensure_table<'a>(doc: &'a mut toml_edit::DocumentMut, key: &str) -> &'a mut t
     doc[key].as_table_mut().expect("just ensured table")
 }
 
+/// Ask a running TokenGauge daemon (`tokengauge-waybar --daemon`) to reload its
+/// config from disk without a restart. No-op when no daemon is running.
+///
+/// Matches the full command line: the 17-char binary name exceeds procps'
+/// 15-char comm cap, so a bare `pkill tokengauge-waybar` matches nothing. The
+/// `--daemon` fragment also keeps us from signalling the short-lived one-shot
+/// invocation that triggered the edit (it has no SIGHUP handler).
+pub fn signal_daemon_reload() {
+    let _ = Command::new("pkill")
+        .arg("-HUP")
+        .arg("-f")
+        .arg("tokengauge-waybar --daemon")
+        .status();
+}
+
 /// Enable/disable an OAuth provider (codex, claude) in the config file.
 pub fn config_set_oauth_provider(path: &Path, name: &str, enabled: bool) -> Result<()> {
     let name = name.to_string();

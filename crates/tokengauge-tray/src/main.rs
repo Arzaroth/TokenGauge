@@ -5,6 +5,10 @@
 //! peak usage percentage. Windows-only; on other platforms this is a stub (the
 //! Linux surfaces are the Waybar module, GTK popover, and KDE applet).
 
+// Build as a GUI (windowless) binary on Windows so launching it doesn't pop a
+// console window - important when it runs at login / from the tray.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 #[cfg(not(windows))]
 fn main() {
     eprintln!("tokengauge-tray is Windows-only; use the Waybar / GTK / KDE surfaces on Linux.");

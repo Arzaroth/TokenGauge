@@ -803,17 +803,56 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<Output> {
     }
 }
 
-/// Fetch a single provider using codexbar.
+/// Secondary codexbar `--source` to retry with when the primary source fails.
+/// Anthropic's OAuth endpoint rate-limits often; the local Claude CLI source
+/// keeps the bar populated. Only providers codexbar exposes a `cli` source for
+/// qualify (currently just Claude).
+fn cli_fallback_source(provider: &EnabledProvider) -> Option<&'static str> {
+    match provider.name.as_str() {
+        "claude" => Some("cli"),
+        _ => None,
+    }
+}
+
+/// Fetch a single provider using codexbar, retrying via a fallback `--source`
+/// when the primary source errors (e.g. Claude OAuth 429 → local CLI).
 pub fn fetch_single_provider(
     codexbar_bin: &str,
     provider: &EnabledProvider,
     timeout: Duration,
 ) -> Result<Vec<ProviderPayload>> {
-    let source = match provider.provider_type {
+    let primary = match provider.provider_type {
         ProviderType::OAuth => "oauth",
         ProviderType::Api => "api",
     };
 
+    let result = fetch_single_provider_source(codexbar_bin, provider, primary, timeout);
+    if payloads_usable(&result) {
+        return result;
+    }
+
+    if let Some(fallback) = cli_fallback_source(provider) {
+        let retried = fetch_single_provider_source(codexbar_bin, provider, fallback, timeout);
+        if payloads_usable(&retried) {
+            return retried;
+        }
+    }
+
+    result
+}
+
+/// True when a fetch result carries at least one usable (error-free) payload.
+fn payloads_usable(result: &Result<Vec<ProviderPayload>>) -> bool {
+    matches!(result, Ok(payloads) if payloads.iter().any(|p| !p.has_error()))
+}
+
+/// Fetch a single provider from a specific codexbar `--source`.
+fn fetch_single_provider_source(
+    codexbar_bin: &str,
+    provider: &EnabledProvider,
+    source: &str,
+    timeout: Duration,
+) -> Result<Vec<ProviderPayload>> {
     let mut command = Command::new(codexbar_bin);
     command
         .arg("usage")
@@ -1941,6 +1980,57 @@ claude = true
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------------------
+    // fallback source tests
+    // ------------------------------------------------------------------------
+
+    fn enabled(name: &str, ty: ProviderType) -> EnabledProvider {
+        EnabledProvider {
+            name: name.to_string(),
+            provider_type: ty,
+            api_key: None,
+            env_var: None,
+        }
+    }
+
+    #[test]
+    fn cli_fallback_only_for_claude() {
+        assert_eq!(
+            cli_fallback_source(&enabled("claude", ProviderType::OAuth)),
+            Some("cli")
+        );
+        assert_eq!(
+            cli_fallback_source(&enabled("codex", ProviderType::OAuth)),
+            None
+        );
+        assert_eq!(cli_fallback_source(&enabled("zai", ProviderType::Api)), None);
+    }
+
+    #[test]
+    fn payloads_usable_detects_error_only_results() {
+        let ok = ProviderPayload {
+            provider: "claude".into(),
+            version: None,
+            source: None,
+            usage: None,
+            credits: None,
+            error: None,
+        };
+        let err = ProviderPayload {
+            error: Some(ProviderError {
+                message: Some("429".into()),
+                code: None,
+                kind: None,
+            }),
+            ..ok.clone()
+        };
+        assert!(payloads_usable(&Ok(vec![ok.clone()])));
+        assert!(payloads_usable(&Ok(vec![err.clone(), ok])));
+        assert!(!payloads_usable(&Ok(vec![err])));
+        assert!(!payloads_usable(&Ok(vec![])));
+        assert!(!payloads_usable(&Err(anyhow!("boom"))));
+    }
 
     // ------------------------------------------------------------------------
     // format_window tests

@@ -9,10 +9,10 @@
     your user PATH, and seeds a default config at %APPDATA%\tokengauge\config.toml.
 
     Only the TUI is supported on Windows - the Waybar module, GTK4 popover, and
-    KDE Plasma applet are Linux-only. Cost/token data comes from ccusage (needs
-    Node.js or Bun on PATH). Usage limits need a `codexbar` binary, which upstream
-    CodexBar does not ship for Windows; without it the TUI still runs and shows
-    ccusage data (limit providers just report an error).
+    KDE Plasma applet are Linux-only. TokenGauge builds its rows from codexbar
+    data, so a codexbar-compatible binary is required for anything to show;
+    upstream CodexBar doesn't ship one for Windows (Win-CodexBar works as a
+    drop-in). ccusage (needs Node.js/Bun on PATH) then adds cost/token detail.
 
 .PARAMETER Repo
     GitHub repo to install from. Default: Arzaroth/TokenGauge.

@@ -331,6 +331,17 @@ does not ship for Windows - see the note below.
 
 ### Install
 
+**Quick install (PowerShell):** downloads the latest release, installs
+`tokengauge-tui.exe`, adds it to your user `PATH`, and writes a default config:
+
+```powershell
+irm https://raw.githubusercontent.com/Arzaroth/TokenGauge/master/scripts/install.ps1 | iex
+```
+
+Or run a local checkout with `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`.
+
+**Manual:**
+
 1. Download `tokengauge-<version>-windows-x86_64.zip` from
    [GitHub Releases](https://github.com/Arzaroth/TokenGauge/releases) and unzip
    it. Put `tokengauge-tui.exe` somewhere on your `PATH` (or just run it from the

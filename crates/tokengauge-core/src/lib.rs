@@ -895,6 +895,34 @@ fn payloads_usable(result: &Result<Vec<ProviderPayload>>) -> bool {
     matches!(result, Ok(payloads) if payloads.iter().any(|p| !p.has_error()))
 }
 
+/// Build the base `Command` for the codexbar binary.
+///
+/// A plain executable (`.exe`, or a name CreateProcess resolves) is spawned
+/// directly. On Windows a `.cmd`/`.bat` shim can't be exec'd directly, so those
+/// are routed through `cmd /C` - mirroring the ccusage handling and letting a
+/// batch wrapper work as `codexbar_bin`.
+fn codexbar_command(codexbar_bin: &str) -> Command {
+    #[cfg(windows)]
+    {
+        let is_batch = |p: &Path| {
+            matches!(
+                p.extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .as_deref(),
+                Some("cmd") | Some("bat")
+            )
+        };
+        let resolved = find_in_path(codexbar_bin);
+        if is_batch(Path::new(codexbar_bin)) || resolved.as_deref().map(is_batch).unwrap_or(false) {
+            let mut command = Command::new("cmd");
+            command.arg("/C").arg(codexbar_bin);
+            return command;
+        }
+    }
+    Command::new(codexbar_bin)
+}
+
 /// Fetch a single provider from a specific codexbar `--source`.
 fn fetch_single_provider_source(
     codexbar_bin: &str,
@@ -902,7 +930,7 @@ fn fetch_single_provider_source(
     source: &str,
     timeout: Duration,
 ) -> Result<Vec<ProviderPayload>> {
-    let mut command = Command::new(codexbar_bin);
+    let mut command = codexbar_command(codexbar_bin);
     command
         .arg("usage")
         .arg("--provider")
@@ -2276,8 +2304,23 @@ mod tests {
         let payloads = parse_payload_bytes(json).expect("Win-CodexBar JSON should parse");
         assert_eq!(payloads.len(), 1);
         let usage = payloads[0].usage.as_ref().expect("usage present");
-        assert_eq!(usage.primary.as_ref().unwrap().used_percent, Some(100));
+        let primary = usage.primary.as_ref().unwrap();
+        assert_eq!(primary.used_percent, Some(100));
+        // Every snake_case alias must map, not just the percentages.
+        assert_eq!(
+            primary.reset_description.as_deref(),
+            Some("Jul 14 at 8:49PM")
+        );
+        assert_eq!(
+            primary.resets_at.as_deref(),
+            Some("2026-07-14T20:49:59.922430Z")
+        );
+        assert_eq!(primary.window_minutes, Some(300));
         assert_eq!(usage.secondary.as_ref().unwrap().used_percent, Some(21));
+        assert_eq!(
+            usage.updated_at.as_deref(),
+            Some("2026-07-14T15:57:20.912196200Z")
+        );
         assert_eq!(usage.login_method.as_deref(), Some("Claude Max 5x"));
         assert_eq!(usage.extra_rate_windows.len(), 1);
 

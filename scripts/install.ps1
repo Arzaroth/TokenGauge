@@ -81,9 +81,9 @@ try {
     try {
         Invoke-WebRequest -Uri $url -OutFile $zipPath -Headers $Headers
     } catch {
-        throw "Failed to download $asset. This release may predate Windows support - " +
-              "install a newer release with -Version, or build from source: " +
-              "cargo build --release -p tokengauge-tui"
+        throw "Failed to download $asset ($($_.Exception.Message)). This release may " +
+              "predate Windows support - install a newer release with -Version, or " +
+              "build from source: cargo build --release -p tokengauge-tui"
     }
 
     Expand-Archive -Path $zipPath -DestinationPath $tmp -Force

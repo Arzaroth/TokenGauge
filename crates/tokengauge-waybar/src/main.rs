@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Serialize;
+use tokengauge_core::update;
 use tokengauge_core::{
     CostInfo, ExtraWindowRow, FetchResult, ProviderFetchError, ProviderPayload, ProviderRow, Theme,
     TokenGaugeConfig, WaybarState, WaybarWindow, config_set_oauth_provider, config_set_primary,
@@ -90,6 +91,14 @@ struct Args {
     /// the daemon. e.g. `--set-primary claude` or `--set-primary highest`.
     #[arg(long, value_name = "NAME")]
     set_primary: Option<String>,
+    /// Download the latest matching release from GitHub and replace the
+    /// installed binaries. Used by the GUI "Update" button too.
+    #[arg(long)]
+    update: bool,
+    /// Query GitHub for the latest release, cache the result, and print it as
+    /// JSON. Does not install anything.
+    #[arg(long)]
+    check_update: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -186,6 +195,14 @@ fn main() -> Result<()> {
 
     if let Some(name) = &args.set_primary {
         return handle_set_primary(&config_path, name);
+    }
+
+    if args.check_update {
+        return handle_check_update(&config);
+    }
+
+    if args.update {
+        return handle_update(&config);
     }
 
     if args.refresh {
@@ -358,6 +375,7 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
         WaybarWindow::Daily => "daily",
         WaybarWindow::Weekly => "weekly",
     };
+    let update_status = tokengauge_core::read_update_status(&config.cache_file);
     let out = serde_json::json!({
         "rows": row_values,
         "errors": errors,
@@ -372,6 +390,7 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
             "red": t.red,
             "neutral": t.neutral,
         },
+        "update": update_status,
     });
     println!("{}", serde_json::to_string(&out)?);
     Ok(())
@@ -542,6 +561,112 @@ fn check_and_notify(
     }
 
     let _ = write_notify_state(&path, &state);
+}
+
+/// `--check-update`: live GitHub check, cache result, print JSON status.
+fn handle_check_update(config: &TokenGaugeConfig) -> Result<()> {
+    let status = update::check(&config.cache_file)?;
+    println!("{}", serde_json::to_string(&status)?);
+    Ok(())
+}
+
+/// `--update`: download the latest release and swap the installed binaries.
+fn handle_update(config: &TokenGaugeConfig) -> Result<()> {
+    let current = update::current_version();
+    println!("Current version: {current}");
+    println!("Checking for updates...");
+    let installed = update::apply(&config.cache_file)?;
+    if update::version_gt(&installed, current) {
+        println!("Updated to {installed}.");
+        if restart_daemon() {
+            println!("Restarted tokengauge-daemon.service.");
+        } else {
+            println!("Restart to load it: systemctl --user restart tokengauge-daemon.service");
+        }
+    } else {
+        println!("Already up to date ({current}).");
+    }
+    Ok(())
+}
+
+/// Restart the systemd user daemon so the freshly-installed binary is loaded.
+/// Best effort: returns false when there's no active unit to restart (plain
+/// polling mode) or systemctl is unavailable.
+fn restart_daemon() -> bool {
+    let active = Command::new("systemctl")
+        .args([
+            "--user",
+            "is-active",
+            "--quiet",
+            "tokengauge-daemon.service",
+        ])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !active {
+        return false;
+    }
+    Command::new("systemctl")
+        .args(["--user", "restart", "tokengauge-daemon.service"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Fire a one-shot "update available" desktop notification, guarding on the
+/// version so the daemon doesn't nag on every check.
+fn notify_update_available(config: &TokenGaugeConfig, status: &tokengauge_core::UpdateStatus) {
+    let Some(latest) = &status.latest else {
+        return;
+    };
+    if !status.available || status.notified.as_deref() == Some(latest.as_str()) {
+        return;
+    }
+    let title = "TokenGauge: update available";
+    let body = format!(
+        "v{latest} is available (you have v{}). Run tokengauge-waybar --update.",
+        status.current
+    );
+    let _ = Command::new("notify-send")
+        .arg("--app-name")
+        .arg("tokengauge")
+        .arg("--hint=int:transient:1")
+        .arg(title)
+        .arg(&body)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+
+    let mut persisted = status.clone();
+    persisted.notified = Some(latest.clone());
+    let _ = tokengauge_core::write_update_status(&config.cache_file, &persisted);
+}
+
+/// Daemon thread: periodically check GitHub and notify once per new version.
+fn daemon_update_loop(config: Arc<Mutex<TokenGaugeConfig>>) {
+    loop {
+        let snapshot = config.lock().expect("daemon config mutex poisoned").clone();
+        if !snapshot.update.check {
+            thread::sleep(Duration::from_secs(3600));
+            continue;
+        }
+        match update::check(&snapshot.cache_file) {
+            Ok(status) => {
+                if status.available {
+                    dlog(
+                        "update",
+                        &format!("newer version available: {:?}", status.latest),
+                    );
+                    notify_update_available(&snapshot, &status);
+                }
+            }
+            Err(e) => dlog("update", &format!("check failed: {e}")),
+        }
+        thread::sleep(Duration::from_secs(
+            snapshot.update.check_interval_secs.max(600),
+        ));
+    }
 }
 
 fn fire_notification(provider: &str, window: &str, pct: u8, threshold: u8, reset: &str) {
@@ -855,6 +980,36 @@ fn handle_doctor(config_path: &Path) -> i32 {
     };
     record(DoctorCheck { label, ok, detail });
 
+    section("Updates");
+    record(DoctorCheck {
+        label: format!("installed version: {}", update::current_version()),
+        ok: true,
+        detail: String::new(),
+    });
+    match tokengauge_core::read_update_status(&cfg.cache_file) {
+        Some(status) if status.available => record(DoctorCheck {
+            label: "update available".into(),
+            ok: true,
+            detail: format!(
+                "{} available - run: tokengauge-waybar --update",
+                status.latest.as_deref().unwrap_or("newer release")
+            ),
+        }),
+        Some(status) => record(DoctorCheck {
+            label: "up to date".into(),
+            ok: true,
+            detail: status
+                .latest
+                .map(|v| format!("latest: {v}"))
+                .unwrap_or_default(),
+        }),
+        None => record(DoctorCheck {
+            label: "no update check yet".into(),
+            ok: true,
+            detail: "run: tokengauge-waybar --check-update".into(),
+        }),
+    }
+
     println!();
     let failed = checks.borrow().iter().filter(|c| !c.ok).count();
     if failed == 0 {
@@ -1098,6 +1253,12 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
         let state = Arc::clone(&state);
         let cfg = Arc::clone(&shared_config);
         thread::spawn(move || daemon_fetch_loop(state, cfg));
+    }
+
+    // Periodic GitHub release check + one-shot "update available" notification.
+    {
+        let cfg = Arc::clone(&shared_config);
+        thread::spawn(move || daemon_update_loop(cfg));
     }
 
     // Signal-driven immediate fetch (preserves backward compat with pkill -RTMIN+8)
@@ -2209,6 +2370,7 @@ mod tests {
             waybar: Default::default(),
             notifications: Default::default(),
             theme: Default::default(),
+            update: Default::default(),
         }
     }
 

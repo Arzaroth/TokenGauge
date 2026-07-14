@@ -391,14 +391,16 @@ JSON schema TokenGauge parses.
 1. Install it: `winget install Finesssee.Win-CodexBar`, then sign in so it can
    read your Claude/Codex usage.
 2. Point TokenGauge at its CLI in `%APPDATA%\tokengauge\config.toml`:
+
    ```toml
    # full path, or just "codexbar-cli" if its folder is on PATH
    codexbar_bin = "C:\\Program Files\\Win-CodexBar\\codexbar-cli.exe"
    ```
+
 3. Restart `tokengauge-tui`.
 
 TokenGauge omits the `--json-only` flag on Windows automatically (Win-CodexBar's
 `usage` command doesn't define it, and `--format json` already yields clean
-JSON), so `codexbar-cli.exe` works as a drop-in. `codexbar_bin` must resolve to
-an `.exe` (a `.cmd`/`.bat` shim won't spawn); use its full path if it isn't on
-`PATH`.
+JSON), so `codexbar-cli.exe` works as a drop-in. `codexbar_bin` may point at an
+`.exe`, or a `.cmd`/`.bat` shim (those are run via `cmd /C`); use its full path
+if it isn't on `PATH`.

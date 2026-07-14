@@ -31,6 +31,8 @@ PlasmoidItem {
     // Cached GitHub release check written by the daemon; see UpdateStatus.
     readonly property var updateInfo: snapshot.update || null
     readonly property bool updateAvailable: !!(updateInfo && updateInfo.available)
+    // True while an --update command is in flight; reset when exec completes.
+    property bool updating: false
 
     // Row shown in the panel / hovered.
     readonly property var selRow: rows.length > 0
@@ -71,6 +73,9 @@ PlasmoidItem {
         connectedSources: []
         onNewData: (source, data) => {
             exec.disconnectSource(source)
+            // Any command completing (refresh or update) clears the in-flight
+            // update state so the Update button recovers on success or failure.
+            root.updating = false
             if (data["exit code"] === 0) {
                 try {
                     var parsed = JSON.parse(data.stdout)
@@ -111,6 +116,7 @@ PlasmoidItem {
     // --update's human-readable stdout is discarded so only the --json payload
     // reaches onNewData's JSON.parse.
     function applyUpdate() {
+        root.updating = true
         exec.connectSource(cmd(root.waybarBin + " --update >/dev/null 2>&1 && " + root.waybarBin + " --json"))
     }
 

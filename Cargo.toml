@@ -6,6 +6,14 @@ members = [
   "crates/tokengauge-tui",
   "crates/tokengauge-popover"
 ]
+# The waybar and popover crates are Linux-only (Waybar / gtk4-layer-shell) and do
+# not build on Windows or macOS. `default-members` limits a bare `cargo build`
+# (and `cargo test`) to the cross-platform crates so the workspace builds on any
+# OS. On Linux you can still build everything with `cargo build --workspace`.
+default-members = [
+  "crates/tokengauge-core",
+  "crates/tokengauge-tui"
+]
 
 [workspace.dependencies]
 anyhow = "1.0"

@@ -378,6 +378,24 @@ cargo build --release -p tokengauge-tui
 (`tokengauge-core` + `tokengauge-tui`); the Linux-only crates are excluded via
 `default-members`. Do **not** pass `--workspace` on Windows.
 
+### Tray GUI (`tokengauge-tray`)
+
+Prefer a window over the terminal? `tokengauge-tray` is a Windows system-tray
+app (egui) that shows per-provider **Session / Weekly** usage bars and reset
+times in a small window, backed by a tray icon. It shares the same config and
+cache as the TUI and refreshes in the background.
+
+```powershell
+cargo build --release -p tokengauge-tray
+.\target\release\tokengauge-tray.exe
+```
+
+- Left-click the tray icon (near the clock) to show the window; closing the
+  window hides it back to the tray.
+- Right-click the tray icon for **Show / Refresh now / Quit**.
+- It reads limits from the same `codexbar_bin` as the TUI, so set that up first
+  (see **Limits on Windows** below). This crate is Windows-only.
+
 ### Limits on Windows
 
 Upstream CodexBar ships a `codexbar` CLI for macOS and Linux only. Without a

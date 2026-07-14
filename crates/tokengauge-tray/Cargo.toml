@@ -1,0 +1,14 @@
+[package]
+name = "tokengauge-tray"
+version = "0.8.0"
+edition = "2024"
+
+[dependencies]
+tokengauge-core = { path = "../tokengauge-core" }
+anyhow = { workspace = true }
+
+# GUI + tray deps are Windows-only so non-Windows targets (and Linux CI) don't
+# pull eframe/winit/GTK. On other platforms this crate builds a trivial stub.
+[target.'cfg(windows)'.dependencies]
+eframe = "0.35"
+tray-icon = "0.24"

@@ -68,6 +68,10 @@ pub struct ProviderPayload {
     pub usage: Option<UsageSnapshot>,
     pub credits: Option<Credits>,
     pub error: Option<ProviderError>,
+    /// True when this payload was served from a previous cache because the
+    /// live fetch failed. Set by `fetch_all_providers`, not by codexbar.
+    #[serde(default)]
+    pub stale: bool,
 }
 
 impl ProviderPayload {
@@ -702,6 +706,9 @@ pub struct ProviderRow {
     pub plan_label: Option<String>,
     pub extra_windows: Vec<ExtraWindowRow>,
     pub cost: Option<CostInfo>,
+    /// True when this row came from a cached last-good payload after a failed
+    /// live fetch.
+    pub stale: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -968,12 +975,44 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
         }
     }
 
+    // Serve last-good cached data for providers that failed this round, so a
+    // transient 429 / network blip surfaces as `stale` instead of a blank bar.
+    if !errors.is_empty() {
+        if let Ok(previous) = read_cache_full(&config.cache_file) {
+            apply_stale_fallback(&mut payloads, &mut errors, previous.payloads());
+        }
+    }
+
     let costs = ccusage_handle.join().unwrap_or_default();
     FetchResult {
         payloads,
         errors,
         costs,
     }
+}
+
+/// Replace each failed provider's error with its previous good payload (marked
+/// stale) when the cache still holds one. Providers with no cached fallback
+/// keep their error.
+fn apply_stale_fallback(
+    payloads: &mut Vec<ProviderPayload>,
+    errors: &mut Vec<ProviderFetchError>,
+    previous: &[ProviderPayload],
+) {
+    errors.retain(|err| {
+        let cached = previous.iter().find(|p| {
+            !p.has_error() && p.provider.eq_ignore_ascii_case(&err.provider)
+        });
+        match cached {
+            Some(payload) => {
+                let mut payload = payload.clone();
+                payload.stale = true;
+                payloads.push(payload);
+                false // drop the error, we have last-good data
+            }
+            None => true, // no fallback, keep the error
+        }
+    });
 }
 
 // ============================================================================
@@ -1174,6 +1213,7 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
         plan_label,
         extra_windows,
         cost: None,
+        stale: payload.stale,
     }
 }
 
@@ -2008,6 +2048,36 @@ mod tests {
     }
 
     #[test]
+    fn apply_stale_fallback_serves_last_good_and_keeps_uncovered_errors() {
+        let good_claude = ProviderPayload {
+            provider: "claude".into(),
+            version: None,
+            source: None,
+            usage: None,
+            credits: None,
+            error: None,
+            stale: false,
+        };
+        let previous = vec![good_claude];
+
+        let mut payloads: Vec<ProviderPayload> = Vec::new();
+        let mut errors = vec![
+            ProviderFetchError::new("claude".into(), "429"),
+            ProviderFetchError::new("codex".into(), "boom"),
+        ];
+
+        apply_stale_fallback(&mut payloads, &mut errors, &previous);
+
+        // claude had a cached good payload -> served stale, error dropped.
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0].provider, "claude");
+        assert!(payloads[0].stale);
+        // codex had no fallback -> error retained.
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].provider, "codex");
+    }
+
+    #[test]
     fn payloads_usable_detects_error_only_results() {
         let ok = ProviderPayload {
             provider: "claude".into(),
@@ -2016,6 +2086,7 @@ mod tests {
             usage: None,
             credits: None,
             error: None,
+            stale: false,
         };
         let err = ProviderPayload {
             error: Some(ProviderError {
@@ -2300,6 +2371,7 @@ mod tests {
                 code: None,
                 kind: None,
             }),
+            stale: false,
         };
         assert!(payload.has_error());
     }
@@ -2313,6 +2385,7 @@ mod tests {
             usage: None,
             credits: None,
             error: None,
+            stale: false,
         };
         assert!(!payload.has_error());
     }
@@ -2330,6 +2403,7 @@ mod tests {
             usage: None,
             credits: None,
             error: None,
+            stale: false,
         };
         let error = ProviderFetchError {
             provider: "codex".to_string(),
@@ -2360,6 +2434,7 @@ mod tests {
             usage: None,
             credits: None,
             error: None,
+            stale: false,
         };
         let cached = CachedData::Legacy(vec![payload]);
 
@@ -2497,6 +2572,7 @@ mod tests {
             usage: None,
             credits: None,
             error: None,
+            stale: false,
         };
         let bad = ProviderPayload {
             provider: "codex".to_string(),
@@ -2509,6 +2585,7 @@ mod tests {
                 code: None,
                 kind: None,
             }),
+            stale: false,
         };
         let rows = payload_to_rows(vec![good, bad]);
         assert_eq!(rows.len(), 1);
@@ -2526,6 +2603,7 @@ mod tests {
                 remaining: Some(42.567),
             }),
             error: None,
+            stale: false,
         };
         let rows = payload_to_rows(vec![payload]);
         assert_eq!(rows[0].credits, "42.57"); // 2 decimal places
@@ -2541,6 +2619,7 @@ mod tests {
             usage: None,
             credits: None,
             error: None,
+            stale: false,
         };
         let rows = payload_to_rows(vec![payload1]);
         assert_eq!(rows[0].source, "2.1.12 (oauth)");
@@ -2553,6 +2632,7 @@ mod tests {
             usage: None,
             credits: None,
             error: None,
+            stale: false,
         };
         let rows = payload_to_rows(vec![payload2]);
         assert_eq!(rows[0].source, "2.1.12");
@@ -2565,6 +2645,7 @@ mod tests {
             usage: None,
             credits: None,
             error: None,
+            stale: false,
         };
         let rows = payload_to_rows(vec![payload3]);
         assert_eq!(rows[0].source, "oauth");
@@ -2577,6 +2658,7 @@ mod tests {
             usage: None,
             credits: None,
             error: None,
+            stale: false,
         };
         let rows = payload_to_rows(vec![payload4]);
         assert_eq!(rows[0].source, "—");

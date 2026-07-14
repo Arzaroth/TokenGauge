@@ -119,6 +119,7 @@ In addition to the base `tokengauge` class, the module sets one of these based o
 | `tokengauge-refreshing` | A manual refresh is in flight |
 | `tokengauge-error` | All providers failed to fetch |
 | `tokengauge-partial-error` | At least one provider failed |
+| `tokengauge-stale` | At least one provider is showing last-good cached data after a failed fetch (added on top of the tier class) |
 | `tokengauge-crit` | Max session usage ≥ 80% |
 | `tokengauge-warn` | Max session usage ≥ 50% (< 80%) |
 
@@ -128,6 +129,7 @@ Style them in `~/.config/waybar/style.css`:
 #custom-tokengauge.tokengauge-warn  { background: #f9e2af; color: black; }
 #custom-tokengauge.tokengauge-crit  { background: #f38ba8; color: black; }
 #custom-tokengauge.tokengauge-error { background: #45475a; color: #f38ba8; }
+#custom-tokengauge.tokengauge-stale { opacity: 0.6; }
 ```
 
 ## Daemon mode (optional, faster)

@@ -315,10 +315,12 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 
 The Waybar module, the GTK4 popover, and the KDE Plasma applet are Linux-only
 (they depend on Waybar / `gtk4-layer-shell` / Plasma). On Windows only the
-**TUI dashboard** (`tokengauge-tui.exe`) is supported. It builds and runs
-natively on Windows 10, tracking **cost and token usage via ccusage**. Usage
-**limits** need a `codexbar` binary, which upstream [CodexBar](https://github.com/steipete/CodexBar)
-does not ship for Windows - see the note below.
+**TUI dashboard** (`tokengauge-tui.exe`) is supported, and it builds and runs
+natively on Windows 10. TokenGauge builds its rows from `codexbar` data, so you
+need a codexbar-compatible binary for anything to show — upstream
+[CodexBar](https://github.com/steipete/CodexBar) doesn't ship one for Windows,
+but Win-CodexBar works as a drop-in (see **Limits on Windows** below). `ccusage`
+then layers on **cost/token** detail per provider.
 
 ### Prerequisites
 

@@ -380,16 +380,25 @@ cargo build --release -p tokengauge-tui
 
 ### Limits on Windows
 
-Upstream CodexBar ships a `codexbar` CLI for macOS and Linux only, so
-out of the box the Windows build shows ccusage cost/token data while the
-limit providers report a "codexbar not found" error - the TUI keeps working,
-it just omits the limits bars.
+Upstream CodexBar ships a `codexbar` CLI for macOS and Linux only. Without a
+codexbar binary, every provider errors ("failed to spawn codexbar") and the TUI
+has nothing to show, since rows are built from codexbar data. To get real data
+on Windows, use **[Win-CodexBar](https://github.com/Finesssee/Win-CodexBar)**, a
+faithful Windows port whose bundled `codexbar-cli.exe` speaks the same
+`usage --provider … --source oauth --format json` interface and emits the same
+JSON schema TokenGauge parses.
 
-To get limits, point `codexbar_bin` in the config at any Windows binary that
-implements the same `usage --provider <name> --source <src> --format json
---json-only` contract. The community project
-[Win-CodexBar](https://github.com/Finesssee/Win-CodexBar) ships a
-`codexbar-cli.exe`, but its flags (`usage -p <provider>`) and JSON shape differ
-from what TokenGauge expects, so it is **not yet a drop-in** replacement -
-full integration is a follow-up. If you have a `.cmd`/`.bat` shim rather than an
-`.exe`, set `codexbar_bin` to its full path.
+1. Install it: `winget install Finesssee.Win-CodexBar`, then sign in so it can
+   read your Claude/Codex usage.
+2. Point TokenGauge at its CLI in `%APPDATA%\tokengauge\config.toml`:
+   ```toml
+   # full path, or just "codexbar-cli" if its folder is on PATH
+   codexbar_bin = "C:\\Program Files\\Win-CodexBar\\codexbar-cli.exe"
+   ```
+3. Restart `tokengauge-tui`.
+
+TokenGauge omits the `--json-only` flag on Windows automatically (Win-CodexBar's
+`usage` command doesn't define it, and `--format json` already yields clean
+JSON), so `codexbar-cli.exe` works as a drop-in. `codexbar_bin` must resolve to
+an `.exe` (a `.cmd`/`.bat` shim won't spawn); use its full path if it isn't on
+`PATH`.

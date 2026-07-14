@@ -891,8 +891,16 @@ fn fetch_single_provider_source(
         .arg("--source")
         .arg(source)
         .arg("--format")
-        .arg("json")
-        .arg("--json-only");
+        .arg("json");
+
+    // The upstream (macOS/Linux) codexbar CLI takes `--json-only` to suppress
+    // any non-JSON preamble. On Windows there is no upstream binary; the only
+    // codexbar-compatible options are third-party ports (e.g. Win-CodexBar)
+    // whose `usage` command doesn't define that flag - and clap rejects unknown
+    // flags - while their `--format json` already emits pure JSON. So only pass
+    // `--json-only` off Windows, which keeps Win-CodexBar usable as a drop-in.
+    #[cfg(not(windows))]
+    command.arg("--json-only");
 
     // Set API key environment variable if needed
     if let (Some(api_key), Some(env_var)) = (&provider.api_key, provider.env_var) {

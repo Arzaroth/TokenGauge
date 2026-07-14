@@ -1,9 +1,9 @@
 //! TokenGauge system-tray GUI for Windows.
 //!
 //! A small always-available window showing per-provider usage (session / weekly
-//! bars, reset times), backed by a system-tray icon. Windows-only; on other
-//! platforms this is a stub (the Linux surfaces are the Waybar module, GTK
-//! popover, and KDE applet).
+//! bars, reset times), backed by a system-tray icon that renders the current
+//! peak usage percentage. Windows-only; on other platforms this is a stub (the
+//! Linux surfaces are the Waybar module, GTK popover, and KDE applet).
 
 #[cfg(not(windows))]
 fn main() {
@@ -54,7 +54,7 @@ mod win {
     const YELLOW: Color32 = Color32::from_rgb(0xf9, 0xe2, 0xaf);
     const PEACH: Color32 = Color32::from_rgb(0xfa, 0xb3, 0x87);
     const RED: Color32 = Color32::from_rgb(0xf3, 0x8b, 0xa8);
-    const BAR_TEXT: Color32 = Color32::from_rgb(0x11, 0x11, 0x1b);
+    const DARK: Color32 = Color32::from_rgb(0x11, 0x11, 0x1b);
 
     /// A rendered provider row (decoupled from core's `ProviderRow`).
     #[derive(Clone, Default)]
@@ -90,8 +90,9 @@ mod win {
     pub struct TrayApp {
         shared: Arc<Mutex<Snapshot>>,
         refresh_tx: mpsc::Sender<()>,
-        _tray: TrayIcon,
+        tray: TrayIcon,
         _items: Vec<MenuItem>,
+        last_tip: String,
     }
 
     impl TrayApp {
@@ -147,7 +148,7 @@ mod win {
 
             let tray = TrayIconBuilder::new()
                 .with_tooltip("TokenGauge")
-                .with_icon(make_icon())
+                .with_icon(render_icon(None, BLUE))
                 .with_menu(Box::new(menu))
                 .with_menu_on_left_click(false)
                 .build()?;
@@ -170,9 +171,21 @@ mod win {
             Ok(Self {
                 shared,
                 refresh_tx,
-                _tray: tray,
+                tray,
                 _items: vec![show_i, refresh_i, quit_i],
+                last_tip: String::new(),
             })
+        }
+
+        /// Reflect the latest usage in the tray icon (peak %) and tooltip.
+        fn sync_tray(&mut self, snap: &Snapshot) {
+            let (tip, peak) = tray_summary(snap);
+            if tip != self.last_tip {
+                let color = peak.map(usage_color).unwrap_or(BLUE);
+                let _ = self.tray.set_icon(Some(render_icon(peak, color)));
+                let _ = self.tray.set_tooltip(Some(&tip));
+                self.last_tip = tip;
+            }
         }
     }
 
@@ -181,89 +194,111 @@ mod win {
             BG.to_normalized_gamma_f32()
         }
 
-        // Runs before each `ui`. We only handle close-to-tray here; tray clicks
-        // are serviced by the dedicated thread so they work while hidden too.
+        // Runs before each `ui`. Handles close-to-tray and keeps the tray icon
+        // fresh; tray clicks are serviced by the dedicated thread.
         fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            let snap = self.shared.lock().unwrap().clone();
+            self.sync_tray(&snap);
+
             if ctx.input(|i| i.viewport().close_requested()) {
                 ctx.send_viewport_cmd(ViewportCommand::CancelClose);
                 ctx.send_viewport_cmd(ViewportCommand::Visible(false));
             }
-            // Refresh the view periodically while visible.
             ctx.request_repaint_after(Duration::from_millis(750));
         }
 
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
             let snap = self.shared.lock().unwrap().clone();
 
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("TokenGauge").size(22.0).strong().color(BLUE));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(RichText::new("⟳ Refresh").color(TEXT)).clicked() {
-                        let _ = self.refresh_tx.send(());
-                    }
-                    if snap.fetching {
-                        ui.spinner();
-                    }
-                });
-            });
-            ui.add_space(2.0);
-            ui.separator();
-            ui.add_space(4.0);
-
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
+            // Outer padding so content doesn't touch the window edges.
+            egui::Frame::group(ui.style())
+                .fill(BG)
+                .stroke(egui::Stroke::new(0.0, Color32::TRANSPARENT))
+                .inner_margin(egui::Margin::symmetric(18, 14))
                 .show(ui, |ui| {
-                    if snap.rows.is_empty() {
-                        ui.add_space(24.0);
-                        ui.vertical_centered(|ui| {
-                            ui.label(RichText::new("No usage data yet").size(15.0).color(SUB));
-                            ui.label(
-                                RichText::new("Set codexbar_bin and sign in to Win-CodexBar.")
-                                    .small()
-                                    .color(SUB),
-                            );
-                        });
-                    }
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
-                    for row in &snap.rows {
-                        card(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(cap(&row.provider)).size(16.0).strong());
-                                if row.stale {
-                                    ui.label(RichText::new("stale").small().color(PEACH));
-                                }
-                                if let Some(plan) = &row.plan {
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            ui.label(RichText::new(plan).small().color(MAUVE));
-                                        },
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("TokenGauge").size(22.0).strong().color(BLUE));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let btn =
+                                egui::Button::new(RichText::new("⟳ Refresh").strong().color(DARK))
+                                    .fill(BLUE)
+                                    .corner_radius(6)
+                                    .min_size(egui::vec2(0.0, 26.0));
+                            if ui.add(btn).clicked() {
+                                let _ = self.refresh_tx.send(());
+                            }
+                            if snap.fetching {
+                                ui.spinner();
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            if snap.rows.is_empty() {
+                                ui.add_space(24.0);
+                                ui.vertical_centered(|ui| {
+                                    ui.label(
+                                        RichText::new("No usage data yet").size(15.0).color(SUB),
                                     );
-                                }
-                            });
-                            ui.add_space(6.0);
-                            usage_row(ui, "Session", row.session_used, &row.session_reset);
-                            usage_row(ui, "Weekly", row.weekly_used, &row.weekly_reset);
-                        });
-                        ui.add_space(6.0);
-                    }
+                                    ui.label(
+                                        RichText::new(
+                                            "Set codexbar_bin and sign in to Win-CodexBar.",
+                                        )
+                                        .small()
+                                        .color(SUB),
+                                    );
+                                });
+                            }
 
-                    if !snap.errors.is_empty() {
-                        egui::Frame::group(ui.style())
-                            .fill(Color32::from_rgb(0x2a, 0x1e, 0x26))
-                            .stroke(egui::Stroke::new(1.0, RED))
-                            .corner_radius(10)
-                            .inner_margin(egui::Margin::same(12))
-                            .show(ui, |ui| {
-                                ui.label(RichText::new("Errors").strong().color(RED));
-                                ui.add_space(4.0);
-                                for e in &snap.errors {
-                                    ui.label(RichText::new(e).small().color(SUB));
-                                }
-                            });
-                    }
+                            for row in &snap.rows {
+                                card(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new(cap(&row.provider)).size(16.0).strong(),
+                                        );
+                                        if row.stale {
+                                            ui.label(RichText::new("stale").small().color(PEACH));
+                                        }
+                                        if let Some(plan) = &row.plan {
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    ui.label(
+                                                        RichText::new(plan).small().color(MAUVE),
+                                                    );
+                                                },
+                                            );
+                                        }
+                                    });
+                                    ui.add_space(8.0);
+                                    usage_row(ui, "Session", row.session_used, &row.session_reset);
+                                    usage_row(ui, "Weekly", row.weekly_used, &row.weekly_reset);
+                                });
+                                ui.add_space(8.0);
+                            }
+
+                            if !snap.errors.is_empty() {
+                                egui::Frame::group(ui.style())
+                                    .fill(Color32::from_rgb(0x2a, 0x1e, 0x26))
+                                    .stroke(egui::Stroke::new(1.0, RED))
+                                    .corner_radius(10)
+                                    .inner_margin(egui::Margin::same(12))
+                                    .show(ui, |ui| {
+                                        ui.label(RichText::new("Errors").strong().color(RED));
+                                        ui.add_space(4.0);
+                                        for e in &snap.errors {
+                                            ui.label(RichText::new(e).small().color(SUB));
+                                        }
+                                    });
+                            }
+                        });
                 });
         }
     }
@@ -273,14 +308,14 @@ mod win {
             .fill(CARD)
             .stroke(egui::Stroke::new(1.0, BORDER))
             .corner_radius(10)
-            .inner_margin(egui::Margin::same(12))
+            .inner_margin(egui::Margin::same(14))
             .show(ui, add);
     }
 
     fn usage_row(ui: &mut egui::Ui, label: &str, used: Option<u8>, reset: &str) {
         ui.horizontal(|ui| {
             ui.add_sized(
-                [58.0, 18.0],
+                [62.0, 18.0],
                 egui::Label::new(RichText::new(label).color(SUB)),
             );
             match used {
@@ -290,12 +325,7 @@ mod win {
                             .desired_width(190.0)
                             .corner_radius(6)
                             .fill(usage_color(p))
-                            .text(
-                                RichText::new(format!("{p}%"))
-                                    .small()
-                                    .strong()
-                                    .color(BAR_TEXT),
-                            ),
+                            .text(RichText::new(format!("{p}%")).small().strong().color(DARK)),
                     );
                 }
                 None => {
@@ -330,14 +360,102 @@ mod win {
         }
     }
 
-    /// A flat teal 32x32 icon (kept simple so we don't ship an asset).
-    fn make_icon() -> Icon {
-        let (w, h) = (32u32, 32u32);
-        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-        for _ in 0..(w * h) {
-            rgba.extend_from_slice(&[0x89, 0xb4, 0xfa, 0xff]);
+    /// Tooltip text + the peak usage percentage across all windows.
+    fn tray_summary(snap: &Snapshot) -> (String, Option<u8>) {
+        if snap.rows.is_empty() {
+            return ("TokenGauge — no data".to_string(), None);
         }
-        Icon::from_rgba(rgba, w, h).expect("valid icon")
+        let mut peak: Option<u8> = None;
+        let mut bump = |v: Option<u8>| {
+            if let Some(p) = v {
+                peak = Some(peak.map_or(p, |cur| cur.max(p)));
+            }
+        };
+        let mut lines = Vec::new();
+        for r in &snap.rows {
+            bump(r.session_used);
+            bump(r.weekly_used);
+            let s = r.session_used.map_or("—".to_string(), |p| format!("{p}%"));
+            let w = r.weekly_used.map_or("—".to_string(), |p| format!("{p}%"));
+            lines.push(format!("{}: session {s} · weekly {w}", cap(&r.provider)));
+        }
+        (lines.join("\n"), peak)
+    }
+
+    // --- Tray icon rendering (peak % drawn with a tiny 3x5 bitmap font) -------
+
+    fn render_icon(number: Option<u8>, color: Color32) -> Icon {
+        const W: usize = 32;
+        const H: usize = 32;
+        let mut px = vec![0u8; W * H * 4];
+        // Rounded-ish filled square in `color`.
+        for y in 0..H {
+            for x in 0..W {
+                let corner = !(3..W - 3).contains(&x) && !(3..H - 3).contains(&y);
+                let i = (y * W + x) * 4;
+                if !corner {
+                    px[i] = color.r();
+                    px[i + 1] = color.g();
+                    px[i + 2] = color.b();
+                    px[i + 3] = 255;
+                }
+            }
+        }
+        if let Some(n) = number {
+            draw_number(&mut px, W, H, &n.to_string(), DARK);
+        }
+        Icon::from_rgba(px, W as u32, H as u32).expect("valid icon")
+    }
+
+    fn digit_rows(c: char) -> Option<[u8; 5]> {
+        Some(match c {
+            '0' => [0b111, 0b101, 0b101, 0b101, 0b111],
+            '1' => [0b010, 0b110, 0b010, 0b010, 0b111],
+            '2' => [0b111, 0b001, 0b111, 0b100, 0b111],
+            '3' => [0b111, 0b001, 0b111, 0b001, 0b111],
+            '4' => [0b101, 0b101, 0b111, 0b001, 0b001],
+            '5' => [0b111, 0b100, 0b111, 0b001, 0b111],
+            '6' => [0b111, 0b100, 0b111, 0b101, 0b111],
+            '7' => [0b111, 0b001, 0b010, 0b100, 0b100],
+            '8' => [0b111, 0b101, 0b111, 0b101, 0b111],
+            '9' => [0b111, 0b101, 0b111, 0b001, 0b111],
+            _ => return None,
+        })
+    }
+
+    fn draw_number(px: &mut [u8], w: usize, h: usize, s: &str, color: Color32) {
+        let len = s.chars().count().max(1) as i32;
+        // Fit width `scale*(4*len-1) <= 28` and height `5*scale <= 24`.
+        let scale = ((28 / (4 * len - 1)).min(24 / 5)).clamp(1, 6) as usize;
+        let dw = 3 * scale;
+        let gap = scale;
+        let total = (len as usize) * dw + (len as usize - 1) * gap;
+        let mut x0 = w.saturating_sub(total) / 2;
+        let y0 = h.saturating_sub(5 * scale) / 2;
+        for c in s.chars() {
+            if let Some(rows) = digit_rows(c) {
+                for (r, row) in rows.iter().enumerate() {
+                    for col in 0..3 {
+                        if row & (0b100 >> col) != 0 {
+                            for dy in 0..scale {
+                                for dx in 0..scale {
+                                    let x = x0 + col * scale + dx;
+                                    let y = y0 + r * scale + dy;
+                                    if x < w && y < h {
+                                        let i = (y * w + x) * 4;
+                                        px[i] = color.r();
+                                        px[i + 1] = color.g();
+                                        px[i + 2] = color.b();
+                                        px[i + 3] = 255;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            x0 += dw + gap;
+        }
     }
 
     fn show_window(ctx: &egui::Context) {

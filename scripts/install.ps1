@@ -94,7 +94,12 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    Copy-Item -Path $exe.FullName -Destination (Join-Path $InstallDir 'tokengauge-tui.exe') -Force
+    try {
+        Copy-Item -Path $exe.FullName -Destination (Join-Path $InstallDir 'tokengauge-tui.exe') -Force
+    } catch {
+        throw "Couldn't write tokengauge-tui.exe to $InstallDir - it may be running. " +
+              "Close it (and the tray app) and re-run. ($($_.Exception.Message))"
+    }
     Write-Good "Installed tokengauge-tui.exe to $InstallDir"
 } finally {
     Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -155,6 +160,10 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue) -and
     -not (Get-Command bun  -ErrorAction SilentlyContinue) -and
     -not (Get-Command ccusage -ErrorAction SilentlyContinue)) {
     Write-Warned "No Node.js / Bun / ccusage found on PATH. Install Node.js (https://nodejs.org) so"
-    Write-Warned "cost tracking via 'npx ccusage' works. TokenGauge will run without it, but empty."
+    Write-Warned "'npx ccusage' can add cost/token detail. (Limits still show via codexbar; costs won't.)"
 }
-Write-Good "Done. Run it with:  tokengauge-tui"
+if ($NoPath) {
+    Write-Good "Done. Run it with:  & `"$(Join-Path $InstallDir 'tokengauge-tui.exe')`""
+} else {
+    Write-Good "Done. Run it with:  tokengauge-tui"
+}

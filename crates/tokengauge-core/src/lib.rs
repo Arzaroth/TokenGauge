@@ -776,13 +776,11 @@ pub fn default_cache_file() -> PathBuf {
 }
 
 pub fn default_config_path() -> PathBuf {
-    // On Windows prefer the native config directory (`%APPDATA%`); on Unix keep
-    // the XDG convention (`$XDG_CONFIG_HOME` or `~/.config`).
+    // On Windows use the native config directory (`%APPDATA%`) so the path
+    // matches what scripts/install.ps1 writes; on Unix keep the XDG convention
+    // (`$XDG_CONFIG_HOME` or `~/.config`).
     #[cfg(windows)]
-    let config_dir = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .ok()
-        .or_else(dirs::config_dir)
+    let config_dir = dirs::config_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")));
 
     #[cfg(not(windows))]
@@ -2366,6 +2364,24 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         assert_eq!(args, vec!["/C", "npx", "--yes", "ccusage"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codexbar_command_routes_batch_shim_through_cmd() {
+        // A .cmd/.bat shim must run via `cmd /C`...
+        let command = codexbar_command("codexbar.cmd");
+        assert_eq!(command.get_program().to_string_lossy(), "cmd");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, vec!["/C", "codexbar.cmd"]);
+
+        // ...while a plain .exe is spawned directly.
+        let direct = codexbar_command("codexbar-cli.exe");
+        assert_eq!(direct.get_program().to_string_lossy(), "codexbar-cli.exe");
+        assert_eq!(direct.get_args().count(), 0);
     }
 
     // ------------------------------------------------------------------------

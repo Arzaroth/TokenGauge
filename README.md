@@ -90,7 +90,7 @@ Edit `~/.config/tokengauge/config.toml`:
 |-------|-------------|---------|
 | `codexbar_bin` | Path to CodexBar CLI | `codexbar` |
 | `refresh_secs` | Cache refresh interval (seconds) | `600` |
-| `cache_file` | Cache file location | `/tmp/tokengauge-usage.json` |
+| `cache_file` | Cache file location | OS temp dir + `tokengauge-usage.json` (`/tmp/…` on Linux, `%TEMP%\…` on Windows) |
 | `timeout_secs` | Per-provider codexbar timeout | `10` |
 | `stagger_ms` | Delay (ms) between provider fetch starts, to avoid 429 bursts (0 = all at once) | `0` |
 | `ccusage_enabled` | Fetch cost data via `ccusage` | `true` |
@@ -324,12 +324,13 @@ then layers on **cost/token** detail per provider.
 
 ### Prerequisites
 
-- **[Node.js](https://nodejs.org/)** (or [Bun](https://bun.sh/)) - so `ccusage`
-  can run. TokenGauge auto-detects `ccusage`, then `bunx ccusage`, then
-  `npx --yes ccusage` on your `PATH`. Installing it globally
-  (`npm i -g ccusage`) is fastest but optional.
-- *(Optional, for limits)* a Windows `codexbar` binary - see **Limits on
-  Windows** below.
+- **A codexbar-compatible binary** - **required** for any provider rows to
+  appear (TokenGauge builds its rows from codexbar data). Upstream CodexBar has
+  no Windows build; use Win-CodexBar - see **Limits on Windows** below.
+- *(Optional)* **[Node.js](https://nodejs.org/)** (or [Bun](https://bun.sh/)) -
+  lets `ccusage` add **cost/token** detail to those rows. TokenGauge auto-detects
+  `ccusage`, then `bunx ccusage`, then `npx --yes ccusage` on your `PATH`
+  (`npm i -g ccusage` is fastest).
 
 ### Install
 

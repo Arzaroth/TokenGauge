@@ -6,7 +6,7 @@ use std::process::{Command, Output};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -1007,10 +1007,10 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
 
     // Serve last-good cached data for providers that failed this round, so a
     // transient 429 / network blip surfaces as `stale` instead of a blank bar.
-    if !errors.is_empty() {
-        if let Ok(previous) = read_cache_full(&config.cache_file) {
-            apply_stale_fallback(&mut payloads, &mut errors, previous.payloads());
-        }
+    if !errors.is_empty()
+        && let Ok(previous) = read_cache_full(&config.cache_file)
+    {
+        apply_stale_fallback(&mut payloads, &mut errors, previous.payloads());
     }
 
     let costs = ccusage_handle.join().unwrap_or_default();
@@ -1041,9 +1041,9 @@ fn apply_stale_fallback(
         {
             return false;
         }
-        let cached = previous.iter().find(|p| {
-            !p.has_error() && p.provider.eq_ignore_ascii_case(&err.provider)
-        });
+        let cached = previous
+            .iter()
+            .find(|p| !p.has_error() && p.provider.eq_ignore_ascii_case(&err.provider));
         match cached {
             Some(payload) => {
                 let mut payload = payload.clone();
@@ -1319,8 +1319,7 @@ pub const NEUTRAL_HEX: &str = "#cdd6f4";
 /// `&'static Theme` references stay valid. The leaked memory is a few
 /// hundred bytes per reload and is never reclaimed; acceptable because
 /// reloads are user-initiated and rare.
-static ACTIVE_THEME: std::sync::RwLock<Option<&'static Theme>> =
-    std::sync::RwLock::new(None);
+static ACTIVE_THEME: std::sync::RwLock<Option<&'static Theme>> = std::sync::RwLock::new(None);
 
 pub fn theme() -> &'static Theme {
     if let Some(t) = *ACTIVE_THEME.read().expect("theme lock poisoned") {
@@ -1633,11 +1632,7 @@ pub fn write_notify_state(path: &Path, state: &NotifyState) -> Result<()> {
 /// Reset: if pct dropped 10+ points below the highest previously-notified
 /// threshold, treat as window roll-over and clear the notified list before
 /// considering thresholds. Avoids needing to track raw reset timestamps.
-pub fn thresholds_to_fire(
-    pct: u8,
-    thresholds: &[u8],
-    notified: &[u8],
-) -> (Vec<u8>, Vec<u8>) {
+pub fn thresholds_to_fire(pct: u8, thresholds: &[u8], notified: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut current = notified.to_vec();
     if let Some(&max_notified) = current.iter().max()
         && (pct + 10) < max_notified
@@ -1731,17 +1726,18 @@ impl AggregatedProvider {
             .into_iter()
             .map(|(model, (usd, tokens))| ModelCost { model, usd, tokens })
             .collect();
-        models.sort_by(|a, b| b.usd.partial_cmp(&a.usd).unwrap_or(std::cmp::Ordering::Equal));
+        models.sort_by(|a, b| {
+            b.usd
+                .partial_cmp(&a.usd)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         (self.total_usd, self.total_tokens, models)
     }
 }
 
 /// Last `n` days of cost per provider, oldest first. Pads with 0.0 for any
 /// days missing from the response so the sparkline has consistent length.
-fn last_n_days_by_provider(
-    response: &CcusageDailyResponse,
-    n: usize,
-) -> HashMap<String, Vec<f64>> {
+fn last_n_days_by_provider(response: &CcusageDailyResponse, n: usize) -> HashMap<String, Vec<f64>> {
     // (provider, period) -> usd
     let mut per_day: HashMap<String, HashMap<String, f64>> = HashMap::new();
     let mut periods: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -1779,18 +1775,18 @@ fn aggregate_ccusage(response: &CcusageDailyResponse) -> HashMap<String, Aggrega
     for day in &response.daily {
         for b in &day.model_breakdowns {
             if let Some(provider) = model_to_provider(&b.model_name) {
-                let entry = totals.entry(provider.to_string()).or_insert_with(|| AggregatedProvider {
-                    total_usd: 0.0,
-                    total_tokens: 0,
-                    models: HashMap::new(),
-                });
+                let entry =
+                    totals
+                        .entry(provider.to_string())
+                        .or_insert_with(|| AggregatedProvider {
+                            total_usd: 0.0,
+                            total_tokens: 0,
+                            models: HashMap::new(),
+                        });
                 let tokens = ccusage_total_tokens(b);
                 entry.total_usd += b.cost;
                 entry.total_tokens += tokens;
-                let model_entry = entry
-                    .models
-                    .entry(b.model_name.clone())
-                    .or_insert((0.0, 0));
+                let model_entry = entry.models.entry(b.model_name.clone()).or_insert((0.0, 0));
                 model_entry.0 += b.cost;
                 model_entry.1 += tokens;
             }
@@ -2174,8 +2170,7 @@ where
     let tmp = path.with_extension("toml.tmp");
     fs::write(&tmp, doc.to_string())
         .with_context(|| format!("failed to write {}", tmp.display()))?;
-    fs::rename(&tmp, path)
-        .with_context(|| format!("failed to replace {}", path.display()))?;
+    fs::rename(&tmp, path).with_context(|| format!("failed to replace {}", path.display()))?;
     Ok(())
 }
 
@@ -2303,7 +2298,10 @@ mod tests {
             cli_fallback_source(&enabled("codex", ProviderType::OAuth)),
             None
         );
-        assert_eq!(cli_fallback_source(&enabled("zai", ProviderType::Api)), None);
+        assert_eq!(
+            cli_fallback_source(&enabled("zai", ProviderType::Api)),
+            None
+        );
     }
 
     #[test]
@@ -2369,7 +2367,10 @@ mod tests {
 
         assert_eq!(payloads.len(), 1, "no duplicate stale row: {payloads:?}");
         assert!(!payloads[0].stale);
-        assert!(errors.is_empty(), "errors covered by live payload: {errors:?}");
+        assert!(
+            errors.is_empty(),
+            "errors covered by live payload: {errors:?}"
+        );
     }
 
     #[test]
@@ -2390,8 +2391,14 @@ mod tests {
         assert!(out.contains("# my config"), "top comment lost: {out}");
         assert!(out.contains("# oauth"), "section comment lost: {out}");
         assert!(out.contains("claude = false"), "toggle not applied: {out}");
-        assert!(out.contains("codex = true"), "other provider changed: {out}");
-        assert!(out.contains("primary = \"codex\""), "primary not set: {out}");
+        assert!(
+            out.contains("codex = true"),
+            "other provider changed: {out}"
+        );
+        assert!(
+            out.contains("primary = \"codex\""),
+            "primary not set: {out}"
+        );
 
         // Clearing primary removes the key, keeps the rest.
         config_set_primary(&path, None).unwrap();
@@ -2487,7 +2494,10 @@ mod tests {
 
     #[test]
     fn format_window_with_days() {
-        let future = Utc::now() + chrono::Duration::days(3) + chrono::Duration::hours(16) + chrono::Duration::minutes(41);
+        let future = Utc::now()
+            + chrono::Duration::days(3)
+            + chrono::Duration::hours(16)
+            + chrono::Duration::minutes(41);
         let window = UsageWindow {
             used_percent: Some(5),
             reset_description: Some("ignored".to_string()),
@@ -3068,8 +3078,7 @@ mod tests {
 
     #[test]
     fn waybar_config_primary_round_trips() {
-        let config: WaybarConfig =
-            toml::from_str(r#"primary = "claude""#).expect("parse primary");
+        let config: WaybarConfig = toml::from_str(r#"primary = "claude""#).expect("parse primary");
         assert_eq!(config.primary.as_deref(), Some("claude"));
     }
 
@@ -3077,7 +3086,10 @@ mod tests {
     fn waybar_state_path_lives_next_to_cache() {
         let cache = PathBuf::from("/tmp/foo/bar.json");
         let state = waybar_state_path(&cache);
-        assert_eq!(state, PathBuf::from("/tmp/foo/tokengauge-waybar-state.json"));
+        assert_eq!(
+            state,
+            PathBuf::from("/tmp/foo/tokengauge-waybar-state.json")
+        );
     }
 
     #[test]
@@ -3139,7 +3151,12 @@ mod tests {
 
     #[test]
     fn sparkline_basic_ramp() {
-        assert_eq!(sparkline(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]).chars().count(), 8);
+        assert_eq!(
+            sparkline(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
+                .chars()
+                .count(),
+            8
+        );
         assert_eq!(sparkline(&[0.0, 7.0]), "▁█");
         assert_eq!(sparkline(&[3.5, 7.0]), "▅█");
     }

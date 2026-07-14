@@ -1,15 +1,14 @@
+use chrono::{Datelike, Duration as ChronoDuration, Local, Weekday};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use chrono::{Datelike, Duration as ChronoDuration, Local, Weekday};
 use ratatui::widgets::{
     Bar, BarChart, BarGroup, Block, BorderType, Borders, Clear, List, ListItem, ListState,
     Paragraph, Wrap,
 };
 use tokengauge_core::{
-    CostInfo, ModelCost, ProviderRow, format_tokens, format_updated_relative, theme,
-    window_labels,
+    CostInfo, ModelCost, ProviderRow, format_tokens, format_updated_relative, theme, window_labels,
 };
 
 use crate::app::AppState;
@@ -83,11 +82,20 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing:
 
     let provider_count = state.rows.len();
     let count_span = Span::styled(
-        format!("{provider_count} provider{}", if provider_count == 1 { "" } else { "s" }),
+        format!(
+            "{provider_count} provider{}",
+            if provider_count == 1 { "" } else { "s" }
+        ),
         Style::default().fg(dim()),
     );
 
-    let line = Line::from(vec![title, separator.clone(), status, separator, count_span]);
+    let line = Line::from(vec![
+        title,
+        separator.clone(),
+        status,
+        separator,
+        count_span,
+    ]);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -146,9 +154,8 @@ fn render_body(frame: &mut Frame, area: Rect, state: &mut AppState) {
         // Narrow mode: hide sidebar, show only the active provider's detail.
         render_detail(frame, usage_area, state);
     } else {
-        let cols =
-            Layout::horizontal([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(0)])
-                .split(usage_area);
+        let cols = Layout::horizontal([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(0)])
+            .split(usage_area);
         render_sidebar(frame, cols[0], state);
         render_detail(frame, cols[1], state);
     }
@@ -177,7 +184,10 @@ fn render_sidebar(frame: &mut Frame, area: Rect, state: &mut AppState) {
                 Span::raw("  "),
                 Span::raw(name),
                 Span::raw("  "),
-                Span::styled(pct_str, Style::default().fg(pct_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    pct_str,
+                    Style::default().fg(pct_color).add_modifier(Modifier::BOLD),
+                ),
             ]))
         })
         .collect();
@@ -405,8 +415,7 @@ fn render_usage(frame: &mut Frame, area: Rect, row: &ProviderRow) {
                 let pct_label = format!(" {pct_clamped:>3}%");
                 let label_w = pct_label.chars().count() as u16;
                 let bar_w = bar_inner.width.saturating_sub(label_w + 1);
-                let filled =
-                    ((pct_clamped as usize * bar_w as usize) + 50) / 100; // round to nearest
+                let filled = ((pct_clamped as usize * bar_w as usize) + 50) / 100; // round to nearest
                 let filled = filled.min(bar_w as usize);
                 let empty = bar_w as usize - filled;
                 let bar_color = color_for(pct_clamped);
@@ -648,8 +657,7 @@ fn render_sparkline(frame: &mut Frame, area: Rect, cost: &CostInfo) {
 
     let peak_str = format!("peak ${max:.2}");
     let peak_w = (peak_str.chars().count() as u16) + 2;
-    let split =
-        Layout::horizontal([Constraint::Min(10), Constraint::Length(peak_w)]).split(inner);
+    let split = Layout::horizontal([Constraint::Min(10), Constraint::Length(peak_w)]).split(inner);
     let chart_area = split[0];
     let peak_area = split[1];
 
@@ -667,8 +675,8 @@ fn render_sparkline(frame: &mut Frame, area: Rect, cost: &CostInfo) {
     // BarChart only carries one label row; build bars with the day letter
     // there, then layout a second caption row below for the $ amounts.
     let gap: u16 = 1;
-    let bar_width = ((chart_area.width.saturating_sub(gap * (n as u16 - 1)) / n as u16) as u16)
-        .max(3);
+    let bar_width =
+        ((chart_area.width.saturating_sub(gap * (n as u16 - 1)) / n as u16) as u16).max(3);
     let stride = bar_width + gap;
 
     // Reserve bottom row of chart_area for dollar amounts.
@@ -752,18 +760,25 @@ fn render_today_models(frame: &mut Frame, area: Rect, cost: &CostInfo) {
         .unwrap_or(8)
         .max(8);
     let usd_strs: Vec<String> = models.iter().map(|m| format!("${:.2}", m.usd)).collect();
-    let usd_w = usd_strs.iter().map(|s| s.chars().count()).max().unwrap_or(6);
+    let usd_w = usd_strs
+        .iter()
+        .map(|s| s.chars().count())
+        .max()
+        .unwrap_or(6);
 
     let pad = "  ";
-    let bar_room = (inner.width as usize)
-        .saturating_sub(pad.len() + name_w + 2 + usd_w + 1);
+    let bar_room = (inner.width as usize).saturating_sub(pad.len() + name_w + 2 + usd_w + 1);
     let bar_room = bar_room.max(4);
 
     let lines: Vec<Line<'static>> = models
         .iter()
         .zip(usd_strs.iter())
         .map(|(m, usd)| {
-            let frac = if max_total > 0.0 { m.usd / max_total } else { 0.0 };
+            let frac = if max_total > 0.0 {
+                m.usd / max_total
+            } else {
+                0.0
+            };
             let filled = (frac * bar_room as f64).round() as usize;
             let filled = filled.min(bar_room);
             let bar = format!("{}{}", "█".repeat(filled), "░".repeat(bar_room - filled));
@@ -789,10 +804,7 @@ fn render_credits(frame: &mut Frame, area: Rect, row: &ProviderRow) {
         Span::raw("  "),
         Span::styled("Credits", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw("    "),
-        Span::styled(
-            format!("${}", row.credits),
-            Style::default().fg(green()),
-        ),
+        Span::styled(format!("${}", row.credits), Style::default().fg(green())),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -927,7 +939,12 @@ fn render_help_popup(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, popup);
 }
 
-fn binding_line(key_str: &str, desc_str: &str, key_style: Style, desc_style: Style) -> Line<'static> {
+fn binding_line(
+    key_str: &str,
+    desc_str: &str,
+    key_style: Style,
+    desc_style: Style,
+) -> Line<'static> {
     Line::from(vec![
         Span::raw("  "),
         Span::styled(format!("{key_str:<10}"), key_style),
@@ -949,4 +966,3 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     ])
     .split(popup_layout[1])[1]
 }
-

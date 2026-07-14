@@ -12,11 +12,12 @@ use clap::Parser;
 use serde::Serialize;
 use tokengauge_core::{
     CostInfo, ExtraWindowRow, FetchResult, ProviderFetchError, ProviderPayload, ProviderRow, Theme,
-    TokenGaugeConfig, WaybarState, WaybarWindow, ensure_cache_dir, fetch_all_providers,
-    format_tokens, format_updated_relative, load_config, notify_state_path,
-    payload_to_rows_with_costs, provider_icon, read_cache_full, read_notify_state,
-    read_waybar_state, theme, thresholds_to_fire, waybar_state_path, window_labels,
-    write_cache_full, write_default_config, write_notify_state, write_waybar_state,
+    TokenGaugeConfig, WaybarState, WaybarWindow, config_set_oauth_provider, config_set_primary,
+    ensure_cache_dir, fetch_all_providers, format_tokens, format_updated_relative, load_config,
+    notify_state_path, payload_to_rows_with_costs, provider_icon, provider_icon_svg_path,
+    provider_label, read_cache_full, read_notify_state, read_waybar_state, theme,
+    thresholds_to_fire, waybar_state_path, window_labels, write_cache_full, write_default_config,
+    write_notify_state, write_waybar_state,
 };
 
 fn theme_palette() -> (
@@ -76,6 +77,19 @@ struct Args {
     /// `tokengauge-popover --toggle`).
     #[arg(long)]
     click: bool,
+    /// Emit the full snapshot as one JSON object (rows, errors, enabled,
+    /// primary, theme, window) for non-waybar frontends such as the KDE
+    /// Plasma applet. Does not affect the default waybar output line.
+    #[arg(long)]
+    json: bool,
+    /// Enable/disable an OAuth provider in the config, then reload the daemon.
+    /// Format: `--set-provider claude=true`.
+    #[arg(long, value_name = "NAME=BOOL")]
+    set_provider: Option<String>,
+    /// Pin the bar to a provider, or `highest` to clear the pin, then reload
+    /// the daemon. e.g. `--set-primary claude` or `--set-primary highest`.
+    #[arg(long, value_name = "NAME")]
+    set_primary: Option<String>,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -160,6 +174,18 @@ fn main() -> Result<()> {
     if args.click {
         handle_click(&config);
         return Ok(());
+    }
+
+    if args.json {
+        return emit_json(&config);
+    }
+
+    if let Some(spec) = &args.set_provider {
+        return handle_set_provider(&config_path, spec);
+    }
+
+    if let Some(name) = &args.set_primary {
+        return handle_set_primary(&config_path, name);
     }
 
     if args.refresh {
@@ -278,6 +304,107 @@ fn main() -> Result<()> {
     };
 
     println!("{}", serde_json::to_string(&output)?);
+    Ok(())
+}
+
+/// Ask a running daemon to reload its config without a restart. No-op when no
+/// daemon is running. Mirrors the popover settings pane.
+fn signal_daemon_reload() {
+    let _ = Command::new("pkill")
+        .arg("-HUP")
+        .arg("tokengauge-waybar")
+        .spawn();
+}
+
+/// Emit the full snapshot as one JSON object for non-waybar frontends (KDE
+/// Plasma applet, etc.). Reuses the popover's data path: serve the last-good
+/// cache the daemon / waybar polls keep fresh, fetching only when nothing is
+/// cached yet. Each row is enriched with the display label, brand SVG path,
+/// glyph, and brand colour so the QML frontend needs no provider knowledge.
+fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
+    let (payloads, errors, costs) = match read_cache_full(&config.cache_file) {
+        Ok(c) => c.into_parts(),
+        Err(_) => maybe_refresh(config)?,
+    };
+    let rows = payload_to_rows_with_costs(payloads, &costs);
+
+    let enabled: Vec<String> = config
+        .providers
+        .enabled_providers()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+
+    let row_values: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let mut v = serde_json::to_value(r).unwrap_or(serde_json::Value::Null);
+            if let serde_json::Value::Object(map) = &mut v {
+                let icon = provider_icon(&r.provider);
+                let (wl_s, wl_w, wl_t) = window_labels(&r.provider);
+                map.insert("window_labels".into(), serde_json::json!([wl_s, wl_w, wl_t]));
+                map.insert("label".into(), provider_label(&r.provider).into());
+                map.insert(
+                    "icon_svg".into(),
+                    provider_icon_svg_path(&r.provider)
+                        .map(|p| serde_json::Value::from(p.to_string_lossy().into_owned()))
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                map.insert("glyph".into(), icon.glyph.into());
+                map.insert("color".into(), icon.color_hex.into());
+            }
+            v
+        })
+        .collect();
+
+    let t = theme();
+    let window = match config.waybar.window {
+        WaybarWindow::Daily => "daily",
+        WaybarWindow::Weekly => "weekly",
+    };
+    let out = serde_json::json!({
+        "rows": row_values,
+        "errors": errors,
+        "enabled": enabled,
+        "primary": config.waybar.primary,
+        "window": window,
+        "theme": {
+            "dim": t.dim,
+            "separator": t.separator,
+            "green": t.green,
+            "yellow": t.yellow,
+            "red": t.red,
+            "neutral": t.neutral,
+        },
+    });
+    println!("{}", serde_json::to_string(&out)?);
+    Ok(())
+}
+
+/// `--set-provider NAME=BOOL`: toggle an OAuth provider in the config, then
+/// signal the daemon to reload. Backs the plasmoid settings pane.
+fn handle_set_provider(config_path: &Path, spec: &str) -> Result<()> {
+    let (name, val) = spec
+        .split_once('=')
+        .ok_or_else(|| anyhow::anyhow!("expected NAME=BOOL, got '{spec}'"))?;
+    let enabled: bool = val
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid bool '{val}' (want true/false)"))?;
+    config_set_oauth_provider(config_path, name.trim(), enabled)?;
+    signal_daemon_reload();
+    Ok(())
+}
+
+/// `--set-primary NAME|highest`: pin the bar to a provider (or clear the pin),
+/// then signal the daemon to reload.
+fn handle_set_primary(config_path: &Path, name: &str) -> Result<()> {
+    let primary = match name.trim().to_lowercase().as_str() {
+        "highest" | "none" | "" => None,
+        other => Some(other.to_string()),
+    };
+    config_set_primary(config_path, primary.as_deref())?;
+    signal_daemon_reload();
     Ok(())
 }
 

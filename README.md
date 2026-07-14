@@ -2,17 +2,18 @@
 
 [![GitHub release](https://img.shields.io/github/v/release/Arzaroth/TokenGauge)](https://github.com/Arzaroth/TokenGauge/releases)
 
-Monitor token usage, costs, and limits for AI coding assistants from your Waybar and TUI. Powered by [CodexBar](https://github.com/steipete/CodexBar) for usage limits and [ccusage](https://github.com/ryoppippi/ccusage) for cost breakdown. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
+Monitor token usage, costs, and limits for AI coding assistants from your Waybar, KDE Plasma panel, and TUI. Powered by [CodexBar](https://github.com/steipete/CodexBar) for usage limits and [ccusage](https://github.com/ryoppippi/ccusage) for cost breakdown. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
 
-| Waybar | TUI |
-|--------|-----|
-| ![Waybar module](waybar.png) | ![TUI dashboard](tui.png) |
+| Waybar | TUI | KDE Plasma |
+|--------|-----|------------|
+| ![Waybar module](waybar.png) | ![TUI dashboard](tui.png) | ![KDE Plasma applet](plasma.png) |
 
 ## Features
 
 - **Waybar module**: bar + percentage per provider with brand-colored icons, pango-markup tooltip mirroring the TUI card layout
 - **TUI dashboard** (ratatui): per-provider sidebar, Session / Weekly / Sonnet-only / Tertiary windows, Extra usage rates, cost breakdown
 - **Native GTK4 popover**: bundled `tokengauge-popover` (gtk4-layer-shell) gives a click-to-open GUI panel with codexbar-style provider tabs, real provider brand logos (SVG, from [CodexBar](https://github.com/steipete/CodexBar); falls back to glyph icons when a logo is missing), color-tiered usage bars, monospace-aligned cost rows, and a collapsible 7-day chart. Pick `tui` or `popover` per `[waybar].click_action`.
+- **KDE Plasma 6 applet**: native panel widget (QML plasmoid) mirroring the popover - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, a 7-day chart, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
 - **Cost tracking via ccusage**: today, month, 7-day rolling, per-model split, current burn rate $/hr, 7-day chart, trend vs 7d average
 - **Multi-provider**: Claude, Codex, Copilot, Z.ai, Kimi, MiniMax (mix OAuth + API key providers)
 - **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary
@@ -184,6 +185,39 @@ Left-click goes through `tokengauge-waybar --click`, which reads
 when its leading binary isn't on `$PATH`. `popover_command` accepts any
 shell command, so you can point it at another window toolkit if you'd
 rather not use the bundled GTK4 popover.
+
+## KDE Plasma widget
+
+On KDE Plasma 6, TokenGauge ships a native panel applet (a QML plasmoid) that
+mirrors the GTK popover - it is an additive fourth frontend, so your Waybar
+module keeps working exactly as before. From a local checkout:
+
+```bash
+bash scripts/install-plasma.sh
+```
+
+The script builds the release binaries, installs the provider logos to
+`~/.local/share/tokengauge/icons`, and registers the applet with
+`kpackagetool6`. Then add it: right-click a panel or the desktop -> **Add
+Widgets** -> search **TokenGauge**. If it doesn't show up yet, restart Plasma
+(`kquitapp6 plasmashell && kstart plasmashell`).
+
+The applet reads the same `~/.config/tokengauge/config.toml`, cache, and (when
+running) daemon as the Waybar module. Under the hood it polls
+`tokengauge-waybar --json` - a machine-readable snapshot of every provider's
+usage, cost, and 7-day history - and drives all its actions (refresh, rotate,
+open dashboard/status, provider toggles, pin) through the same
+`tokengauge-waybar` binary, so the daemon stays the single source of truth and
+threshold notifications keep firing.
+
+Panel behaviour matches Waybar: left-click opens the popup, right-click
+refreshes, middle-click opens the dashboard, back-button opens the status page,
+scroll rotates the shown provider. Point the applet at a non-default binary or
+change its poll interval in the widget's own settings.
+
+> GNOME Shell is not supported yet. The `tokengauge-waybar --json` seam is
+> desktop-agnostic, so a GNOME extension can be built on the same contract
+> later.
 
 ## Diagnostics
 

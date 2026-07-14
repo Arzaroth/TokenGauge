@@ -15,11 +15,6 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # `cargo build --workspace` includes tokengauge-popover (GTK4), which needs
-      # GTK4 + gtk4-layer-shell development libraries at build time.
-      - name: Install system deps (GTK4 for tokengauge-popover)
-        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgtk4-layer-shell-dev
-
       - name: Cache Cargo
         uses: actions/cache@v4
         with:
@@ -28,17 +23,20 @@ jobs:
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-ci-${{ hashFiles('**/Cargo.lock') }}
 
+      # tokengauge-popover links the gtk4-layer-shell C library, which isn't
+      # packaged for the ubuntu-latest runner, so it's excluded here (the same
+      # way release.yml only builds waybar + tui). fmt still covers every crate.
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --exclude tokengauge-popover
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude tokengauge-popover
 
       - name: Format check
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --exclude tokengauge-popover --all-targets --all-features -- -D warnings
 
   build-windows:
     runs-on: windows-latest

@@ -1397,6 +1397,41 @@ pub fn provider_icon(label: &str) -> ProviderIcon {
     }
 }
 
+/// Basename slug of the bundled brand SVG for a provider label, if one ships.
+/// Kimi K2 reuses the Kimi (Moonshot) mark.
+pub fn provider_icon_slug(label: &str) -> Option<&'static str> {
+    Some(match label.to_lowercase().as_str() {
+        "claude" => "claude",
+        "codex" => "codex",
+        "copilot" => "copilot",
+        "z.ai" | "zai" => "zai",
+        "minimax" => "minimax",
+        "kimi" | "kimi k2" | "kimik2" => "kimi",
+        _ => return None,
+    })
+}
+
+/// Directory the installer drops provider SVG logos into. Overridable with
+/// `TOKENGAUGE_ICON_DIR` (e.g. point it at the repo `assets/providers` when
+/// running a dev build).
+pub fn provider_icon_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("TOKENGAUGE_ICON_DIR") {
+        return PathBuf::from(dir);
+    }
+    let base = std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".local/share"));
+    base.join("tokengauge").join("icons")
+}
+
+/// Path to a provider's bundled brand SVG, or None when no logo is installed
+/// (the popover then falls back to the glyph icon).
+pub fn provider_icon_svg_path(label: &str) -> Option<PathBuf> {
+    let slug = provider_icon_slug(label)?;
+    let path = provider_icon_dir().join(format!("ProviderIcon-{slug}.svg"));
+    path.exists().then_some(path)
+}
+
 /// Provider-specific labels for the three usage windows.
 /// Defaults to generic "Session"/"Weekly"/"Tertiary" for unknown providers.
 pub fn window_labels(provider: &str) -> (&'static str, &'static str, &'static str) {

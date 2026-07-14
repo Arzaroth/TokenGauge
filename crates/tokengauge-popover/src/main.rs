@@ -13,13 +13,15 @@ use gtk4::glib::{ControlFlow, Propagation, source};
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GBox, Button, CssProvider, EventControllerKey,
-    Expander, Grid, Label, Orientation, ProgressBar, ScrolledWindow, Stack, ToggleButton,
+    Expander, Grid, Image, Label, Orientation, ProgressBar, ScrolledWindow, Stack, ToggleButton,
+    Widget,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use tokengauge_core::{
     ClickAction, CostInfo, ProviderRow, TokenGaugeConfig, WaybarPlacement, format_tokens,
     format_updated_relative, load_config, payload_to_rows_with_costs, provider_icon,
-    read_cache_full, read_waybar_state, theme, waybar_state_path, window_labels,
+    provider_icon_svg_path, read_cache_full, read_waybar_state, theme, waybar_state_path,
+    window_labels,
 };
 
 const APP_ID: &str = "io.arzaroth.tokengauge.popover";
@@ -443,22 +445,12 @@ fn render_body(
 /// Build one tab toggle button: icon glyph on top, provider name middle,
 /// thin session-usage bar at the bottom (codexbar-style, compact).
 fn build_tab_button(row: &ProviderRow) -> ToggleButton {
-    let icon = provider_icon(&row.provider);
     let v = GBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(1)
         .halign(Align::Center)
         .build();
-    let icon_label = Label::builder()
-        .label(icon.glyph)
-        .css_classes(vec!["tg-tab-icon".to_string()])
-        .build();
-    let inline_css = format!("label.tg-tab-icon {{ color: {}; }}", icon.color_hex);
-    let provider_css = CssProvider::new();
-    provider_css.load_from_data(&inline_css);
-    icon_label
-        .style_context()
-        .add_provider(&provider_css, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    let icon_widget = build_tab_icon(row);
 
     let name_label = Label::builder()
         .label(row.provider.clone())
@@ -484,7 +476,7 @@ fn build_tab_button(row: &ProviderRow) -> ToggleButton {
             bar.add_css_class("tg-tier-none");
         }
     }
-    v.append(&icon_label);
+    v.append(&icon_widget);
     v.append(&name_label);
     v.append(&bar);
 
@@ -493,6 +485,30 @@ fn build_tab_button(row: &ProviderRow) -> ToggleButton {
         .css_classes(vec!["tg-tab".to_string()])
         .hexpand(true)
         .build()
+}
+
+/// Tab icon: the bundled brand SVG logo when installed, otherwise the
+/// brand-coloured glyph fallback.
+fn build_tab_icon(row: &ProviderRow) -> Widget {
+    if let Some(path) = provider_icon_svg_path(&row.provider) {
+        let image = Image::from_file(&path);
+        image.set_pixel_size(20);
+        image.add_css_class("tg-tab-icon");
+        return image.upcast();
+    }
+
+    let icon = provider_icon(&row.provider);
+    let icon_label = Label::builder()
+        .label(icon.glyph)
+        .css_classes(vec!["tg-tab-icon".to_string()])
+        .build();
+    let inline_css = format!("label.tg-tab-icon {{ color: {}; }}", icon.color_hex);
+    let provider_css = CssProvider::new();
+    provider_css.load_from_data(&inline_css);
+    icon_label
+        .style_context()
+        .add_provider(&provider_css, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    icon_label.upcast()
 }
 
 /// Page body for a provider (no outer Frame; StackSwitcher provides the tab

@@ -437,7 +437,7 @@ impl Default for TokenGaugeConfig {
         Self {
             codexbar_bin: "codexbar".to_string(),
             refresh_secs: 600,
-            cache_file: PathBuf::from("/tmp/tokengauge-usage.json"),
+            cache_file: default_cache_file(),
             timeout_secs: 20,
             stagger_ms: 0,
             ccusage_enabled: true,
@@ -740,7 +740,7 @@ pub fn load_config(path: Option<PathBuf>) -> Result<TokenGaugeConfig> {
         config.codexbar_bin = "codexbar".to_string();
     }
     if config.cache_file.as_os_str().is_empty() {
-        config.cache_file = PathBuf::from("/tmp/tokengauge-usage.json");
+        config.cache_file = default_cache_file();
     }
     if config.refresh_secs == 0 {
         config.refresh_secs = 600;
@@ -749,7 +749,24 @@ pub fn load_config(path: Option<PathBuf>) -> Result<TokenGaugeConfig> {
     Ok(config)
 }
 
+/// Default cache file location. Uses the platform temp dir so it resolves to
+/// `%TEMP%` on Windows and `/tmp` on Unix (preserving the previous behaviour on
+/// Linux, since `std::env::temp_dir()` is `/tmp` there).
+pub fn default_cache_file() -> PathBuf {
+    std::env::temp_dir().join("tokengauge-usage.json")
+}
+
 pub fn default_config_path() -> PathBuf {
+    // On Windows prefer the native config directory (`%APPDATA%`); on Unix keep
+    // the XDG convention (`$XDG_CONFIG_HOME` or `~/.config`).
+    #[cfg(windows)]
+    let config_dir = std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(dirs::config_dir)
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")));
+
+    #[cfg(not(windows))]
     let config_dir = std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -757,6 +774,7 @@ pub fn default_config_path() -> PathBuf {
             home.push(".config");
             home
         });
+
     config_dir.join("tokengauge").join("config.toml")
 }
 
@@ -1842,23 +1860,73 @@ pub fn ccusage_runner_description() -> Option<String> {
 }
 
 fn binary_on_path(name: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| {
-        let candidate = dir.join(name);
-        std::fs::metadata(&candidate)
-            .map(|m| m.is_file())
-            .unwrap_or(false)
-    })
+    find_in_path(name).is_some()
+}
+
+/// Locate an executable named `name` on `PATH`, returning its full path.
+///
+/// On Windows the name is tried both as-is and with each extension from
+/// `PATHEXT` (falling back to a sensible default set), so shims like
+/// `npx.cmd`, `bunx.cmd` and `ccusage.exe` are found even when the caller
+/// passes the bare stem.
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let is_file = |p: &Path| std::fs::metadata(p).map(|m| m.is_file()).unwrap_or(false);
+
+    for dir in std::env::split_paths(&path) {
+        let direct = dir.join(name);
+        if is_file(&direct) {
+            return Some(direct);
+        }
+
+        #[cfg(windows)]
+        {
+            // Only append extensions when the name has none of its own.
+            if Path::new(name).extension().is_none() {
+                let pathext =
+                    std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string());
+                for ext in pathext.split(';').filter(|e| !e.is_empty()) {
+                    let ext = ext.trim_start_matches('.');
+                    let candidate = dir.join(format!("{name}.{ext}"));
+                    if is_file(&candidate) {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Build a `Command` for the resolved ccusage runner.
+///
+/// On Windows the runner is very often a batch shim (`npx.cmd`, `bunx.cmd`),
+/// which `CreateProcess` cannot execute directly — Rust's `Command` only
+/// appends `.exe`. Routing through `cmd /C` lets the shell resolve `.cmd`/`.bat`
+/// (and plain `.exe`) via `PATHEXT`. On Unix we spawn the program directly.
+fn ccusage_command(runner: &[String]) -> Command {
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("cmd");
+        command.arg("/C");
+        for part in runner {
+            command.arg(part);
+        }
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = Command::new(&runner[0]);
+        for part in &runner[1..] {
+            command.arg(part);
+        }
+        command
+    }
 }
 
 fn run_ccusage_blocks(timeout: Duration) -> Result<CcusageBlocksResponse> {
     let runner = resolve_ccusage_runner().ok_or_else(|| anyhow!("no ccusage runner on PATH"))?;
-    let mut command = Command::new(&runner[0]);
-    for part in &runner[1..] {
-        command.arg(part);
-    }
+    let mut command = ccusage_command(&runner);
     command.arg("blocks").arg("--active").arg("--json");
     let output = run_with_timeout(command, timeout).context("ccusage blocks failed")?;
     if !output.status.success() {
@@ -1908,10 +1976,7 @@ fn fetch_active_blocks(timeout: Duration) -> HashMap<String, ActiveBlockInfo> {
 
 fn run_ccusage(args: &[&str], timeout: Duration) -> Result<CcusageDailyResponse> {
     let runner = resolve_ccusage_runner().ok_or_else(|| anyhow!("no ccusage runner on PATH"))?;
-    let mut command = Command::new(&runner[0]);
-    for part in &runner[1..] {
-        command.arg(part);
-    }
+    let mut command = ccusage_command(&runner);
     command.args(args).arg("--json");
     let output = run_with_timeout(command, timeout).context("ccusage failed")?;
 

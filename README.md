@@ -310,3 +310,75 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 6. (Optional) Set up the daemon - see **Daemon mode** above.
 
 7. Restart Waybar.
+
+## Windows 10 (TUI)
+
+The Waybar module, the GTK4 popover, and the KDE Plasma applet are Linux-only
+(they depend on Waybar / `gtk4-layer-shell` / Plasma). On Windows only the
+**TUI dashboard** (`tokengauge-tui.exe`) is supported. It builds and runs
+natively on Windows 10, tracking **cost and token usage via ccusage**. Usage
+**limits** need a `codexbar` binary, which upstream [CodexBar](https://github.com/steipete/CodexBar)
+does not ship for Windows - see the note below.
+
+### Prerequisites
+
+- **[Node.js](https://nodejs.org/)** (or [Bun](https://bun.sh/)) - so `ccusage`
+  can run. TokenGauge auto-detects `ccusage`, then `bunx ccusage`, then
+  `npx --yes ccusage` on your `PATH`. Installing it globally
+  (`npm i -g ccusage`) is fastest but optional.
+- *(Optional, for limits)* a Windows `codexbar` binary - see **Limits on
+  Windows** below.
+
+### Install
+
+1. Download `tokengauge-<version>-windows-x86_64.zip` from
+   [GitHub Releases](https://github.com/Arzaroth/TokenGauge/releases) and unzip
+   it. Put `tokengauge-tui.exe` somewhere on your `PATH` (or just run it from the
+   unzipped folder).
+
+2. Run it from **Windows Terminal**, **PowerShell**, or **cmd**:
+   ```powershell
+   tokengauge-tui.exe
+   ```
+
+On first run a default config is created at
+`%APPDATA%\tokengauge\config.toml` and the usage cache is written to
+`%TEMP%\tokengauge-usage.json`. A minimal config:
+
+```toml
+codexbar_bin = "codexbar"
+refresh_secs = 600
+
+[providers]
+codex = true
+claude = true
+```
+
+### Build from source (Windows)
+
+With the [Rust toolchain](https://rustup.rs/) installed:
+
+```powershell
+cargo build --release -p tokengauge-tui
+# binary at target\release\tokengauge-tui.exe
+```
+
+`cargo build` (no `--workspace`) only builds the cross-platform crates
+(`tokengauge-core` + `tokengauge-tui`); the Linux-only crates are excluded via
+`default-members`. Do **not** pass `--workspace` on Windows.
+
+### Limits on Windows
+
+Upstream CodexBar ships a `codexbar` CLI for macOS and Linux only, so
+out of the box the Windows build shows ccusage cost/token data while the
+limit providers report a "codexbar not found" error - the TUI keeps working,
+it just omits the limits bars.
+
+To get limits, point `codexbar_bin` in the config at any Windows binary that
+implements the same `usage --provider <name> --source <src> --format json
+--json-only` contract. The community project
+[Win-CodexBar](https://github.com/Finesssee/Win-CodexBar) ships a
+`codexbar-cli.exe`, but its flags (`usage -p <provider>`) and JSON shape differ
+from what TokenGauge expects, so it is **not yet a drop-in** replacement -
+full integration is a follow-up. If you have a `.cmd`/`.bat` shim rather than an
+`.exe`, set `codexbar_bin` to its full path.

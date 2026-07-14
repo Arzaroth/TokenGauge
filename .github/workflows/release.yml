@@ -106,9 +106,50 @@ jobs:
           if-no-files-found: error
 
 
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-windows-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        # Only the TUI runs on Windows; waybar and popover are Linux-only.
+        run: cargo build --release --target x86_64-pc-windows-msvc -p tokengauge-tui
+
+      - name: Package
+        shell: pwsh
+        env:
+          REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/tokengauge-tui.exe dist/
+          Compress-Archive -Path dist/tokengauge-tui.exe -DestinationPath "dist/tokengauge-$env:REF_NAME-windows-x86_64.zip" -Force
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tokengauge-windows-x86_64
+          path: dist/tokengauge-*-windows-x86_64.zip
+          if-no-files-found: error
+
   release:
     runs-on: ubuntu-latest
-    needs: [build-x86_64, build-aarch64]
+    needs: [build-x86_64, build-aarch64, build-windows]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -124,4 +165,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: dist/*.tar.gz
+          files: |
+            dist/*.tar.gz
+            dist/*.zip

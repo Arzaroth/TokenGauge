@@ -1,0 +1,169 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Install the TokenGauge TUI on Windows 10/11.
+
+.DESCRIPTION
+    Downloads the latest (or a specified) TokenGauge Windows release, installs
+    tokengauge-tui.exe into a user-writable directory, adds that directory to
+    your user PATH, and seeds a default config at %APPDATA%\tokengauge\config.toml.
+
+    Only the TUI is supported on Windows - the Waybar module, GTK4 popover, and
+    KDE Plasma applet are Linux-only. TokenGauge builds its rows from codexbar
+    data, so a codexbar-compatible binary is required for anything to show;
+    upstream CodexBar doesn't ship one for Windows (Win-CodexBar works as a
+    drop-in). ccusage (needs Node.js/Bun on PATH) then adds cost/token detail.
+
+.PARAMETER Repo
+    GitHub repo to install from. Default: Arzaroth/TokenGauge.
+
+.PARAMETER Version
+    Release tag to install (e.g. v0.8.0). Default: the latest release.
+
+.PARAMETER InstallDir
+    Where to place tokengauge-tui.exe. Default: %LOCALAPPDATA%\TokenGauge\bin.
+
+.PARAMETER NoPath
+    Do not modify the user PATH.
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+
+.EXAMPLE
+    irm https://raw.githubusercontent.com/Arzaroth/TokenGauge/master/scripts/install.ps1 | iex
+#>
+[CmdletBinding()]
+param(
+    [string]$Repo = $(if ($env:TOKENGAUGE_REPO) { $env:TOKENGAUGE_REPO } else { 'Arzaroth/TokenGauge' }),
+    [string]$Version = '',
+    [string]$InstallDir = $(if ($env:TOKENGAUGE_INSTALL_DIR) { $env:TOKENGAUGE_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'TokenGauge\bin' }),
+    [switch]$NoPath
+)
+
+$ErrorActionPreference = 'Stop'
+# The progress bar makes Invoke-WebRequest downloads very slow on Windows PowerShell 5.1.
+$ProgressPreference = 'SilentlyContinue'
+# GitHub requires a User-Agent; older PowerShell defaults to TLS 1.0.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+$Headers = @{ 'User-Agent' = 'TokenGauge-Installer' }
+
+function Write-Info    { param([string]$Msg) Write-Host $Msg -ForegroundColor Cyan }
+function Write-Good    { param([string]$Msg) Write-Host $Msg -ForegroundColor Green }
+function Write-Warned  { param([string]$Msg) Write-Host $Msg -ForegroundColor Yellow }
+
+# ---------------------------------------------------------------------------
+# Resolve the release tag
+# ---------------------------------------------------------------------------
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    Write-Info "Fetching latest release for $Repo"
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers $Headers
+    $Version = $release.tag_name
+}
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    throw "Could not determine a release tag for $Repo"
+}
+Write-Info "Installing TokenGauge $Version"
+
+# ---------------------------------------------------------------------------
+# Download + extract the Windows zip
+# ---------------------------------------------------------------------------
+# The release job sanitizes the tag when naming the archive, so mirror that here
+# (the download path still uses the raw tag, which is the actual release/tag name).
+$assetVersion = $Version -replace '[^A-Za-z0-9._-]', '_'
+$asset = "tokengauge-$assetVersion-windows-x86_64.zip"
+$url   = "https://github.com/$Repo/releases/download/$Version/$asset"
+$tmp   = Join-Path ([System.IO.Path]::GetTempPath()) ("tokengauge-install-" + [System.IO.Path]::GetRandomFileName())
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+
+try {
+    $zipPath = Join-Path $tmp $asset
+    Write-Info "Downloading $url"
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $zipPath -Headers $Headers
+    } catch {
+        throw "Failed to download $asset ($($_.Exception.Message)). This release may " +
+              "predate Windows support - install a newer release with -Version, or " +
+              "build from source: cargo build --release -p tokengauge-tui"
+    }
+
+    Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
+
+    $exe = Get-ChildItem -Path $tmp -Recurse -Filter 'tokengauge-tui.exe' | Select-Object -First 1
+    if (-not $exe) {
+        throw "tokengauge-tui.exe not found inside $asset"
+    }
+
+    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+    try {
+        Copy-Item -Path $exe.FullName -Destination (Join-Path $InstallDir 'tokengauge-tui.exe') -Force
+    } catch {
+        throw "Couldn't write tokengauge-tui.exe to $InstallDir - it may be running. " +
+              "Close it (and the tray app) and re-run. ($($_.Exception.Message))"
+    }
+    Write-Good "Installed tokengauge-tui.exe to $InstallDir"
+} finally {
+    Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ---------------------------------------------------------------------------
+# Add the install dir to the user PATH
+# ---------------------------------------------------------------------------
+if (-not $NoPath) {
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $entries  = @()
+    if ($userPath) { $entries = $userPath -split ';' | Where-Object { $_ -ne '' } }
+    if ($entries -notcontains $InstallDir) {
+        $newPath = (@($entries + $InstallDir) -join ';')
+        [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+        # Reflect it in the current session too.
+        $env:Path = "$env:Path;$InstallDir"
+        Write-Good "Added $InstallDir to your user PATH (restart terminals to pick it up)"
+    } else {
+        Write-Info "$InstallDir already on your user PATH"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Seed a default config
+# ---------------------------------------------------------------------------
+$configDir  = Join-Path $env:APPDATA 'tokengauge'
+$configFile = Join-Path $configDir 'config.toml'
+if (-not (Test-Path $configFile)) {
+    New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+    # Single-quoted here-string: no variable/backtick interpretation.
+    # cache_file is intentionally omitted so it defaults to %TEMP%.
+    $config = @'
+# TokenGauge configuration (Windows)
+# TokenGauge builds its rows from codexbar data, so a codexbar-compatible binary
+# is required for anything to show (e.g. Win-CodexBar's codexbar-cli.exe);
+# ccusage then adds cost/token detail. codexbar_bin may be an .exe or .cmd/.bat.
+codexbar_bin = "codexbar"
+refresh_secs = 600
+
+[providers]
+codex = true
+claude = true
+'@
+    # WriteAllText writes UTF-8 without a BOM (Set-Content -Encoding UTF8 on
+    # Windows PowerShell 5.1 emits a BOM, which the TOML parser rejects).
+    [System.IO.File]::WriteAllText($configFile, $config)
+    Write-Good "Wrote default config to $configFile"
+} else {
+    Write-Info "Config already exists at $configFile (left unchanged)"
+}
+
+# ---------------------------------------------------------------------------
+# Prerequisite hints
+# ---------------------------------------------------------------------------
+Write-Host ""
+if (-not (Get-Command node -ErrorAction SilentlyContinue) -and
+    -not (Get-Command bun  -ErrorAction SilentlyContinue) -and
+    -not (Get-Command ccusage -ErrorAction SilentlyContinue)) {
+    Write-Warned "No Node.js / Bun / ccusage found on PATH. Install Node.js (https://nodejs.org) so"
+    Write-Warned "'npx ccusage' can add cost/token detail. (Limits still show via codexbar; costs won't.)"
+}
+if ($NoPath) {
+    Write-Good "Done. Run it with:  & `"$(Join-Path $InstallDir 'tokengauge-tui.exe')`""
+} else {
+    Write-Good "Done. Run it with:  tokengauge-tui"
+}

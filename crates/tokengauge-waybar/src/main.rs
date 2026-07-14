@@ -287,13 +287,17 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let text = format!("   {}", build_text_for_rows_with_errors(&rows, &errors, &config));
+    let text = format!(
+        "   {}",
+        build_text_for_rows_with_errors(&rows, &errors, &config)
+    );
     let selected = selected_provider_for_tooltip(&config, &rows);
     let tooltip_rows: Vec<&ProviderRow> = match selected {
         Some(idx) => vec![&rows[idx]],
         None => rows.iter().collect(),
     };
-    let tooltip = format_tooltip_with_errors(&tooltip_rows, &errors, false, &left_click_label(&config));
+    let tooltip =
+        format_tooltip_with_errors(&tooltip_rows, &errors, false, &left_click_label(&config));
 
     let class = compute_class(&rows, &errors, false, config.waybar.window.clone());
 
@@ -331,7 +335,10 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
             if let serde_json::Value::Object(map) = &mut v {
                 let icon = provider_icon(&r.provider);
                 let (wl_s, wl_w, wl_t) = window_labels(&r.provider);
-                map.insert("window_labels".into(), serde_json::json!([wl_s, wl_w, wl_t]));
+                map.insert(
+                    "window_labels".into(),
+                    serde_json::json!([wl_s, wl_w, wl_t]),
+                );
                 map.insert("label".into(), provider_label(&r.provider).into());
                 map.insert(
                     "icon_svg".into(),
@@ -427,8 +434,7 @@ fn resolved_selection_key(
 
 fn selected_provider_for_tooltip(config: &TokenGaugeConfig, rows: &[ProviderRow]) -> Option<usize> {
     let key = resolved_selection_key(config, rows, &[])?;
-    rows.iter()
-        .position(|r| r.provider.to_lowercase() == key)
+    rows.iter().position(|r| r.provider.to_lowercase() == key)
 }
 
 fn build_text_for_rows_with_errors(
@@ -476,11 +482,8 @@ fn format_bar_error(label: &str) -> String {
     let (_dim, _separator, _green, _yellow, red, _neutral) = theme_palette();
     let icon = icon_markup(label);
     let escaped_label = pango_escape(label);
-    format!(
-        "{icon} {escaped_label} <span foreground=\"{red}\">⚠</span>"
-    )
+    format!("{icon} {escaped_label} <span foreground=\"{red}\">⚠</span>")
 }
-
 
 fn refresh_sentinel_path(cache_file: &Path) -> PathBuf {
     let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
@@ -520,8 +523,7 @@ fn check_and_notify(
     let thresholds = &config.notifications.thresholds;
 
     for row in &rows {
-        let (s_label, w_label, t_label) =
-            tokengauge_core::window_labels(&row.provider);
+        let (s_label, w_label, t_label) = tokengauge_core::window_labels(&row.provider);
         let windows: [(&str, Option<u8>, &str, &str); 3] = [
             ("session", row.session_used, &row.session_reset, s_label),
             ("weekly", row.weekly_used, &row.weekly_reset, w_label),
@@ -561,7 +563,10 @@ fn fire_notification(provider: &str, window: &str, pct: u8, threshold: u8, reset
         .arg(urgency)
         .arg("--app-name")
         .arg("tokengauge")
-        .arg(format!("--hint=int:transient:{}", if threshold < 90 { 1 } else { 0 }))
+        .arg(format!(
+            "--hint=int:transient:{}",
+            if threshold < 90 { 1 } else { 0 }
+        ))
         .arg(&title)
         .arg(&body)
         .stdin(Stdio::null())
@@ -829,7 +834,11 @@ fn handle_doctor(config_path: &Path) -> i32 {
             "no TUI launcher found; set [waybar].tui_command or install a terminal".into(),
         )
     } else {
-        let first = click_cmd.split_whitespace().next().unwrap_or("").to_string();
+        let first = click_cmd
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string();
         let on_path = which(&first).is_some() || first.starts_with('/');
         (
             format!(
@@ -950,7 +959,11 @@ fn current_snapshot(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) 
         };
         return render_output(config, &rows, &errors, true);
     }
-    state.lock().expect("daemon state mutex poisoned").output.clone()
+    state
+        .lock()
+        .expect("daemon state mutex poisoned")
+        .output
+        .clone()
 }
 
 struct DaemonState {
@@ -966,7 +979,8 @@ impl DaemonState {
             Ok(s) => format!("{s}\n"),
             Err(_) => return,
         };
-        self.subscribers.retain_mut(|s| s.write_all(line.as_bytes()).is_ok());
+        self.subscribers
+            .retain_mut(|s| s.write_all(line.as_bytes()).is_ok());
     }
 }
 
@@ -1041,7 +1055,8 @@ fn render_output(
         Some(idx) => vec![&rows[idx]],
         None => rows.iter().collect(),
     };
-    let tooltip = format_tooltip_with_errors(&tooltip_rows, errors, refreshing, &left_click_label(config));
+    let tooltip =
+        format_tooltip_with_errors(&tooltip_rows, errors, refreshing, &left_click_label(config));
     let class = compute_class(rows, errors, refreshing, config.waybar.window.clone());
     WaybarOutput {
         text,
@@ -1106,7 +1121,10 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
                         do_fetch_and_broadcast(&s, &snapshot);
                     }));
                     if let Err(payload) = res {
-                        dlog("signal", &format!("panic recovered: {}", panic_message(&payload)));
+                        dlog(
+                            "signal",
+                            &format!("panic recovered: {}", panic_message(&payload)),
+                        );
                     }
                 }
             }
@@ -1169,12 +1187,14 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
         let term = Arc::new(std::sync::atomic::AtomicBool::new(false));
         signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term))?;
         signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term))?;
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_millis(200));
-            if term.load(std::sync::atomic::Ordering::SeqCst) {
-                dlog("daemon", "SIGTERM/SIGINT received, shutting down");
-                let _ = std::fs::remove_file(&sock_path_clone);
-                std::process::exit(0);
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(200));
+                if term.load(std::sync::atomic::Ordering::SeqCst) {
+                    dlog("daemon", "SIGTERM/SIGINT received, shutting down");
+                    let _ = std::fs::remove_file(&sock_path_clone);
+                    std::process::exit(0);
+                }
             }
         });
     }
@@ -1192,9 +1212,10 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
                     }));
                     match res {
                         Ok(Err(e)) => dlog("client", &format!("error: {e}")),
-                        Err(payload) => {
-                            dlog("client", &format!("panic recovered: {}", panic_message(&payload)))
-                        }
+                        Err(payload) => dlog(
+                            "client",
+                            &format!("panic recovered: {}", panic_message(&payload)),
+                        ),
                         Ok(Ok(())) => {}
                     }
                 });
@@ -1302,7 +1323,11 @@ fn handle_client(
             let reply = SocketReply::Update { output };
             writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
             stream.flush()?;
-            state.lock().expect("daemon state mutex poisoned").subscribers.push(stream);
+            state
+                .lock()
+                .expect("daemon state mutex poisoned")
+                .subscribers
+                .push(stream);
             // Don't close - daemon broadcast will push updates
         }
         SocketCommand::Refresh => {
@@ -1395,7 +1420,11 @@ fn run_client_tail(config: &TokenGaugeConfig) -> Result<()> {
         }
     };
     let mut writer = stream.try_clone()?;
-    writeln!(writer, "{}", serde_json::to_string(&SocketCommand::Subscribe)?)?;
+    writeln!(
+        writer,
+        "{}",
+        serde_json::to_string(&SocketCommand::Subscribe)?
+    )?;
     writer.flush()?;
     let reader = BufReader::new(stream);
     for line in reader.lines() {
@@ -1537,8 +1566,7 @@ fn handle_rotate(config: &TokenGaugeConfig, dir: RotateDir) -> Result<()> {
         .as_deref()
         .and_then(|key| {
             let lower = key.to_lowercase();
-            rows.iter()
-                .position(|r| r.provider.to_lowercase() == lower)
+            rows.iter().position(|r| r.provider.to_lowercase() == lower)
         })
         .unwrap_or(0);
 
@@ -1591,11 +1619,7 @@ fn maybe_refresh(config: &TokenGaugeConfig) -> Result<RefreshSnapshot> {
     } else {
         let cached = read_cache_full(&config.cache_file)?;
         let costs = cached.costs();
-        Ok((
-            cached.payloads().to_vec(),
-            cached.errors().to_vec(),
-            costs,
-        ))
+        Ok((cached.payloads().to_vec(), cached.errors().to_vec(), costs))
     }
 }
 
@@ -1740,9 +1764,8 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
     let session_line = (cost.session_usd > 0.0).then(|| {
         format!("  Session   <span foreground=\"{dim}\">{session_usd:>usd_width$}</span>")
     });
-    let weekly_line = (cost.weekly_usd > 0.0).then(|| {
-        format!("  Weekly    <span foreground=\"{dim}\">{weekly_usd:>usd_width$}</span>")
-    });
+    let weekly_line = (cost.weekly_usd > 0.0)
+        .then(|| format!("  Weekly    <span foreground=\"{dim}\">{weekly_usd:>usd_width$}</span>"));
     let blank = (session_line.is_some() || weekly_line.is_some()).then(String::new);
 
     let today_line = format!(
@@ -1752,10 +1775,17 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
         "  Month     <span foreground=\"{dim}\">{monthly_usd:>usd_width$}  ·  {monthly_tokens:>tokens_width$} tokens</span>"
     );
 
-    [rate_line, session_line, weekly_line, blank, Some(today_line), Some(month_line)]
-        .into_iter()
-        .flatten()
-        .collect()
+    [
+        rate_line,
+        session_line,
+        weekly_line,
+        blank,
+        Some(today_line),
+        Some(month_line),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 fn format_header(row: &ProviderRow) -> String {
@@ -1764,10 +1794,7 @@ fn format_header(row: &ProviderRow) -> String {
     let name = pango_escape(&row.provider);
     let plan = row.plan_label.as_deref().filter(|s| !s.is_empty());
     let badge = match plan {
-        Some(p) => format!(
-            "  <span foreground=\"{dim}\">·  {}</span>",
-            pango_escape(p)
-        ),
+        Some(p) => format!("  <span foreground=\"{dim}\">·  {}</span>", pango_escape(p)),
         None => String::new(),
     };
     format!("<b>{icon}  {name}</b>{badge}")
@@ -1799,9 +1826,8 @@ fn format_provider_card(row: &ProviderRow) -> String {
             row.weekly_used,
             &row.weekly_reset,
         )),
-        (row.tertiary_used.is_some() || row.tertiary_reset != "—").then(|| {
-            format_provider_line(tertiary_label, row.tertiary_used, &row.tertiary_reset)
-        }),
+        (row.tertiary_used.is_some() || row.tertiary_reset != "—")
+            .then(|| format_provider_line(tertiary_label, row.tertiary_used, &row.tertiary_reset)),
     ];
 
     let extras_section: Vec<String> = if row.extra_windows.is_empty() {
@@ -1843,9 +1869,7 @@ fn format_error_card(err: &ProviderFetchError) -> String {
     let icon = icon_markup(&err.provider);
     let name = pango_escape(&err.provider);
     let msg = pango_escape(&err.message);
-    format!(
-        "<tt><b>{icon}  {name}</b>  <span foreground=\"{red}\">⚠ {msg}</span></tt>"
-    )
+    format!("<tt><b>{icon}  {name}</b>  <span foreground=\"{red}\">⚠ {msg}</span></tt>")
 }
 
 fn format_tooltip_with_errors(
@@ -1870,9 +1894,7 @@ fn format_tooltip_from_cards(cards: &[&str], refreshing: bool, left_verb: &str) 
     );
     let body = cards.join(&format!("\n{separator}\n"));
     let status_line = if refreshing {
-        format!(
-            "\n<tt><b><span foreground=\"{yellow}\">⟳ Refreshing...</span></b></tt>"
-        )
+        format!("\n<tt><b><span foreground=\"{yellow}\">⟳ Refreshing...</span></b></tt>")
     } else {
         String::new()
     };
@@ -2255,8 +2277,7 @@ mod tests {
         let cache = dir.join("cache.json");
         let state = test_state("INITIAL");
         let config = test_config(cache.clone());
-        let (sock, server) =
-            spawn_one_shot_server(&cache, Arc::clone(&state), config);
+        let (sock, server) = spawn_one_shot_server(&cache, Arc::clone(&state), config);
 
         let mut stream = UnixStream::connect(&sock).unwrap();
         writeln!(
@@ -2310,7 +2331,10 @@ mod tests {
         let (sock, server) = spawn_one_shot_server(&cache, state, config);
 
         let reply = send_recv(&sock, &SocketCommand::Refresh);
-        assert!(matches!(reply, SocketReply::Ack), "expected ack, got {reply:?}");
+        assert!(
+            matches!(reply, SocketReply::Ack),
+            "expected ack, got {reply:?}"
+        );
         assert!(sentinel.exists(), "Refresh should create the sentinel file");
 
         server.join().unwrap().unwrap();
@@ -2335,7 +2359,10 @@ mod tests {
                 direction: "next".into(),
             },
         );
-        assert!(matches!(reply, SocketReply::Ack), "expected ack, got {reply:?}");
+        assert!(
+            matches!(reply, SocketReply::Ack),
+            "expected ack, got {reply:?}"
+        );
 
         server.join().unwrap().unwrap();
         let _ = std::fs::remove_file(&sock);
@@ -2355,7 +2382,10 @@ mod tests {
                 target: "dashboard".into(),
             },
         );
-        assert!(matches!(reply, SocketReply::Ack), "expected ack, got {reply:?}");
+        assert!(
+            matches!(reply, SocketReply::Ack),
+            "expected ack, got {reply:?}"
+        );
 
         server.join().unwrap().unwrap();
         let _ = std::fs::remove_file(&sock);
@@ -2407,10 +2437,7 @@ mod tests {
         let mut cfg = test_config(PathBuf::from("/tmp/x"));
         cfg.waybar.click_action = tokengauge_core::ClickAction::Tui;
         cfg.waybar.tui_command = "alacritty -e tokengauge-tui".into();
-        assert_eq!(
-            resolve_click_command(&cfg),
-            "alacritty -e tokengauge-tui"
-        );
+        assert_eq!(resolve_click_command(&cfg), "alacritty -e tokengauge-tui");
     }
 
     #[test]

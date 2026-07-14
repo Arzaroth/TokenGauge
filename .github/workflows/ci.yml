@@ -3,34 +3,74 @@ name: CI
 on:
   pull_request:
 
+# Least privilege: CI only needs to read the repository.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-ci-${{ hashFiles('**/Cargo.lock') }}
 
+      # tokengauge-popover links the gtk4-layer-shell C library, which isn't
+      # packaged for the ubuntu-latest runner, so it's excluded here (the same
+      # way release.yml only builds waybar + tui). fmt still covers every crate.
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --exclude tokengauge-popover
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude tokengauge-popover
 
       - name: Format check
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --exclude tokengauge-popover --all-targets --all-features -- -D warnings
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-ci-${{ hashFiles('**/Cargo.lock') }}
+
+      # Only the cross-platform crates build on Windows; the waybar and popover
+      # crates are Linux-only (Waybar / gtk4-layer-shell). Formatting and clippy
+      # are OS-independent and run in the Linux `build` job.
+      - name: Build
+        run: cargo build -p tokengauge-core -p tokengauge-tui
+
+      - name: Test
+        run: cargo test -p tokengauge-core -p tokengauge-tui

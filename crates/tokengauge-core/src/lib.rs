@@ -352,6 +352,10 @@ pub struct TokenGaugeConfig {
     pub cache_file: PathBuf,
     /// Timeout in seconds for each provider request
     pub timeout_secs: u64,
+    /// Delay in milliseconds between consecutive provider fetch starts. Spreads
+    /// out codexbar calls to avoid rate-limit (429) bursts when many providers
+    /// are enabled. 0 disables staggering (all providers fetched at once).
+    pub stagger_ms: u64,
     /// Enable ccusage cost fetching (requires `npx ccusage`)
     pub ccusage_enabled: bool,
     /// Timeout in seconds for each ccusage call
@@ -435,6 +439,7 @@ impl Default for TokenGaugeConfig {
             refresh_secs: 600,
             cache_file: PathBuf::from("/tmp/tokengauge-usage.json"),
             timeout_secs: 20,
+            stagger_ms: 0,
             ccusage_enabled: true,
             ccusage_timeout_secs: 15,
             providers: ProvidersConfig {
@@ -925,13 +930,20 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
         }
     });
 
-    // Spawn threads for each provider
+    // Spawn threads for each provider. Each thread self-delays by its index
+    // times `stagger_ms` so codexbar calls are spread out (rate-limit relief)
+    // without blocking the main spawn loop or the ccusage thread.
+    let stagger = Duration::from_millis(config.stagger_ms);
     let handles: Vec<_> = enabled
         .into_iter()
-        .map(|provider| {
+        .enumerate()
+        .map(|(i, provider)| {
             let bin = config.codexbar_bin.clone();
             let provider_name = provider.name.clone();
             thread::spawn(move || {
+                if !stagger.is_zero() && i > 0 {
+                    thread::sleep(stagger * i as u32);
+                }
                 let result = fetch_single_provider(&bin, &provider, timeout);
                 (provider_name, result)
             })
@@ -1958,6 +1970,11 @@ refresh_secs = 600
 
 # Cache file location
 cache_file = "/tmp/tokengauge-usage.json"
+
+# Delay in milliseconds between provider fetch starts. Spreads out codexbar
+# calls to avoid rate-limit (429) bursts when several providers are enabled.
+# 0 = fetch all at once (fastest, default).
+stagger_ms = 0
 
 # Enable ccusage cost fetching (requires `npx ccusage` to be available)
 ccusage_enabled = true

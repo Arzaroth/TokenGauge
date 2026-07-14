@@ -113,6 +113,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -136,9 +137,11 @@ jobs:
         env:
           REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
+          # Sanitize the tag/ref so path separators can't break out of dist/.
+          $safe = $env:REF_NAME -replace '[^A-Za-z0-9._-]', '_'
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target/x86_64-pc-windows-msvc/release/tokengauge-tui.exe dist/
-          Compress-Archive -Path dist/tokengauge-tui.exe -DestinationPath "dist/tokengauge-$env:REF_NAME-windows-x86_64.zip" -Force
+          Compress-Archive -Path dist/tokengauge-tui.exe -DestinationPath "dist/tokengauge-$safe-windows-x86_64.zip" -Force
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

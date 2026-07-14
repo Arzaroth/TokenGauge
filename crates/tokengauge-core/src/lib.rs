@@ -1885,9 +1885,8 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
             if Path::new(name).extension().is_none() {
                 let pathext =
                     std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string());
-                for ext in pathext.split(';').filter(|e| !e.is_empty()) {
-                    let ext = ext.trim_start_matches('.');
-                    let candidate = dir.join(format!("{name}.{ext}"));
+                for cand in pathext_candidates(name, &pathext) {
+                    let candidate = dir.join(cand);
                     if is_file(&candidate) {
                         return Some(candidate);
                     }
@@ -1896,6 +1895,19 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Expand an extensionless executable `name` into `name.<ext>` candidates from a
+/// `PATHEXT` string (e.g. "npx" -> ["npx.EXE", "npx.CMD", ...]). Empty segments
+/// are skipped. Extracted so the probing order can be unit-tested without
+/// touching the process environment or filesystem.
+#[cfg(windows)]
+fn pathext_candidates(name: &str, pathext: &str) -> Vec<String> {
+    pathext
+        .split(';')
+        .filter(|e| !e.is_empty())
+        .map(|ext| format!("{name}.{}", ext.trim_start_matches('.')))
+        .collect()
 }
 
 /// Build a `Command` for the resolved ccusage runner.
@@ -2228,6 +2240,45 @@ pub fn config_set_primary(path: &Path, primary: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------------------
+    // Windows executable discovery / command construction
+    // ------------------------------------------------------------------------
+
+    #[cfg(windows)]
+    #[test]
+    fn pathext_candidates_appends_each_extension() {
+        assert_eq!(
+            pathext_candidates("npx", ".EXE;.CMD;.BAT"),
+            vec![
+                "npx.EXE".to_string(),
+                "npx.CMD".to_string(),
+                "npx.BAT".to_string()
+            ]
+        );
+        // Empty PATHEXT segments are skipped.
+        assert_eq!(
+            pathext_candidates("foo", ".EXE;;"),
+            vec!["foo.EXE".to_string()]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ccusage_command_routes_through_cmd_preserving_args() {
+        let runner = vec![
+            "npx".to_string(),
+            "--yes".to_string(),
+            "ccusage".to_string(),
+        ];
+        let command = ccusage_command(&runner);
+        assert_eq!(command.get_program().to_string_lossy(), "cmd");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, vec!["/C", "npx", "--yes", "ccusage"]);
+    }
 
     // ------------------------------------------------------------------------
     // fallback source tests

@@ -129,7 +129,6 @@ if (-not (Test-Path $configFile)) {
 # Limits need a Windows codexbar binary; without one, ccusage cost/token data
 # still works. Point codexbar_bin at a full path if you have a .cmd/.bat shim.
 codexbar_bin = "codexbar"
-source = "oauth"
 refresh_secs = 600
 
 [providers]

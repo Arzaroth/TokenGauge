@@ -15,6 +15,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # `cargo build --workspace` includes tokengauge-popover (GTK4), which needs
+      # GTK4 + gtk4-layer-shell development libraries at build time.
+      - name: Install system deps (GTK4 for tokengauge-popover)
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgtk4-layer-shell-dev
+
       - name: Cache Cargo
         uses: actions/cache@v4
         with:
@@ -40,6 +45,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

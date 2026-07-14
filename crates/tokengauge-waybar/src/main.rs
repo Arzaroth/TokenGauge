@@ -856,13 +856,20 @@ impl DaemonState {
 
 /// Pick the strongest CSS class tier based on current state.
 /// Order of precedence (strongest first): refreshing > error > partial-error >
-/// crit (>=80%) > warn (>=50%) > base.
+/// crit (>=80%) > warn (>=50%) > base. `tokengauge-stale` is additive: it is
+/// appended whenever any row was served from last-good cache, on top of the
+/// tier so usage colouring still shows.
 fn compute_class(
     rows: &[ProviderRow],
     errors: &[ProviderFetchError],
     refreshing: bool,
     window: WaybarWindow,
 ) -> String {
+    let stale_suffix = if rows.iter().any(|r| r.stale) {
+        " tokengauge-stale"
+    } else {
+        ""
+    };
     if refreshing {
         return "tokengauge tokengauge-refreshing".to_string();
     }
@@ -870,7 +877,7 @@ fn compute_class(
         return if rows.is_empty() {
             "tokengauge tokengauge-error".to_string()
         } else {
-            "tokengauge tokengauge-partial-error".to_string()
+            format!("tokengauge tokengauge-partial-error{stale_suffix}")
         };
     }
     let max_pct = rows
@@ -881,11 +888,12 @@ fn compute_class(
         })
         .max()
         .unwrap_or(0);
-    match max_pct {
-        80..=u8::MAX => "tokengauge tokengauge-crit".to_string(),
-        50..=79 => "tokengauge tokengauge-warn".to_string(),
-        _ => "tokengauge".to_string(),
-    }
+    let tier = match max_pct {
+        80..=u8::MAX => "tokengauge tokengauge-crit",
+        50..=79 => "tokengauge tokengauge-warn",
+        _ => "tokengauge",
+    };
+    format!("{tier}{stale_suffix}")
 }
 
 fn render_output(
@@ -1917,6 +1925,7 @@ mod tests {
             plan_label: None,
             extra_windows: Vec::new(),
             cost: None,
+            stale: false,
         }
     }
 

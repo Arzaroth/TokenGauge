@@ -6,7 +6,7 @@
         "Icon": "utilities-system-monitor",
         "Category": "System Information",
         "License": "MIT",
-        "Version": "0.6.3",
+        "Version": "0.8.0",
         "Website": "https://github.com/Arzaroth/TokenGauge",
         "Authors": [
             { "Name": "Marc-Etienne Barrut" }

@@ -70,7 +70,7 @@ jobs:
       # crates are Linux-only (Waybar / gtk4-layer-shell). Formatting and clippy
       # are OS-independent and run in the Linux `build` job.
       - name: Build
-        run: cargo build -p tokengauge-core -p tokengauge-tui
+        run: cargo build -p tokengauge-core -p tokengauge-tui -p tokengauge-tray
 
       - name: Test
         run: cargo test -p tokengauge-core -p tokengauge-tui

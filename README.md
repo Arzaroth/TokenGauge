@@ -311,12 +311,14 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 
 7. Restart Waybar.
 
-## Windows 10 (TUI)
+## Windows 10
 
 The Waybar module, the GTK4 popover, and the KDE Plasma applet are Linux-only
-(they depend on Waybar / `gtk4-layer-shell` / Plasma). On Windows only the
-**TUI dashboard** (`tokengauge-tui.exe`) is supported, and it builds and runs
-natively on Windows 10. TokenGauge builds its rows from `codexbar` data, so you
+(they depend on Waybar / `gtk4-layer-shell` / Plasma). On Windows two surfaces
+are supported, both building and running natively on Windows 10: the
+**TUI dashboard** (`tokengauge-tui.exe`) and a **system-tray GUI**
+(`tokengauge-tray.exe`, see [Tray GUI](#tray-gui-tokengauge-tray) below).
+TokenGauge builds its rows from `codexbar` data, so you
 need a codexbar-compatible binary for anything to show — upstream
 [CodexBar](https://github.com/steipete/CodexBar) doesn't ship one for Windows,
 but Win-CodexBar works as a drop-in (see **Limits on Windows** below). `ccusage`
@@ -380,6 +382,24 @@ cargo build --release -p tokengauge-tui
 `cargo build` (no `--workspace`) only builds the cross-platform crates
 (`tokengauge-core` + `tokengauge-tui`); the Linux-only crates are excluded via
 `default-members`. Do **not** pass `--workspace` on Windows.
+
+### Tray GUI (`tokengauge-tray`)
+
+Prefer a window over the terminal? `tokengauge-tray` is a Windows system-tray
+app (egui) that shows per-provider **Session / Weekly** usage bars and reset
+times in a small window, backed by a tray icon. It shares the same config and
+cache as the TUI and refreshes in the background.
+
+```powershell
+cargo build --release -p tokengauge-tray
+.\target\release\tokengauge-tray.exe
+```
+
+- Left-click the tray icon (near the clock) to show the window; closing the
+  window hides it back to the tray.
+- Right-click the tray icon for **Show / Refresh now / Quit**.
+- It reads limits from the same `codexbar_bin` as the TUI, so set that up first
+  (see **Limits on Windows** below). This crate is Windows-only.
 
 ### Limits on Windows
 

@@ -138,8 +138,8 @@ jobs:
           key: ${{ runner.os }}-cargo-windows-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build
-        # Only the TUI runs on Windows; waybar and popover are Linux-only.
-        run: cargo build --release --target x86_64-pc-windows-msvc -p tokengauge-tui
+        # The TUI and the tray GUI run on Windows; waybar and popover are Linux-only.
+        run: cargo build --release --target x86_64-pc-windows-msvc -p tokengauge-tui -p tokengauge-tray
 
       - name: Package
         shell: pwsh
@@ -151,7 +151,8 @@ jobs:
           $safe = $env:REF_NAME -replace '[^A-Za-z0-9._-]', '_'
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target/x86_64-pc-windows-msvc/release/tokengauge-tui.exe dist/
-          Compress-Archive -Path dist/tokengauge-tui.exe -DestinationPath "dist/tokengauge-$safe-windows-x86_64.zip" -Force
+          Copy-Item target/x86_64-pc-windows-msvc/release/tokengauge-tray.exe dist/
+          Compress-Archive -Path dist/tokengauge-tui.exe,dist/tokengauge-tray.exe -DestinationPath "dist/tokengauge-$safe-windows-x86_64.zip" -Force
 
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

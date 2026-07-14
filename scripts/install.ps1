@@ -129,8 +129,9 @@ if (-not (Test-Path $configFile)) {
     # cache_file is intentionally omitted so it defaults to %TEMP%.
     $config = @'
 # TokenGauge configuration (Windows)
-# Limits need a Windows codexbar binary; without one, ccusage cost/token data
-# still works. Point codexbar_bin at a full path if you have a .cmd/.bat shim.
+# TokenGauge builds its rows from codexbar data, so a codexbar-compatible binary
+# is required for anything to show (e.g. Win-CodexBar's codexbar-cli.exe);
+# ccusage then adds cost/token detail. codexbar_bin may be an .exe or .cmd/.bat.
 codexbar_bin = "codexbar"
 refresh_secs = 600
 

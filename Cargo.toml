@@ -4,7 +4,8 @@ members = [
   "crates/tokengauge-core",
   "crates/tokengauge-waybar",
   "crates/tokengauge-tui",
-  "crates/tokengauge-popover"
+  "crates/tokengauge-popover",
+  "crates/tokengauge-tray"
 ]
 # The waybar and popover crates are Linux-only (Waybar / gtk4-layer-shell) and do
 # not build on Windows or macOS. `default-members` limits a bare `cargo build`

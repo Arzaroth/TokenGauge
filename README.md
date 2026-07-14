@@ -311,12 +311,14 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 
 7. Restart Waybar.
 
-## Windows 10 (TUI)
+## Windows 10
 
 The Waybar module, the GTK4 popover, and the KDE Plasma applet are Linux-only
-(they depend on Waybar / `gtk4-layer-shell` / Plasma). On Windows only the
-**TUI dashboard** (`tokengauge-tui.exe`) is supported, and it builds and runs
-natively on Windows 10. TokenGauge builds its rows from `codexbar` data, so you
+(they depend on Waybar / `gtk4-layer-shell` / Plasma). On Windows two surfaces
+are supported, both building and running natively on Windows 10: the
+**TUI dashboard** (`tokengauge-tui.exe`) and a **system-tray GUI**
+(`tokengauge-tray.exe`, see [Tray GUI](#tray-gui-tokengauge-tray) below).
+TokenGauge builds its rows from `codexbar` data, so you
 need a codexbar-compatible binary for anything to show — upstream
 [CodexBar](https://github.com/steipete/CodexBar) doesn't ship one for Windows,
 but Win-CodexBar works as a drop-in (see **Limits on Windows** below). `ccusage`

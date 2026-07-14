@@ -18,9 +18,9 @@ use gtk4::{
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use tokengauge_core::{
-    ClickAction, CostInfo, ProviderRow, TokenGaugeConfig, WaybarPlacement, config_set_oauth_provider,
-    config_set_primary, format_tokens, format_updated_relative, load_config,
-    payload_to_rows_with_costs, provider_icon, provider_icon_svg_path, provider_label,
+    ClickAction, CostInfo, ProviderRow, TokenGaugeConfig, WaybarPlacement,
+    config_set_oauth_provider, config_set_primary, format_tokens, format_updated_relative,
+    load_config, payload_to_rows_with_costs, provider_icon, provider_icon_svg_path, provider_label,
     read_cache_full, read_waybar_state, signal_daemon_reload, theme, waybar_state_path,
     window_labels,
 };
@@ -347,7 +347,10 @@ fn render_settings(scroller: &ScrolledWindow, body: &GBox, config_path: &Rc<Path
             .halign(Align::Start)
             .hexpand(true)
             .build();
-        let sw = Switch::builder().active(enabled).valign(Align::Center).build();
+        let sw = Switch::builder()
+            .active(enabled)
+            .valign(Align::Center)
+            .build();
         let path = Rc::clone(config_path);
         let k = key.to_string();
         let rerender = Rc::clone(&rerender);
@@ -405,9 +408,7 @@ fn render_settings(scroller: &ScrolledWindow, body: &GBox, config_path: &Rc<Path
     let mut prev = highest.clone();
     for provider in config.providers.enabled_providers() {
         let name = provider.name.clone();
-        let rb = CheckButton::builder()
-            .label(provider_label(&name))
-            .build();
+        let rb = CheckButton::builder().label(provider_label(&name)).build();
         rb.set_group(Some(&prev));
         rb.set_active(current.as_deref() == Some(name.as_str()));
         let path = Rc::clone(config_path);
@@ -590,8 +591,7 @@ fn render_body(
     // known) and restore exactly once.
     if saved_scroll > 0.0 {
         let adj = scroller.vadjustment();
-        let handler: Rc<RefCell<Option<gtk4::glib::SignalHandlerId>>> =
-            Rc::new(RefCell::new(None));
+        let handler: Rc<RefCell<Option<gtk4::glib::SignalHandlerId>>> = Rc::new(RefCell::new(None));
         let handler_for_cb = Rc::clone(&handler);
         let adj_for_cb = adj.clone();
         let id = adj.connect_changed(move |adj| {
@@ -832,7 +832,10 @@ fn cost_section(cost: &CostInfo) -> GBox {
     // Pad value to a width that fits the widest amount in this card, so
     // decimal points line up under a monospace font.
     let widest = [
-        cost.burn_rate.as_ref().map(|b| b.cost_per_hour).unwrap_or(0.0),
+        cost.burn_rate
+            .as_ref()
+            .map(|b| b.cost_per_hour)
+            .unwrap_or(0.0),
         cost.session_usd,
         cost.weekly_usd,
         cost.today_usd,
@@ -845,8 +848,7 @@ fn cost_section(cost: &CostInfo) -> GBox {
     // against the digits (with leading spaces before the $), matching the
     // tooltip / TUI alignment.
     let widest_money = format!("${widest:.2}").chars().count();
-    let fmt_money =
-        |v: f64| -> String { format!("{:>w$}", format!("${v:.2}"), w = widest_money) };
+    let fmt_money = |v: f64| -> String { format!("{:>w$}", format!("${v:.2}"), w = widest_money) };
 
     if let Some(br) = cost.burn_rate.as_ref() {
         let trend = cost

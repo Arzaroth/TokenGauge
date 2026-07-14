@@ -6,13 +6,23 @@ use std::process::{Command, Output};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
 // Codexbar Payload Types
 // ============================================================================
+
+/// Deserialize a percentage that may arrive as an integer (upstream codexbar)
+/// or a float (e.g. Win-CodexBar sends `100.0`), rounding/clamping to `0..=100`.
+fn de_opt_percent<'de, D>(deserializer: D) -> Result<Option<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<f64>::deserialize(deserializer)?;
+    Ok(opt.map(|v| v.round().clamp(0.0, 100.0) as u8))
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,10 +31,13 @@ pub struct UsageSnapshot {
     pub secondary: Option<UsageWindow>,
     #[serde(default)]
     pub tertiary: Option<UsageWindow>,
+    // Accept snake_case too, so third-party codexbar ports (e.g. Win-CodexBar,
+    // which serializes snake_case) parse alongside the upstream camelCase CLI.
+    #[serde(default, alias = "updated_at")]
     pub updated_at: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "login_method")]
     pub login_method: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "extra_rate_windows")]
     pub extra_rate_windows: Vec<ExtraRateWindow>,
 }
 
@@ -39,9 +52,15 @@ pub struct ExtraRateWindow {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageWindow {
+    // `alias` accepts snake_case (Win-CodexBar); `de_opt_percent` also tolerates
+    // a float percent like `100.0` in addition to an integer.
+    #[serde(default, alias = "used_percent", deserialize_with = "de_opt_percent")]
     pub used_percent: Option<u8>,
+    #[serde(default, alias = "reset_description")]
     pub reset_description: Option<String>,
+    #[serde(default, alias = "resets_at")]
     pub resets_at: Option<String>,
+    #[serde(default, alias = "window_minutes")]
     pub window_minutes: Option<u32>,
 }
 
@@ -437,7 +456,7 @@ impl Default for TokenGaugeConfig {
         Self {
             codexbar_bin: "codexbar".to_string(),
             refresh_secs: 600,
-            cache_file: PathBuf::from("/tmp/tokengauge-usage.json"),
+            cache_file: default_cache_file(),
             timeout_secs: 20,
             stagger_ms: 0,
             ccusage_enabled: true,
@@ -740,7 +759,7 @@ pub fn load_config(path: Option<PathBuf>) -> Result<TokenGaugeConfig> {
         config.codexbar_bin = "codexbar".to_string();
     }
     if config.cache_file.as_os_str().is_empty() {
-        config.cache_file = PathBuf::from("/tmp/tokengauge-usage.json");
+        config.cache_file = default_cache_file();
     }
     if config.refresh_secs == 0 {
         config.refresh_secs = 600;
@@ -749,7 +768,22 @@ pub fn load_config(path: Option<PathBuf>) -> Result<TokenGaugeConfig> {
     Ok(config)
 }
 
+/// Default cache file location. Uses the platform temp dir so it resolves to
+/// `%TEMP%` on Windows and `/tmp` on Unix (preserving the previous behaviour on
+/// Linux, since `std::env::temp_dir()` is `/tmp` there).
+pub fn default_cache_file() -> PathBuf {
+    std::env::temp_dir().join("tokengauge-usage.json")
+}
+
 pub fn default_config_path() -> PathBuf {
+    // On Windows use the native config directory (`%APPDATA%`) so the path
+    // matches what scripts/install.ps1 writes; on Unix keep the XDG convention
+    // (`$XDG_CONFIG_HOME` or `~/.config`).
+    #[cfg(windows)]
+    let config_dir = dirs::config_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")));
+
+    #[cfg(not(windows))]
     let config_dir = std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -757,6 +791,7 @@ pub fn default_config_path() -> PathBuf {
             home.push(".config");
             home
         });
+
     config_dir.join("tokengauge").join("config.toml")
 }
 
@@ -858,6 +893,34 @@ fn payloads_usable(result: &Result<Vec<ProviderPayload>>) -> bool {
     matches!(result, Ok(payloads) if payloads.iter().any(|p| !p.has_error()))
 }
 
+/// Build the base `Command` for the codexbar binary.
+///
+/// A plain executable (`.exe`, or a name CreateProcess resolves) is spawned
+/// directly. On Windows a `.cmd`/`.bat` shim can't be exec'd directly, so those
+/// are routed through `cmd /C` - mirroring the ccusage handling and letting a
+/// batch wrapper work as `codexbar_bin`.
+fn codexbar_command(codexbar_bin: &str) -> Command {
+    #[cfg(windows)]
+    {
+        let is_batch = |p: &Path| {
+            matches!(
+                p.extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .as_deref(),
+                Some("cmd") | Some("bat")
+            )
+        };
+        let resolved = find_in_path(codexbar_bin);
+        if is_batch(Path::new(codexbar_bin)) || resolved.as_deref().map(is_batch).unwrap_or(false) {
+            let mut command = Command::new("cmd");
+            command.arg("/C").arg(codexbar_bin);
+            return command;
+        }
+    }
+    Command::new(codexbar_bin)
+}
+
 /// Fetch a single provider from a specific codexbar `--source`.
 fn fetch_single_provider_source(
     codexbar_bin: &str,
@@ -865,7 +928,7 @@ fn fetch_single_provider_source(
     source: &str,
     timeout: Duration,
 ) -> Result<Vec<ProviderPayload>> {
-    let mut command = Command::new(codexbar_bin);
+    let mut command = codexbar_command(codexbar_bin);
     command
         .arg("usage")
         .arg("--provider")
@@ -873,8 +936,16 @@ fn fetch_single_provider_source(
         .arg("--source")
         .arg(source)
         .arg("--format")
-        .arg("json")
-        .arg("--json-only");
+        .arg("json");
+
+    // The upstream (macOS/Linux) codexbar CLI takes `--json-only` to suppress
+    // any non-JSON preamble. On Windows there is no upstream binary; the only
+    // codexbar-compatible options are third-party ports (e.g. Win-CodexBar)
+    // whose `usage` command doesn't define that flag - and clap rejects unknown
+    // flags - while their `--format json` already emits pure JSON. So only pass
+    // `--json-only` off Windows, which keeps Win-CodexBar usable as a drop-in.
+    #[cfg(not(windows))]
+    command.arg("--json-only");
 
     // Set API key environment variable if needed
     if let (Some(api_key), Some(env_var)) = (&provider.api_key, provider.env_var) {
@@ -989,10 +1060,10 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
 
     // Serve last-good cached data for providers that failed this round, so a
     // transient 429 / network blip surfaces as `stale` instead of a blank bar.
-    if !errors.is_empty() {
-        if let Ok(previous) = read_cache_full(&config.cache_file) {
-            apply_stale_fallback(&mut payloads, &mut errors, previous.payloads());
-        }
+    if !errors.is_empty()
+        && let Ok(previous) = read_cache_full(&config.cache_file)
+    {
+        apply_stale_fallback(&mut payloads, &mut errors, previous.payloads());
     }
 
     let costs = ccusage_handle.join().unwrap_or_default();
@@ -1023,17 +1094,21 @@ fn apply_stale_fallback(
         {
             return false;
         }
-        let cached = previous.iter().find(|p| {
-            !p.has_error() && p.provider.eq_ignore_ascii_case(&err.provider)
-        });
-        match cached {
-            Some(payload) => {
-                let mut payload = payload.clone();
+        // Restore every cached payload for the provider (accounts/windows), not
+        // just the first, so a full outage doesn't drop all but one row.
+        let cached: Vec<ProviderPayload> = previous
+            .iter()
+            .filter(|p| !p.has_error() && p.provider.eq_ignore_ascii_case(&err.provider))
+            .cloned()
+            .collect();
+        if cached.is_empty() {
+            true // no fallback, keep the error
+        } else {
+            payloads.extend(cached.into_iter().map(|mut payload| {
                 payload.stale = true;
-                payloads.push(payload);
-                false // drop the error, we have last-good data
-            }
-            None => true, // no fallback, keep the error
+                payload
+            }));
+            false // drop the error, we have last-good data
         }
     });
 }
@@ -1301,8 +1376,7 @@ pub const NEUTRAL_HEX: &str = "#cdd6f4";
 /// `&'static Theme` references stay valid. The leaked memory is a few
 /// hundred bytes per reload and is never reclaimed; acceptable because
 /// reloads are user-initiated and rare.
-static ACTIVE_THEME: std::sync::RwLock<Option<&'static Theme>> =
-    std::sync::RwLock::new(None);
+static ACTIVE_THEME: std::sync::RwLock<Option<&'static Theme>> = std::sync::RwLock::new(None);
 
 pub fn theme() -> &'static Theme {
     if let Some(t) = *ACTIVE_THEME.read().expect("theme lock poisoned") {
@@ -1615,11 +1689,7 @@ pub fn write_notify_state(path: &Path, state: &NotifyState) -> Result<()> {
 /// Reset: if pct dropped 10+ points below the highest previously-notified
 /// threshold, treat as window roll-over and clear the notified list before
 /// considering thresholds. Avoids needing to track raw reset timestamps.
-pub fn thresholds_to_fire(
-    pct: u8,
-    thresholds: &[u8],
-    notified: &[u8],
-) -> (Vec<u8>, Vec<u8>) {
+pub fn thresholds_to_fire(pct: u8, thresholds: &[u8], notified: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut current = notified.to_vec();
     if let Some(&max_notified) = current.iter().max()
         && (pct + 10) < max_notified
@@ -1713,17 +1783,18 @@ impl AggregatedProvider {
             .into_iter()
             .map(|(model, (usd, tokens))| ModelCost { model, usd, tokens })
             .collect();
-        models.sort_by(|a, b| b.usd.partial_cmp(&a.usd).unwrap_or(std::cmp::Ordering::Equal));
+        models.sort_by(|a, b| {
+            b.usd
+                .partial_cmp(&a.usd)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         (self.total_usd, self.total_tokens, models)
     }
 }
 
 /// Last `n` days of cost per provider, oldest first. Pads with 0.0 for any
 /// days missing from the response so the sparkline has consistent length.
-fn last_n_days_by_provider(
-    response: &CcusageDailyResponse,
-    n: usize,
-) -> HashMap<String, Vec<f64>> {
+fn last_n_days_by_provider(response: &CcusageDailyResponse, n: usize) -> HashMap<String, Vec<f64>> {
     // (provider, period) -> usd
     let mut per_day: HashMap<String, HashMap<String, f64>> = HashMap::new();
     let mut periods: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -1761,18 +1832,18 @@ fn aggregate_ccusage(response: &CcusageDailyResponse) -> HashMap<String, Aggrega
     for day in &response.daily {
         for b in &day.model_breakdowns {
             if let Some(provider) = model_to_provider(&b.model_name) {
-                let entry = totals.entry(provider.to_string()).or_insert_with(|| AggregatedProvider {
-                    total_usd: 0.0,
-                    total_tokens: 0,
-                    models: HashMap::new(),
-                });
+                let entry =
+                    totals
+                        .entry(provider.to_string())
+                        .or_insert_with(|| AggregatedProvider {
+                            total_usd: 0.0,
+                            total_tokens: 0,
+                            models: HashMap::new(),
+                        });
                 let tokens = ccusage_total_tokens(b);
                 entry.total_usd += b.cost;
                 entry.total_tokens += tokens;
-                let model_entry = entry
-                    .models
-                    .entry(b.model_name.clone())
-                    .or_insert((0.0, 0));
+                let model_entry = entry.models.entry(b.model_name.clone()).or_insert((0.0, 0));
                 model_entry.0 += b.cost;
                 model_entry.1 += tokens;
             }
@@ -1842,23 +1913,85 @@ pub fn ccusage_runner_description() -> Option<String> {
 }
 
 fn binary_on_path(name: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| {
-        let candidate = dir.join(name);
-        std::fs::metadata(&candidate)
-            .map(|m| m.is_file())
-            .unwrap_or(false)
-    })
+    find_in_path(name).is_some()
+}
+
+/// Locate an executable named `name` on `PATH`, returning its full path.
+///
+/// On Windows the name is tried both as-is and with each extension from
+/// `PATHEXT` (falling back to a sensible default set), so shims like
+/// `npx.cmd`, `bunx.cmd` and `ccusage.exe` are found even when the caller
+/// passes the bare stem.
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let is_file = |p: &Path| std::fs::metadata(p).map(|m| m.is_file()).unwrap_or(false);
+
+    for dir in std::env::split_paths(&path) {
+        let direct = dir.join(name);
+        if is_file(&direct) {
+            return Some(direct);
+        }
+
+        #[cfg(windows)]
+        {
+            // Only append extensions when the name has none of its own.
+            if Path::new(name).extension().is_none() {
+                let pathext =
+                    std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string());
+                for cand in pathext_candidates(name, &pathext) {
+                    let candidate = dir.join(cand);
+                    if is_file(&candidate) {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Expand an extensionless executable `name` into `name.<ext>` candidates from a
+/// `PATHEXT` string (e.g. "npx" -> ["npx.EXE", "npx.CMD", ...]). Empty segments
+/// are skipped. Extracted so the probing order can be unit-tested without
+/// touching the process environment or filesystem.
+#[cfg(windows)]
+fn pathext_candidates(name: &str, pathext: &str) -> Vec<String> {
+    pathext
+        .split(';')
+        .filter(|e| !e.is_empty())
+        .map(|ext| format!("{name}.{}", ext.trim_start_matches('.')))
+        .collect()
+}
+
+/// Build a `Command` for the resolved ccusage runner.
+///
+/// On Windows the runner is very often a batch shim (`npx.cmd`, `bunx.cmd`),
+/// which `CreateProcess` cannot execute directly — Rust's `Command` only
+/// appends `.exe`. Routing through `cmd /C` lets the shell resolve `.cmd`/`.bat`
+/// (and plain `.exe`) via `PATHEXT`. On Unix we spawn the program directly.
+fn ccusage_command(runner: &[String]) -> Command {
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("cmd");
+        command.arg("/C");
+        for part in runner {
+            command.arg(part);
+        }
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = Command::new(&runner[0]);
+        for part in &runner[1..] {
+            command.arg(part);
+        }
+        command
+    }
 }
 
 fn run_ccusage_blocks(timeout: Duration) -> Result<CcusageBlocksResponse> {
     let runner = resolve_ccusage_runner().ok_or_else(|| anyhow!("no ccusage runner on PATH"))?;
-    let mut command = Command::new(&runner[0]);
-    for part in &runner[1..] {
-        command.arg(part);
-    }
+    let mut command = ccusage_command(&runner);
     command.arg("blocks").arg("--active").arg("--json");
     let output = run_with_timeout(command, timeout).context("ccusage blocks failed")?;
     if !output.status.success() {
@@ -1908,10 +2041,7 @@ fn fetch_active_blocks(timeout: Duration) -> HashMap<String, ActiveBlockInfo> {
 
 fn run_ccusage(args: &[&str], timeout: Duration) -> Result<CcusageDailyResponse> {
     let runner = resolve_ccusage_runner().ok_or_else(|| anyhow!("no ccusage runner on PATH"))?;
-    let mut command = Command::new(&runner[0]);
-    for part in &runner[1..] {
-        command.arg(part);
-    }
+    let mut command = ccusage_command(&runner);
     command.args(args).arg("--json");
     let output = run_with_timeout(command, timeout).context("ccusage failed")?;
 
@@ -2097,8 +2227,7 @@ where
     let tmp = path.with_extension("toml.tmp");
     fs::write(&tmp, doc.to_string())
         .with_context(|| format!("failed to write {}", tmp.display()))?;
-    fs::rename(&tmp, path)
-        .with_context(|| format!("failed to replace {}", path.display()))?;
+    fs::rename(&tmp, path).with_context(|| format!("failed to replace {}", path.display()))?;
     Ok(())
 }
 
@@ -2165,6 +2294,101 @@ mod tests {
     use super::*;
 
     // ------------------------------------------------------------------------
+    // Third-party codexbar (Win-CodexBar) snake_case + float-percent parsing
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn parses_win_codexbar_snake_case_usage() {
+        // Real output from Win-CodexBar's codexbar-cli: snake_case field names
+        // and a float `used_percent`, unlike upstream codexbar's camelCase/int.
+        let json = br#"[{"cost":null,"provider":"claude","source":"oauth","usage":{"extra_rate_windows":[{"id":"claude-weekly-scoped-fable","title":"Fable only","window":{"used_percent":0.0,"window_minutes":10080}}],"login_method":"Claude Max 5x","primary":{"reset_description":"Jul 14 at 8:49PM","resets_at":"2026-07-14T20:49:59.922430Z","used_percent":100.0,"window_minutes":300},"secondary":{"reset_description":"Jul 18 at 9:59AM","resets_at":"2026-07-18T09:59:59.922452Z","used_percent":21.0,"window_minutes":10080},"updated_at":"2026-07-14T15:57:20.912196200Z"}}]"#;
+
+        let payloads = parse_payload_bytes(json).expect("Win-CodexBar JSON should parse");
+        assert_eq!(payloads.len(), 1);
+        let usage = payloads[0].usage.as_ref().expect("usage present");
+        let primary = usage.primary.as_ref().unwrap();
+        assert_eq!(primary.used_percent, Some(100));
+        // Every snake_case alias must map, not just the percentages.
+        assert_eq!(
+            primary.reset_description.as_deref(),
+            Some("Jul 14 at 8:49PM")
+        );
+        assert_eq!(
+            primary.resets_at.as_deref(),
+            Some("2026-07-14T20:49:59.922430Z")
+        );
+        assert_eq!(primary.window_minutes, Some(300));
+        assert_eq!(usage.secondary.as_ref().unwrap().used_percent, Some(21));
+        assert_eq!(
+            usage.updated_at.as_deref(),
+            Some("2026-07-14T15:57:20.912196200Z")
+        );
+        assert_eq!(usage.login_method.as_deref(), Some("Claude Max 5x"));
+        assert_eq!(usage.extra_rate_windows.len(), 1);
+
+        let rows = payload_to_rows(payloads);
+        assert_eq!(rows[0].session_used, Some(100));
+        assert_eq!(rows[0].weekly_used, Some(21));
+    }
+
+    // ------------------------------------------------------------------------
+    // Windows executable discovery / command construction
+    // ------------------------------------------------------------------------
+
+    #[cfg(windows)]
+    #[test]
+    fn pathext_candidates_appends_each_extension() {
+        assert_eq!(
+            pathext_candidates("npx", ".EXE;.CMD;.BAT"),
+            vec![
+                "npx.EXE".to_string(),
+                "npx.CMD".to_string(),
+                "npx.BAT".to_string()
+            ]
+        );
+        // Empty PATHEXT segments are skipped.
+        assert_eq!(
+            pathext_candidates("foo", ".EXE;;"),
+            vec!["foo.EXE".to_string()]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ccusage_command_routes_through_cmd_preserving_args() {
+        let runner = vec![
+            "npx".to_string(),
+            "--yes".to_string(),
+            "ccusage".to_string(),
+        ];
+        let command = ccusage_command(&runner);
+        assert_eq!(command.get_program().to_string_lossy(), "cmd");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, vec!["/C", "npx", "--yes", "ccusage"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codexbar_command_routes_batch_shim_through_cmd() {
+        // A .cmd/.bat shim must run via `cmd /C`...
+        let command = codexbar_command("codexbar.cmd");
+        assert_eq!(command.get_program().to_string_lossy(), "cmd");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, vec!["/C", "codexbar.cmd"]);
+
+        // ...while a plain .exe is spawned directly.
+        let direct = codexbar_command("codexbar-cli.exe");
+        assert_eq!(direct.get_program().to_string_lossy(), "codexbar-cli.exe");
+        assert_eq!(direct.get_args().count(), 0);
+    }
+
+    // ------------------------------------------------------------------------
     // fallback source tests
     // ------------------------------------------------------------------------
 
@@ -2187,7 +2411,10 @@ mod tests {
             cli_fallback_source(&enabled("codex", ProviderType::OAuth)),
             None
         );
-        assert_eq!(cli_fallback_source(&enabled("zai", ProviderType::Api)), None);
+        assert_eq!(
+            cli_fallback_source(&enabled("zai", ProviderType::Api)),
+            None
+        );
     }
 
     #[test]
@@ -2253,7 +2480,45 @@ mod tests {
 
         assert_eq!(payloads.len(), 1, "no duplicate stale row: {payloads:?}");
         assert!(!payloads[0].stale);
-        assert!(errors.is_empty(), "errors covered by live payload: {errors:?}");
+        assert!(
+            errors.is_empty(),
+            "errors covered by live payload: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn apply_stale_fallback_restores_all_cached_payloads_for_a_failed_provider() {
+        // Provider with two cached payloads (e.g. two accounts/windows).
+        let previous = vec![
+            ProviderPayload {
+                provider: "claude".into(),
+                version: None,
+                source: Some("oauth".into()),
+                usage: None,
+                credits: None,
+                error: None,
+                stale: false,
+            },
+            ProviderPayload {
+                provider: "claude".into(),
+                version: None,
+                source: Some("cli".into()),
+                usage: None,
+                credits: None,
+                error: None,
+                stale: false,
+            },
+        ];
+
+        // Full outage this round: no live payloads, one error for the provider.
+        let mut payloads: Vec<ProviderPayload> = Vec::new();
+        let mut errors = vec![ProviderFetchError::new("claude".into(), "timeout")];
+
+        apply_stale_fallback(&mut payloads, &mut errors, &previous);
+
+        assert_eq!(payloads.len(), 2, "both cached rows restored: {payloads:?}");
+        assert!(payloads.iter().all(|p| p.stale));
+        assert!(errors.is_empty());
     }
 
     #[test]
@@ -2274,8 +2539,14 @@ mod tests {
         assert!(out.contains("# my config"), "top comment lost: {out}");
         assert!(out.contains("# oauth"), "section comment lost: {out}");
         assert!(out.contains("claude = false"), "toggle not applied: {out}");
-        assert!(out.contains("codex = true"), "other provider changed: {out}");
-        assert!(out.contains("primary = \"codex\""), "primary not set: {out}");
+        assert!(
+            out.contains("codex = true"),
+            "other provider changed: {out}"
+        );
+        assert!(
+            out.contains("primary = \"codex\""),
+            "primary not set: {out}"
+        );
 
         // Clearing primary removes the key, keeps the rest.
         config_set_primary(&path, None).unwrap();
@@ -2371,7 +2642,10 @@ mod tests {
 
     #[test]
     fn format_window_with_days() {
-        let future = Utc::now() + chrono::Duration::days(3) + chrono::Duration::hours(16) + chrono::Duration::minutes(41);
+        let future = Utc::now()
+            + chrono::Duration::days(3)
+            + chrono::Duration::hours(16)
+            + chrono::Duration::minutes(41);
         let window = UsageWindow {
             used_percent: Some(5),
             reset_description: Some("ignored".to_string()),
@@ -2952,8 +3226,7 @@ mod tests {
 
     #[test]
     fn waybar_config_primary_round_trips() {
-        let config: WaybarConfig =
-            toml::from_str(r#"primary = "claude""#).expect("parse primary");
+        let config: WaybarConfig = toml::from_str(r#"primary = "claude""#).expect("parse primary");
         assert_eq!(config.primary.as_deref(), Some("claude"));
     }
 
@@ -2961,7 +3234,10 @@ mod tests {
     fn waybar_state_path_lives_next_to_cache() {
         let cache = PathBuf::from("/tmp/foo/bar.json");
         let state = waybar_state_path(&cache);
-        assert_eq!(state, PathBuf::from("/tmp/foo/tokengauge-waybar-state.json"));
+        assert_eq!(
+            state,
+            PathBuf::from("/tmp/foo/tokengauge-waybar-state.json")
+        );
     }
 
     #[test]
@@ -3023,7 +3299,12 @@ mod tests {
 
     #[test]
     fn sparkline_basic_ramp() {
-        assert_eq!(sparkline(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]).chars().count(), 8);
+        assert_eq!(
+            sparkline(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
+                .chars()
+                .count(),
+            8
+        );
         assert_eq!(sparkline(&[0.0, 7.0]), "▁█");
         assert_eq!(sparkline(&[3.5, 7.0]), "▅█");
     }

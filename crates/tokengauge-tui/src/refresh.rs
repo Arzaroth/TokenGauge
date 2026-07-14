@@ -28,10 +28,7 @@ pub fn spawn_refresh(
     receiver
 }
 
-fn fetch_rows_with_config(
-    config_override: Option<PathBuf>,
-    force: bool,
-) -> Result<RefreshResult> {
+fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Result<RefreshResult> {
     let config_path = config_override.unwrap_or_else(tokengauge_core::default_config_path);
     if !config_path.exists() {
         write_default_config(&config_path)?;

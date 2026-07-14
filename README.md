@@ -90,7 +90,7 @@ Edit `~/.config/tokengauge/config.toml`:
 |-------|-------------|---------|
 | `codexbar_bin` | Path to CodexBar CLI | `codexbar` |
 | `refresh_secs` | Cache refresh interval (seconds) | `600` |
-| `cache_file` | Cache file location | `/tmp/tokengauge-usage.json` |
+| `cache_file` | Cache file location | OS temp dir + `tokengauge-usage.json` (`/tmp/…` on Linux, `%TEMP%\…` on Windows) |
 | `timeout_secs` | Per-provider codexbar timeout | `10` |
 | `stagger_ms` | Delay (ms) between provider fetch starts, to avoid 429 bursts (0 = all at once) | `0` |
 | `ccusage_enabled` | Fetch cost data via `ccusage` | `true` |
@@ -310,3 +310,100 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 6. (Optional) Set up the daemon - see **Daemon mode** above.
 
 7. Restart Waybar.
+
+## Windows 10 (TUI)
+
+The Waybar module, the GTK4 popover, and the KDE Plasma applet are Linux-only
+(they depend on Waybar / `gtk4-layer-shell` / Plasma). On Windows only the
+**TUI dashboard** (`tokengauge-tui.exe`) is supported, and it builds and runs
+natively on Windows 10. TokenGauge builds its rows from `codexbar` data, so you
+need a codexbar-compatible binary for anything to show — upstream
+[CodexBar](https://github.com/steipete/CodexBar) doesn't ship one for Windows,
+but Win-CodexBar works as a drop-in (see **Limits on Windows** below). `ccusage`
+then layers on **cost/token** detail per provider.
+
+### Prerequisites
+
+- **A codexbar-compatible binary** - **required** for any provider rows to
+  appear (TokenGauge builds its rows from codexbar data). Upstream CodexBar has
+  no Windows build; use Win-CodexBar - see **Limits on Windows** below.
+- *(Optional)* **[Node.js](https://nodejs.org/)** (or [Bun](https://bun.sh/)) -
+  lets `ccusage` add **cost/token** detail to those rows. TokenGauge auto-detects
+  `ccusage`, then `bunx ccusage`, then `npx --yes ccusage` on your `PATH`
+  (`npm i -g ccusage` is fastest).
+
+### Install
+
+**Quick install (PowerShell):** downloads the latest release, installs
+`tokengauge-tui.exe`, adds it to your user `PATH`, and writes a default config:
+
+```powershell
+irm https://raw.githubusercontent.com/Arzaroth/TokenGauge/master/scripts/install.ps1 | iex
+```
+
+Or run a local checkout with `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`.
+
+**Manual:**
+
+1. Download `tokengauge-<version>-windows-x86_64.zip` from
+   [GitHub Releases](https://github.com/Arzaroth/TokenGauge/releases) and unzip
+   it. Put `tokengauge-tui.exe` somewhere on your `PATH` (or just run it from the
+   unzipped folder).
+
+2. Run it from **Windows Terminal**, **PowerShell**, or **cmd**:
+   ```powershell
+   tokengauge-tui.exe
+   ```
+
+On first run a default config is created at
+`%APPDATA%\tokengauge\config.toml` and the usage cache is written to
+`%TEMP%\tokengauge-usage.json`. A minimal config:
+
+```toml
+codexbar_bin = "codexbar"
+refresh_secs = 600
+
+[providers]
+codex = true
+claude = true
+```
+
+### Build from source (Windows)
+
+With the [Rust toolchain](https://rustup.rs/) installed:
+
+```powershell
+cargo build --release -p tokengauge-tui
+# binary at target\release\tokengauge-tui.exe
+```
+
+`cargo build` (no `--workspace`) only builds the cross-platform crates
+(`tokengauge-core` + `tokengauge-tui`); the Linux-only crates are excluded via
+`default-members`. Do **not** pass `--workspace` on Windows.
+
+### Limits on Windows
+
+Upstream CodexBar ships a `codexbar` CLI for macOS and Linux only. Without a
+codexbar binary, every provider errors ("failed to spawn codexbar") and the TUI
+has nothing to show, since rows are built from codexbar data. To get real data
+on Windows, use **[Win-CodexBar](https://github.com/Finesssee/Win-CodexBar)**, a
+faithful Windows port whose bundled `codexbar-cli.exe` speaks the same
+`usage --provider … --source oauth --format json` interface and emits the same
+JSON schema TokenGauge parses.
+
+1. Install it: `winget install Finesssee.Win-CodexBar`, then sign in so it can
+   read your Claude/Codex usage.
+2. Point TokenGauge at its CLI in `%APPDATA%\tokengauge\config.toml`:
+
+   ```toml
+   # full path, or just "codexbar-cli" if its folder is on PATH
+   codexbar_bin = "C:\\Program Files\\Win-CodexBar\\codexbar-cli.exe"
+   ```
+
+3. Restart `tokengauge-tui`.
+
+TokenGauge omits the `--json-only` flag on Windows automatically (Win-CodexBar's
+`usage` command doesn't define it, and `--format json` already yields clean
+JSON), so `codexbar-cli.exe` works as a drop-in. `codexbar_bin` may point at an
+`.exe`, or a `.cmd`/`.bat` shim (those are run via `cmd /C`); use its full path
+if it isn't on `PATH`.

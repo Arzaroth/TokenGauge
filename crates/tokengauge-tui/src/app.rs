@@ -115,7 +115,7 @@ impl App {
         let cache_file = loaded_config
             .as_ref()
             .map(|c| c.cache_file.clone())
-            .unwrap_or_else(|| PathBuf::from("/tmp/tokengauge-usage.json"));
+            .unwrap_or_else(tokengauge_core::default_cache_file);
         let config_primary = loaded_config.and_then(|c| c.waybar.primary);
 
         let mut state = AppState::new(cache_file.clone());

@@ -360,26 +360,22 @@ mod win {
         }
     }
 
-    /// Tooltip text + the peak usage percentage across all windows.
+    /// Tooltip text + the peak *session* usage percentage (what the icon shows).
     fn tray_summary(snap: &Snapshot) -> (String, Option<u8>) {
         if snap.rows.is_empty() {
             return ("TokenGauge — no data".to_string(), None);
         }
-        let mut peak: Option<u8> = None;
-        let mut bump = |v: Option<u8>| {
-            if let Some(p) = v {
-                peak = Some(peak.map_or(p, |cur| cur.max(p)));
-            }
-        };
+        let mut session_peak: Option<u8> = None;
         let mut lines = Vec::new();
         for r in &snap.rows {
-            bump(r.session_used);
-            bump(r.weekly_used);
+            if let Some(p) = r.session_used {
+                session_peak = Some(session_peak.map_or(p, |cur| cur.max(p)));
+            }
             let s = r.session_used.map_or("—".to_string(), |p| format!("{p}%"));
             let w = r.weekly_used.map_or("—".to_string(), |p| format!("{p}%"));
             lines.push(format!("{}: session {s} · weekly {w}", cap(&r.provider)));
         }
-        (lines.join("\n"), peak)
+        (lines.join("\n"), session_peak)
     }
 
     // --- Tray icon rendering (peak % drawn with a tiny 3x5 bitmap font) -------

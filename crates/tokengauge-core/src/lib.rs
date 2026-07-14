@@ -1094,17 +1094,21 @@ fn apply_stale_fallback(
         {
             return false;
         }
-        let cached = previous
+        // Restore every cached payload for the provider (accounts/windows), not
+        // just the first, so a full outage doesn't drop all but one row.
+        let cached: Vec<ProviderPayload> = previous
             .iter()
-            .find(|p| !p.has_error() && p.provider.eq_ignore_ascii_case(&err.provider));
-        match cached {
-            Some(payload) => {
-                let mut payload = payload.clone();
+            .filter(|p| !p.has_error() && p.provider.eq_ignore_ascii_case(&err.provider))
+            .cloned()
+            .collect();
+        if cached.is_empty() {
+            true // no fallback, keep the error
+        } else {
+            payloads.extend(cached.into_iter().map(|mut payload| {
                 payload.stale = true;
-                payloads.push(payload);
-                false // drop the error, we have last-good data
-            }
-            None => true, // no fallback, keep the error
+                payload
+            }));
+            false // drop the error, we have last-good data
         }
     });
 }
@@ -2480,6 +2484,41 @@ mod tests {
             errors.is_empty(),
             "errors covered by live payload: {errors:?}"
         );
+    }
+
+    #[test]
+    fn apply_stale_fallback_restores_all_cached_payloads_for_a_failed_provider() {
+        // Provider with two cached payloads (e.g. two accounts/windows).
+        let previous = vec![
+            ProviderPayload {
+                provider: "claude".into(),
+                version: None,
+                source: Some("oauth".into()),
+                usage: None,
+                credits: None,
+                error: None,
+                stale: false,
+            },
+            ProviderPayload {
+                provider: "claude".into(),
+                version: None,
+                source: Some("cli".into()),
+                usage: None,
+                credits: None,
+                error: None,
+                stale: false,
+            },
+        ];
+
+        // Full outage this round: no live payloads, one error for the provider.
+        let mut payloads: Vec<ProviderPayload> = Vec::new();
+        let mut errors = vec![ProviderFetchError::new("claude".into(), "timeout")];
+
+        apply_stale_fallback(&mut payloads, &mut errors, &previous);
+
+        assert_eq!(payloads.len(), 2, "both cached rows restored: {payloads:?}");
+        assert!(payloads.iter().all(|p| p.stale));
+        assert!(errors.is_empty());
     }
 
     #[test]

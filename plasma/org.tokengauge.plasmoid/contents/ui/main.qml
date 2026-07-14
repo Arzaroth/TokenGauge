@@ -33,6 +33,10 @@ PlasmoidItem {
     readonly property bool updateAvailable: !!(updateInfo && updateInfo.available)
     // True while an --update command is in flight; reset when exec completes.
     property bool updating: false
+    // Exact exec source of the in-flight update command, so only its own
+    // completion clears `updating` (waybarBin is user-configurable, so a
+    // substring match on "--update" isn't reliable).
+    property string updateSource: ""
 
     // Row shown in the panel / hovered.
     readonly property var selRow: rows.length > 0
@@ -76,8 +80,10 @@ PlasmoidItem {
             // Clear the in-flight update state only when the update command
             // itself completes, so a periodic refresh finishing mid-update
             // doesn't re-enable the button while --update is still running.
-            if (source.indexOf("--update") !== -1)
+            if (source === root.updateSource) {
                 root.updating = false
+                root.updateSource = ""
+            }
             if (data["exit code"] === 0) {
                 try {
                     var parsed = JSON.parse(data.stdout)
@@ -121,7 +127,9 @@ PlasmoidItem {
         root.updating = true
         // Discard --update's stdout (keeps the JSON refresh parseable) but keep
         // stderr so a failed update surfaces its error via root.lastError.
-        exec.connectSource(cmd(root.waybarBin + " --update >/dev/null && " + root.waybarBin + " --json"))
+        var updateSource = cmd(root.waybarBin + " --update >/dev/null && " + root.waybarBin + " --json")
+        root.updateSource = updateSource
+        exec.connectSource(updateSource)
     }
 
     function shellQuote(s) {

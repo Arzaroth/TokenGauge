@@ -12,16 +12,16 @@ use clap::Parser;
 use gtk4::glib::{ControlFlow, Propagation, source};
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Application, ApplicationWindow, Box as GBox, Button, CssProvider, EventControllerKey,
-    Expander, Grid, Image, Label, Orientation, ProgressBar, ScrolledWindow, Stack, ToggleButton,
-    Widget,
+    Align, Application, ApplicationWindow, Box as GBox, Button, CheckButton, CssProvider,
+    EventControllerKey, Expander, Grid, Image, Label, Orientation, ProgressBar, ScrolledWindow,
+    Stack, Switch, ToggleButton, Widget,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use tokengauge_core::{
-    ClickAction, CostInfo, ProviderRow, TokenGaugeConfig, WaybarPlacement, format_tokens,
-    format_updated_relative, load_config, payload_to_rows_with_costs, provider_icon,
-    provider_icon_svg_path, read_cache_full, read_waybar_state, theme, waybar_state_path,
-    window_labels,
+    ClickAction, CostInfo, ProviderRow, TokenGaugeConfig, WaybarPlacement, config_set_oauth_provider,
+    config_set_primary, format_tokens, format_updated_relative, load_config,
+    payload_to_rows_with_costs, provider_icon, provider_icon_svg_path, provider_label,
+    read_cache_full, read_waybar_state, theme, waybar_state_path, window_labels,
 };
 
 const APP_ID: &str = "io.arzaroth.tokengauge.popover";
@@ -78,7 +78,7 @@ fn main() -> Result<()> {
         .clone()
         .unwrap_or_else(tokengauge_core::default_config_path);
     let config = if config_path.exists() {
-        load_config(Some(config_path)).context("loading config")?
+        load_config(Some(config_path.clone())).context("loading config")?
     } else {
         TokenGaugeConfig::default()
     };
@@ -90,10 +90,10 @@ fn main() -> Result<()> {
 
     let app = Application::builder().application_id(APP_ID).build();
     let config_rc = Rc::new(config);
+    let path_rc = Rc::new(config_path);
 
     app.connect_activate(move |app| {
-        let cfg = Rc::clone(&config_rc);
-        build_window(app, cfg);
+        build_window(app, Rc::clone(&config_rc), Rc::clone(&path_rc));
     });
 
     // GTK's Application uses argv for command-line handling; pass an empty
@@ -106,7 +106,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn build_window(app: &Application, config: Rc<TokenGaugeConfig>) {
+fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc<PathBuf>) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("TokenGauge")
@@ -163,9 +163,11 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>) {
         .css_classes(vec!["tg-footer".to_string()])
         .halign(Align::End)
         .build();
+    let btn_settings = Button::builder().label("⚙  Settings").build();
     let btn_refresh = Button::builder().label("↻  Refresh").build();
     let btn_tui = Button::builder().label("  Open TUI").build();
     let btn_close = Button::builder().label("✕  Close").build();
+    footer.append(&btn_settings);
     footer.append(&btn_refresh);
     footer.append(&btn_tui);
     footer.append(&btn_close);
@@ -179,17 +181,42 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>) {
     let body_rc = body.clone();
     let scroller_rc = scroller.clone();
     let cfg_for_refresh = Rc::clone(&config);
+    let path_for_render = Rc::clone(&config_path);
     let active_tab: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let active_tab_for_render = Rc::clone(&active_tab);
+    let settings_mode: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+    let settings_mode_for_render = Rc::clone(&settings_mode);
     let do_render = Rc::new(RefCell::new(move || {
-        render_body(
-            &scroller_rc,
-            &body_rc,
-            &cfg_for_refresh,
-            &active_tab_for_render,
-        );
+        if *settings_mode_for_render.borrow() {
+            render_settings(&scroller_rc, &body_rc, &cfg_for_refresh, &path_for_render);
+        } else {
+            render_body(
+                &scroller_rc,
+                &body_rc,
+                &cfg_for_refresh,
+                &active_tab_for_render,
+            );
+        }
     }));
     (do_render.borrow_mut())();
+
+    // Settings button: flip the body between the provider view and the inline
+    // settings pane.
+    {
+        let render = Rc::clone(&do_render);
+        let mode = Rc::clone(&settings_mode);
+        let btn = btn_settings.clone();
+        btn_settings.connect_clicked(move |_| {
+            let now_settings = !*mode.borrow();
+            *mode.borrow_mut() = now_settings;
+            btn.set_label(if now_settings {
+                "‹  Back"
+            } else {
+                "⚙  Settings"
+            });
+            (render.borrow_mut())();
+        });
+    }
 
     // Refresh button: ask daemon to fetch, then re-render after a beat.
     {
@@ -268,6 +295,139 @@ fn header_bar() -> GBox {
     bar.append(&title);
     bar.append(&stamp);
     bar
+}
+
+/// Ask a running daemon to reload its config (theme / providers / primary /
+/// click action) without a restart. No-op when no daemon is running.
+fn signal_daemon_reload() {
+    let _ = Command::new("pkill")
+        .arg("-HUP")
+        .arg("tokengauge-waybar")
+        .spawn();
+}
+
+fn settings_section(text: &str) -> Label {
+    Label::builder()
+        .label(text)
+        .css_classes(vec!["tg-settings-section".to_string()])
+        .halign(Align::Start)
+        .build()
+}
+
+/// Inline settings pane: toggle OAuth providers and pick the bar-pinned
+/// provider. Changes are written to the config file live (comments preserved)
+/// and the daemon is signalled to reload.
+fn render_settings(
+    scroller: &ScrolledWindow,
+    body: &GBox,
+    config: &TokenGaugeConfig,
+    config_path: &Rc<PathBuf>,
+) {
+    while let Some(child) = body.first_child() {
+        body.remove(&child);
+    }
+    scroller.vadjustment().set_value(0.0);
+
+    // --- Providers ---
+    body.append(&settings_section("Providers"));
+    for (key, label, enabled) in [
+        ("codex", "Codex", config.providers.codex.unwrap_or(false)),
+        ("claude", "Claude", config.providers.claude.unwrap_or(false)),
+    ] {
+        let row = GBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(8)
+            .build();
+        let name = Label::builder()
+            .label(label)
+            .halign(Align::Start)
+            .hexpand(true)
+            .build();
+        let sw = Switch::builder().active(enabled).valign(Align::Center).build();
+        let path = Rc::clone(config_path);
+        let k = key.to_string();
+        sw.connect_state_set(move |_, state| {
+            if let Err(e) = config_set_oauth_provider(&path, &k, state) {
+                eprintln!("tokengauge-popover: failed to update config: {e:#}");
+            } else {
+                signal_daemon_reload();
+            }
+            Propagation::Proceed
+        });
+        row.append(&name);
+        row.append(&sw);
+        body.append(&row);
+    }
+    // API providers are enabled by adding an api_key to the config; show their
+    // state read-only here.
+    for (label, on) in [
+        ("z.ai", config.providers.zai.is_some()),
+        ("Kimi K2", config.providers.kimik2.is_some()),
+        ("Copilot", config.providers.copilot.is_some()),
+        ("MiniMax", config.providers.minimax.is_some()),
+        ("Kimi", config.providers.kimi.is_some()),
+    ] {
+        let row = GBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(8)
+            .build();
+        let name = Label::builder()
+            .label(label)
+            .halign(Align::Start)
+            .hexpand(true)
+            .css_classes(vec!["tg-dim".to_string()])
+            .build();
+        let state = Label::builder()
+            .label(if on { "on (api_key)" } else { "needs api_key" })
+            .css_classes(vec!["tg-dim".to_string()])
+            .halign(Align::End)
+            .build();
+        row.append(&name);
+        row.append(&state);
+        body.append(&row);
+    }
+
+    // --- Bar pin ---
+    body.append(&settings_section("Bar pin"));
+    let current = config.waybar.primary.clone();
+    let highest = CheckButton::builder()
+        .label("Highest (most constrained)")
+        .active(current.is_none())
+        .build();
+    body.append(&highest);
+
+    let mut prev = highest.clone();
+    for provider in config.providers.enabled_providers() {
+        let name = provider.name.clone();
+        let rb = CheckButton::builder()
+            .label(provider_label(&name))
+            .build();
+        rb.set_group(Some(&prev));
+        rb.set_active(current.as_deref() == Some(name.as_str()));
+        let path = Rc::clone(config_path);
+        rb.connect_toggled(move |b| {
+            if b.is_active() {
+                if let Err(e) = config_set_primary(&path, Some(&name)) {
+                    eprintln!("tokengauge-popover: failed to update config: {e:#}");
+                } else {
+                    signal_daemon_reload();
+                }
+            }
+        });
+        body.append(&rb);
+        prev = rb;
+    }
+    // Connect "Highest" last so the set_active calls above don't fire it.
+    let path = Rc::clone(config_path);
+    highest.connect_toggled(move |b| {
+        if b.is_active() {
+            if let Err(e) = config_set_primary(&path, None) {
+                eprintln!("tokengauge-popover: failed to update config: {e:#}");
+            } else {
+                signal_daemon_reload();
+            }
+        }
+    });
 }
 
 fn render_body(

@@ -2063,6 +2063,7 @@ mod tests {
             codexbar_bin: "codexbar".to_string(),
             refresh_secs: 600,
             timeout_secs: 10,
+            stagger_ms: 0,
             ccusage_enabled: false,
             ccusage_timeout_secs: 15,
             cache_file,

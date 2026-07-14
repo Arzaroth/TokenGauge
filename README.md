@@ -172,7 +172,13 @@ Left-click goes through `tokengauge-waybar --click`, which reads
   brand-coloured icons + tier-tinted session bars, monospace-aligned
   cost rows, and a collapsible 7-day chart. A second click on the waybar
   module toggles it closed. Tune `popover_margin_top` /
-  `popover_margin_side` if it doesn't sit where you want.
+  `popover_margin_side` if it doesn't sit where you want. The **⚙ Settings**
+  button flips the body to an inline pane: toggle the OAuth providers
+  (Codex / Claude) and pick which provider is pinned to the bar (or
+  `Highest`). Changes are written to `config.toml` live (comments
+  preserved) and the daemon is signalled to reload - no restart needed.
+  API-key providers are shown read-only there (enable them by adding an
+  `api_key` to the config).
 
 `tokengauge-waybar --doctor` reports the resolved click target and warns
 when its leading binary isn't on `$PATH`. `popover_command` accepts any

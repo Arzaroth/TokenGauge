@@ -693,7 +693,7 @@ pub struct BurnRate {
 // Provider Row (for display)
 // ============================================================================
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProviderRow {
     pub provider: String,
     pub session_used: Option<u8>,
@@ -716,7 +716,7 @@ pub struct ProviderRow {
     pub stale: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ExtraWindowRow {
     pub title: String,
     pub used: Option<u8>,

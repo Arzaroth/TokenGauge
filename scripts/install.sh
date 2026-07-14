@@ -349,6 +349,12 @@ if [[ -n "$BACKUP_PATH" ]]; then
 fi
 info "Installed tokengauge to $INSTALL_DIR"
 
+if [[ "${XDG_CURRENT_DESKTOP:-}" == *KDE* ]] || command -v kpackagetool6 >/dev/null 2>&1; then
+  echo ""
+  info "KDE Plasma detected. For a native panel widget instead of Waybar, run"
+  info "scripts/install-plasma.sh from a checkout, then add the TokenGauge widget."
+fi
+
 if $HAS_OMARCHY; then
   success "Restart Waybar: omarchy-restart-waybar"
 else

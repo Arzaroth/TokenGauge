@@ -1,0 +1,17 @@
+{
+    "KPlugin": {
+        "Id": "org.tokengauge.plasmoid",
+        "Name": "TokenGauge",
+        "Description": "Token usage, cost and limits for AI coding assistants",
+        "Icon": "utilities-system-monitor",
+        "Category": "System Information",
+        "License": "MIT",
+        "Version": "0.6.3",
+        "Website": "https://github.com/Arzaroth/TokenGauge",
+        "Authors": [
+            { "Name": "Marc-Etienne Barrut" }
+        ]
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

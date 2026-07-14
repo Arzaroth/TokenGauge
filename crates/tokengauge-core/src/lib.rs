@@ -942,7 +942,7 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
             let provider_name = provider.name.clone();
             thread::spawn(move || {
                 if !stagger.is_zero() && i > 0 {
-                    thread::sleep(stagger * i as u32);
+                    thread::sleep(stagger.saturating_mul(i as u32));
                 }
                 let result = fetch_single_provider(&bin, &provider, timeout);
                 (provider_name, result)
@@ -1012,6 +1012,17 @@ fn apply_stale_fallback(
     previous: &[ProviderPayload],
 ) {
     errors.retain(|err| {
+        // A provider can return several payloads (one per account/window); if
+        // one succeeded and another errored, the provider name is in both lists.
+        // A per-name stale clone would then duplicate the live row - and a
+        // second error for the same provider would clone it again. Skip once the
+        // provider already has any payload (live or an earlier stale restore).
+        if payloads
+            .iter()
+            .any(|p| p.provider.eq_ignore_ascii_case(&err.provider))
+        {
+            return false;
+        }
         let cached = previous.iter().find(|p| {
             !p.has_error() && p.provider.eq_ignore_ascii_case(&err.provider)
         });
@@ -2093,7 +2104,16 @@ where
 
 fn ensure_table<'a>(doc: &'a mut toml_edit::DocumentMut, key: &str) -> &'a mut toml_edit::Table {
     if doc.get(key).and_then(|i| i.as_table()).is_none() {
-        doc.insert(key, toml_edit::Item::Table(toml_edit::Table::new()));
+        // An existing inline table (`providers = { codex = true }`) reads as None
+        // via as_table(); convert it in place so its keys survive instead of
+        // silently overwriting the user's settings with an empty table.
+        let replacement = doc
+            .get(key)
+            .and_then(|i| i.as_inline_table())
+            .cloned()
+            .map(|t| toml_edit::Item::Table(t.into_table()))
+            .unwrap_or_else(|| toml_edit::Item::Table(toml_edit::Table::new()));
+        doc.insert(key, replacement);
     }
     doc[key].as_table_mut().expect("just ensured table")
 }
@@ -2186,6 +2206,42 @@ mod tests {
     }
 
     #[test]
+    fn apply_stale_fallback_skips_providers_with_a_live_payload() {
+        let cached = ProviderPayload {
+            provider: "claude".into(),
+            version: None,
+            source: None,
+            usage: None,
+            credits: None,
+            error: None,
+            stale: false,
+        };
+        let previous = vec![cached];
+
+        // claude already has a live payload this round plus an error for a
+        // sibling sub-payload; a stale clone must not be added (no dup row).
+        let mut payloads = vec![ProviderPayload {
+            provider: "claude".into(),
+            version: None,
+            source: None,
+            usage: None,
+            credits: None,
+            error: None,
+            stale: false,
+        }];
+        let mut errors = vec![
+            ProviderFetchError::new("claude".into(), "429"),
+            ProviderFetchError::new("claude".into(), "429 again"),
+        ];
+
+        apply_stale_fallback(&mut payloads, &mut errors, &previous);
+
+        assert_eq!(payloads.len(), 1, "no duplicate stale row: {payloads:?}");
+        assert!(!payloads[0].stale);
+        assert!(errors.is_empty(), "errors covered by live payload: {errors:?}");
+    }
+
+    #[test]
     fn config_edits_preserve_comments_and_toggle_values() {
         let dir = std::env::temp_dir().join(format!("tg-cfgtest-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
@@ -2211,6 +2267,23 @@ mod tests {
         let out = fs::read_to_string(&path).unwrap();
         assert!(!out.contains("primary ="), "primary not cleared: {out}");
         assert!(out.contains("window = \"daily\""));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_edit_preserves_inline_provider_table() {
+        let dir = std::env::temp_dir().join(format!("tg-cfginline-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("config.toml");
+        fs::write(&path, "providers = { codex = true, claude = true }\n").unwrap();
+
+        config_set_oauth_provider(&path, "claude", false).unwrap();
+
+        let out = fs::read_to_string(&path).unwrap();
+        assert!(out.contains("codex = true"), "codex wiped: {out}");
+        assert!(out.contains("claude = false"), "claude not toggled: {out}");
 
         let _ = fs::remove_dir_all(&dir);
     }

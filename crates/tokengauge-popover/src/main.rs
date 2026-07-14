@@ -188,7 +188,7 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
     let settings_mode_for_render = Rc::clone(&settings_mode);
     let do_render = Rc::new(RefCell::new(move || {
         if *settings_mode_for_render.borrow() {
-            render_settings(&scroller_rc, &body_rc, &cfg_for_refresh, &path_for_render);
+            render_settings(&scroller_rc, &body_rc, &path_for_render);
         } else {
             render_body(
                 &scroller_rc,
@@ -300,10 +300,14 @@ fn header_bar() -> GBox {
 /// Ask a running daemon to reload its config (theme / providers / primary /
 /// click action) without a restart. No-op when no daemon is running.
 fn signal_daemon_reload() {
+    // Match the full command line: the 17-char binary name exceeds procps'
+    // 15-char comm cap, so a bare `pkill tokengauge-waybar` matches nothing.
+    // `--daemon` keeps us from signalling short-lived one-shot invocations.
     let _ = Command::new("pkill")
         .arg("-HUP")
-        .arg("tokengauge-waybar")
-        .spawn();
+        .arg("-f")
+        .arg("tokengauge-waybar --daemon")
+        .status();
 }
 
 fn settings_section(text: &str) -> Label {
@@ -317,12 +321,24 @@ fn settings_section(text: &str) -> Label {
 /// Inline settings pane: toggle OAuth providers and pick the bar-pinned
 /// provider. Changes are written to the config file live (comments preserved)
 /// and the daemon is signalled to reload.
-fn render_settings(
-    scroller: &ScrolledWindow,
-    body: &GBox,
-    config: &TokenGaugeConfig,
-    config_path: &Rc<PathBuf>,
-) {
+fn render_settings(scroller: &ScrolledWindow, body: &GBox, config_path: &Rc<PathBuf>) {
+    // Load fresh from disk each render so the pane reflects edits made by the
+    // toggles below (the in-memory snapshot from startup goes stale otherwise).
+    let config = load_config(Some((**config_path).clone())).unwrap_or_default();
+
+    // Rebuild the pane after a provider edit so it drops from the bar-pin list
+    // immediately. Deferred to idle so the switch that fired the signal isn't
+    // destroyed mid-callback.
+    let rerender: Rc<dyn Fn()> = Rc::new({
+        let scroller = scroller.clone();
+        let body = body.clone();
+        let config_path = Rc::clone(config_path);
+        move || {
+            let (s, b, p) = (scroller.clone(), body.clone(), Rc::clone(&config_path));
+            gtk4::glib::idle_add_local_once(move || render_settings(&s, &b, &p));
+        }
+    });
+
     while let Some(child) = body.first_child() {
         body.remove(&child);
     }
@@ -346,11 +362,13 @@ fn render_settings(
         let sw = Switch::builder().active(enabled).valign(Align::Center).build();
         let path = Rc::clone(config_path);
         let k = key.to_string();
+        let rerender = Rc::clone(&rerender);
         sw.connect_state_set(move |_, state| {
             if let Err(e) = config_set_oauth_provider(&path, &k, state) {
                 eprintln!("tokengauge-popover: failed to update config: {e:#}");
             } else {
                 signal_daemon_reload();
+                rerender();
             }
             Propagation::Proceed
         });

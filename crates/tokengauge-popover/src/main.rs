@@ -1070,7 +1070,16 @@ fn spawn_tui(config: &TokenGaugeConfig) {
 }
 
 fn spawn_update() {
-    let mut cmd = Command::new("tokengauge-waybar");
+    // Prefer the tokengauge-waybar sibling next to this binary; the popover's
+    // PATH (graphical-session) may not include the install dir.
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("tokengauge-waybar")))
+        .filter(|p| p.exists());
+    let mut cmd = match sibling {
+        Some(p) => Command::new(p),
+        None => Command::new("tokengauge-waybar"),
+    };
     cmd.arg("--update")
         .stdin(Stdio::null())
         .stdout(Stdio::null())

@@ -108,8 +108,10 @@ PlasmoidItem {
     }
 
     // Download + install the latest release, then refresh so the banner clears.
+    // --update's human-readable stdout is discarded so only the --json payload
+    // reaches onNewData's JSON.parse.
     function applyUpdate() {
-        exec.connectSource(cmd(root.waybarBin + " --update && " + root.waybarBin + " --json"))
+        exec.connectSource(cmd(root.waybarBin + " --update >/dev/null 2>&1 && " + root.waybarBin + " --json"))
     }
 
     function shellQuote(s) {

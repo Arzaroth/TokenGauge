@@ -147,9 +147,11 @@ mod win {
             let menu = Menu::new();
             let show_i = MenuItem::new("Show TokenGauge", true, None);
             let refresh_i = MenuItem::new("Refresh now", true, None);
+            let update_i = MenuItem::new("Update TokenGauge", true, None);
             let quit_i = MenuItem::new("Quit", true, None);
             menu.append(&show_i)?;
             menu.append(&refresh_i)?;
+            menu.append(&update_i)?;
             menu.append(&quit_i)?;
 
             let tray = TrayIconBuilder::new()
@@ -167,13 +169,16 @@ mod win {
                 let ctx = ctx.clone();
                 let refresh_tx = refresh_tx.clone();
                 let quit = quit.clone();
-                let (show_id, refresh_id, quit_id) = (
+                let (show_id, refresh_id, update_id, quit_id) = (
                     show_i.id().clone(),
                     refresh_i.id().clone(),
+                    update_i.id().clone(),
                     quit_i.id().clone(),
                 );
                 thread::spawn(move || {
-                    tray_event_loop(ctx, refresh_tx, quit, show_id, refresh_id, quit_id)
+                    tray_event_loop(
+                        ctx, refresh_tx, quit, show_id, refresh_id, update_id, quit_id,
+                    )
                 });
             }
 
@@ -182,7 +187,7 @@ mod win {
                 refresh_tx,
                 quit,
                 tray,
-                _items: vec![show_i, refresh_i, quit_i],
+                _items: vec![show_i, refresh_i, update_i, quit_i],
                 last_tip: String::new(),
             })
         }
@@ -481,12 +486,27 @@ mod win {
         ctx.request_repaint();
     }
 
+    /// Spawn `tokengauge-tui --update` (which owns the self-update code) to
+    /// download the latest release and replace the installed binaries.
+    fn spawn_update() {
+        let tui = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("tokengauge-tui.exe")))
+            .filter(|p| p.exists());
+        let mut cmd = match tui {
+            Some(p) => std::process::Command::new(p),
+            None => std::process::Command::new("tokengauge-tui"),
+        };
+        let _ = cmd.arg("--update").spawn();
+    }
+
     fn tray_event_loop(
         ctx: egui::Context,
         refresh_tx: mpsc::Sender<()>,
         quit: Arc<AtomicBool>,
         show_id: MenuId,
         refresh_id: MenuId,
+        update_id: MenuId,
         quit_id: MenuId,
     ) {
         let menu_rx = MenuEvent::receiver();
@@ -497,6 +517,8 @@ mod win {
                     show_window(&ctx);
                 } else if ev.id == refresh_id {
                     let _ = refresh_tx.send(());
+                } else if ev.id == update_id {
+                    spawn_update();
                 } else if ev.id == quit_id {
                     // Ask the app to close so Drop runs (removes the tray icon)
                     // instead of exiting the process abruptly.

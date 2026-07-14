@@ -10,6 +10,9 @@ use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "self-update")]
+pub mod update;
+
 // ============================================================================
 // Codexbar Payload Types
 // ============================================================================
@@ -383,6 +386,7 @@ pub struct TokenGaugeConfig {
     pub waybar: WaybarConfig,
     pub notifications: NotificationsConfig,
     pub theme: ThemeConfig,
+    pub update: UpdateConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -451,6 +455,26 @@ impl Default for NotificationsConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct UpdateConfig {
+    /// Have the daemon periodically check GitHub releases and notify (via
+    /// `notify-send`) when a newer version is available. Applying is never
+    /// automatic - the user triggers `tokengauge-waybar --update`.
+    pub check: bool,
+    /// Seconds between daemon update checks. Default 6h.
+    pub check_interval_secs: u64,
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self {
+            check: true,
+            check_interval_secs: 21600,
+        }
+    }
+}
+
 impl Default for TokenGaugeConfig {
     fn default() -> Self {
         Self {
@@ -469,6 +493,7 @@ impl Default for TokenGaugeConfig {
             waybar: WaybarConfig::default(),
             notifications: NotificationsConfig::default(),
             theme: ThemeConfig::default(),
+            update: UpdateConfig::default(),
         }
     }
 }
@@ -1660,6 +1685,49 @@ pub struct NotifyState {
 pub struct NotifyEntry {
     #[serde(default)]
     pub notified: Vec<u8>,
+}
+
+/// Cached result of the last GitHub release check. Written by the waybar
+/// binary (which owns the network code) and read by the GUIs so opening the
+/// popover/plasmoid never triggers a network call.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateStatus {
+    /// Currently-installed version (no leading `v`).
+    #[serde(default)]
+    pub current: String,
+    /// Latest release tag seen on GitHub (e.g. `v0.9.0`), if a check succeeded.
+    #[serde(default)]
+    pub latest: Option<String>,
+    /// True when `latest` is newer than `current`.
+    #[serde(default)]
+    pub available: bool,
+    /// Unix ms of the last successful check.
+    #[serde(default)]
+    pub checked_ms: i64,
+    /// Version we last fired a desktop notification for (one-shot guard).
+    #[serde(default)]
+    pub notified: Option<String>,
+}
+
+pub fn update_status_path(cache_file: &Path) -> PathBuf {
+    let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
+    parent.join("tokengauge-update.json")
+}
+
+pub fn read_update_status(cache_file: &Path) -> Option<UpdateStatus> {
+    let path = update_status_path(cache_file);
+    let contents = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+pub fn write_update_status(cache_file: &Path, status: &UpdateStatus) -> Result<()> {
+    let path = update_status_path(cache_file);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    let contents = serde_json::to_string(status)?;
+    fs::write(&path, contents)
+        .with_context(|| format!("failed to write update status {}", path.display()))
 }
 
 pub fn notify_state_path(cache_file: &Path) -> PathBuf {

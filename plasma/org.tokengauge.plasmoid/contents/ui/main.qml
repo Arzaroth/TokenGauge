@@ -28,6 +28,10 @@ PlasmoidItem {
     readonly property string waybarBin: Plasmoid.configuration.waybarBinary || "tokengauge-waybar"
     readonly property int refreshSecs: Math.max(15, Plasmoid.configuration.refreshInterval)
 
+    // Cached GitHub release check written by the daemon; see UpdateStatus.
+    readonly property var updateInfo: snapshot.update || null
+    readonly property bool updateAvailable: !!(updateInfo && updateInfo.available)
+
     // Row shown in the panel / hovered.
     readonly property var selRow: rows.length > 0
         ? rows[Math.min(selectedIndex, rows.length - 1)]
@@ -101,6 +105,11 @@ PlasmoidItem {
     // Run a tokengauge-waybar action flag, then refresh the snapshot.
     function action(flag) {
         exec.connectSource(cmd(root.waybarBin + " " + flag + " && " + root.waybarBin + " --json"))
+    }
+
+    // Download + install the latest release, then refresh so the banner clears.
+    function applyUpdate() {
+        exec.connectSource(cmd(root.waybarBin + " --update && " + root.waybarBin + " --json"))
     }
 
     function shellQuote(s) {

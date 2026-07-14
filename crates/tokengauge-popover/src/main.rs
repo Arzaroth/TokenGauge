@@ -21,8 +21,8 @@ use tokengauge_core::{
     ClickAction, CostInfo, ProviderRow, TokenGaugeConfig, WaybarPlacement,
     config_set_oauth_provider, config_set_primary, format_tokens, format_updated_relative,
     load_config, payload_to_rows_with_costs, provider_icon, provider_icon_svg_path, provider_label,
-    read_cache_full, read_waybar_state, signal_daemon_reload, theme, waybar_state_path,
-    window_labels,
+    read_cache_full, read_update_status, read_waybar_state, signal_daemon_reload, theme,
+    waybar_state_path, window_labels,
 };
 
 const APP_ID: &str = "io.arzaroth.tokengauge.popover";
@@ -172,6 +172,29 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
     footer.append(&btn_refresh);
     footer.append(&btn_tui);
     footer.append(&btn_close);
+
+    // Update button - only shown when the daemon's cached release check found a
+    // newer version. Clicking shells out to `tokengauge-waybar --update`.
+    if let Some(status) = read_update_status(&config.cache_file) {
+        if status.available {
+            let label = match &status.latest {
+                Some(v) => format!("⬆  Update to v{v}"),
+                None => "⬆  Update".to_string(),
+            };
+            let btn_update = Button::builder()
+                .label(label)
+                .css_classes(vec!["tg-update".to_string()])
+                .build();
+            let btn = btn_update.clone();
+            btn_update.connect_clicked(move |_| {
+                spawn_update();
+                btn.set_label("⬆  Updating...");
+                btn.set_sensitive(false);
+            });
+            footer.prepend(&btn_update);
+        }
+    }
+
     outer.append(&footer);
 
     window.set_child(Some(&outer));
@@ -1044,6 +1067,18 @@ fn spawn_tui(config: &TokenGaugeConfig) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
+}
+
+fn spawn_update() {
+    let mut cmd = Command::new("tokengauge-waybar");
+    cmd.arg("--update")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(path) = std::env::var_os("TOKENGAUGE_CONFIG") {
+        cmd.env("TOKENGAUGE_CONFIG", path);
+    }
+    let _ = cmd.spawn();
 }
 
 fn default_terminal_launcher() -> String {

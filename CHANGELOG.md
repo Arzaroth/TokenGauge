@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-07-16
+
+### Fixed
+
+- The daemon resolves `codexbar` again. Its systemd unit inherited a PATH without `~/.local/bin` - where the installer puts the binary - so every fetch failed to spawn it, and the stale fallback silently served frozen usage indefinitely. The unit now sets `Environment=PATH` to include the install dir.
+- Stale fallback rounds are visible in the fetch log (`stale=N`) instead of reporting `errors=0` and reading like a clean fetch.
+
 ## [0.9.0] - 2026-07-15
 
 Windows support and self-updating binaries.
@@ -133,7 +140,8 @@ Major feature batch on top of upstream v0.4.2.
 
 Released by the upstream project, [oorestisime/TokenGauge](https://github.com/oorestisime/TokenGauge/releases). This fork's own history starts at 0.5.0.
 
-[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/Arzaroth/TokenGauge/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.6.3...v0.7.0

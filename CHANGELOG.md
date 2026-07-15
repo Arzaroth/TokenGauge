@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The popover and TUI fetch fresh data when opened instead of rendering a cache that may be up to `refresh_secs` old.
+- Refresh indicator in the popover: a ⟳ marker shows in the header for the duration of a fetch, and the view re-renders when the data lands.
+
+### Fixed
+
+- Disabling a provider now takes effect immediately. The daemon refetches when a config reload changes the enabled provider set (previously it re-rendered from cache, so a disabled provider kept showing, and a newly enabled one stayed missing, until the next refresh tick - up to `refresh_secs`).
+- The popover's "updated" stamp reports when the data was actually fetched, taken from the cache's mtime. It rendered the current time, so it always claimed the data was fresh even when the fetch behind it was hours old or failing.
+- `scripts/install.sh` reports that `tokengauge-popover` isn't in the release tarball (it needs GTK4 at build time) instead of skipping it in silence, and points at the source build. An upgrade previously left a stale popover next to freshly-updated binaries with no hint anything had been left behind.
+- Every read of the cache is scoped to the enabled providers, so a disabled provider can't surface from a cache written before the toggle. This covers the no-daemon case, where nothing signals a reload; the bar's scroll rotation is scoped too, so scrolling no longer stops on a disabled provider.
+- The popover's Refresh button works without a running daemon. It shelled straight to the daemon socket and silently did nothing when there was none; it now goes through `--refresh`, which falls back to a detached worker.
+
 ## [0.9.1] - 2026-07-16
 
 ### Fixed

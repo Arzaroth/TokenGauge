@@ -1,13 +1,11 @@
 use std::cell::RefCell;
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{Datelike, Duration as ChronoDuration, Local, Weekday};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, Local, Weekday};
 use clap::Parser;
 use gtk4::glib::{ControlFlow, Propagation, source};
 use gtk4::prelude::*;
@@ -21,8 +19,9 @@ use tokengauge_core::{
     ClickAction, CostInfo, ProviderRow, TokenGaugeConfig, WaybarPlacement,
     config_set_oauth_provider, config_set_primary, format_tokens, format_updated_relative,
     load_config, payload_to_rows_with_costs, provider_icon, provider_icon_svg_path, provider_label,
-    read_cache_full, read_update_status, read_waybar_state, signal_daemon_reload, theme,
-    waybar_state_path, window_labels,
+    read_cache_full, read_update_status, read_waybar_state, refresh_in_progress,
+    refresh_sentinel_path, retain_enabled, signal_daemon_reload, theme, waybar_state_path,
+    window_labels,
 };
 
 const APP_ID: &str = "io.arzaroth.tokengauge.popover";
@@ -141,7 +140,8 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
         .spacing(0)
         .css_classes(vec!["tg-root".to_string()])
         .build();
-    outer.append(&header_bar());
+    let (header, refresh_indicator, updated_stamp) = header_bar(&config);
+    outer.append(&header);
 
     let scroller = ScrolledWindow::builder()
         .vexpand(true)
@@ -175,49 +175,49 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
 
     // Update button - only shown when the daemon's cached release check found a
     // newer version. Clicking shells out to `tokengauge-waybar --update`.
-    if let Some(status) = read_update_status(&config.cache_file) {
-        if status.available {
-            let label = match &status.latest {
-                Some(v) => format!("⬆  Update to v{v}"),
-                None => "⬆  Update".to_string(),
-            };
-            let btn_update = Button::builder()
-                .label(&label)
-                .css_classes(vec!["tg-update".to_string()])
-                .build();
-            let btn = btn_update.clone();
-            let cfg = Rc::clone(&config);
-            btn_update.connect_clicked(move |_| {
-                spawn_update();
-                btn.set_label("⬆  Updating...");
-                btn.set_sensitive(false);
+    if let Some(status) = read_update_status(&config.cache_file)
+        && status.available
+    {
+        let label = match &status.latest {
+            Some(v) => format!("⬆  Update to v{v}"),
+            None => "⬆  Update".to_string(),
+        };
+        let btn_update = Button::builder()
+            .label(&label)
+            .css_classes(vec!["tg-update".to_string()])
+            .build();
+        let btn = btn_update.clone();
+        let cfg = Rc::clone(&config);
+        btn_update.connect_clicked(move |_| {
+            spawn_update();
+            btn.set_label("⬆  Updating...");
+            btn.set_sensitive(false);
 
-                // spawn_update is fire-and-forget: poll the cached status so the
-                // button recovers if the update fails/exits without clearing it,
-                // instead of staying stuck on "Updating...".
-                let cfg = Rc::clone(&cfg);
-                let btn = btn.clone();
-                let orig = label.clone();
-                let ticks = Rc::new(RefCell::new(0u32));
-                source::timeout_add_local(Duration::from_secs(3), move || {
-                    *ticks.borrow_mut() += 1;
-                    let cleared = read_update_status(&cfg.cache_file)
-                        .map(|s| !s.available)
-                        .unwrap_or(false);
-                    if cleared {
-                        btn.set_label("✓  Updated - restart");
-                        ControlFlow::Break
-                    } else if *ticks.borrow() >= 40 {
-                        btn.set_label(&orig);
-                        btn.set_sensitive(true);
-                        ControlFlow::Break
-                    } else {
-                        ControlFlow::Continue
-                    }
-                });
+            // spawn_update is fire-and-forget: poll the cached status so the
+            // button recovers if the update fails/exits without clearing it,
+            // instead of staying stuck on "Updating...".
+            let cfg = Rc::clone(&cfg);
+            let btn = btn.clone();
+            let orig = label.clone();
+            let ticks = Rc::new(RefCell::new(0u32));
+            source::timeout_add_local(Duration::from_secs(3), move || {
+                *ticks.borrow_mut() += 1;
+                let cleared = read_update_status(&cfg.cache_file)
+                    .map(|s| !s.available)
+                    .unwrap_or(false);
+                if cleared {
+                    btn.set_label("✓  Updated - restart");
+                    ControlFlow::Break
+                } else if *ticks.borrow() >= 40 {
+                    btn.set_label(&orig);
+                    btn.set_sensitive(true);
+                    ControlFlow::Break
+                } else {
+                    ControlFlow::Continue
+                }
             });
-            footer.prepend(&btn_update);
-        }
+        });
+        footer.prepend(&btn_update);
     }
 
     outer.append(&footer);
@@ -236,6 +236,7 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
     let settings_mode: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
     let settings_mode_for_render = Rc::clone(&settings_mode);
     let do_render = Rc::new(RefCell::new(move || {
+        updated_stamp.set_label(&cache_stamp(&cfg_for_refresh));
         if *settings_mode_for_render.borrow() {
             render_settings(&scroller_rc, &body_rc, &path_for_render);
         } else {
@@ -267,17 +268,30 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
         });
     }
 
-    // Refresh button: ask daemon to fetch, then re-render after a beat.
+    // Refresh button: kick the fetch and let the sentinel watcher below drive
+    // the indicator and the re-render when it lands.
+    btn_refresh.connect_clicked(move |_| send_refresh());
+
+    // Fetch on open: the cache may be up to refresh_secs old (and may predate a
+    // provider toggle), so show it immediately, then refresh underneath. The
+    // watcher polls the sentinel that --refresh raises: while it's up the ⟳
+    // indicator shows, and when it clears we re-render with the fresh data.
+    send_refresh();
     {
         let cfg = Rc::clone(&config);
         let render = Rc::clone(&do_render);
-        btn_refresh.connect_clicked(move |_| {
-            send_refresh(&cfg);
-            let render = Rc::clone(&render);
-            source::timeout_add_local(Duration::from_millis(400), move || {
-                (render.borrow_mut())();
-                ControlFlow::Break
-            });
+        let indicator = refresh_indicator.clone();
+        let was_refreshing = Rc::new(RefCell::new(false));
+        source::timeout_add_local(Duration::from_millis(250), move || {
+            let refreshing = refresh_in_progress(&refresh_sentinel_path(&cfg.cache_file));
+            if refreshing != *was_refreshing.borrow() {
+                *was_refreshing.borrow_mut() = refreshing;
+                indicator.set_visible(refreshing);
+                if !refreshing {
+                    (render.borrow_mut())();
+                }
+            }
+            ControlFlow::Continue
         });
     }
 
@@ -324,7 +338,22 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
     window.present();
 }
 
-fn header_bar() -> GBox {
+/// When the cache was last written, which is what the header's "updated" label
+/// claims. Rendering `now` there instead would report fresh data even when the
+/// fetch behind it is hours old or failing.
+fn cache_stamp(config: &TokenGaugeConfig) -> String {
+    match std::fs::metadata(&config.cache_file).and_then(|m| m.modified()) {
+        Ok(modified) => format!(
+            "updated {}",
+            DateTime::<Local>::from(modified).format("%H:%M")
+        ),
+        Err(_) => "never updated".to_string(),
+    }
+}
+
+/// Header bar; returns it alongside the ⟳ indicator and the "updated" stamp so
+/// the caller can keep both in step with the data.
+fn header_bar(config: &TokenGaugeConfig) -> (GBox, Label, Label) {
     let bar = GBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(8)
@@ -336,14 +365,21 @@ fn header_bar() -> GBox {
         .halign(Align::Start)
         .hexpand(true)
         .build();
+    let spinner = Label::builder()
+        .label("⟳ refreshing")
+        .css_classes(vec!["tg-refreshing".to_string()])
+        .halign(Align::End)
+        .visible(false)
+        .build();
     let stamp = Label::builder()
-        .label(format!("updated {}", Local::now().format("%H:%M")))
+        .label(cache_stamp(config))
         .css_classes(vec!["tg-dim".to_string()])
         .halign(Align::End)
         .build();
     bar.append(&title);
+    bar.append(&spinner);
     bar.append(&stamp);
-    bar
+    (bar, spinner, stamp)
 }
 
 fn settings_section(text: &str) -> Label {
@@ -510,7 +546,8 @@ fn render_body(
             return;
         }
     };
-    let (payloads, errors, costs) = cached.into_parts();
+    let (mut payloads, mut errors, costs) = cached.into_parts();
+    retain_enabled(&mut payloads, &mut errors, &config.providers);
     let rows = payload_to_rows_with_costs(payloads, &costs);
 
     if rows.is_empty() && errors.is_empty() {
@@ -1051,22 +1088,11 @@ fn install_css() {
     }
 }
 
-fn socket_path_from_config(config: &TokenGaugeConfig) -> PathBuf {
-    let parent = config.cache_file.parent().unwrap_or(Path::new("."));
-    parent.join("tokengauge.sock")
-}
-
-fn send_refresh(config: &TokenGaugeConfig) {
-    let sock = socket_path_from_config(config);
-    let Ok(mut stream) = UnixStream::connect(&sock) else {
-        return;
-    };
-    let cmd = r#"{"cmd":"refresh"}"#;
-    let _ = writeln!(stream, "{cmd}");
-    let _ = stream.flush();
-    let mut reader = BufReader::new(stream);
-    let mut buf = String::new();
-    let _ = reader.read_line(&mut buf);
+/// Kick a refresh and return without waiting for it. `--refresh` asks the daemon
+/// over its socket and forks a detached worker when there's no daemon, so this
+/// works in both setups; the sentinel it raises drives the ⟳ indicator.
+fn send_refresh() {
+    spawn_waybar("--refresh");
 }
 
 fn spawn_tui(config: &TokenGaugeConfig) {
@@ -1095,8 +1121,12 @@ fn spawn_tui(config: &TokenGaugeConfig) {
 }
 
 fn spawn_update() {
-    // Prefer the tokengauge-waybar sibling next to this binary; the popover's
-    // PATH (graphical-session) may not include the install dir.
+    spawn_waybar("--update");
+}
+
+/// Spawn `tokengauge-waybar <arg>` detached, preferring the sibling next to this
+/// binary; the popover's PATH (graphical-session) may not include the install dir.
+fn spawn_waybar(arg: &str) {
     let sibling = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("tokengauge-waybar")))
@@ -1105,7 +1135,7 @@ fn spawn_update() {
         Some(p) => Command::new(p),
         None => Command::new("tokengauge-waybar"),
     };
-    cmd.arg("--update")
+    cmd.arg(arg)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());

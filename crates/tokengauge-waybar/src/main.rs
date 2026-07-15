@@ -1550,13 +1550,16 @@ fn handle_client(
                 _ => RotateDir::Next,
             };
             let _ = handle_rotate(&config, dir);
-            // Re-render from current cache + rotation
+            // Re-render from current cache + rotation, scoped to the enabled set
+            // like handle_rotate just was: rotating off an unfiltered cache would
+            // put a disabled provider back in the bar.
             let cached = read_cache_full(&config.cache_file).ok();
             let (rows, errors) = match cached {
-                Some(c) => (
-                    payload_to_rows_with_costs(c.payloads().to_vec(), &c.costs()),
-                    c.errors().to_vec(),
-                ),
+                Some(c) => {
+                    let (mut payloads, mut errors, costs) = c.into_parts();
+                    retain_enabled(&mut payloads, &mut errors, &config.providers);
+                    (payload_to_rows_with_costs(payloads, &costs), errors)
+                }
                 None => (Vec::new(), Vec::new()),
             };
             let output = render_output(&config, &rows, &errors, false);

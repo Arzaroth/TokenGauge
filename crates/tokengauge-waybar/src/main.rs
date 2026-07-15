@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -16,9 +16,10 @@ use tokengauge_core::{
     TokenGaugeConfig, WaybarState, WaybarWindow, config_set_oauth_provider, config_set_primary,
     ensure_cache_dir, fetch_all_providers, format_tokens, format_updated_relative, load_config,
     notify_state_path, payload_to_rows_with_costs, provider_icon, provider_icon_svg_path,
-    provider_label, read_cache_full, read_notify_state, read_waybar_state, signal_daemon_reload,
-    theme, thresholds_to_fire, waybar_state_path, window_labels, write_cache_full,
-    write_default_config, write_notify_state, write_waybar_state,
+    provider_label, read_cache_full, read_notify_state, read_waybar_state, refresh_in_progress,
+    refresh_sentinel_path, retain_enabled, signal_daemon_reload, theme, thresholds_to_fire,
+    waybar_state_path, window_labels, write_cache_full, write_default_config, write_notify_state,
+    write_waybar_state,
 };
 
 fn theme_palette() -> (
@@ -502,26 +503,6 @@ fn format_bar_error(label: &str) -> String {
     let icon = icon_markup(label);
     let escaped_label = pango_escape(label);
     format!("{icon} {escaped_label} <span foreground=\"{red}\">⚠</span>")
-}
-
-fn refresh_sentinel_path(cache_file: &Path) -> PathBuf {
-    let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
-    parent.join("tokengauge-refreshing")
-}
-
-const REFRESH_SENTINEL_TTL_MS: i64 = 30_000;
-
-fn refresh_in_progress(sentinel: &Path) -> bool {
-    let Ok(meta) = std::fs::metadata(sentinel) else {
-        return false;
-    };
-    let Ok(modified) = meta.modified() else {
-        return false;
-    };
-    let Ok(age) = SystemTime::now().duration_since(modified) else {
-        return false;
-    };
-    age.as_millis() < REFRESH_SENTINEL_TTL_MS as u128
 }
 
 fn check_and_notify(
@@ -1308,7 +1289,12 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
                         Ok(new_cfg) => {
                             tokengauge_core::install_theme(new_cfg.theme.resolve());
                             let refresh_secs = new_cfg.refresh_secs.max(10);
-                            *cfg.lock().expect("daemon config mutex poisoned") = new_cfg.clone();
+                            let prior = {
+                                let mut guard = cfg.lock().expect("daemon config mutex poisoned");
+                                let prior = enabled_set(&guard.providers);
+                                *guard = new_cfg.clone();
+                                prior
+                            };
                             dlog(
                                 "reload",
                                 &format!(
@@ -1316,14 +1302,25 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
                                     path.display()
                                 ),
                             );
-                            // Re-render cached output with the new theme/config so
-                            // colour changes show up before the next fetch.
+                            // A changed provider set invalidates the cache rather
+                            // than merely ageing it: re-rendering would keep
+                            // serving a provider the user just disabled (and show
+                            // nothing for one just enabled) until the next tick.
+                            if enabled_set(&new_cfg.providers) != prior {
+                                dlog("reload", "provider set changed, refetching");
+                                do_refresh_cycle(&state, &new_cfg);
+                                continue;
+                            }
+                            // Otherwise re-render cached output with the new
+                            // theme/config so colour changes show up before the
+                            // next fetch, without paying for a fetch.
                             let cached = read_cache_full(&new_cfg.cache_file).ok();
                             let (rows, errors) = match cached {
-                                Some(c) => (
-                                    payload_to_rows_with_costs(c.payloads().to_vec(), &c.costs()),
-                                    c.errors().to_vec(),
-                                ),
+                                Some(c) => {
+                                    let (mut payloads, mut errors, costs) = c.into_parts();
+                                    retain_enabled(&mut payloads, &mut errors, &new_cfg.providers);
+                                    (payload_to_rows_with_costs(payloads, &costs), errors)
+                                }
                                 None => (Vec::new(), Vec::new()),
                             };
                             let output = render_output(&new_cfg, &rows, &errors, false);
@@ -1461,6 +1458,36 @@ fn do_fetch_and_broadcast(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeCo
     );
 }
 
+/// Raise the ⟳ sentinel and signal waybar to re-poll so the indicator appears.
+/// Idempotent: callers that must guarantee the sentinel is up before replying to
+/// a client (see the Refresh command) can raise it themselves first.
+fn raise_refresh_sentinel(config: &TokenGaugeConfig) {
+    let _ = std::fs::write(
+        refresh_sentinel_path(&config.cache_file),
+        now_ms().to_string(),
+    );
+    signal_waybar();
+}
+
+/// Full manual-refresh cycle: raise the sentinel so every frontend renders ⟳,
+/// fetch, then drop it. waybar is signalled on both edges so the bar picks up
+/// the indicator and the result without waiting for its poll interval.
+fn do_refresh_cycle(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) {
+    raise_refresh_sentinel(config);
+    do_fetch_and_broadcast(state, config);
+    let _ = std::fs::remove_file(refresh_sentinel_path(&config.cache_file));
+    signal_waybar();
+}
+
+/// Names of the providers currently enabled, for change detection on reload.
+fn enabled_set(providers: &tokengauge_core::ProvidersConfig) -> BTreeSet<String> {
+    providers
+        .enabled_providers()
+        .into_iter()
+        .map(|p| p.name.to_lowercase())
+        .collect()
+}
+
 fn handle_client(
     mut stream: UnixStream,
     state: Arc<Mutex<DaemonState>>,
@@ -1493,14 +1520,12 @@ fn handle_client(
             // Don't close - daemon broadcast will push updates
         }
         SocketCommand::Refresh => {
-            // Write the sentinel so subsequent snapshots render the refreshing
-            // state, signal waybar to re-poll immediately, then ack the client
-            // and kick off the actual fetch in a background thread. Matches
-            // the standalone --refresh path's UX (⟳ visible for the fetch
-            // duration) without waiting for the fetch to complete.
-            let sentinel = refresh_sentinel_path(&config.cache_file);
-            let _ = std::fs::write(&sentinel, now_ms().to_string());
-            signal_waybar();
+            // Raise the sentinel before acking: a client that kicks a refresh
+            // and then polls for the ⟳ state (the popover on open) must never
+            // observe the gap between its ack and the fetch thread starting.
+            // The fetch itself runs in the background so the client doesn't
+            // block on the network.
+            raise_refresh_sentinel(&config);
             writeln!(stream, "{}", serde_json::to_string(&SocketReply::Ack)?)?;
             stream.flush()?;
 
@@ -1508,16 +1533,15 @@ fn handle_client(
             let config = config.clone();
             thread::spawn(move || {
                 let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    do_fetch_and_broadcast(&state, &config);
+                    do_refresh_cycle(&state, &config);
                 }));
                 if let Err(payload) = res {
                     dlog(
                         "refresh",
                         &format!("panic recovered: {}", panic_message(&payload)),
                     );
+                    let _ = std::fs::remove_file(refresh_sentinel_path(&config.cache_file));
                 }
-                let _ = std::fs::remove_file(refresh_sentinel_path(&config.cache_file));
-                signal_waybar();
             });
         }
         SocketCommand::Rotate { direction } => {
@@ -1707,7 +1731,11 @@ fn handle_rotate(config: &TokenGaugeConfig, dir: RotateDir) -> Result<()> {
         Ok(c) => c,
         Err(_) => return Ok(()),
     };
-    let rows = payload_to_rows_with_costs(cached.payloads().to_vec(), &cached.costs());
+    // Scoped to the enabled set, or scroll would still stop on a provider the
+    // user disabled and pin the selection to a row nothing else will render.
+    let (mut payloads, mut errors, costs) = cached.into_parts();
+    retain_enabled(&mut payloads, &mut errors, &config.providers);
+    let rows = payload_to_rows_with_costs(payloads, &costs);
     if rows.is_empty() {
         return Ok(());
     }
@@ -1779,9 +1807,12 @@ fn maybe_refresh(config: &TokenGaugeConfig) -> Result<RefreshSnapshot> {
         check_and_notify(config, &payloads, &costs);
         Ok((payloads, errors, costs))
     } else {
-        let cached = read_cache_full(&config.cache_file)?;
-        let costs = cached.costs();
-        Ok((cached.payloads().to_vec(), cached.errors().to_vec(), costs))
+        // Scope the cache to the currently-enabled providers: it was written by
+        // whatever set was enabled at fetch time, so without this a provider
+        // disabled since then keeps rendering until the cache next turns over.
+        let (mut payloads, mut errors, costs) = read_cache_full(&config.cache_file)?.into_parts();
+        retain_enabled(&mut payloads, &mut errors, &config.providers);
+        Ok((payloads, errors, costs))
     }
 }
 

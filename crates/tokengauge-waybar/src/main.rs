@@ -1472,9 +1472,20 @@ fn raise_refresh_sentinel(config: &TokenGaugeConfig) {
 /// Full manual-refresh cycle: raise the sentinel so every frontend renders ⟳,
 /// fetch, then drop it. waybar is signalled on both edges so the bar picks up
 /// the indicator and the result without waiting for its poll interval.
+/// Panics are contained here rather than at each caller: the sentinel raised
+/// above must come down whatever the fetch does, or every client shows ⟳
+/// forever, and an escaping panic would kill the caller's long-lived thread.
 fn do_refresh_cycle(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) {
     raise_refresh_sentinel(config);
-    do_fetch_and_broadcast(state, config);
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        do_fetch_and_broadcast(state, config);
+    }));
+    if let Err(payload) = res {
+        dlog(
+            "refresh",
+            &format!("panic recovered: {}", panic_message(&payload)),
+        );
+    }
     let _ = std::fs::remove_file(refresh_sentinel_path(&config.cache_file));
     signal_waybar();
 }
@@ -1531,18 +1542,7 @@ fn handle_client(
 
             let state = state.clone();
             let config = config.clone();
-            thread::spawn(move || {
-                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    do_refresh_cycle(&state, &config);
-                }));
-                if let Err(payload) = res {
-                    dlog(
-                        "refresh",
-                        &format!("panic recovered: {}", panic_message(&payload)),
-                    );
-                    let _ = std::fs::remove_file(refresh_sentinel_path(&config.cache_file));
-                }
-            });
+            thread::spawn(move || do_refresh_cycle(&state, &config));
         }
         SocketCommand::Rotate { direction } => {
             let dir = match direction.as_str() {

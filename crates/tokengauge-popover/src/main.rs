@@ -268,9 +268,25 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
         });
     }
 
+    // Seeded true, with the indicator shown to match, because a refresh is
+    // kicked below: a fetch that starts and finishes inside one 250ms poll
+    // window is never observed as `true`, and only a true -> false edge
+    // re-renders. Every optimistic set here must move both, or the watcher
+    // sees no edge and the ⟳ stays down for the whole fetch.
+    let was_refreshing = Rc::new(RefCell::new(true));
+    refresh_indicator.set_visible(true);
+
     // Refresh button: kick the fetch and let the sentinel watcher below drive
     // the indicator and the re-render when it lands.
-    btn_refresh.connect_clicked(move |_| send_refresh());
+    {
+        let was_refreshing = Rc::clone(&was_refreshing);
+        let indicator = refresh_indicator.clone();
+        btn_refresh.connect_clicked(move |_| {
+            *was_refreshing.borrow_mut() = true;
+            indicator.set_visible(true);
+            send_refresh();
+        });
+    }
 
     // Fetch on open: the cache may be up to refresh_secs old (and may predate a
     // provider toggle), so show it immediately, then refresh underneath. The
@@ -281,7 +297,6 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
         let cfg = Rc::clone(&config);
         let render = Rc::clone(&do_render);
         let indicator = refresh_indicator.clone();
-        let was_refreshing = Rc::new(RefCell::new(false));
         source::timeout_add_local(Duration::from_millis(250), move || {
             let refreshing = refresh_in_progress(&refresh_sentinel_path(&cfg.cache_file));
             if refreshing != *was_refreshing.borrow() {

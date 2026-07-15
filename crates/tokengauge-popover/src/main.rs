@@ -21,8 +21,8 @@ use tokengauge_core::{
     ClickAction, CostInfo, ProviderRow, TokenGaugeConfig, WaybarPlacement,
     config_set_oauth_provider, config_set_primary, format_tokens, format_updated_relative,
     load_config, payload_to_rows_with_costs, provider_icon, provider_icon_svg_path, provider_label,
-    read_cache_full, read_waybar_state, signal_daemon_reload, theme, waybar_state_path,
-    window_labels,
+    read_cache_full, read_update_status, read_waybar_state, signal_daemon_reload, theme,
+    waybar_state_path, window_labels,
 };
 
 const APP_ID: &str = "io.arzaroth.tokengauge.popover";
@@ -172,6 +172,54 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
     footer.append(&btn_refresh);
     footer.append(&btn_tui);
     footer.append(&btn_close);
+
+    // Update button - only shown when the daemon's cached release check found a
+    // newer version. Clicking shells out to `tokengauge-waybar --update`.
+    if let Some(status) = read_update_status(&config.cache_file) {
+        if status.available {
+            let label = match &status.latest {
+                Some(v) => format!("⬆  Update to v{v}"),
+                None => "⬆  Update".to_string(),
+            };
+            let btn_update = Button::builder()
+                .label(&label)
+                .css_classes(vec!["tg-update".to_string()])
+                .build();
+            let btn = btn_update.clone();
+            let cfg = Rc::clone(&config);
+            btn_update.connect_clicked(move |_| {
+                spawn_update();
+                btn.set_label("⬆  Updating...");
+                btn.set_sensitive(false);
+
+                // spawn_update is fire-and-forget: poll the cached status so the
+                // button recovers if the update fails/exits without clearing it,
+                // instead of staying stuck on "Updating...".
+                let cfg = Rc::clone(&cfg);
+                let btn = btn.clone();
+                let orig = label.clone();
+                let ticks = Rc::new(RefCell::new(0u32));
+                source::timeout_add_local(Duration::from_secs(3), move || {
+                    *ticks.borrow_mut() += 1;
+                    let cleared = read_update_status(&cfg.cache_file)
+                        .map(|s| !s.available)
+                        .unwrap_or(false);
+                    if cleared {
+                        btn.set_label("✓  Updated - restart");
+                        ControlFlow::Break
+                    } else if *ticks.borrow() >= 40 {
+                        btn.set_label(&orig);
+                        btn.set_sensitive(true);
+                        ControlFlow::Break
+                    } else {
+                        ControlFlow::Continue
+                    }
+                });
+            });
+            footer.prepend(&btn_update);
+        }
+    }
+
     outer.append(&footer);
 
     window.set_child(Some(&outer));
@@ -1044,6 +1092,27 @@ fn spawn_tui(config: &TokenGaugeConfig) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
+}
+
+fn spawn_update() {
+    // Prefer the tokengauge-waybar sibling next to this binary; the popover's
+    // PATH (graphical-session) may not include the install dir.
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("tokengauge-waybar")))
+        .filter(|p| p.exists());
+    let mut cmd = match sibling {
+        Some(p) => Command::new(p),
+        None => Command::new("tokengauge-waybar"),
+    };
+    cmd.arg("--update")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(path) = std::env::var_os("TOKENGAUGE_CONFIG") {
+        cmd.env("TOKENGAUGE_CONFIG", path);
+    }
+    let _ = cmd.spawn();
 }
 
 fn default_terminal_launcher() -> String {

@@ -121,6 +121,29 @@ Item {
                 : (root.snapshot.errors || []).map(function (e) { return (e.provider || "?") + ": " + (e.message || e.raw || "error") }).join("\n")
         }
 
+        // update-available banner
+        RowLayout {
+            Layout.fillWidth: true
+            visible: root.updateAvailable
+            PlasmaComponents.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: root.snapshot.theme && root.snapshot.theme.green ? root.snapshot.theme.green : "#a6e3a1"
+                text: root.updateInfo && root.updateInfo.latest
+                    ? i18n("Update available: v%1", root.updateInfo.latest)
+                    : i18n("Update available")
+            }
+            PlasmaComponents.Button {
+                icon.name: "system-software-update"
+                text: root.updating ? i18n("Updating…") : i18n("Update")
+                // Disabled while an update is in flight so a double-trigger can't
+                // race a second --update; root.updating resets when exec finishes
+                // (success or failure), re-enabling on a failed update.
+                enabled: !root.updating
+                onClicked: root.applyUpdate()
+            }
+        }
+
         // provider tab strip
         Flow {
             Layout.fillWidth: true

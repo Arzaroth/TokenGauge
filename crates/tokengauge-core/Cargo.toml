@@ -11,3 +11,7 @@ serde_json = { workspace = true }
 toml = "0.8"
 toml_edit = "0.22"
 dirs = "5.0"
+self_update = { version = "0.44", default-features = false, features = ["reqwest", "rustls", "archive-tar", "compression-flate2", "archive-zip", "compression-zip-deflate"], optional = true }
+
+[features]
+self-update = ["dep:self_update"]

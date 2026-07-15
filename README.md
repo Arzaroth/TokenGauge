@@ -19,6 +19,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary
 - **Threshold notifications**: `notify-send` alerts at 50/80/95% (configurable) - one-shot per threshold, resets on window roll-over
 - **Daemon mode**: optional long-lived process for near-instant waybar polls, background notifications, and SIGHUP config reload
+- **Self-update**: `tokengauge-waybar --update` pulls the arch-matching build from GitHub releases; the daemon checks periodically and notifies, and the popover / Plasma widget expose an **Update** button
 - **`--doctor`**: diagnostic checklist for codexbar, ccusage, notifications, providers, waybar wiring, click action launcher
 - **CSS tier classes**: waybar text class flips to `tokengauge-warn` / `tokengauge-crit` past usage thresholds for theme-driven coloring
 
@@ -109,6 +110,8 @@ Edit `~/.config/tokengauge/config.toml`:
 | `waybar.popover_margin_side` | Bundled popover's side-edge offset (px) | `8` |
 | `notifications.enabled` | Send desktop notifications | `true` |
 | `notifications.thresholds` | Percent thresholds to fire on | `[50, 80, 95]` |
+| `update.check` | Daemon checks GitHub releases and notifies when a newer version exists | `true` |
+| `update.check_interval_secs` | Seconds between daemon update checks | `21600` |
 
 `ccusage` is auto-detected on PATH (preferring a global install, then `bunx`, then `npx`).
 
@@ -235,6 +238,35 @@ Exit 0 if all pass, 1 if any fails - CI-friendly.
 
 ## Updates
 
+The binaries self-update from GitHub releases, pulling the archive matching your
+platform (`linux-x86_64` / `linux-aarch64` / `windows-x86_64`):
+
+```bash
+# Linux
+tokengauge-waybar --update        # download the latest release and swap the binaries
+tokengauge-waybar --check-update  # just report the latest version (prints JSON)
+```
+
+```powershell
+# Windows (no waybar binary - the TUI carries the updater)
+tokengauge-tui.exe --update
+tokengauge-tui.exe --check-update
+```
+
+When the daemon is running it checks GitHub every `update.check_interval_secs`
+(default 6h) and fires a one-shot `notify-send` when a newer version is
+available - set `update.check = false` to opt out. The popover and KDE Plasma
+widget surface an **Update** button when a newer release is cached; clicking it
+runs `--update`. After a Linux update the daemon is restarted automatically to
+load the new binary (falls back to printing the `systemctl --user restart
+tokengauge-daemon.service` command when not managed by systemd). On Windows the
+tray's **Update TokenGauge** menu item runs the updater; restart the app to load
+the new binaries.
+
+Set `TOKENGAUGE_REPO=owner/repo` to update from a fork's releases.
+
+The shell installers still work if you prefer them:
+
 ```bash
 # Update TokenGauge
 curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/update.sh | bash
@@ -300,6 +332,9 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
    [notifications]
    enabled = true
    thresholds = [50, 80, 95]
+
+   [update]
+   check = true
    EOF
    ```
 
@@ -397,7 +432,8 @@ cargo build --release -p tokengauge-tray
 
 - Left-click the tray icon (near the clock) to show the window; closing the
   window hides it back to the tray.
-- Right-click the tray icon for **Show / Refresh now / Quit**.
+- Right-click the tray icon for **Show / Refresh now / Update TokenGauge / Quit**
+  (**Update** runs `tokengauge-tui --update`; restart the tray afterward).
 - It reads limits from the same `codexbar_bin` as the TUI, so set that up first
   (see **Limits on Windows** below). This crate is Windows-only.
 

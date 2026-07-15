@@ -28,6 +28,16 @@ PlasmoidItem {
     readonly property string waybarBin: Plasmoid.configuration.waybarBinary || "tokengauge-waybar"
     readonly property int refreshSecs: Math.max(15, Plasmoid.configuration.refreshInterval)
 
+    // Cached GitHub release check written by the daemon; see UpdateStatus.
+    readonly property var updateInfo: snapshot.update || null
+    readonly property bool updateAvailable: !!(updateInfo && updateInfo.available)
+    // True while an --update command is in flight; reset when exec completes.
+    property bool updating: false
+    // Exact exec source of the in-flight update command, so only its own
+    // completion clears `updating` (waybarBin is user-configurable, so a
+    // substring match on "--update" isn't reliable).
+    property string updateSource: ""
+
     // Row shown in the panel / hovered.
     readonly property var selRow: rows.length > 0
         ? rows[Math.min(selectedIndex, rows.length - 1)]
@@ -67,6 +77,13 @@ PlasmoidItem {
         connectedSources: []
         onNewData: (source, data) => {
             exec.disconnectSource(source)
+            // Clear the in-flight update state only when the update command
+            // itself completes, so a periodic refresh finishing mid-update
+            // doesn't re-enable the button while --update is still running.
+            if (source === root.updateSource) {
+                root.updating = false
+                root.updateSource = ""
+            }
             if (data["exit code"] === 0) {
                 try {
                     var parsed = JSON.parse(data.stdout)
@@ -101,6 +118,18 @@ PlasmoidItem {
     // Run a tokengauge-waybar action flag, then refresh the snapshot.
     function action(flag) {
         exec.connectSource(cmd(root.waybarBin + " " + flag + " && " + root.waybarBin + " --json"))
+    }
+
+    // Download + install the latest release, then refresh so the banner clears.
+    // --update's human-readable stdout is discarded so only the --json payload
+    // reaches onNewData's JSON.parse.
+    function applyUpdate() {
+        root.updating = true
+        // Discard --update's stdout (keeps the JSON refresh parseable) but keep
+        // stderr so a failed update surfaces its error via root.lastError.
+        var updateSource = cmd(root.waybarBin + " --update >/dev/null && " + root.waybarBin + " --json")
+        root.updateSource = updateSource
+        exec.connectSource(updateSource)
     }
 
     function shellQuote(s) {

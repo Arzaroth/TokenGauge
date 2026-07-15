@@ -1450,8 +1450,9 @@ fn do_fetch_and_broadcast(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeCo
     dlog(
         "fetch",
         &format!(
-            "rows={} errors={} costs={} subscribers={} elapsed={:?}",
+            "rows={} stale={} errors={} costs={} subscribers={} elapsed={:?}",
             rows.len(),
+            rows.iter().filter(|r| r.stale).count(),
             errors.len(),
             costs.len(),
             subscriber_count,

@@ -1531,18 +1531,23 @@ fn handle_client(
             // Don't close - daemon broadcast will push updates
         }
         SocketCommand::Refresh => {
-            // Raise the sentinel before acking: a client that kicks a refresh
-            // and then polls for the ⟳ state (the popover on open) must never
-            // observe the gap between its ack and the fetch thread starting.
-            // The fetch itself runs in the background so the client doesn't
-            // block on the network.
+            // Raise the sentinel and start the fetch before acking: a client
+            // that kicks a refresh and then polls for the ⟳ state (the popover
+            // on open) must never observe the gap between its ack and the fetch
+            // thread starting. The fetch itself runs in the background so the
+            // client doesn't block on the network.
+            //
+            // Both precede the ack, which is a `?` path: a client that hangs up
+            // before reading it would otherwise return early and strand the
+            // sentinel raised with no fetch thread left to take it down.
             raise_refresh_sentinel(&config);
+            {
+                let state = state.clone();
+                let config = config.clone();
+                thread::spawn(move || do_refresh_cycle(&state, &config));
+            }
             writeln!(stream, "{}", serde_json::to_string(&SocketReply::Ack)?)?;
             stream.flush()?;
-
-            let state = state.clone();
-            let config = config.clone();
-            thread::spawn(move || do_refresh_cycle(&state, &config));
         }
         SocketCommand::Rotate { direction } => {
             let dir = match direction.as_str() {

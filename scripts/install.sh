@@ -213,6 +213,9 @@ After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
+# The systemd user manager's PATH omits ~/.local/bin, where codexbar usually
+# lives; without this the daemon's fetches fail and only serve stale data.
+Environment=PATH=$INSTALL_DIR:/usr/local/bin:/usr/bin:/bin
 ExecStart=$INSTALL_DIR/tokengauge-waybar --daemon
 Restart=on-failure
 RestartSec=5

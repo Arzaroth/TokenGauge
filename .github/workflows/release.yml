@@ -177,10 +177,26 @@ jobs:
           pattern: tokengauge-*
           merge-multiple: true
 
+      - name: Extract release notes from CHANGELOG
+        env:
+          REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          VERSION="${REF_NAME#v}"
+          awk -v hdr="## [$VERSION]" '
+            index($0, hdr) == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::warning::No CHANGELOG.md section for $VERSION - falling back to auto-generated notes."
+          fi
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: release-notes.md
+          generate_release_notes: true
           files: |
             dist/*.tar.gz
             dist/*.zip

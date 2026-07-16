@@ -49,8 +49,8 @@ struct Args {
     /// Rotate the provider shown in the waybar text and exit (no JSON output).
     #[arg(long, value_enum)]
     rotate: Option<RotateDir>,
-    /// Wipe the cache file and exit. Next render will re-fetch from codexbar
-    /// and ccusage. Pair with a waybar signal so the bar repolls immediately.
+    /// Wipe the cache file and exit. Next render will re-fetch usage and
+    /// ccusage. Pair with a waybar signal so the bar repolls immediately.
     #[arg(long)]
     refresh: bool,
     /// Internal: run the actual fetch in a detached worker spawned by --refresh.
@@ -853,7 +853,7 @@ fn handle_doctor(config_path: &Path) -> i32 {
             record(DoctorCheck {
                 label: format!("unknown config key `{key}`"),
                 ok: false,
-                detail: "removed in 0.10 - delete it from your config".into(),
+                detail: "removed in 0.11 - delete it from your config".into(),
             });
         }
     }
@@ -1255,7 +1255,7 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
     for key in config.unknown_config_keys() {
         dlog(
             "daemon",
-            &format!("ignoring unknown config key `{key}` (removed in 0.10)"),
+            &format!("ignoring unknown config key `{key}` (removed in 0.11)"),
         );
     }
 

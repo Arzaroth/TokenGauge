@@ -14,18 +14,12 @@ use serde::{Deserialize, Serialize};
 pub mod update;
 
 // ============================================================================
-// Codexbar Payload Types
+// Provider payload types
+//
+// These are the internal model the native fetchers produce and the frontends
+// render; they are also the on-disk cache format (`CachedData`). The camelCase
+// serde naming is preserved so caches written by earlier versions still read.
 // ============================================================================
-
-/// Deserialize a percentage that may arrive as an integer (upstream codexbar)
-/// or a float (e.g. Win-CodexBar sends `100.0`), rounding/clamping to `0..=100`.
-fn de_opt_percent<'de, D>(deserializer: D) -> Result<Option<u8>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let opt = Option::<f64>::deserialize(deserializer)?;
-    Ok(opt.map(|v| v.round().clamp(0.0, 100.0) as u8))
-}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,13 +28,11 @@ pub struct UsageSnapshot {
     pub secondary: Option<UsageWindow>,
     #[serde(default)]
     pub tertiary: Option<UsageWindow>,
-    // Accept snake_case too, so third-party codexbar ports (e.g. Win-CodexBar,
-    // which serializes snake_case) parse alongside the upstream camelCase CLI.
-    #[serde(default, alias = "updated_at")]
+    #[serde(default)]
     pub updated_at: Option<String>,
-    #[serde(default, alias = "login_method")]
+    #[serde(default)]
     pub login_method: Option<String>,
-    #[serde(default, alias = "extra_rate_windows")]
+    #[serde(default)]
     pub extra_rate_windows: Vec<ExtraRateWindow>,
 }
 
@@ -55,15 +47,13 @@ pub struct ExtraRateWindow {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageWindow {
-    // `alias` accepts snake_case (Win-CodexBar); `de_opt_percent` also tolerates
-    // a float percent like `100.0` in addition to an integer.
-    #[serde(default, alias = "used_percent", deserialize_with = "de_opt_percent")]
+    #[serde(default)]
     pub used_percent: Option<u8>,
-    #[serde(default, alias = "reset_description")]
+    #[serde(default)]
     pub reset_description: Option<String>,
-    #[serde(default, alias = "resets_at")]
+    #[serde(default)]
     pub resets_at: Option<String>,
-    #[serde(default, alias = "window_minutes")]
+    #[serde(default)]
     pub window_minutes: Option<u32>,
 }
 
@@ -415,92 +405,21 @@ impl ProviderFetchError {
     }
 }
 
-/// Clean up error messages to extract the meaningful part.
-/// Removes JSON log prefixes and extracts key error info.
+/// Shorten a fetch error for display. The native fetchers already produce
+/// concise, purpose-written messages, so this only guards against runaway
+/// length (e.g. a raw provider error body) and normalizes timeouts.
 fn clean_error_message(raw: &str) -> String {
-    // If it's a codexbar failure with JSON in stderr, try to extract the actual error
-    if raw.contains("codexbar failed") {
-        // Try to find API error messages like "401: {\"error\":\"Unauthorized\"}"
-        if let Some(api_error) = extract_api_error(raw) {
-            return api_error;
-        }
-        // Try to find "No available fetch strategy" errors
-        if raw.contains("No available fetch strategy") {
-            return "No available fetch strategy".to_string();
-        }
-        // Try to extract message from JSON payload error
-        if let Some(msg) = extract_json_message(raw) {
-            return msg;
-        }
-        // Default: just say it failed
-        return "API request failed".to_string();
-    }
-
-    // If it's a timeout
     if raw.contains("timeout") {
         return "Request timed out".to_string();
     }
-
-    // Clean up codexbar API error messages like "Kimi K2 API returned 401: {\"error\":..."
-    if raw.contains("API returned") || raw.contains("API error") {
-        if let Some(api_error) = extract_api_error(raw) {
-            return api_error;
-        }
-        // Extract just the status part
-        if let Some(status) = extract_http_status(raw) {
-            return format!("API error ({})", status);
-        }
-    }
-
-    // If message is reasonably short, use it as-is
-    if raw.len() <= 60 {
+    // Char-boundary-safe truncation: `raw` may be an HTTP body with multi-byte
+    // characters, so a byte slice at 57 could split a codepoint and panic.
+    if raw.chars().count() <= 60 {
         return raw.to_string();
     }
-
-    // Truncate long messages
-    format!("{}...", &raw[..57])
-}
-
-/// Try to extract API error like "Unauthorized" or "Invalid API key"
-fn extract_api_error(raw: &str) -> Option<String> {
-    // Look for patterns like: API returned 401: {"error":"Unauthorized"}
-    // Or: Kimi K2 API error: {"error":"Unauthorized"}
-    if let Some(idx) = raw.find("\"error\":\"") {
-        let start = idx + 9;
-        if let Some(end) = raw[start..].find('"') {
-            let error = &raw[start..start + end];
-            // Look for HTTP status code
-            if let Some(status) = extract_http_status(raw) {
-                return Some(format!("{} (HTTP {})", error, status));
-            }
-            return Some(error.to_string());
-        }
-    }
-    None
-}
-
-/// Extract HTTP status code from error message
-fn extract_http_status(raw: &str) -> Option<&'static str> {
-    // Look for patterns like "returned 401:" or "status: 401)"
-    ["401", "403", "404", "500", "502", "503"]
-        .iter()
-        .find(|&pattern| raw.contains(pattern))
-        .copied()
-}
-
-/// Try to extract "message" field from JSON in error
-fn extract_json_message(raw: &str) -> Option<String> {
-    // Look for "message":"..." pattern
-    if let Some(idx) = raw.find("\"message\":\"") {
-        let start = idx + 11;
-        if let Some(end) = raw[start..].find('"') {
-            let msg = &raw[start..start + end];
-            if !msg.is_empty() && msg.len() <= 80 {
-                return Some(msg.to_string());
-            }
-        }
-    }
-    None
+    let mut s: String = raw.chars().take(57).collect();
+    s.push_str("...");
+    s
 }
 
 /// Result of fetching all providers.
@@ -767,121 +686,13 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<Output> {
     }
 }
 
-/// Secondary codexbar `--source` to retry with when the primary source fails.
-/// Anthropic's OAuth endpoint rate-limits often; the local Claude CLI source
-/// keeps the bar populated. Only providers codexbar exposes a `cli` source for
-/// qualify (currently just Claude).
-fn cli_fallback_source(provider: &str) -> Option<&'static str> {
+/// Fetch a single provider's usage natively over HTTP.
+pub fn fetch_single_provider(provider: &str, timeout: Duration) -> Result<Vec<ProviderPayload>> {
     match provider {
-        "claude" => Some("cli"),
-        _ => None,
+        "claude" => claude::fetch(timeout),
+        "codex" => codex::fetch(timeout),
+        other => Err(anyhow!("unknown provider {other}")),
     }
-}
-
-/// Fetch a single provider using codexbar, retrying via a fallback `--source`
-/// when the primary source errors (e.g. Claude OAuth 429 → local CLI).
-pub fn fetch_single_provider(
-    codexbar_bin: &str,
-    provider: &str,
-    timeout: Duration,
-) -> Result<Vec<ProviderPayload>> {
-    let result = fetch_single_provider_source(codexbar_bin, provider, "oauth", timeout);
-    if payloads_usable(&result) {
-        return result;
-    }
-
-    if let Some(fallback) = cli_fallback_source(provider) {
-        let retried = fetch_single_provider_source(codexbar_bin, provider, fallback, timeout);
-        if payloads_usable(&retried) {
-            return retried;
-        }
-    }
-
-    result
-}
-
-/// True when a fetch result carries at least one usable (error-free) payload.
-fn payloads_usable(result: &Result<Vec<ProviderPayload>>) -> bool {
-    matches!(result, Ok(payloads) if payloads.iter().any(|p| !p.has_error()))
-}
-
-/// Build the base `Command` for the codexbar binary.
-///
-/// A plain executable (`.exe`, or a name CreateProcess resolves) is spawned
-/// directly. On Windows a `.cmd`/`.bat` shim can't be exec'd directly, so those
-/// are routed through `cmd /C` - mirroring the ccusage handling and letting a
-/// batch wrapper work as `codexbar_bin`.
-fn codexbar_command(codexbar_bin: &str) -> Command {
-    #[cfg(windows)]
-    {
-        let is_batch = |p: &Path| {
-            matches!(
-                p.extension()
-                    .and_then(|e| e.to_str())
-                    .map(str::to_ascii_lowercase)
-                    .as_deref(),
-                Some("cmd") | Some("bat")
-            )
-        };
-        let resolved = find_in_path(codexbar_bin);
-        if is_batch(Path::new(codexbar_bin)) || resolved.as_deref().map(is_batch).unwrap_or(false) {
-            let mut command = Command::new("cmd");
-            command.arg("/C").arg(codexbar_bin);
-            return command;
-        }
-    }
-    Command::new(codexbar_bin)
-}
-
-/// Fetch a single provider from a specific codexbar `--source`.
-fn fetch_single_provider_source(
-    codexbar_bin: &str,
-    provider: &str,
-    source: &str,
-    timeout: Duration,
-) -> Result<Vec<ProviderPayload>> {
-    let mut command = codexbar_command(codexbar_bin);
-    command
-        .arg("usage")
-        .arg("--provider")
-        .arg(provider)
-        .arg("--source")
-        .arg(source)
-        .arg("--format")
-        .arg("json");
-
-    // The upstream (macOS/Linux) codexbar CLI takes `--json-only` to suppress
-    // any non-JSON preamble. On Windows there is no upstream binary; the only
-    // codexbar-compatible options are third-party ports (e.g. Win-CodexBar)
-    // whose `usage` command doesn't define that flag - and clap rejects unknown
-    // flags - while their `--format json` already emits pure JSON. So only pass
-    // `--json-only` off Windows, which keeps Win-CodexBar usable as a drop-in.
-    #[cfg(not(windows))]
-    command.arg("--json-only");
-
-    let output = run_with_timeout(command, timeout)
-        .with_context(|| format!("failed to run codexbar for {provider}"))?;
-
-    if !output.status.success() {
-        // Try to parse JSON error from stdout first
-        if let Ok(payloads) = parse_payload_bytes(&output.stdout) {
-            // Codexbar returns non-zero but still outputs JSON with error info
-            return Ok(payloads);
-        }
-
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let detail = if !stderr.is_empty() {
-            stderr
-        } else if !stdout.is_empty() {
-            stdout
-        } else {
-            "no error output".to_string()
-        };
-        return Err(anyhow!("codexbar failed ({}) - {}", output.status, detail));
-    }
-
-    parse_payload_bytes(&output.stdout)
 }
 
 /// Fetch all enabled providers in parallel.
@@ -915,12 +726,11 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
         .into_iter()
         .enumerate()
         .map(|(i, provider)| {
-            let bin = config.codexbar_bin.clone();
             thread::spawn(move || {
                 if !stagger.is_zero() && i > 0 {
                     thread::sleep(stagger.saturating_mul(i as u32));
                 }
-                let result = fetch_single_provider(&bin, provider, timeout);
+                let result = fetch_single_provider(provider, timeout);
                 (provider.to_string(), result)
             })
         })
@@ -2294,44 +2104,6 @@ mod tests {
     use super::*;
 
     // ------------------------------------------------------------------------
-    // Third-party codexbar (Win-CodexBar) snake_case + float-percent parsing
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn parses_win_codexbar_snake_case_usage() {
-        // Real output from Win-CodexBar's codexbar-cli: snake_case field names
-        // and a float `used_percent`, unlike upstream codexbar's camelCase/int.
-        let json = br#"[{"cost":null,"provider":"claude","source":"oauth","usage":{"extra_rate_windows":[{"id":"claude-weekly-scoped-fable","title":"Fable only","window":{"used_percent":0.0,"window_minutes":10080}}],"login_method":"Claude Max 5x","primary":{"reset_description":"Jul 14 at 8:49PM","resets_at":"2026-07-14T20:49:59.922430Z","used_percent":100.0,"window_minutes":300},"secondary":{"reset_description":"Jul 18 at 9:59AM","resets_at":"2026-07-18T09:59:59.922452Z","used_percent":21.0,"window_minutes":10080},"updated_at":"2026-07-14T15:57:20.912196200Z"}}]"#;
-
-        let payloads = parse_payload_bytes(json).expect("Win-CodexBar JSON should parse");
-        assert_eq!(payloads.len(), 1);
-        let usage = payloads[0].usage.as_ref().expect("usage present");
-        let primary = usage.primary.as_ref().unwrap();
-        assert_eq!(primary.used_percent, Some(100));
-        // Every snake_case alias must map, not just the percentages.
-        assert_eq!(
-            primary.reset_description.as_deref(),
-            Some("Jul 14 at 8:49PM")
-        );
-        assert_eq!(
-            primary.resets_at.as_deref(),
-            Some("2026-07-14T20:49:59.922430Z")
-        );
-        assert_eq!(primary.window_minutes, Some(300));
-        assert_eq!(usage.secondary.as_ref().unwrap().used_percent, Some(21));
-        assert_eq!(
-            usage.updated_at.as_deref(),
-            Some("2026-07-14T15:57:20.912196200Z")
-        );
-        assert_eq!(usage.login_method.as_deref(), Some("Claude Max 5x"));
-        assert_eq!(usage.extra_rate_windows.len(), 1);
-
-        let rows = payload_to_rows(payloads);
-        assert_eq!(rows[0].session_used, Some(100));
-        assert_eq!(rows[0].weekly_used, Some(21));
-    }
-
-    // ------------------------------------------------------------------------
     // Windows executable discovery / command construction
     // ------------------------------------------------------------------------
 
@@ -2368,34 +2140,6 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         assert_eq!(args, vec!["/C", "npx", "--yes", "ccusage"]);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn codexbar_command_routes_batch_shim_through_cmd() {
-        // A .cmd/.bat shim must run via `cmd /C`...
-        let command = codexbar_command("codexbar.cmd");
-        assert_eq!(command.get_program().to_string_lossy(), "cmd");
-        let args: Vec<String> = command
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(args, vec!["/C", "codexbar.cmd"]);
-
-        // ...while a plain .exe is spawned directly.
-        let direct = codexbar_command("codexbar-cli.exe");
-        assert_eq!(direct.get_program().to_string_lossy(), "codexbar-cli.exe");
-        assert_eq!(direct.get_args().count(), 0);
-    }
-
-    // ------------------------------------------------------------------------
-    // fallback source tests
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn cli_fallback_only_for_claude() {
-        assert_eq!(cli_fallback_source("claude"), Some("cli"));
-        assert_eq!(cli_fallback_source("codex"), None);
     }
 
     #[test]
@@ -2601,32 +2345,6 @@ mod tests {
         assert!(out.contains("codex = false"), "{out}");
 
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn payloads_usable_detects_error_only_results() {
-        let ok = ProviderPayload {
-            provider: "claude".into(),
-            version: None,
-            source: None,
-            usage: None,
-            credits: None,
-            error: None,
-            stale: false,
-        };
-        let err = ProviderPayload {
-            error: Some(ProviderError {
-                message: Some("429".into()),
-                code: None,
-                kind: None,
-            }),
-            ..ok.clone()
-        };
-        assert!(payloads_usable(&Ok(vec![ok.clone()])));
-        assert!(payloads_usable(&Ok(vec![err.clone(), ok])));
-        assert!(!payloads_usable(&Ok(vec![err])));
-        assert!(!payloads_usable(&Ok(vec![])));
-        assert!(!payloads_usable(&Err(anyhow!("boom"))));
     }
 
     // ------------------------------------------------------------------------
@@ -2936,20 +2654,6 @@ mod tests {
     }
 
     #[test]
-    fn provider_fetch_error_api_401() {
-        let raw = r#"codexbar failed (exit status: 1) - {"error":"Unauthorized"}"#;
-        let error = ProviderFetchError::new("kimik2".to_string(), raw);
-        assert!(error.message.contains("Unauthorized"));
-    }
-
-    #[test]
-    fn provider_fetch_error_no_fetch_strategy() {
-        let raw = "codexbar failed - No available fetch strategy for provider";
-        let error = ProviderFetchError::new("test".to_string(), raw);
-        assert_eq!(error.message, "No available fetch strategy");
-    }
-
-    #[test]
     fn provider_fetch_error_short_message_unchanged() {
         let error = ProviderFetchError::new("test".to_string(), "Short error");
         assert_eq!(error.message, "Short error");
@@ -2959,7 +2663,15 @@ mod tests {
     fn provider_fetch_error_long_message_truncated() {
         let long_msg = "a".repeat(100);
         let error = ProviderFetchError::new("test".to_string(), &long_msg);
-        assert!(error.message.len() <= 60);
+        assert!(error.message.chars().count() <= 60);
+        assert!(error.message.ends_with("..."));
+    }
+
+    #[test]
+    fn provider_fetch_error_multibyte_truncation_does_not_panic() {
+        // A long body with a multi-byte char straddling byte 57 must not panic.
+        let raw = "é".repeat(100);
+        let error = ProviderFetchError::new("claude".to_string(), &raw);
         assert!(error.message.ends_with("..."));
     }
 

@@ -6,7 +6,6 @@
 //! would race any lock we invent), and the file also holds unrelated `mcpOAuth`
 //! secrets. On an expired token we surface an error and let the stale-cache
 //! fallback keep the last-good number visible until `claude` is next run.
-#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

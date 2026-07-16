@@ -4,7 +4,6 @@
 //! `$CODEX_HOME/auth.json`. The refresh token rotates, so two processes
 //! refreshing at once would revoke one and log the user out - hence the
 //! cross-process `try_lock` + double-check before refreshing.
-#![allow(dead_code)]
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;

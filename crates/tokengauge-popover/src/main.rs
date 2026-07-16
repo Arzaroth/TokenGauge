@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::time::Duration;
@@ -188,8 +188,9 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
             .build();
         let btn = btn_update.clone();
         let cfg = Rc::clone(&config);
+        let path = Rc::clone(&config_path);
         btn_update.connect_clicked(move |_| {
-            spawn_update();
+            spawn_update(&path);
             btn.set_label("⬆  Updating...");
             btn.set_sensitive(false);
 
@@ -281,10 +282,11 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
     {
         let was_refreshing = Rc::clone(&was_refreshing);
         let indicator = refresh_indicator.clone();
+        let path = Rc::clone(&config_path);
         btn_refresh.connect_clicked(move |_| {
             *was_refreshing.borrow_mut() = true;
             indicator.set_visible(true);
-            send_refresh();
+            send_refresh(&path);
         });
     }
 
@@ -292,7 +294,7 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
     // provider toggle), so show it immediately, then refresh underneath. The
     // watcher polls the sentinel that --refresh raises: while it's up the ⟳
     // indicator shows, and when it clears we re-render with the fresh data.
-    send_refresh();
+    send_refresh(&config_path);
     {
         let cfg = Rc::clone(&config);
         let render = Rc::clone(&do_render);
@@ -1111,8 +1113,8 @@ fn install_css() {
 /// Kick a refresh and return without waiting for it. `--refresh` asks the daemon
 /// over its socket and forks a detached worker when there's no daemon, so this
 /// works in both setups; the sentinel it raises drives the ⟳ indicator.
-fn send_refresh() {
-    spawn_waybar("--refresh");
+fn send_refresh(config_path: &Path) {
+    spawn_waybar("--refresh", config_path);
 }
 
 fn spawn_tui(config: &TokenGaugeConfig) {
@@ -1140,13 +1142,15 @@ fn spawn_tui(config: &TokenGaugeConfig) {
         .spawn();
 }
 
-fn spawn_update() {
-    spawn_waybar("--update");
+fn spawn_update(config_path: &Path) {
+    spawn_waybar("--update", config_path);
 }
 
 /// Spawn `tokengauge-waybar <arg>` detached, preferring the sibling next to this
 /// binary; the popover's PATH (graphical-session) may not include the install dir.
-fn spawn_waybar(arg: &str) {
+/// The popover's resolved config path is forwarded so the child targets the same
+/// cache the popover is showing, not the default one.
+fn spawn_waybar(arg: &str, config_path: &Path) {
     let sibling = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("tokengauge-waybar")))
@@ -1156,12 +1160,11 @@ fn spawn_waybar(arg: &str) {
         None => Command::new("tokengauge-waybar"),
     };
     cmd.arg(arg)
+        .arg("--config")
+        .arg(config_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if let Some(path) = std::env::var_os("TOKENGAUGE_CONFIG") {
-        cmd.env("TOKENGAUGE_CONFIG", path);
-    }
     let _ = cmd.spawn();
 }
 

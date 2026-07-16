@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- The popover and TUI fetch fresh data when opened instead of rendering a cache that may be up to `refresh_secs` old.
+- The popover and TUI fetch fresh data when opened; the popover shows the current cache immediately while the refresh runs, and the TUI blocks on the fetch behind its spinner.
 - Refresh indicator in the popover: a ⟳ marker shows in the header for the duration of a fetch, and the view re-renders when the data lands.
 
 ### Fixed

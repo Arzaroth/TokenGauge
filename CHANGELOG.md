@@ -7,10 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-16
+
+Usage limits are now fetched natively - no external CodexBar CLI.
+
 ### Changed
 
 - Usage limits are now fetched natively over HTTP for Claude and Codex; the external `codexbar` CLI is no longer required.
 - Windows fetches Claude/Codex usage natively - Win-CodexBar is no longer needed.
+- Codex refreshes its own OAuth token behind a cross-process lock and writes it back atomically (0600, unknown fields preserved), keeping a recovery copy if the final replace fails.
 
 ### Removed
 
@@ -19,12 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Guarded a u8 overflow in threshold notifications.
-- Guarded a UTF-8 panic when truncating long error messages.
+- Expired/failed fetches keep serving the last-good cached number instead of a blank row (empty or malformed provider data is no longer treated as live usage).
+- Guarded a u8 overflow in threshold notifications and a UTF-8 panic when truncating long error messages.
 
 ### Notes
 
 - `socks5://` proxies now require building with reqwest's `socks` feature; `HTTP_PROXY`/`HTTPS_PROXY` still work.
+- Minimum supported Rust version is now 1.89 (the native Codex refresh lock uses `File::try_lock`).
 
 ## [0.10.1] - 2026-07-16
 
@@ -182,7 +188,8 @@ Major feature batch on top of upstream v0.4.2.
 
 Released by the upstream project, [oorestisime/TokenGauge](https://github.com/oorestisime/TokenGauge/releases). This fork's own history starts at 0.5.0.
 
-[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/Arzaroth/TokenGauge/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/Arzaroth/TokenGauge/compare/v0.9.0...v0.9.1

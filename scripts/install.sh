@@ -115,7 +115,7 @@ install -m 0755 "$TMP_DIR/tokengauge-tui" "$INSTALL_DIR/tokengauge-tui"
 # next to freshly-updated binaries with no hint anything was left behind.
 if [[ -f "$TMP_DIR/tokengauge-popover" ]]; then
   install -m 0755 "$TMP_DIR/tokengauge-popover" "$INSTALL_DIR/tokengauge-popover"
-elif [[ -e "$INSTALL_DIR/tokengauge-popover" ]]; then
+elif [[ -f "$INSTALL_DIR/tokengauge-popover" && -x "$INSTALL_DIR/tokengauge-popover" ]]; then
   warn "tokengauge-popover is not in the $latest tarball (it needs GTK4 at build time)."
   warn "  Kept the installed one, which is now older than the other binaries."
   warn "  Update it from a checkout: cargo build --release -p tokengauge-popover"

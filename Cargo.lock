@@ -5343,6 +5343,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "http",
+ "reqwest",
  "self_update",
  "serde",
  "serde_json",

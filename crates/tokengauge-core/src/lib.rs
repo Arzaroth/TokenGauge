@@ -81,7 +81,7 @@ pub struct ProviderPayload {
     pub credits: Option<Credits>,
     pub error: Option<ProviderError>,
     /// True when this payload was served from a previous cache because the
-    /// live fetch failed. Set by `fetch_all_providers`, not by codexbar.
+    /// live fetch failed. Set by `fetch_all_providers`, not by the fetchers.
     #[serde(default)]
     pub stale: bool,
 }
@@ -750,7 +750,7 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
     });
 
     // Spawn threads for each provider. Each thread self-delays by its index
-    // times `stagger_ms` so codexbar calls are spread out (rate-limit relief)
+    // times `stagger_ms` so provider fetches are spread out (rate-limit relief)
     // without blocking the main spawn loop or the ccusage thread.
     let stagger = Duration::from_millis(config.stagger_ms);
     let handles: Vec<_> = enabled
@@ -875,7 +875,7 @@ pub fn parse_payload(value: serde_json::Value) -> Result<Vec<ProviderPayload>> {
 
 pub fn parse_payload_bytes(bytes: &[u8]) -> Result<Vec<ProviderPayload>> {
     let value: serde_json::Value =
-        serde_json::from_slice(bytes).context("codexbar output was not JSON")?;
+        serde_json::from_slice(bytes).context("provider payload was not JSON")?;
     parse_payload(value)
 }
 
@@ -1145,7 +1145,7 @@ fn now_ms() -> u64 {
 }
 
 /// Wall-clock budget a manual refresh may legitimately take under the current
-/// config: per-provider timeout (the slower of the codexbar and ccusage limits)
+/// config: per-provider timeout (the slower of the fetch and ccusage limits)
 /// plus the worst-case stagger delay, plus head-room. The sentinel stores
 /// `now + this` as its deadline so a slow-but-live fetch keeps the ⟳ up instead
 /// of expiring at a fixed TTL shorter than the fetch it is guarding.

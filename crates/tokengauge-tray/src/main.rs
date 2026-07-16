@@ -277,7 +277,7 @@ mod win {
                                     );
                                     ui.label(
                                         RichText::new(
-                                            "Set codexbar_bin and sign in to Win-CodexBar.",
+                                            "Sign in with `codex` or `claude`, then refresh.",
                                         )
                                         .small()
                                         .color(SUB),

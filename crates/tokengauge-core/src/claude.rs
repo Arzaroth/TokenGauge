@@ -60,7 +60,7 @@ struct Oauth {
     subscription_type: Option<String>,
 }
 
-fn credentials_path() -> PathBuf {
+pub(crate) fn credentials_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_default()
         .join(".claude")

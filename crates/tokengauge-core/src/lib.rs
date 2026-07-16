@@ -149,6 +149,16 @@ pub(crate) fn http_client(timeout: Duration) -> Result<reqwest::blocking::Client
         .context("failed to build HTTP client")
 }
 
+/// Path to the Claude OAuth credentials file the native fetcher reads.
+pub fn claude_credentials_path() -> PathBuf {
+    claude::credentials_path()
+}
+
+/// Path to the Codex auth file the native fetcher reads (honors `CODEX_HOME`).
+pub fn codex_auth_path() -> PathBuf {
+    codex::auth_path()
+}
+
 // ============================================================================
 // Configuration Types
 // ============================================================================
@@ -159,6 +169,10 @@ pub(crate) fn http_client(timeout: Duration) -> Result<reqwest::blocking::Client
 pub struct ProvidersConfig {
     pub codex: Option<bool>,
     pub claude: Option<bool>,
+    /// Removed-provider keys (e.g. `[providers.zai]`) left over from older
+    /// configs. Captured so `--doctor` can warn instead of silently ignoring.
+    #[serde(flatten)]
+    pub unknown: HashMap<String, toml::Value>,
 }
 
 impl ProvidersConfig {
@@ -252,14 +266,13 @@ pub enum ClickAction {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TokenGaugeConfig {
-    pub codexbar_bin: String,
     pub refresh_secs: u64,
     pub cache_file: PathBuf,
     /// Timeout in seconds for each provider request
     pub timeout_secs: u64,
     /// Delay in milliseconds between consecutive provider fetch starts. Spreads
-    /// out codexbar calls to avoid rate-limit (429) bursts when many providers
-    /// are enabled. 0 disables staggering (all providers fetched at once).
+    /// out fetches to avoid rate-limit (429) bursts. 0 disables staggering (all
+    /// providers fetched at once).
     pub stagger_ms: u64,
     /// Enable ccusage cost fetching (requires `npx ccusage`)
     pub ccusage_enabled: bool,
@@ -270,6 +283,26 @@ pub struct TokenGaugeConfig {
     pub notifications: NotificationsConfig,
     pub theme: ThemeConfig,
     pub update: UpdateConfig,
+    /// Unknown top-level keys (e.g. the removed `codexbar_bin`) left over from
+    /// older configs. Captured so `--doctor` can warn instead of ignoring.
+    #[serde(flatten)]
+    pub unknown: HashMap<String, toml::Value>,
+}
+
+impl TokenGaugeConfig {
+    /// Config keys that are no longer recognized (own top-level keys plus any
+    /// `providers.<name>` left from a removed provider), sorted for stable output.
+    pub fn unknown_config_keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self.unknown.keys().cloned().collect();
+        keys.extend(
+            self.providers
+                .unknown
+                .keys()
+                .map(|k| format!("providers.{k}")),
+        );
+        keys.sort();
+        keys
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -361,7 +394,6 @@ impl Default for UpdateConfig {
 impl Default for TokenGaugeConfig {
     fn default() -> Self {
         Self {
-            codexbar_bin: "codexbar".to_string(),
             refresh_secs: 600,
             cache_file: default_cache_file(),
             timeout_secs: 20,
@@ -371,11 +403,13 @@ impl Default for TokenGaugeConfig {
             providers: ProvidersConfig {
                 codex: Some(true),
                 claude: Some(true),
+                unknown: HashMap::new(),
             },
             waybar: WaybarConfig::default(),
             notifications: NotificationsConfig::default(),
             theme: ThemeConfig::default(),
             update: UpdateConfig::default(),
+            unknown: HashMap::new(),
         }
     }
 }
@@ -591,9 +625,6 @@ pub fn load_config(path: Option<PathBuf>) -> Result<TokenGaugeConfig> {
         .with_context(|| format!("failed to parse config at {}", path.display()))?;
 
     // Apply defaults for empty values
-    if config.codexbar_bin.is_empty() {
-        config.codexbar_bin = "codexbar".to_string();
-    }
     if config.cache_file.as_os_str().is_empty() {
         config.cache_file = default_cache_file();
     }
@@ -1083,7 +1114,7 @@ pub fn retain_enabled(
     let is_enabled = |name: &str| {
         enabled
             .iter()
-            .any(|p| p.name.eq_ignore_ascii_case(name.trim()))
+            .any(|p| p.eq_ignore_ascii_case(name.trim()))
     };
     payloads.retain(|p| is_enabled(&p.provider));
     errors.retain(|e| is_enabled(&e.provider));
@@ -1518,7 +1549,7 @@ pub fn write_notify_state(path: &Path, state: &NotifyState) -> Result<()> {
 pub fn thresholds_to_fire(pct: u8, thresholds: &[u8], notified: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut current = notified.to_vec();
     if let Some(&max_notified) = current.iter().max()
-        && (pct + 10) < max_notified
+        && pct.saturating_add(10) < max_notified
     {
         current.clear();
     }
@@ -1964,9 +1995,6 @@ pub fn write_default_config(path: &Path) -> Result<()> {
     ensure_config_dir(path)?;
     let contents = r#"# TokenGauge Configuration
 
-# Path to codexbar binary
-codexbar_bin = "codexbar"
-
 # Refresh interval in seconds
 refresh_secs = 600
 
@@ -2074,6 +2102,12 @@ pub fn signal_daemon_reload() {
 
 /// Enable/disable an OAuth provider (codex, claude) in the config file.
 pub fn config_set_oauth_provider(path: &Path, name: &str, enabled: bool) -> Result<()> {
+    if !PROVIDERS.contains(&name) {
+        return Err(anyhow!(
+            "unknown provider '{name}' (expected one of: {})",
+            PROVIDERS.join(", ")
+        ));
+    }
     let name = name.to_string();
     edit_config_file(path, |doc| {
         let providers = ensure_table(doc, "providers");
@@ -2513,6 +2547,7 @@ mod tests {
         let config = ProvidersConfig {
             codex: Some(true),
             claude: Some(true),
+            ..Default::default()
         };
         let enabled = config.enabled_providers();
         assert_eq!(enabled.len(), 2);
@@ -2525,6 +2560,7 @@ mod tests {
         let config = ProvidersConfig {
             codex: Some(false),
             claude: Some(true),
+            ..Default::default()
         };
         let enabled = config.enabled_providers();
         assert_eq!(enabled, vec!["claude"]);
@@ -2542,6 +2578,7 @@ mod tests {
         let config = ProvidersConfig {
             codex: Some(true),
             claude: Some(false),
+            ..Default::default()
         };
         assert!(config.is_enabled("codex"));
         assert!(!config.is_enabled("claude"));
@@ -2867,9 +2904,22 @@ mod tests {
     #[test]
     fn tokengauge_config_default() {
         let config = TokenGaugeConfig::default();
-        assert_eq!(config.codexbar_bin, "codexbar");
         assert_eq!(config.refresh_secs, 600);
         assert!(config.providers.codex.unwrap_or(false));
+        assert!(config.providers.claude.unwrap_or(false));
+    }
+
+    #[test]
+    fn unknown_config_keys_flags_removed_providers_and_keys() {
+        let config: TokenGaugeConfig = toml::from_str(
+            "codexbar_bin = \"codexbar\"\n[providers]\nclaude = true\n\n[providers.zai]\napi_key = \"x\"\n",
+        )
+        .expect("legacy config still parses");
+        assert_eq!(
+            config.unknown_config_keys(),
+            vec!["codexbar_bin".to_string(), "providers.zai".to_string()]
+        );
+        // Parsing does not fail - the daemon keeps running on an old config.
         assert!(config.providers.claude.unwrap_or(false));
     }
 

@@ -59,6 +59,10 @@ fn codex_home() -> PathBuf {
     }
 }
 
+pub(crate) fn auth_path() -> PathBuf {
+    codex_home().join("auth.json")
+}
+
 fn read_auth(path: &Path) -> Result<AuthFile> {
     let data =
         std::fs::read_to_string(path).map_err(|_| anyhow!("Codex not logged in - run `codex`"))?;

@@ -124,6 +124,7 @@ pub fn provider_label(name: &str) -> &str {
 // ============================================================================
 
 mod claude;
+mod codex;
 
 /// Round and clamp a float percentage into the `0..=100` byte range the render
 /// layer expects. Mirrors the old `de_opt_percent` serde hook, now called from

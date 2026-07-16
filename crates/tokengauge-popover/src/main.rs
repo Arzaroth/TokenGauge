@@ -236,16 +236,16 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
     let settings_mode: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
     let settings_mode_for_render = Rc::clone(&settings_mode);
     let do_render = Rc::new(RefCell::new(move || {
-        updated_stamp.set_label(&cache_stamp(&cfg_for_refresh));
+        // Reload from disk each render: Settings edits the config file directly,
+        // so the startup snapshot would keep filtering against the old provider
+        // set (a just-disabled provider would linger with no daemon to refetch).
+        let cfg = load_config(Some((*path_for_render).clone()))
+            .unwrap_or_else(|_| (*cfg_for_refresh).clone());
+        updated_stamp.set_label(&cache_stamp(&cfg));
         if *settings_mode_for_render.borrow() {
             render_settings(&scroller_rc, &body_rc, &path_for_render);
         } else {
-            render_body(
-                &scroller_rc,
-                &body_rc,
-                &cfg_for_refresh,
-                &active_tab_for_render,
-            );
+            render_body(&scroller_rc, &body_rc, &cfg, &active_tab_for_render);
         }
     }));
     (do_render.borrow_mut())();
@@ -358,10 +358,15 @@ fn build_window(app: &Application, config: Rc<TokenGaugeConfig>, config_path: Rc
 /// fetch behind it is hours old or failing.
 fn cache_stamp(config: &TokenGaugeConfig) -> String {
     match std::fs::metadata(&config.cache_file).and_then(|m| m.modified()) {
-        Ok(modified) => format!(
-            "updated {}",
-            DateTime::<Local>::from(modified).format("%H:%M")
-        ),
+        Ok(modified) => {
+            let modified = DateTime::<Local>::from(modified);
+            let fmt = if modified.date_naive() == Local::now().date_naive() {
+                "%H:%M"
+            } else {
+                "%Y-%m-%d %H:%M"
+            };
+            format!("updated {}", modified.format(fmt))
+        }
         Err(_) => "never updated".to_string(),
     }
 }

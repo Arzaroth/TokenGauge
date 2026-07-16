@@ -1407,11 +1407,53 @@ pub fn refresh_sentinel_path(cache_file: &Path) -> PathBuf {
     parent.join("tokengauge-refreshing")
 }
 
-/// TTL guard so a worker killed mid-fetch can't strand the ⟳ state forever.
+/// Fallback TTL for a sentinel whose contents predate the deadline scheme (an
+/// older build wrote a start timestamp, not a deadline): treat it as abandoned
+/// once this much time has passed since it was last written.
 const REFRESH_SENTINEL_TTL: Duration = Duration::from_secs(30);
 
-/// True while a manual refresh is in flight (sentinel present and not stale).
+/// Head-room added to the configured fetch budget so a refresh that runs to its
+/// worst case still counts as in-flight.
+const REFRESH_SENTINEL_MARGIN_MS: u64 = 10_000;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Wall-clock budget a manual refresh may legitimately take under the current
+/// config: per-provider timeout (the slower of the codexbar and ccusage limits)
+/// plus the worst-case stagger delay, plus head-room. The sentinel stores
+/// `now + this` as its deadline so a slow-but-live fetch keeps the ⟳ up instead
+/// of expiring at a fixed TTL shorter than the fetch it is guarding.
+pub fn refresh_budget_ms(config: &TokenGaugeConfig) -> u64 {
+    let enabled = config.providers.enabled_providers().len() as u64;
+    let stagger = config.stagger_ms.saturating_mul(enabled.saturating_sub(1));
+    let timeout = config.timeout_secs.max(config.ccusage_timeout_secs) * 1000;
+    stagger + timeout + REFRESH_SENTINEL_MARGIN_MS
+}
+
+/// Absolute deadline (epoch ms) to stamp into a fresh refresh sentinel.
+pub fn refresh_sentinel_deadline_ms(config: &TokenGaugeConfig) -> u64 {
+    now_ms().saturating_add(refresh_budget_ms(config))
+}
+
+/// True while a manual refresh is in flight. The sentinel holds an absolute
+/// deadline (epoch ms) derived from the fetch budget, so a refresh counts as
+/// live until that deadline rather than a fixed TTL that a configured-slow fetch
+/// could outlast. Sentinels written by older builds (a start timestamp, already
+/// in the past) fall back to the mtime TTL.
 pub fn refresh_in_progress(sentinel: &Path) -> bool {
+    let Ok(contents) = fs::read_to_string(sentinel) else {
+        return false;
+    };
+    if let Ok(deadline) = contents.trim().parse::<u64>()
+        && deadline > now_ms()
+    {
+        return true;
+    }
     let Ok(meta) = fs::metadata(sentinel) else {
         return false;
     };
@@ -3556,6 +3598,33 @@ mod tests {
         let _ = fs::remove_file(&path);
         let state = read_waybar_state(&path);
         assert_eq!(state.selected, None);
+    }
+
+    #[test]
+    fn refresh_budget_scales_past_fixed_ttl() {
+        let config = TokenGaugeConfig {
+            timeout_secs: 45,
+            ccusage_timeout_secs: 10,
+            stagger_ms: 0,
+            ..TokenGaugeConfig::default()
+        };
+        // Budget follows the larger configured timeout, so a 45s fetch is not
+        // classed stale by a 30s TTL.
+        assert_eq!(
+            refresh_budget_ms(&config),
+            45_000 + REFRESH_SENTINEL_MARGIN_MS
+        );
+        assert!(refresh_budget_ms(&config) > REFRESH_SENTINEL_TTL.as_millis() as u64);
+    }
+
+    #[test]
+    fn refresh_in_progress_honors_future_deadline() {
+        let dir = tempdir_for_test("sentinel");
+        let sentinel = dir.join("tokengauge-refreshing");
+        fs::write(&sentinel, (now_ms() + 3_600_000).to_string()).unwrap();
+        assert!(refresh_in_progress(&sentinel));
+        fs::remove_file(&sentinel).unwrap();
+        assert!(!refresh_in_progress(&sentinel));
     }
 
     fn tempdir_for_test(prefix: &str) -> PathBuf {

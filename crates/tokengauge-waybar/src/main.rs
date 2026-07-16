@@ -17,9 +17,9 @@ use tokengauge_core::{
     ensure_cache_dir, fetch_all_providers, format_tokens, format_updated_relative, load_config,
     notify_state_path, payload_to_rows_with_costs, provider_icon, provider_icon_svg_path,
     provider_label, read_cache_full, read_notify_state, read_waybar_state, refresh_in_progress,
-    refresh_sentinel_path, retain_enabled, signal_daemon_reload, theme, thresholds_to_fire,
-    waybar_state_path, window_labels, write_cache_full, write_default_config, write_notify_state,
-    write_waybar_state,
+    refresh_sentinel_deadline_ms, refresh_sentinel_path, retain_enabled, signal_daemon_reload,
+    theme, thresholds_to_fire, waybar_state_path, window_labels, write_cache_full,
+    write_default_config, write_notify_state, write_waybar_state,
 };
 
 fn theme_palette() -> (
@@ -252,10 +252,11 @@ fn main() -> Result<()> {
         let yellow = theme().yellow.as_str();
         let cached = read_cache_full(&config.cache_file).ok();
         let (rows, errors) = match cached {
-            Some(c) => (
-                payload_to_rows_with_costs(c.payloads().to_vec(), &c.costs()),
-                c.errors().to_vec(),
-            ),
+            Some(c) => {
+                let (mut payloads, mut errors, costs) = c.into_parts();
+                retain_enabled(&mut payloads, &mut errors, &config.providers);
+                (payload_to_rows_with_costs(payloads, &costs), errors)
+            }
             None => (Vec::new(), Vec::new()),
         };
         let selected = selected_provider_for_tooltip(&config, &rows);
@@ -714,7 +715,7 @@ fn find_waybar_pids() -> Vec<libc::pid_t> {
 /// handler unblocks fast and waybar services the signal.
 fn handle_refresh_quick(config: &TokenGaugeConfig) {
     let sentinel = refresh_sentinel_path(&config.cache_file);
-    let _ = std::fs::write(&sentinel, now_ms().to_string());
+    let _ = std::fs::write(&sentinel, refresh_sentinel_deadline_ms(config).to_string());
     signal_waybar();
 
     if let Ok(exe) = std::env::current_exe() {
@@ -1087,10 +1088,11 @@ fn current_snapshot(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) 
     if refresh_in_progress(&sentinel) {
         let cached = read_cache_full(&config.cache_file).ok();
         let (rows, errors) = match cached {
-            Some(c) => (
-                payload_to_rows_with_costs(c.payloads().to_vec(), &c.costs()),
-                c.errors().to_vec(),
-            ),
+            Some(c) => {
+                let (mut payloads, mut errors, costs) = c.into_parts();
+                retain_enabled(&mut payloads, &mut errors, &config.providers);
+                (payload_to_rows_with_costs(payloads, &costs), errors)
+            }
             None => (Vec::new(), Vec::new()),
         };
         return render_output(config, &rows, &errors, true);
@@ -1464,7 +1466,7 @@ fn do_fetch_and_broadcast(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeCo
 fn raise_refresh_sentinel(config: &TokenGaugeConfig) {
     let _ = std::fs::write(
         refresh_sentinel_path(&config.cache_file),
-        now_ms().to_string(),
+        refresh_sentinel_deadline_ms(config).to_string(),
     );
     signal_waybar();
 }

@@ -40,7 +40,8 @@ mod win {
     use eframe::egui::{self, Color32, ProgressBar, RichText, ViewportCommand};
     use tokengauge_core::{
         ProviderRow, default_config_path, fetch_all_providers, load_config,
-        payload_to_rows_with_costs, read_cache_full, write_cache_full, write_default_config,
+        payload_to_rows_with_costs, read_cache_full, retain_enabled, write_cache_full,
+        write_default_config,
     };
     use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem};
     use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -123,7 +124,8 @@ mod win {
             if let Ok(config) = load_config(Some(cfg_path.clone()))
                 && let Ok(cached) = read_cache_full(&config.cache_file)
             {
-                let (payloads, errors, costs) = cached.into_parts();
+                let (mut payloads, mut errors, costs) = cached.into_parts();
+                retain_enabled(&mut payloads, &mut errors, &config.providers);
                 let rows = payload_to_rows_with_costs(payloads, &costs)
                     .iter()
                     .map(to_row)

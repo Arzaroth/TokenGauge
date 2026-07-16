@@ -7,7 +7,8 @@ use std::time::{Duration, SystemTime};
 use anyhow::Result;
 use tokengauge_core::{
     FetchResult, ProviderFetchError, ProviderRow, fetch_all_providers, load_config,
-    payload_to_rows_with_costs, read_cache_full, write_cache_full, write_default_config,
+    payload_to_rows_with_costs, read_cache_full, retain_enabled, write_cache_full,
+    write_default_config,
 };
 
 /// Outcome of a background fetch.
@@ -43,7 +44,7 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
         .map(|age| age >= Duration::from_secs(config.refresh_secs))
         .unwrap_or(true);
 
-    let (payloads, errors, costs) = match cached {
+    let (mut payloads, mut errors, costs) = match cached {
         Some(c) if !force && !stale => c.into_parts(),
         _ => {
             let FetchResult {
@@ -55,6 +56,9 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
             (payloads, errors, costs)
         }
     };
+    // The cache can predate a provider toggle; a fetch can't (it starts from the
+    // enabled set), but filtering both is cheaper than reasoning about which.
+    retain_enabled(&mut payloads, &mut errors, &config.providers);
 
     Ok(RefreshResult {
         rows: payload_to_rows_with_costs(payloads, &costs),

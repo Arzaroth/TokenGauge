@@ -107,182 +107,40 @@ impl ProviderPayload {
 // Provider Registry
 // ============================================================================
 
-/// The type of authentication a provider uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderType {
-    /// OAuth-based providers (codex, claude) - use `--source oauth`
-    OAuth,
-    /// API key providers (zai, kimik2, etc.) - use `--source api` with env var
-    Api,
-}
-
-/// Information about a supported provider.
-#[derive(Debug, Clone)]
-pub struct ProviderInfo {
-    pub name: &'static str,
-    pub provider_type: ProviderType,
-    /// Environment variable name for API key (only for Api type)
-    pub env_var: Option<&'static str>,
-    pub label: &'static str,
-}
-
-/// Registry of all supported providers.
-pub const PROVIDERS: &[ProviderInfo] = &[
-    // OAuth providers
-    ProviderInfo {
-        name: "codex",
-        provider_type: ProviderType::OAuth,
-        env_var: None,
-        label: "Codex",
-    },
-    ProviderInfo {
-        name: "claude",
-        provider_type: ProviderType::OAuth,
-        env_var: None,
-        label: "Claude",
-    },
-    // API providers
-    ProviderInfo {
-        name: "zai",
-        provider_type: ProviderType::Api,
-        env_var: Some("ZAI_API_TOKEN"),
-        label: "z.ai",
-    },
-    ProviderInfo {
-        name: "kimik2",
-        provider_type: ProviderType::Api,
-        env_var: Some("KIMI_K2_API_KEY"),
-        label: "Kimi K2",
-    },
-    ProviderInfo {
-        name: "copilot",
-        provider_type: ProviderType::Api,
-        env_var: Some("COPILOT_API_TOKEN"),
-        label: "Copilot",
-    },
-    ProviderInfo {
-        name: "minimax",
-        provider_type: ProviderType::Api,
-        env_var: Some("MINIMAX_API_TOKEN"),
-        label: "MiniMax",
-    },
-    ProviderInfo {
-        name: "kimi",
-        provider_type: ProviderType::Api,
-        env_var: Some("KIMI_AUTH_TOKEN"),
-        label: "Kimi",
-    },
-];
-
-/// Get provider info by name.
-pub fn get_provider_info(name: &str) -> Option<&'static ProviderInfo> {
-    PROVIDERS.iter().find(|p| p.name == name)
-}
+/// The providers TokenGauge fetches natively, both OAuth.
+pub const PROVIDERS: &[&str] = &["codex", "claude"];
 
 /// Get the display label for a provider.
 pub fn provider_label(name: &str) -> &str {
-    get_provider_info(name).map(|p| p.label).unwrap_or(name)
+    match name {
+        "codex" => "Codex",
+        "claude" => "Claude",
+        other => other,
+    }
 }
 
 // ============================================================================
 // Configuration Types
 // ============================================================================
 
-/// Configuration for an API provider (requires api_key).
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ApiProviderConfig {
-    pub api_key: String,
-}
-
 /// Provider configuration section.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct ProvidersConfig {
-    // OAuth providers - just true/false
     pub codex: Option<bool>,
     pub claude: Option<bool>,
-    // API providers - struct with api_key
-    pub zai: Option<ApiProviderConfig>,
-    pub kimik2: Option<ApiProviderConfig>,
-    pub copilot: Option<ApiProviderConfig>,
-    pub minimax: Option<ApiProviderConfig>,
-    pub kimi: Option<ApiProviderConfig>,
-}
-
-/// An enabled provider with its configuration.
-#[derive(Debug, Clone)]
-pub struct EnabledProvider {
-    pub name: String,
-    pub provider_type: ProviderType,
-    pub api_key: Option<String>,
-    pub env_var: Option<&'static str>,
 }
 
 impl ProvidersConfig {
-    /// Get list of all enabled providers with their configuration.
-    pub fn enabled_providers(&self) -> Vec<EnabledProvider> {
+    /// Get list of all enabled provider names.
+    pub fn enabled_providers(&self) -> Vec<&'static str> {
         let mut enabled = Vec::new();
-
-        // OAuth providers
         if self.codex.unwrap_or(false) {
-            enabled.push(EnabledProvider {
-                name: "codex".to_string(),
-                provider_type: ProviderType::OAuth,
-                api_key: None,
-                env_var: None,
-            });
+            enabled.push("codex");
         }
         if self.claude.unwrap_or(false) {
-            enabled.push(EnabledProvider {
-                name: "claude".to_string(),
-                provider_type: ProviderType::OAuth,
-                api_key: None,
-                env_var: None,
-            });
+            enabled.push("claude");
         }
-
-        // API providers - enabled if api_key is present
-        if let Some(ref config) = self.zai {
-            enabled.push(EnabledProvider {
-                name: "zai".to_string(),
-                provider_type: ProviderType::Api,
-                api_key: Some(config.api_key.clone()),
-                env_var: Some("ZAI_API_TOKEN"),
-            });
-        }
-        if let Some(ref config) = self.kimik2 {
-            enabled.push(EnabledProvider {
-                name: "kimik2".to_string(),
-                provider_type: ProviderType::Api,
-                api_key: Some(config.api_key.clone()),
-                env_var: Some("KIMI_K2_API_KEY"),
-            });
-        }
-        if let Some(ref config) = self.copilot {
-            enabled.push(EnabledProvider {
-                name: "copilot".to_string(),
-                provider_type: ProviderType::Api,
-                api_key: Some(config.api_key.clone()),
-                env_var: Some("COPILOT_API_TOKEN"),
-            });
-        }
-        if let Some(ref config) = self.minimax {
-            enabled.push(EnabledProvider {
-                name: "minimax".to_string(),
-                provider_type: ProviderType::Api,
-                api_key: Some(config.api_key.clone()),
-                env_var: Some("MINIMAX_API_TOKEN"),
-            });
-        }
-        if let Some(ref config) = self.kimi {
-            enabled.push(EnabledProvider {
-                name: "kimi".to_string(),
-                provider_type: ProviderType::Api,
-                api_key: Some(config.api_key.clone()),
-                env_var: Some("KIMI_AUTH_TOKEN"),
-            });
-        }
-
         enabled
     }
 
@@ -291,11 +149,6 @@ impl ProvidersConfig {
         match provider {
             "codex" => self.codex.unwrap_or(false),
             "claude" => self.claude.unwrap_or(false),
-            "zai" => self.zai.is_some(),
-            "kimik2" => self.kimik2.is_some(),
-            "copilot" => self.copilot.is_some(),
-            "minimax" => self.minimax.is_some(),
-            "kimi" => self.kimi.is_some(),
             _ => false,
         }
     }
@@ -488,7 +341,6 @@ impl Default for TokenGaugeConfig {
             providers: ProvidersConfig {
                 codex: Some(true),
                 claude: Some(true),
-                ..Default::default()
             },
             waybar: WaybarConfig::default(),
             notifications: NotificationsConfig::default(),
@@ -879,8 +731,8 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<Output> {
 /// Anthropic's OAuth endpoint rate-limits often; the local Claude CLI source
 /// keeps the bar populated. Only providers codexbar exposes a `cli` source for
 /// qualify (currently just Claude).
-fn cli_fallback_source(provider: &EnabledProvider) -> Option<&'static str> {
-    match provider.name.as_str() {
+fn cli_fallback_source(provider: &str) -> Option<&'static str> {
+    match provider {
         "claude" => Some("cli"),
         _ => None,
     }
@@ -890,15 +742,10 @@ fn cli_fallback_source(provider: &EnabledProvider) -> Option<&'static str> {
 /// when the primary source errors (e.g. Claude OAuth 429 → local CLI).
 pub fn fetch_single_provider(
     codexbar_bin: &str,
-    provider: &EnabledProvider,
+    provider: &str,
     timeout: Duration,
 ) -> Result<Vec<ProviderPayload>> {
-    let primary = match provider.provider_type {
-        ProviderType::OAuth => "oauth",
-        ProviderType::Api => "api",
-    };
-
-    let result = fetch_single_provider_source(codexbar_bin, provider, primary, timeout);
+    let result = fetch_single_provider_source(codexbar_bin, provider, "oauth", timeout);
     if payloads_usable(&result) {
         return result;
     }
@@ -949,7 +796,7 @@ fn codexbar_command(codexbar_bin: &str) -> Command {
 /// Fetch a single provider from a specific codexbar `--source`.
 fn fetch_single_provider_source(
     codexbar_bin: &str,
-    provider: &EnabledProvider,
+    provider: &str,
     source: &str,
     timeout: Duration,
 ) -> Result<Vec<ProviderPayload>> {
@@ -957,7 +804,7 @@ fn fetch_single_provider_source(
     command
         .arg("usage")
         .arg("--provider")
-        .arg(&provider.name)
+        .arg(provider)
         .arg("--source")
         .arg(source)
         .arg("--format")
@@ -972,14 +819,8 @@ fn fetch_single_provider_source(
     #[cfg(not(windows))]
     command.arg("--json-only");
 
-    // Set API key environment variable if needed
-    if let (Some(api_key), Some(env_var)) = (&provider.api_key, provider.env_var) {
-        command.env(env_var, api_key);
-    }
-
-    let provider_name = provider.name.clone();
     let output = run_with_timeout(command, timeout)
-        .with_context(|| format!("failed to run codexbar for {provider_name}"))?;
+        .with_context(|| format!("failed to run codexbar for {provider}"))?;
 
     if !output.status.success() {
         // Try to parse JSON error from stdout first
@@ -1035,13 +876,12 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
         .enumerate()
         .map(|(i, provider)| {
             let bin = config.codexbar_bin.clone();
-            let provider_name = provider.name.clone();
             thread::spawn(move || {
                 if !stagger.is_zero() && i > 0 {
                     thread::sleep(stagger.saturating_mul(i as u32));
                 }
-                let result = fetch_single_provider(&bin, &provider, timeout);
-                (provider_name, result)
+                let result = fetch_single_provider(&bin, provider, timeout);
+                (provider.to_string(), result)
             })
         })
         .collect();
@@ -1579,14 +1419,6 @@ pub fn provider_icon(label: &str) -> ProviderIcon {
             glyph: "\u{f0b2b}",
             color_hex: "#74AA9C",
         },
-        "copilot" => ProviderIcon {
-            glyph: "\u{f4b8}",
-            color_hex: "#8b5cf6",
-        },
-        "z.ai" | "zai" => ProviderIcon {
-            glyph: "Z",
-            color_hex: "#126EF4",
-        },
         _ => ProviderIcon {
             glyph: "\u{f06a9}",
             color_hex: NEUTRAL_HEX,
@@ -1595,15 +1427,10 @@ pub fn provider_icon(label: &str) -> ProviderIcon {
 }
 
 /// Basename slug of the bundled brand SVG for a provider label, if one ships.
-/// Kimi K2 reuses the Kimi (Moonshot) mark.
 pub fn provider_icon_slug(label: &str) -> Option<&'static str> {
     Some(match label.to_lowercase().as_str() {
         "claude" => "claude",
         "codex" => "codex",
-        "copilot" => "copilot",
-        "z.ai" | "zai" => "zai",
-        "minimax" => "minimax",
-        "kimi" | "kimi k2" | "kimik2" => "kimi",
         _ => return None,
     })
 }
@@ -1653,14 +1480,6 @@ pub fn provider_urls(provider: &str) -> ProviderUrls {
         "codex" => ProviderUrls {
             dashboard: Some("https://platform.openai.com/usage"),
             status: Some("https://status.openai.com"),
-        },
-        "copilot" => ProviderUrls {
-            dashboard: Some("https://github.com/settings/copilot"),
-            status: Some("https://www.githubstatus.com"),
-        },
-        "z.ai" | "zai" => ProviderUrls {
-            dashboard: Some("https://z.ai/manage-apikey"),
-            status: Some("https://status.z.ai"),
         },
         _ => ProviderUrls {
             dashboard: None,
@@ -2341,22 +2160,6 @@ popover_command = "tokengauge-popover --toggle"
 # OAuth providers - set to true/false to enable/disable
 codex = true
 claude = true
-
-# API providers - uncomment and add your API key to enable
-# [providers.zai]
-# api_key = "your-zai-api-key"
-
-# [providers.kimik2]
-# api_key = "your-kimi-k2-api-key"
-
-# [providers.copilot]
-# api_key = "your-copilot-api-key"
-
-# [providers.minimax]
-# api_key = "your-minimax-api-key"
-
-# [providers.kimi]
-# api_key = "your-kimi-api-key"
 "#;
     fs::write(path, contents)
         .with_context(|| format!("failed to write config {}", path.display()))?;
@@ -2549,29 +2352,10 @@ mod tests {
     // fallback source tests
     // ------------------------------------------------------------------------
 
-    fn enabled(name: &str, ty: ProviderType) -> EnabledProvider {
-        EnabledProvider {
-            name: name.to_string(),
-            provider_type: ty,
-            api_key: None,
-            env_var: None,
-        }
-    }
-
     #[test]
     fn cli_fallback_only_for_claude() {
-        assert_eq!(
-            cli_fallback_source(&enabled("claude", ProviderType::OAuth)),
-            Some("cli")
-        );
-        assert_eq!(
-            cli_fallback_source(&enabled("codex", ProviderType::OAuth)),
-            None
-        );
-        assert_eq!(
-            cli_fallback_source(&enabled("zai", ProviderType::Api)),
-            None
-        );
+        assert_eq!(cli_fallback_source("claude"), Some("cli"));
+        assert_eq!(cli_fallback_source("codex"), None);
     }
 
     #[test]
@@ -2955,38 +2739,11 @@ mod tests {
     fn provider_label_known_providers() {
         assert_eq!(provider_label("claude"), "Claude");
         assert_eq!(provider_label("codex"), "Codex");
-        assert_eq!(provider_label("zai"), "z.ai");
-        assert_eq!(provider_label("kimik2"), "Kimi K2");
     }
 
     #[test]
     fn provider_label_unknown_returns_input() {
         assert_eq!(provider_label("unknown_provider"), "unknown_provider");
-    }
-
-    // ------------------------------------------------------------------------
-    // get_provider_info tests
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn get_provider_info_oauth_provider() {
-        let info = get_provider_info("claude").unwrap();
-        assert_eq!(info.name, "claude");
-        assert_eq!(info.provider_type, ProviderType::OAuth);
-        assert!(info.env_var.is_none());
-    }
-
-    #[test]
-    fn get_provider_info_api_provider() {
-        let info = get_provider_info("zai").unwrap();
-        assert_eq!(info.name, "zai");
-        assert_eq!(info.provider_type, ProviderType::Api);
-        assert_eq!(info.env_var, Some("ZAI_API_TOKEN"));
-    }
-
-    #[test]
-    fn get_provider_info_unknown() {
-        assert!(get_provider_info("nonexistent").is_none());
     }
 
     // ------------------------------------------------------------------------
@@ -2998,29 +2755,11 @@ mod tests {
         let config = ProvidersConfig {
             codex: Some(true),
             claude: Some(true),
-            ..Default::default()
         };
         let enabled = config.enabled_providers();
         assert_eq!(enabled.len(), 2);
-        assert!(enabled.iter().any(|p| p.name == "codex"));
-        assert!(enabled.iter().any(|p| p.name == "claude"));
-    }
-
-    #[test]
-    fn providers_config_enabled_with_api_provider() {
-        let config = ProvidersConfig {
-            claude: Some(true),
-            zai: Some(ApiProviderConfig {
-                api_key: "test-key".to_string(),
-            }),
-            ..Default::default()
-        };
-        let enabled = config.enabled_providers();
-        assert_eq!(enabled.len(), 2);
-
-        let zai = enabled.iter().find(|p| p.name == "zai").unwrap();
-        assert_eq!(zai.api_key, Some("test-key".to_string()));
-        assert_eq!(zai.env_var, Some("ZAI_API_TOKEN"));
+        assert!(enabled.contains(&"codex"));
+        assert!(enabled.contains(&"claude"));
     }
 
     #[test]
@@ -3028,11 +2767,9 @@ mod tests {
         let config = ProvidersConfig {
             codex: Some(false),
             claude: Some(true),
-            ..Default::default()
         };
         let enabled = config.enabled_providers();
-        assert_eq!(enabled.len(), 1);
-        assert_eq!(enabled[0].name, "claude");
+        assert_eq!(enabled, vec!["claude"]);
     }
 
     #[test]
@@ -3047,14 +2784,9 @@ mod tests {
         let config = ProvidersConfig {
             codex: Some(true),
             claude: Some(false),
-            zai: Some(ApiProviderConfig {
-                api_key: "key".to_string(),
-            }),
-            ..Default::default()
         };
         assert!(config.is_enabled("codex"));
         assert!(!config.is_enabled("claude"));
-        assert!(config.is_enabled("zai"));
         assert!(!config.is_enabled("kimik2"));
         assert!(!config.is_enabled("unknown"));
     }

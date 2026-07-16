@@ -58,19 +58,3 @@ popover_command = "tokengauge-popover --toggle"
 # OAuth providers - set to true/false to enable/disable
 codex = true
 claude = true
-
-# API providers - uncomment and add your API key to enable
-# [providers.zai]
-# api_key = "your-zai-api-key"
-
-# [providers.kimik2]
-# api_key = "your-kimi-k2-api-key"
-
-# [providers.copilot]
-# api_key = "your-copilot-api-key"
-
-# [providers.minimax]
-# api_key = "your-minimax-api-key"
-
-# [providers.kimi]
-# api_key = "your-kimi-api-key"

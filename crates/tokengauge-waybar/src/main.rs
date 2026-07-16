@@ -816,13 +816,50 @@ fn handle_doctor(config_path: &Path) -> i32 {
 
     let cfg = config.unwrap_or_default();
 
+    // Credentials (read by the native fetchers)
+    section("Credentials");
+    for (provider, path, hint) in [
+        (
+            "claude",
+            tokengauge_core::claude_credentials_path(),
+            "run `claude` to sign in",
+        ),
+        (
+            "codex",
+            tokengauge_core::codex_auth_path(),
+            "run `codex` to sign in",
+        ),
+    ] {
+        if !cfg.providers.is_enabled(provider) {
+            continue;
+        }
+        let exists = path.exists();
+        record(DoctorCheck {
+            label: format!("{provider} credentials"),
+            ok: exists,
+            detail: if exists {
+                path.display().to_string()
+            } else {
+                format!("{} not found - {hint}", path.display())
+            },
+        });
+    }
+
+    // Unknown / removed config keys
+    let unknown = cfg.unknown_config_keys();
+    if !unknown.is_empty() {
+        section("Removed config keys");
+        for key in &unknown {
+            record(DoctorCheck {
+                label: format!("unknown config key `{key}`"),
+                ok: false,
+                detail: "removed in 0.10 - delete it from your config".into(),
+            });
+        }
+    }
+
     // External dependencies
     section("Dependencies");
-    record(check_binary(
-        &cfg.codexbar_bin,
-        "codexbar usage limits",
-        "install from https://github.com/steipete/CodexBar",
-    ));
     if cfg.ccusage_enabled {
         match tokengauge_core::ccusage_runner_description() {
             Some(cmd) => record(DoctorCheck {
@@ -1215,6 +1252,12 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
             config.refresh_secs.max(10)
         ),
     );
+    for key in config.unknown_config_keys() {
+        dlog(
+            "daemon",
+            &format!("ignoring unknown config key `{key}` (removed in 0.10)"),
+        );
+    }
 
     let state = Arc::new(Mutex::new(DaemonState {
         output: WaybarOutput {
@@ -1493,7 +1536,7 @@ fn enabled_set(providers: &tokengauge_core::ProvidersConfig) -> BTreeSet<String>
     providers
         .enabled_providers()
         .into_iter()
-        .map(|p| p.name.to_lowercase())
+        .map(|p| p.to_lowercase())
         .collect()
 }
 
@@ -2397,7 +2440,6 @@ mod tests {
 
     fn test_config(cache_file: PathBuf) -> TokenGaugeConfig {
         TokenGaugeConfig {
-            codexbar_bin: "codexbar".to_string(),
             refresh_secs: 600,
             timeout_secs: 10,
             stagger_ms: 0,
@@ -2409,6 +2451,7 @@ mod tests {
             notifications: Default::default(),
             theme: Default::default(),
             update: Default::default(),
+            unknown: Default::default(),
         }
     }
 

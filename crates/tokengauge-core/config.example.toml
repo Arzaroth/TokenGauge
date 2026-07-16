@@ -1,9 +1,6 @@
 # TokenGauge Configuration
 # Copy to ~/.config/tokengauge/config.toml
 
-# Path to codexbar binary
-codexbar_bin = "codexbar"
-
 # Refresh interval in seconds
 refresh_secs = 600
 

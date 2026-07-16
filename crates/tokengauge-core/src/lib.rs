@@ -120,6 +120,45 @@ pub fn provider_label(name: &str) -> &str {
 }
 
 // ============================================================================
+// Native fetcher helpers (shared by the claude/codex modules)
+// ============================================================================
+
+mod claude;
+
+/// Round and clamp a float percentage into the `0..=100` byte range the render
+/// layer expects. Mirrors the old `de_opt_percent` serde hook, now called from
+/// the native fetchers instead of at deserialize time.
+pub(crate) fn pct_u8(v: f64) -> u8 {
+    v.round().clamp(0.0, 100.0) as u8
+}
+
+/// Lowercase, collapse each run of non-alphanumeric characters to a single `-`,
+/// and trim leading/trailing `-`. Used for stable extra-window ids.
+pub(crate) fn slug(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_dash = false;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.extend(c.to_lowercase());
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// A blocking HTTP client with the per-request timeout wired to the config's
+/// `timeout_secs` (the subprocess-kill timeout is gone with codexbar).
+pub(crate) fn http_client(timeout: Duration) -> Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .build()
+        .context("failed to build HTTP client")
+}
+
+// ============================================================================
 // Configuration Types
 // ============================================================================
 

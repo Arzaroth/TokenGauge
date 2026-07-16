@@ -853,7 +853,7 @@ fn handle_doctor(config_path: &Path) -> i32 {
             record(DoctorCheck {
                 label: format!("unknown config key `{key}`"),
                 ok: false,
-                detail: "removed in 0.11 - delete it from your config".into(),
+                detail: "unknown or removed key - delete it from your config".into(),
             });
         }
     }
@@ -1236,6 +1236,16 @@ fn render_output(
     }
 }
 
+/// Log a warning for each unrecognized config key (startup and after reloads).
+fn warn_unknown_config_keys(config: &TokenGaugeConfig) {
+    for key in config.unknown_config_keys() {
+        dlog(
+            "daemon",
+            &format!("ignoring unrecognized config key `{key}`"),
+        );
+    }
+}
+
 fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
     let sock_path = socket_path(&config.cache_file);
     let _ = std::fs::remove_file(&sock_path);
@@ -1252,12 +1262,7 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
             config.refresh_secs.max(10)
         ),
     );
-    for key in config.unknown_config_keys() {
-        dlog(
-            "daemon",
-            &format!("ignoring unknown config key `{key}` (removed in 0.11)"),
-        );
-    }
+    warn_unknown_config_keys(&config);
 
     let state = Arc::new(Mutex::new(DaemonState {
         output: WaybarOutput {
@@ -1343,6 +1348,7 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
                                     path.display()
                                 ),
                             );
+                            warn_unknown_config_keys(&new_cfg);
                             // A changed provider set invalidates the cache rather
                             // than merely ageing it: re-rendering would keep
                             // serving a provider the user just disabled (and show

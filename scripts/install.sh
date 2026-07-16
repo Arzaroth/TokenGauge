@@ -227,8 +227,9 @@ PartOf=graphical-session.target
 
 [Service]
 # The systemd user manager's PATH omits ~/.local/bin, where ccusage and the
-# tokengauge binaries usually live; without this the daemon's cost fetches fail
-# and it only serves stale data.
+# tokengauge binaries usually live; without this the daemon's ccusage cost
+# fetches fail and rows show usage without cost enrichment (usage limits are
+# fetched natively and are unaffected).
 Environment=PATH=$INSTALL_DIR:/usr/local/bin:/usr/bin:/bin
 ExecStart=$INSTALL_DIR/tokengauge-waybar --daemon
 Restart=on-failure

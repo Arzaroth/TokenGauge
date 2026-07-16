@@ -1111,11 +1111,7 @@ pub fn retain_enabled(
     providers: &ProvidersConfig,
 ) {
     let enabled = providers.enabled_providers();
-    let is_enabled = |name: &str| {
-        enabled
-            .iter()
-            .any(|p| p.eq_ignore_ascii_case(name.trim()))
-    };
+    let is_enabled = |name: &str| enabled.iter().any(|p| p.eq_ignore_ascii_case(name.trim()));
     payloads.retain(|p| is_enabled(&p.provider));
     errors.retain(|e| is_enabled(&e.provider));
 }

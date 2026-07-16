@@ -8,7 +8,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use ratatui::DefaultTerminal;
 use tokengauge_core::{
     ProviderFetchError, ProviderRow, load_config, payload_to_rows_with_costs, provider_urls,
-    read_cache_full, read_waybar_state, waybar_state_path,
+    read_cache_full, read_waybar_state, retain_enabled, waybar_state_path,
 };
 
 use crate::refresh::{RefreshResult, spawn_refresh};
@@ -123,7 +123,9 @@ impl App {
             .selected
             .or(config_primary);
 
-        let pending_refresh = Some(spawn_refresh(config_override.clone(), false));
+        // Force on open: the user asked for the current picture, so don't serve
+        // a cache that's merely young. The spinner covers the fetch.
+        let pending_refresh = Some(spawn_refresh(config_override.clone(), true));
         Self {
             state,
             config_override,
@@ -179,7 +181,8 @@ impl App {
         let Ok(cached) = read_cache_full(&config.cache_file) else {
             return;
         };
-        let (payloads, errors, costs) = cached.into_parts();
+        let (mut payloads, mut errors, costs) = cached.into_parts();
+        retain_enabled(&mut payloads, &mut errors, &config.providers);
         self.state.rows = payload_to_rows_with_costs(payloads, &costs);
         self.state.errors = errors;
         self.state.last_error = None;

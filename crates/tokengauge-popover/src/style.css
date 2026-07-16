@@ -27,6 +27,11 @@ window.background {
   font-size: 0.95em;
 }
 
+.tg-refreshing {
+  color: #f9e2af;
+  font-size: 0.95em;
+}
+
 .tg-card {
   background-color: #181825;
   border: 1px solid #313244;

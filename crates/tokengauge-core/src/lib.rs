@@ -1379,6 +1379,93 @@ pub fn write_cache_full(
     Ok(())
 }
 
+/// Drop cached payloads and errors for providers that are no longer enabled.
+/// The cache is written by whichever provider set was enabled at fetch time, so
+/// a later toggle leaves it holding rows the user just disabled. Every read of
+/// the cache is config-scoped through here; the cache file itself only catches
+/// up on the next fetch.
+pub fn retain_enabled(
+    payloads: &mut Vec<ProviderPayload>,
+    errors: &mut Vec<ProviderFetchError>,
+    providers: &ProvidersConfig,
+) {
+    let enabled = providers.enabled_providers();
+    let is_enabled = |name: &str| {
+        enabled
+            .iter()
+            .any(|p| p.name.eq_ignore_ascii_case(name.trim()))
+    };
+    payloads.retain(|p| is_enabled(&p.provider));
+    errors.retain(|e| is_enabled(&e.provider));
+}
+
+/// Path of the sentinel file held for the duration of a manual refresh.
+/// Written by whoever kicks the fetch (daemon or the `--refresh` worker) and
+/// removed when it lands, so any frontend can poll it to show a ⟳ indicator.
+pub fn refresh_sentinel_path(cache_file: &Path) -> PathBuf {
+    let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
+    parent.join("tokengauge-refreshing")
+}
+
+/// Fallback TTL for a sentinel whose contents predate the deadline scheme (an
+/// older build wrote a start timestamp, not a deadline): treat it as abandoned
+/// once this much time has passed since it was last written.
+const REFRESH_SENTINEL_TTL: Duration = Duration::from_secs(30);
+
+/// Head-room added to the configured fetch budget so a refresh that runs to its
+/// worst case still counts as in-flight.
+const REFRESH_SENTINEL_MARGIN_MS: u64 = 10_000;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Wall-clock budget a manual refresh may legitimately take under the current
+/// config: per-provider timeout (the slower of the codexbar and ccusage limits)
+/// plus the worst-case stagger delay, plus head-room. The sentinel stores
+/// `now + this` as its deadline so a slow-but-live fetch keeps the ⟳ up instead
+/// of expiring at a fixed TTL shorter than the fetch it is guarding.
+pub fn refresh_budget_ms(config: &TokenGaugeConfig) -> u64 {
+    let enabled = config.providers.enabled_providers().len() as u64;
+    let stagger = config.stagger_ms.saturating_mul(enabled.saturating_sub(1));
+    let timeout = config.timeout_secs.max(config.ccusage_timeout_secs) * 1000;
+    stagger + timeout + REFRESH_SENTINEL_MARGIN_MS
+}
+
+/// Absolute deadline (epoch ms) to stamp into a fresh refresh sentinel.
+pub fn refresh_sentinel_deadline_ms(config: &TokenGaugeConfig) -> u64 {
+    now_ms().saturating_add(refresh_budget_ms(config))
+}
+
+/// True while a manual refresh is in flight. The sentinel holds an absolute
+/// deadline (epoch ms) derived from the fetch budget, so a refresh counts as
+/// live until that deadline rather than a fixed TTL that a configured-slow fetch
+/// could outlast. Sentinels written by older builds (a start timestamp, already
+/// in the past) fall back to the mtime TTL.
+pub fn refresh_in_progress(sentinel: &Path) -> bool {
+    let Ok(contents) = fs::read_to_string(sentinel) else {
+        return false;
+    };
+    if let Ok(deadline) = contents.trim().parse::<u64>()
+        && deadline > now_ms()
+    {
+        return true;
+    }
+    let Ok(meta) = fs::metadata(sentinel) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    let Ok(age) = std::time::SystemTime::now().duration_since(modified) else {
+        return false;
+    };
+    age < REFRESH_SENTINEL_TTL
+}
+
 /// Write cache with only payloads (legacy, for backwards compatibility).
 pub fn write_cache(path: &Path, payloads: &[ProviderPayload]) -> Result<()> {
     write_cache_full(path, payloads, &[], &HashMap::new())
@@ -2488,6 +2575,39 @@ mod tests {
     }
 
     #[test]
+    fn retain_enabled_drops_disabled_providers_from_cache() {
+        let payload = |name: &str| ProviderPayload {
+            provider: name.into(),
+            version: None,
+            source: None,
+            usage: None,
+            credits: None,
+            error: None,
+            stale: false,
+        };
+        // Cache written while codex was still enabled; config since toggled it off.
+        let mut payloads = vec![payload("codex"), payload("Claude")];
+        let mut errors = vec![
+            ProviderFetchError::new("codex".into(), "boom"),
+            ProviderFetchError::new("claude".into(), "429"),
+        ];
+        let providers = ProvidersConfig {
+            codex: Some(false),
+            claude: Some(true),
+            ..Default::default()
+        };
+
+        retain_enabled(&mut payloads, &mut errors, &providers);
+
+        // Disabled provider is gone from both lists; the enabled one survives
+        // regardless of the case the cache happened to store it in.
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0].provider, "Claude");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].provider, "claude");
+    }
+
+    #[test]
     fn apply_stale_fallback_serves_last_good_and_keeps_uncovered_errors() {
         let good_claude = ProviderPayload {
             provider: "claude".into(),
@@ -3478,6 +3598,33 @@ mod tests {
         let _ = fs::remove_file(&path);
         let state = read_waybar_state(&path);
         assert_eq!(state.selected, None);
+    }
+
+    #[test]
+    fn refresh_budget_scales_past_fixed_ttl() {
+        let config = TokenGaugeConfig {
+            timeout_secs: 45,
+            ccusage_timeout_secs: 10,
+            stagger_ms: 0,
+            ..TokenGaugeConfig::default()
+        };
+        // Budget follows the larger configured timeout, so a 45s fetch is not
+        // classed stale by a 30s TTL.
+        assert_eq!(
+            refresh_budget_ms(&config),
+            45_000 + REFRESH_SENTINEL_MARGIN_MS
+        );
+        assert!(refresh_budget_ms(&config) > REFRESH_SENTINEL_TTL.as_millis() as u64);
+    }
+
+    #[test]
+    fn refresh_in_progress_honors_future_deadline() {
+        let dir = tempdir_for_test("sentinel");
+        let sentinel = dir.join("tokengauge-refreshing");
+        fs::write(&sentinel, (now_ms() + 3_600_000).to_string()).unwrap();
+        assert!(refresh_in_progress(&sentinel));
+        fs::remove_file(&sentinel).unwrap();
+        assert!(!refresh_in_progress(&sentinel));
     }
 
     fn tempdir_for_test(prefix: &str) -> PathBuf {

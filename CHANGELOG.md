@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-07-16
+
+### Fixed
+
+- `--update` downloads the release binary again instead of failing with `extract failed: invalid gzip header`. The download hit GitHub's asset API URL without an `Accept: application/octet-stream` header, so GitHub returned the asset's ~1.6 KiB JSON metadata rather than the tarball, and extraction choked on the non-gzip bytes.
+
 ## [0.10.0] - 2026-07-16
 
 Provider toggles apply immediately across all frontends.
@@ -155,7 +161,9 @@ Major feature batch on top of upstream v0.4.2.
 
 Released by the upstream project, [oorestisime/TokenGauge](https://github.com/oorestisime/TokenGauge/releases). This fork's own history starts at 0.5.0.
 
-[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/Arzaroth/TokenGauge/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/Arzaroth/TokenGauge/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.7.0...v0.8.0

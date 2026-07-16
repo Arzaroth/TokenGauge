@@ -182,7 +182,15 @@ pub fn apply(cache_file: &Path) -> Result<String> {
         let archive = tmp.join(&asset.name);
         let f = std::fs::File::create(&archive)
             .with_context(|| format!("cannot create {}", archive.display()))?;
+        // GitHub's asset `url` is the API endpoint, which streams the binary
+        // only when `Accept: application/octet-stream` is set - otherwise it
+        // returns the asset's JSON metadata (self_update's own updater sets
+        // this, but this hand-rolled download path must do it too).
         self_update::Download::from_url(&asset.download_url)
+            .set_header(
+                http::header::ACCEPT,
+                http::HeaderValue::from_static("application/octet-stream"),
+            )
             .show_progress(true)
             .download_to(f)
             .context("download failed")?;

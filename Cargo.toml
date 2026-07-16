@@ -16,6 +16,10 @@ default-members = [
   "crates/tokengauge-tui"
 ]
 
+[workspace.package]
+# File::try_lock / std::fs::TryLockError (codex refresh lock) stabilized in 1.89.
+rust-version = "1.89"
+
 [workspace.dependencies]
 anyhow = "1.0"
 chrono = "0.4"

@@ -136,7 +136,7 @@ ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/tokengauge/icons"
 ICON_BASE="https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/assets/providers"
 ICON_FG="#cdd6f4"
 mkdir -p "$ICON_DIR"
-for icon in claude codex zai copilot minimax kimi; do
+for icon in claude codex; do
   if curl -fsSL "$ICON_BASE/ProviderIcon-$icon.svg" -o "$TMP_DIR/ProviderIcon-$icon.svg" 2>/dev/null; then
     sed "s/currentColor/$ICON_FG/g" "$TMP_DIR/ProviderIcon-$icon.svg" \
       > "$ICON_DIR/ProviderIcon-$icon.svg"
@@ -158,8 +158,6 @@ info "Placement: $PLACEMENT"
 if [[ ! -f "$CONFIG_FILE" ]]; then
   cat <<TOML > "$CONFIG_FILE"
 # TokenGauge configuration
-codexbar_bin = "codexbar"
-source = "oauth"
 refresh_secs = 600
 cache_file = "/tmp/tokengauge-usage.json"
 
@@ -228,8 +226,10 @@ After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
-# The systemd user manager's PATH omits ~/.local/bin, where codexbar usually
-# lives; without this the daemon's fetches fail and only serve stale data.
+# The systemd user manager's PATH omits ~/.local/bin, where ccusage and the
+# tokengauge binaries usually live; without this the daemon's ccusage cost
+# fetches fail and rows show usage without cost enrichment (usage limits are
+# fetched natively and are unaffected).
 Environment=PATH=$INSTALL_DIR:/usr/local/bin:/usr/bin:/bin
 ExecStart=$INSTALL_DIR/tokengauge-waybar --daemon
 Restart=on-failure
@@ -247,42 +247,6 @@ UNIT
   systemctl --user restart tokengauge-daemon.service
   success "tokengauge-daemon enabled via systemd --user"
 }
-
-install_codexbar() {
-  local codex_repo="steipete/CodexBar"
-  local codex_latest
-  codex_latest=$(get_latest_tag "$codex_repo")
-  if [[ -z "$codex_latest" ]]; then
-    echo "Failed to find latest release for $codex_repo" >&2
-    return 1
-  fi
-
-  local codex_asset="CodexBarCLI-$codex_latest-linux-$asset_arch.tar.gz"
-  local codex_url="https://github.com/$codex_repo/releases/download/$codex_latest/$codex_asset"
-  local codex_tmp="$TMP_DIR/codexbar"
-
-  mkdir -p "$codex_tmp"
-  curl -fL "$codex_url" -o "$codex_tmp/$codex_asset"
-  tar -xzf "$codex_tmp/$codex_asset" -C "$codex_tmp"
-
-  if [[ -f "$codex_tmp/CodexBarCLI" ]]; then
-    install -m 0755 "$codex_tmp/CodexBarCLI" "$INSTALL_DIR/CodexBarCLI"
-  fi
-  if [[ -f "$codex_tmp/codexbar" ]]; then
-    install -m 0755 "$codex_tmp/codexbar" "$INSTALL_DIR/codexbar"
-  else
-    ln -sf "$INSTALL_DIR/CodexBarCLI" "$INSTALL_DIR/codexbar"
-  fi
-
-  success "Installed CodexBarCLI $codex_latest to $INSTALL_DIR"
-}
-
-if ! command -v codexbar >/dev/null 2>&1; then
-  warn "CodexBar CLI not found. Installing..."
-  if ! install_codexbar; then
-    warn "Failed to install CodexBar CLI. Install manually from https://github.com/steipete/CodexBar/releases"
-  fi
-fi
 
 if $HAS_SYSTEMD_USER; then
   install_daemon_unit

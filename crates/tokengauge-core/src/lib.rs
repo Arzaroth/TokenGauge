@@ -14,18 +14,12 @@ use serde::{Deserialize, Serialize};
 pub mod update;
 
 // ============================================================================
-// Codexbar Payload Types
+// Provider payload types
+//
+// These are the internal model the native fetchers produce and the frontends
+// render; they are also the on-disk cache format (`CachedData`). The camelCase
+// serde naming is preserved so caches written by earlier versions still read.
 // ============================================================================
-
-/// Deserialize a percentage that may arrive as an integer (upstream codexbar)
-/// or a float (e.g. Win-CodexBar sends `100.0`), rounding/clamping to `0..=100`.
-fn de_opt_percent<'de, D>(deserializer: D) -> Result<Option<u8>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let opt = Option::<f64>::deserialize(deserializer)?;
-    Ok(opt.map(|v| v.round().clamp(0.0, 100.0) as u8))
-}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,13 +28,11 @@ pub struct UsageSnapshot {
     pub secondary: Option<UsageWindow>,
     #[serde(default)]
     pub tertiary: Option<UsageWindow>,
-    // Accept snake_case too, so third-party codexbar ports (e.g. Win-CodexBar,
-    // which serializes snake_case) parse alongside the upstream camelCase CLI.
-    #[serde(default, alias = "updated_at")]
+    #[serde(default)]
     pub updated_at: Option<String>,
-    #[serde(default, alias = "login_method")]
+    #[serde(default)]
     pub login_method: Option<String>,
-    #[serde(default, alias = "extra_rate_windows")]
+    #[serde(default)]
     pub extra_rate_windows: Vec<ExtraRateWindow>,
 }
 
@@ -55,15 +47,13 @@ pub struct ExtraRateWindow {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageWindow {
-    // `alias` accepts snake_case (Win-CodexBar); `de_opt_percent` also tolerates
-    // a float percent like `100.0` in addition to an integer.
-    #[serde(default, alias = "used_percent", deserialize_with = "de_opt_percent")]
+    #[serde(default)]
     pub used_percent: Option<u8>,
-    #[serde(default, alias = "reset_description")]
+    #[serde(default)]
     pub reset_description: Option<String>,
-    #[serde(default, alias = "resets_at")]
+    #[serde(default)]
     pub resets_at: Option<String>,
-    #[serde(default, alias = "window_minutes")]
+    #[serde(default)]
     pub window_minutes: Option<u32>,
 }
 
@@ -91,7 +81,7 @@ pub struct ProviderPayload {
     pub credits: Option<Credits>,
     pub error: Option<ProviderError>,
     /// True when this payload was served from a previous cache because the
-    /// live fetch failed. Set by `fetch_all_providers`, not by codexbar.
+    /// live fetch failed. Set by `fetch_all_providers`, not by the fetchers.
     #[serde(default)]
     pub stale: bool,
 }
@@ -107,182 +97,94 @@ impl ProviderPayload {
 // Provider Registry
 // ============================================================================
 
-/// The type of authentication a provider uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderType {
-    /// OAuth-based providers (codex, claude) - use `--source oauth`
-    OAuth,
-    /// API key providers (zai, kimik2, etc.) - use `--source api` with env var
-    Api,
-}
-
-/// Information about a supported provider.
-#[derive(Debug, Clone)]
-pub struct ProviderInfo {
-    pub name: &'static str,
-    pub provider_type: ProviderType,
-    /// Environment variable name for API key (only for Api type)
-    pub env_var: Option<&'static str>,
-    pub label: &'static str,
-}
-
-/// Registry of all supported providers.
-pub const PROVIDERS: &[ProviderInfo] = &[
-    // OAuth providers
-    ProviderInfo {
-        name: "codex",
-        provider_type: ProviderType::OAuth,
-        env_var: None,
-        label: "Codex",
-    },
-    ProviderInfo {
-        name: "claude",
-        provider_type: ProviderType::OAuth,
-        env_var: None,
-        label: "Claude",
-    },
-    // API providers
-    ProviderInfo {
-        name: "zai",
-        provider_type: ProviderType::Api,
-        env_var: Some("ZAI_API_TOKEN"),
-        label: "z.ai",
-    },
-    ProviderInfo {
-        name: "kimik2",
-        provider_type: ProviderType::Api,
-        env_var: Some("KIMI_K2_API_KEY"),
-        label: "Kimi K2",
-    },
-    ProviderInfo {
-        name: "copilot",
-        provider_type: ProviderType::Api,
-        env_var: Some("COPILOT_API_TOKEN"),
-        label: "Copilot",
-    },
-    ProviderInfo {
-        name: "minimax",
-        provider_type: ProviderType::Api,
-        env_var: Some("MINIMAX_API_TOKEN"),
-        label: "MiniMax",
-    },
-    ProviderInfo {
-        name: "kimi",
-        provider_type: ProviderType::Api,
-        env_var: Some("KIMI_AUTH_TOKEN"),
-        label: "Kimi",
-    },
-];
-
-/// Get provider info by name.
-pub fn get_provider_info(name: &str) -> Option<&'static ProviderInfo> {
-    PROVIDERS.iter().find(|p| p.name == name)
-}
+/// The providers TokenGauge fetches natively, both OAuth.
+pub const PROVIDERS: &[&str] = &["codex", "claude"];
 
 /// Get the display label for a provider.
 pub fn provider_label(name: &str) -> &str {
-    get_provider_info(name).map(|p| p.label).unwrap_or(name)
+    match name {
+        "codex" => "Codex",
+        "claude" => "Claude",
+        other => other,
+    }
+}
+
+// ============================================================================
+// Native fetcher helpers (shared by the claude/codex modules)
+// ============================================================================
+
+mod claude;
+mod codex;
+
+/// Round and clamp a float percentage into the `0..=100` byte range the render
+/// layer expects. Mirrors the old `de_opt_percent` serde hook, now called from
+/// the native fetchers instead of at deserialize time.
+pub(crate) fn pct_u8(v: f64) -> u8 {
+    v.round().clamp(0.0, 100.0) as u8
+}
+
+/// Lowercase, collapse each run of non-alphanumeric characters to a single `-`,
+/// and trim leading/trailing `-`. Used for stable extra-window ids.
+pub(crate) fn slug(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_dash = false;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.extend(c.to_lowercase());
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// A blocking HTTP client with the per-request timeout wired to the config's
+/// `timeout_secs` (the subprocess-kill timeout is gone with codexbar).
+pub(crate) fn http_client(timeout: Duration) -> Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .build()
+        .context("failed to build HTTP client")
+}
+
+/// Path to the Claude OAuth credentials file the native fetcher reads.
+pub fn claude_credentials_path() -> PathBuf {
+    claude::credentials_path()
+}
+
+/// Path to the Codex auth file the native fetcher reads (honors `CODEX_HOME`).
+pub fn codex_auth_path() -> PathBuf {
+    codex::auth_path()
 }
 
 // ============================================================================
 // Configuration Types
 // ============================================================================
 
-/// Configuration for an API provider (requires api_key).
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ApiProviderConfig {
-    pub api_key: String,
-}
-
 /// Provider configuration section.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct ProvidersConfig {
-    // OAuth providers - just true/false
     pub codex: Option<bool>,
     pub claude: Option<bool>,
-    // API providers - struct with api_key
-    pub zai: Option<ApiProviderConfig>,
-    pub kimik2: Option<ApiProviderConfig>,
-    pub copilot: Option<ApiProviderConfig>,
-    pub minimax: Option<ApiProviderConfig>,
-    pub kimi: Option<ApiProviderConfig>,
-}
-
-/// An enabled provider with its configuration.
-#[derive(Debug, Clone)]
-pub struct EnabledProvider {
-    pub name: String,
-    pub provider_type: ProviderType,
-    pub api_key: Option<String>,
-    pub env_var: Option<&'static str>,
+    /// Removed-provider keys (e.g. `[providers.zai]`) left over from older
+    /// configs. Captured so `--doctor` can warn instead of silently ignoring.
+    #[serde(flatten)]
+    pub unknown: HashMap<String, toml::Value>,
 }
 
 impl ProvidersConfig {
-    /// Get list of all enabled providers with their configuration.
-    pub fn enabled_providers(&self) -> Vec<EnabledProvider> {
+    /// Get list of all enabled provider names.
+    pub fn enabled_providers(&self) -> Vec<&'static str> {
         let mut enabled = Vec::new();
-
-        // OAuth providers
         if self.codex.unwrap_or(false) {
-            enabled.push(EnabledProvider {
-                name: "codex".to_string(),
-                provider_type: ProviderType::OAuth,
-                api_key: None,
-                env_var: None,
-            });
+            enabled.push("codex");
         }
         if self.claude.unwrap_or(false) {
-            enabled.push(EnabledProvider {
-                name: "claude".to_string(),
-                provider_type: ProviderType::OAuth,
-                api_key: None,
-                env_var: None,
-            });
+            enabled.push("claude");
         }
-
-        // API providers - enabled if api_key is present
-        if let Some(ref config) = self.zai {
-            enabled.push(EnabledProvider {
-                name: "zai".to_string(),
-                provider_type: ProviderType::Api,
-                api_key: Some(config.api_key.clone()),
-                env_var: Some("ZAI_API_TOKEN"),
-            });
-        }
-        if let Some(ref config) = self.kimik2 {
-            enabled.push(EnabledProvider {
-                name: "kimik2".to_string(),
-                provider_type: ProviderType::Api,
-                api_key: Some(config.api_key.clone()),
-                env_var: Some("KIMI_K2_API_KEY"),
-            });
-        }
-        if let Some(ref config) = self.copilot {
-            enabled.push(EnabledProvider {
-                name: "copilot".to_string(),
-                provider_type: ProviderType::Api,
-                api_key: Some(config.api_key.clone()),
-                env_var: Some("COPILOT_API_TOKEN"),
-            });
-        }
-        if let Some(ref config) = self.minimax {
-            enabled.push(EnabledProvider {
-                name: "minimax".to_string(),
-                provider_type: ProviderType::Api,
-                api_key: Some(config.api_key.clone()),
-                env_var: Some("MINIMAX_API_TOKEN"),
-            });
-        }
-        if let Some(ref config) = self.kimi {
-            enabled.push(EnabledProvider {
-                name: "kimi".to_string(),
-                provider_type: ProviderType::Api,
-                api_key: Some(config.api_key.clone()),
-                env_var: Some("KIMI_AUTH_TOKEN"),
-            });
-        }
-
         enabled
     }
 
@@ -291,11 +193,6 @@ impl ProvidersConfig {
         match provider {
             "codex" => self.codex.unwrap_or(false),
             "claude" => self.claude.unwrap_or(false),
-            "zai" => self.zai.is_some(),
-            "kimik2" => self.kimik2.is_some(),
-            "copilot" => self.copilot.is_some(),
-            "minimax" => self.minimax.is_some(),
-            "kimi" => self.kimi.is_some(),
             _ => false,
         }
     }
@@ -369,14 +266,13 @@ pub enum ClickAction {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TokenGaugeConfig {
-    pub codexbar_bin: String,
     pub refresh_secs: u64,
     pub cache_file: PathBuf,
     /// Timeout in seconds for each provider request
     pub timeout_secs: u64,
     /// Delay in milliseconds between consecutive provider fetch starts. Spreads
-    /// out codexbar calls to avoid rate-limit (429) bursts when many providers
-    /// are enabled. 0 disables staggering (all providers fetched at once).
+    /// out fetches to avoid rate-limit (429) bursts. 0 disables staggering (all
+    /// providers fetched at once).
     pub stagger_ms: u64,
     /// Enable ccusage cost fetching (requires `npx ccusage`)
     pub ccusage_enabled: bool,
@@ -387,6 +283,26 @@ pub struct TokenGaugeConfig {
     pub notifications: NotificationsConfig,
     pub theme: ThemeConfig,
     pub update: UpdateConfig,
+    /// Unknown top-level keys (e.g. the removed `codexbar_bin`) left over from
+    /// older configs. Captured so `--doctor` can warn instead of ignoring.
+    #[serde(flatten)]
+    pub unknown: HashMap<String, toml::Value>,
+}
+
+impl TokenGaugeConfig {
+    /// Config keys that are no longer recognized (own top-level keys plus any
+    /// `providers.<name>` left from a removed provider), sorted for stable output.
+    pub fn unknown_config_keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self.unknown.keys().cloned().collect();
+        keys.extend(
+            self.providers
+                .unknown
+                .keys()
+                .map(|k| format!("providers.{k}")),
+        );
+        keys.sort();
+        keys
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -478,7 +394,6 @@ impl Default for UpdateConfig {
 impl Default for TokenGaugeConfig {
     fn default() -> Self {
         Self {
-            codexbar_bin: "codexbar".to_string(),
             refresh_secs: 600,
             cache_file: default_cache_file(),
             timeout_secs: 20,
@@ -488,12 +403,13 @@ impl Default for TokenGaugeConfig {
             providers: ProvidersConfig {
                 codex: Some(true),
                 claude: Some(true),
-                ..Default::default()
+                unknown: HashMap::new(),
             },
             waybar: WaybarConfig::default(),
             notifications: NotificationsConfig::default(),
             theme: ThemeConfig::default(),
             update: UpdateConfig::default(),
+            unknown: HashMap::new(),
         }
     }
 }
@@ -523,92 +439,21 @@ impl ProviderFetchError {
     }
 }
 
-/// Clean up error messages to extract the meaningful part.
-/// Removes JSON log prefixes and extracts key error info.
+/// Shorten a fetch error for display. The native fetchers already produce
+/// concise, purpose-written messages, so this only guards against runaway
+/// length (e.g. a raw provider error body) and normalizes timeouts.
 fn clean_error_message(raw: &str) -> String {
-    // If it's a codexbar failure with JSON in stderr, try to extract the actual error
-    if raw.contains("codexbar failed") {
-        // Try to find API error messages like "401: {\"error\":\"Unauthorized\"}"
-        if let Some(api_error) = extract_api_error(raw) {
-            return api_error;
-        }
-        // Try to find "No available fetch strategy" errors
-        if raw.contains("No available fetch strategy") {
-            return "No available fetch strategy".to_string();
-        }
-        // Try to extract message from JSON payload error
-        if let Some(msg) = extract_json_message(raw) {
-            return msg;
-        }
-        // Default: just say it failed
-        return "API request failed".to_string();
-    }
-
-    // If it's a timeout
     if raw.contains("timeout") {
         return "Request timed out".to_string();
     }
-
-    // Clean up codexbar API error messages like "Kimi K2 API returned 401: {\"error\":..."
-    if raw.contains("API returned") || raw.contains("API error") {
-        if let Some(api_error) = extract_api_error(raw) {
-            return api_error;
-        }
-        // Extract just the status part
-        if let Some(status) = extract_http_status(raw) {
-            return format!("API error ({})", status);
-        }
-    }
-
-    // If message is reasonably short, use it as-is
-    if raw.len() <= 60 {
+    // Char-boundary-safe truncation: `raw` may be an HTTP body with multi-byte
+    // characters, so a byte slice at 57 could split a codepoint and panic.
+    if raw.chars().count() <= 60 {
         return raw.to_string();
     }
-
-    // Truncate long messages
-    format!("{}...", &raw[..57])
-}
-
-/// Try to extract API error like "Unauthorized" or "Invalid API key"
-fn extract_api_error(raw: &str) -> Option<String> {
-    // Look for patterns like: API returned 401: {"error":"Unauthorized"}
-    // Or: Kimi K2 API error: {"error":"Unauthorized"}
-    if let Some(idx) = raw.find("\"error\":\"") {
-        let start = idx + 9;
-        if let Some(end) = raw[start..].find('"') {
-            let error = &raw[start..start + end];
-            // Look for HTTP status code
-            if let Some(status) = extract_http_status(raw) {
-                return Some(format!("{} (HTTP {})", error, status));
-            }
-            return Some(error.to_string());
-        }
-    }
-    None
-}
-
-/// Extract HTTP status code from error message
-fn extract_http_status(raw: &str) -> Option<&'static str> {
-    // Look for patterns like "returned 401:" or "status: 401)"
-    ["401", "403", "404", "500", "502", "503"]
-        .iter()
-        .find(|&pattern| raw.contains(pattern))
-        .copied()
-}
-
-/// Try to extract "message" field from JSON in error
-fn extract_json_message(raw: &str) -> Option<String> {
-    // Look for "message":"..." pattern
-    if let Some(idx) = raw.find("\"message\":\"") {
-        let start = idx + 11;
-        if let Some(end) = raw[start..].find('"') {
-            let msg = &raw[start..start + end];
-            if !msg.is_empty() && msg.len() <= 80 {
-                return Some(msg.to_string());
-            }
-        }
-    }
-    None
+    let mut s: String = raw.chars().take(57).collect();
+    s.push_str("...");
+    s
 }
 
 /// Result of fetching all providers.
@@ -780,9 +625,6 @@ pub fn load_config(path: Option<PathBuf>) -> Result<TokenGaugeConfig> {
         .with_context(|| format!("failed to parse config at {}", path.display()))?;
 
     // Apply defaults for empty values
-    if config.codexbar_bin.is_empty() {
-        config.codexbar_bin = "codexbar".to_string();
-    }
     if config.cache_file.as_os_str().is_empty() {
         config.cache_file = default_cache_file();
     }
@@ -875,132 +717,13 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<Output> {
     }
 }
 
-/// Secondary codexbar `--source` to retry with when the primary source fails.
-/// Anthropic's OAuth endpoint rate-limits often; the local Claude CLI source
-/// keeps the bar populated. Only providers codexbar exposes a `cli` source for
-/// qualify (currently just Claude).
-fn cli_fallback_source(provider: &EnabledProvider) -> Option<&'static str> {
-    match provider.name.as_str() {
-        "claude" => Some("cli"),
-        _ => None,
+/// Fetch a single provider's usage natively over HTTP.
+pub fn fetch_single_provider(provider: &str, timeout: Duration) -> Result<Vec<ProviderPayload>> {
+    match provider {
+        "claude" => claude::fetch(timeout),
+        "codex" => codex::fetch(timeout),
+        other => Err(anyhow!("unknown provider {other}")),
     }
-}
-
-/// Fetch a single provider using codexbar, retrying via a fallback `--source`
-/// when the primary source errors (e.g. Claude OAuth 429 → local CLI).
-pub fn fetch_single_provider(
-    codexbar_bin: &str,
-    provider: &EnabledProvider,
-    timeout: Duration,
-) -> Result<Vec<ProviderPayload>> {
-    let primary = match provider.provider_type {
-        ProviderType::OAuth => "oauth",
-        ProviderType::Api => "api",
-    };
-
-    let result = fetch_single_provider_source(codexbar_bin, provider, primary, timeout);
-    if payloads_usable(&result) {
-        return result;
-    }
-
-    if let Some(fallback) = cli_fallback_source(provider) {
-        let retried = fetch_single_provider_source(codexbar_bin, provider, fallback, timeout);
-        if payloads_usable(&retried) {
-            return retried;
-        }
-    }
-
-    result
-}
-
-/// True when a fetch result carries at least one usable (error-free) payload.
-fn payloads_usable(result: &Result<Vec<ProviderPayload>>) -> bool {
-    matches!(result, Ok(payloads) if payloads.iter().any(|p| !p.has_error()))
-}
-
-/// Build the base `Command` for the codexbar binary.
-///
-/// A plain executable (`.exe`, or a name CreateProcess resolves) is spawned
-/// directly. On Windows a `.cmd`/`.bat` shim can't be exec'd directly, so those
-/// are routed through `cmd /C` - mirroring the ccusage handling and letting a
-/// batch wrapper work as `codexbar_bin`.
-fn codexbar_command(codexbar_bin: &str) -> Command {
-    #[cfg(windows)]
-    {
-        let is_batch = |p: &Path| {
-            matches!(
-                p.extension()
-                    .and_then(|e| e.to_str())
-                    .map(str::to_ascii_lowercase)
-                    .as_deref(),
-                Some("cmd") | Some("bat")
-            )
-        };
-        let resolved = find_in_path(codexbar_bin);
-        if is_batch(Path::new(codexbar_bin)) || resolved.as_deref().map(is_batch).unwrap_or(false) {
-            let mut command = Command::new("cmd");
-            command.arg("/C").arg(codexbar_bin);
-            return command;
-        }
-    }
-    Command::new(codexbar_bin)
-}
-
-/// Fetch a single provider from a specific codexbar `--source`.
-fn fetch_single_provider_source(
-    codexbar_bin: &str,
-    provider: &EnabledProvider,
-    source: &str,
-    timeout: Duration,
-) -> Result<Vec<ProviderPayload>> {
-    let mut command = codexbar_command(codexbar_bin);
-    command
-        .arg("usage")
-        .arg("--provider")
-        .arg(&provider.name)
-        .arg("--source")
-        .arg(source)
-        .arg("--format")
-        .arg("json");
-
-    // The upstream (macOS/Linux) codexbar CLI takes `--json-only` to suppress
-    // any non-JSON preamble. On Windows there is no upstream binary; the only
-    // codexbar-compatible options are third-party ports (e.g. Win-CodexBar)
-    // whose `usage` command doesn't define that flag - and clap rejects unknown
-    // flags - while their `--format json` already emits pure JSON. So only pass
-    // `--json-only` off Windows, which keeps Win-CodexBar usable as a drop-in.
-    #[cfg(not(windows))]
-    command.arg("--json-only");
-
-    // Set API key environment variable if needed
-    if let (Some(api_key), Some(env_var)) = (&provider.api_key, provider.env_var) {
-        command.env(env_var, api_key);
-    }
-
-    let provider_name = provider.name.clone();
-    let output = run_with_timeout(command, timeout)
-        .with_context(|| format!("failed to run codexbar for {provider_name}"))?;
-
-    if !output.status.success() {
-        // Try to parse JSON error from stdout first
-        if let Ok(payloads) = parse_payload_bytes(&output.stdout) {
-            // Codexbar returns non-zero but still outputs JSON with error info
-            return Ok(payloads);
-        }
-
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let detail = if !stderr.is_empty() {
-            stderr
-        } else if !stdout.is_empty() {
-            stdout
-        } else {
-            "no error output".to_string()
-        };
-        return Err(anyhow!("codexbar failed ({}) - {}", output.status, detail));
-    }
-
-    parse_payload_bytes(&output.stdout)
 }
 
 /// Fetch all enabled providers in parallel.
@@ -1027,21 +750,19 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
     });
 
     // Spawn threads for each provider. Each thread self-delays by its index
-    // times `stagger_ms` so codexbar calls are spread out (rate-limit relief)
+    // times `stagger_ms` so provider fetches are spread out (rate-limit relief)
     // without blocking the main spawn loop or the ccusage thread.
     let stagger = Duration::from_millis(config.stagger_ms);
     let handles: Vec<_> = enabled
         .into_iter()
         .enumerate()
         .map(|(i, provider)| {
-            let bin = config.codexbar_bin.clone();
-            let provider_name = provider.name.clone();
             thread::spawn(move || {
                 if !stagger.is_zero() && i > 0 {
                     thread::sleep(stagger.saturating_mul(i as u32));
                 }
-                let result = fetch_single_provider(&bin, &provider, timeout);
-                (provider_name, result)
+                let result = fetch_single_provider(provider, timeout);
+                (provider.to_string(), result)
             })
         })
         .collect();
@@ -1154,7 +875,7 @@ pub fn parse_payload(value: serde_json::Value) -> Result<Vec<ProviderPayload>> {
 
 pub fn parse_payload_bytes(bytes: &[u8]) -> Result<Vec<ProviderPayload>> {
     let value: serde_json::Value =
-        serde_json::from_slice(bytes).context("codexbar output was not JSON")?;
+        serde_json::from_slice(bytes).context("provider payload was not JSON")?;
     parse_payload(value)
 }
 
@@ -1390,11 +1111,7 @@ pub fn retain_enabled(
     providers: &ProvidersConfig,
 ) {
     let enabled = providers.enabled_providers();
-    let is_enabled = |name: &str| {
-        enabled
-            .iter()
-            .any(|p| p.name.eq_ignore_ascii_case(name.trim()))
-    };
+    let is_enabled = |name: &str| enabled.iter().any(|p| p.eq_ignore_ascii_case(name.trim()));
     payloads.retain(|p| is_enabled(&p.provider));
     errors.retain(|e| is_enabled(&e.provider));
 }
@@ -1424,7 +1141,7 @@ fn now_ms() -> u64 {
 }
 
 /// Wall-clock budget a manual refresh may legitimately take under the current
-/// config: per-provider timeout (the slower of the codexbar and ccusage limits)
+/// config: per-provider timeout (the slower of the fetch and ccusage limits)
 /// plus the worst-case stagger delay, plus head-room. The sentinel stores
 /// `now + this` as its deadline so a slow-but-live fetch keeps the ⟳ up instead
 /// of expiring at a fixed TTL shorter than the fetch it is guarding.
@@ -1579,14 +1296,6 @@ pub fn provider_icon(label: &str) -> ProviderIcon {
             glyph: "\u{f0b2b}",
             color_hex: "#74AA9C",
         },
-        "copilot" => ProviderIcon {
-            glyph: "\u{f4b8}",
-            color_hex: "#8b5cf6",
-        },
-        "z.ai" | "zai" => ProviderIcon {
-            glyph: "Z",
-            color_hex: "#126EF4",
-        },
         _ => ProviderIcon {
             glyph: "\u{f06a9}",
             color_hex: NEUTRAL_HEX,
@@ -1595,15 +1304,10 @@ pub fn provider_icon(label: &str) -> ProviderIcon {
 }
 
 /// Basename slug of the bundled brand SVG for a provider label, if one ships.
-/// Kimi K2 reuses the Kimi (Moonshot) mark.
 pub fn provider_icon_slug(label: &str) -> Option<&'static str> {
     Some(match label.to_lowercase().as_str() {
         "claude" => "claude",
         "codex" => "codex",
-        "copilot" => "copilot",
-        "z.ai" | "zai" => "zai",
-        "minimax" => "minimax",
-        "kimi" | "kimi k2" | "kimik2" => "kimi",
         _ => return None,
     })
 }
@@ -1653,14 +1357,6 @@ pub fn provider_urls(provider: &str) -> ProviderUrls {
         "codex" => ProviderUrls {
             dashboard: Some("https://platform.openai.com/usage"),
             status: Some("https://status.openai.com"),
-        },
-        "copilot" => ProviderUrls {
-            dashboard: Some("https://github.com/settings/copilot"),
-            status: Some("https://www.githubstatus.com"),
-        },
-        "z.ai" | "zai" => ProviderUrls {
-            dashboard: Some("https://z.ai/manage-apikey"),
-            status: Some("https://status.z.ai"),
         },
         _ => ProviderUrls {
             dashboard: None,
@@ -1849,7 +1545,7 @@ pub fn write_notify_state(path: &Path, state: &NotifyState) -> Result<()> {
 pub fn thresholds_to_fire(pct: u8, thresholds: &[u8], notified: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut current = notified.to_vec();
     if let Some(&max_notified) = current.iter().max()
-        && (pct + 10) < max_notified
+        && pct.saturating_add(10) < max_notified
     {
         current.clear();
     }
@@ -2295,9 +1991,6 @@ pub fn write_default_config(path: &Path) -> Result<()> {
     ensure_config_dir(path)?;
     let contents = r#"# TokenGauge Configuration
 
-# Path to codexbar binary
-codexbar_bin = "codexbar"
-
 # Refresh interval in seconds
 refresh_secs = 600
 
@@ -2341,22 +2034,6 @@ popover_command = "tokengauge-popover --toggle"
 # OAuth providers - set to true/false to enable/disable
 codex = true
 claude = true
-
-# API providers - uncomment and add your API key to enable
-# [providers.zai]
-# api_key = "your-zai-api-key"
-
-# [providers.kimik2]
-# api_key = "your-kimi-k2-api-key"
-
-# [providers.copilot]
-# api_key = "your-copilot-api-key"
-
-# [providers.minimax]
-# api_key = "your-minimax-api-key"
-
-# [providers.kimi]
-# api_key = "your-kimi-api-key"
 "#;
     fs::write(path, contents)
         .with_context(|| format!("failed to write config {}", path.display()))?;
@@ -2421,6 +2098,12 @@ pub fn signal_daemon_reload() {
 
 /// Enable/disable an OAuth provider (codex, claude) in the config file.
 pub fn config_set_oauth_provider(path: &Path, name: &str, enabled: bool) -> Result<()> {
+    if !PROVIDERS.contains(&name) {
+        return Err(anyhow!(
+            "unknown provider '{name}' (expected one of: {})",
+            PROVIDERS.join(", ")
+        ));
+    }
     let name = name.to_string();
     edit_config_file(path, |doc| {
         let providers = ensure_table(doc, "providers");
@@ -2449,44 +2132,6 @@ pub fn config_set_primary(path: &Path, primary: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ------------------------------------------------------------------------
-    // Third-party codexbar (Win-CodexBar) snake_case + float-percent parsing
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn parses_win_codexbar_snake_case_usage() {
-        // Real output from Win-CodexBar's codexbar-cli: snake_case field names
-        // and a float `used_percent`, unlike upstream codexbar's camelCase/int.
-        let json = br#"[{"cost":null,"provider":"claude","source":"oauth","usage":{"extra_rate_windows":[{"id":"claude-weekly-scoped-fable","title":"Fable only","window":{"used_percent":0.0,"window_minutes":10080}}],"login_method":"Claude Max 5x","primary":{"reset_description":"Jul 14 at 8:49PM","resets_at":"2026-07-14T20:49:59.922430Z","used_percent":100.0,"window_minutes":300},"secondary":{"reset_description":"Jul 18 at 9:59AM","resets_at":"2026-07-18T09:59:59.922452Z","used_percent":21.0,"window_minutes":10080},"updated_at":"2026-07-14T15:57:20.912196200Z"}}]"#;
-
-        let payloads = parse_payload_bytes(json).expect("Win-CodexBar JSON should parse");
-        assert_eq!(payloads.len(), 1);
-        let usage = payloads[0].usage.as_ref().expect("usage present");
-        let primary = usage.primary.as_ref().unwrap();
-        assert_eq!(primary.used_percent, Some(100));
-        // Every snake_case alias must map, not just the percentages.
-        assert_eq!(
-            primary.reset_description.as_deref(),
-            Some("Jul 14 at 8:49PM")
-        );
-        assert_eq!(
-            primary.resets_at.as_deref(),
-            Some("2026-07-14T20:49:59.922430Z")
-        );
-        assert_eq!(primary.window_minutes, Some(300));
-        assert_eq!(usage.secondary.as_ref().unwrap().used_percent, Some(21));
-        assert_eq!(
-            usage.updated_at.as_deref(),
-            Some("2026-07-14T15:57:20.912196200Z")
-        );
-        assert_eq!(usage.login_method.as_deref(), Some("Claude Max 5x"));
-        assert_eq!(usage.extra_rate_windows.len(), 1);
-
-        let rows = payload_to_rows(payloads);
-        assert_eq!(rows[0].session_used, Some(100));
-        assert_eq!(rows[0].weekly_used, Some(21));
-    }
 
     // ------------------------------------------------------------------------
     // Windows executable discovery / command construction
@@ -2525,53 +2170,6 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         assert_eq!(args, vec!["/C", "npx", "--yes", "ccusage"]);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn codexbar_command_routes_batch_shim_through_cmd() {
-        // A .cmd/.bat shim must run via `cmd /C`...
-        let command = codexbar_command("codexbar.cmd");
-        assert_eq!(command.get_program().to_string_lossy(), "cmd");
-        let args: Vec<String> = command
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(args, vec!["/C", "codexbar.cmd"]);
-
-        // ...while a plain .exe is spawned directly.
-        let direct = codexbar_command("codexbar-cli.exe");
-        assert_eq!(direct.get_program().to_string_lossy(), "codexbar-cli.exe");
-        assert_eq!(direct.get_args().count(), 0);
-    }
-
-    // ------------------------------------------------------------------------
-    // fallback source tests
-    // ------------------------------------------------------------------------
-
-    fn enabled(name: &str, ty: ProviderType) -> EnabledProvider {
-        EnabledProvider {
-            name: name.to_string(),
-            provider_type: ty,
-            api_key: None,
-            env_var: None,
-        }
-    }
-
-    #[test]
-    fn cli_fallback_only_for_claude() {
-        assert_eq!(
-            cli_fallback_source(&enabled("claude", ProviderType::OAuth)),
-            Some("cli")
-        );
-        assert_eq!(
-            cli_fallback_source(&enabled("codex", ProviderType::OAuth)),
-            None
-        );
-        assert_eq!(
-            cli_fallback_source(&enabled("zai", ProviderType::Api)),
-            None
-        );
     }
 
     #[test]
@@ -2779,32 +2377,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn payloads_usable_detects_error_only_results() {
-        let ok = ProviderPayload {
-            provider: "claude".into(),
-            version: None,
-            source: None,
-            usage: None,
-            credits: None,
-            error: None,
-            stale: false,
-        };
-        let err = ProviderPayload {
-            error: Some(ProviderError {
-                message: Some("429".into()),
-                code: None,
-                kind: None,
-            }),
-            ..ok.clone()
-        };
-        assert!(payloads_usable(&Ok(vec![ok.clone()])));
-        assert!(payloads_usable(&Ok(vec![err.clone(), ok])));
-        assert!(!payloads_usable(&Ok(vec![err])));
-        assert!(!payloads_usable(&Ok(vec![])));
-        assert!(!payloads_usable(&Err(anyhow!("boom"))));
-    }
-
     // ------------------------------------------------------------------------
     // format_window tests
     // ------------------------------------------------------------------------
@@ -2955,38 +2527,11 @@ mod tests {
     fn provider_label_known_providers() {
         assert_eq!(provider_label("claude"), "Claude");
         assert_eq!(provider_label("codex"), "Codex");
-        assert_eq!(provider_label("zai"), "z.ai");
-        assert_eq!(provider_label("kimik2"), "Kimi K2");
     }
 
     #[test]
     fn provider_label_unknown_returns_input() {
         assert_eq!(provider_label("unknown_provider"), "unknown_provider");
-    }
-
-    // ------------------------------------------------------------------------
-    // get_provider_info tests
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn get_provider_info_oauth_provider() {
-        let info = get_provider_info("claude").unwrap();
-        assert_eq!(info.name, "claude");
-        assert_eq!(info.provider_type, ProviderType::OAuth);
-        assert!(info.env_var.is_none());
-    }
-
-    #[test]
-    fn get_provider_info_api_provider() {
-        let info = get_provider_info("zai").unwrap();
-        assert_eq!(info.name, "zai");
-        assert_eq!(info.provider_type, ProviderType::Api);
-        assert_eq!(info.env_var, Some("ZAI_API_TOKEN"));
-    }
-
-    #[test]
-    fn get_provider_info_unknown() {
-        assert!(get_provider_info("nonexistent").is_none());
     }
 
     // ------------------------------------------------------------------------
@@ -3002,25 +2547,8 @@ mod tests {
         };
         let enabled = config.enabled_providers();
         assert_eq!(enabled.len(), 2);
-        assert!(enabled.iter().any(|p| p.name == "codex"));
-        assert!(enabled.iter().any(|p| p.name == "claude"));
-    }
-
-    #[test]
-    fn providers_config_enabled_with_api_provider() {
-        let config = ProvidersConfig {
-            claude: Some(true),
-            zai: Some(ApiProviderConfig {
-                api_key: "test-key".to_string(),
-            }),
-            ..Default::default()
-        };
-        let enabled = config.enabled_providers();
-        assert_eq!(enabled.len(), 2);
-
-        let zai = enabled.iter().find(|p| p.name == "zai").unwrap();
-        assert_eq!(zai.api_key, Some("test-key".to_string()));
-        assert_eq!(zai.env_var, Some("ZAI_API_TOKEN"));
+        assert!(enabled.contains(&"codex"));
+        assert!(enabled.contains(&"claude"));
     }
 
     #[test]
@@ -3031,8 +2559,7 @@ mod tests {
             ..Default::default()
         };
         let enabled = config.enabled_providers();
-        assert_eq!(enabled.len(), 1);
-        assert_eq!(enabled[0].name, "claude");
+        assert_eq!(enabled, vec!["claude"]);
     }
 
     #[test]
@@ -3047,14 +2574,10 @@ mod tests {
         let config = ProvidersConfig {
             codex: Some(true),
             claude: Some(false),
-            zai: Some(ApiProviderConfig {
-                api_key: "key".to_string(),
-            }),
             ..Default::default()
         };
         assert!(config.is_enabled("codex"));
         assert!(!config.is_enabled("claude"));
-        assert!(config.is_enabled("zai"));
         assert!(!config.is_enabled("kimik2"));
         assert!(!config.is_enabled("unknown"));
     }
@@ -3164,20 +2687,6 @@ mod tests {
     }
 
     #[test]
-    fn provider_fetch_error_api_401() {
-        let raw = r#"codexbar failed (exit status: 1) - {"error":"Unauthorized"}"#;
-        let error = ProviderFetchError::new("kimik2".to_string(), raw);
-        assert!(error.message.contains("Unauthorized"));
-    }
-
-    #[test]
-    fn provider_fetch_error_no_fetch_strategy() {
-        let raw = "codexbar failed - No available fetch strategy for provider";
-        let error = ProviderFetchError::new("test".to_string(), raw);
-        assert_eq!(error.message, "No available fetch strategy");
-    }
-
-    #[test]
     fn provider_fetch_error_short_message_unchanged() {
         let error = ProviderFetchError::new("test".to_string(), "Short error");
         assert_eq!(error.message, "Short error");
@@ -3187,7 +2696,15 @@ mod tests {
     fn provider_fetch_error_long_message_truncated() {
         let long_msg = "a".repeat(100);
         let error = ProviderFetchError::new("test".to_string(), &long_msg);
-        assert!(error.message.len() <= 60);
+        assert!(error.message.chars().count() <= 60);
+        assert!(error.message.ends_with("..."));
+    }
+
+    #[test]
+    fn provider_fetch_error_multibyte_truncation_does_not_panic() {
+        // A long body with a multi-byte char straddling byte 57 must not panic.
+        let raw = "é".repeat(100);
+        let error = ProviderFetchError::new("claude".to_string(), &raw);
         assert!(error.message.ends_with("..."));
     }
 
@@ -3383,9 +2900,22 @@ mod tests {
     #[test]
     fn tokengauge_config_default() {
         let config = TokenGaugeConfig::default();
-        assert_eq!(config.codexbar_bin, "codexbar");
         assert_eq!(config.refresh_secs, 600);
         assert!(config.providers.codex.unwrap_or(false));
+        assert!(config.providers.claude.unwrap_or(false));
+    }
+
+    #[test]
+    fn unknown_config_keys_flags_removed_providers_and_keys() {
+        let config: TokenGaugeConfig = toml::from_str(
+            "codexbar_bin = \"codexbar\"\n[providers]\nclaude = true\n\n[providers.zai]\napi_key = \"x\"\n",
+        )
+        .expect("legacy config still parses");
+        assert_eq!(
+            config.unknown_config_keys(),
+            vec!["codexbar_bin".to_string(), "providers.zai".to_string()]
+        );
+        // Parsing does not fail - the daemon keeps running on an old config.
         assert!(config.providers.claude.unwrap_or(false));
     }
 

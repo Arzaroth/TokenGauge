@@ -49,8 +49,8 @@ struct Args {
     /// Rotate the provider shown in the waybar text and exit (no JSON output).
     #[arg(long, value_enum)]
     rotate: Option<RotateDir>,
-    /// Wipe the cache file and exit. Next render will re-fetch from codexbar
-    /// and ccusage. Pair with a waybar signal so the bar repolls immediately.
+    /// Wipe the cache file and exit. Next render will re-fetch usage and
+    /// ccusage. Pair with a waybar signal so the bar repolls immediately.
     #[arg(long)]
     refresh: bool,
     /// Internal: run the actual fetch in a detached worker spawned by --refresh.
@@ -344,7 +344,7 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
         .providers
         .enabled_providers()
         .into_iter()
-        .map(|p| p.name)
+        .map(|p| p.to_string())
         .collect();
 
     let row_values: Vec<serde_json::Value> = rows
@@ -816,13 +816,50 @@ fn handle_doctor(config_path: &Path) -> i32 {
 
     let cfg = config.unwrap_or_default();
 
+    // Credentials (read by the native fetchers)
+    section("Credentials");
+    for (provider, path, hint) in [
+        (
+            "claude",
+            tokengauge_core::claude_credentials_path(),
+            "run `claude` to sign in",
+        ),
+        (
+            "codex",
+            tokengauge_core::codex_auth_path(),
+            "run `codex` to sign in",
+        ),
+    ] {
+        if !cfg.providers.is_enabled(provider) {
+            continue;
+        }
+        let exists = path.exists();
+        record(DoctorCheck {
+            label: format!("{provider} credentials"),
+            ok: exists,
+            detail: if exists {
+                path.display().to_string()
+            } else {
+                format!("{} not found - {hint}", path.display())
+            },
+        });
+    }
+
+    // Unknown / removed config keys
+    let unknown = cfg.unknown_config_keys();
+    if !unknown.is_empty() {
+        section("Removed config keys");
+        for key in &unknown {
+            record(DoctorCheck {
+                label: format!("unknown config key `{key}`"),
+                ok: false,
+                detail: "unknown or removed key - delete it from your config".into(),
+            });
+        }
+    }
+
     // External dependencies
     section("Dependencies");
-    record(check_binary(
-        &cfg.codexbar_bin,
-        "codexbar usage limits",
-        "install from https://github.com/steipete/CodexBar",
-    ));
     if cfg.ccusage_enabled {
         match tokengauge_core::ccusage_runner_description() {
             Some(cmd) => record(DoctorCheck {
@@ -877,17 +914,13 @@ fn handle_doctor(config_path: &Path) -> i32 {
         record(DoctorCheck {
             label: "providers enabled".into(),
             ok: false,
-            detail: "set [providers] codex/claude = true or add an API provider".into(),
+            detail: "set [providers] codex = true and/or claude = true".into(),
         });
     } else {
         record(DoctorCheck {
             label: format!("{} provider(s) enabled", enabled.len()),
             ok: true,
-            detail: enabled
-                .iter()
-                .map(|p| p.name.clone())
-                .collect::<Vec<_>>()
-                .join(", "),
+            detail: enabled.join(", "),
         });
         let result = fetch_all_providers(&cfg);
         for payload in &result.payloads {
@@ -1203,6 +1236,16 @@ fn render_output(
     }
 }
 
+/// Log a warning for each unrecognized config key (startup and after reloads).
+fn warn_unknown_config_keys(config: &TokenGaugeConfig) {
+    for key in config.unknown_config_keys() {
+        dlog(
+            "daemon",
+            &format!("ignoring unrecognized config key `{key}`"),
+        );
+    }
+}
+
 fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
     let sock_path = socket_path(&config.cache_file);
     let _ = std::fs::remove_file(&sock_path);
@@ -1219,6 +1262,7 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
             config.refresh_secs.max(10)
         ),
     );
+    warn_unknown_config_keys(&config);
 
     let state = Arc::new(Mutex::new(DaemonState {
         output: WaybarOutput {
@@ -1304,6 +1348,7 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
                                     path.display()
                                 ),
                             );
+                            warn_unknown_config_keys(&new_cfg);
                             // A changed provider set invalidates the cache rather
                             // than merely ageing it: re-rendering would keep
                             // serving a provider the user just disabled (and show
@@ -1497,7 +1542,7 @@ fn enabled_set(providers: &tokengauge_core::ProvidersConfig) -> BTreeSet<String>
     providers
         .enabled_providers()
         .into_iter()
-        .map(|p| p.name.to_lowercase())
+        .map(|p| p.to_lowercase())
         .collect()
 }
 
@@ -2401,7 +2446,6 @@ mod tests {
 
     fn test_config(cache_file: PathBuf) -> TokenGaugeConfig {
         TokenGaugeConfig {
-            codexbar_bin: "codexbar".to_string(),
             refresh_secs: 600,
             timeout_secs: 10,
             stagger_ms: 0,
@@ -2413,6 +2457,7 @@ mod tests {
             notifications: Default::default(),
             theme: Default::default(),
             update: Default::default(),
+            unknown: Default::default(),
         }
     }
 

@@ -2,7 +2,7 @@
 
 [![GitHub release](https://img.shields.io/github/v/release/Arzaroth/TokenGauge)](https://github.com/Arzaroth/TokenGauge/releases)
 
-Monitor token usage, costs, and limits for AI coding assistants from your Waybar, KDE Plasma panel, and TUI. Powered by [CodexBar](https://github.com/steipete/CodexBar) for usage limits and [ccusage](https://github.com/ryoppippi/ccusage) for cost breakdown. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
+Monitor token usage, costs, and limits for AI coding assistants from your Waybar, KDE Plasma panel, and TUI. Usage limits are fetched natively over HTTP for Claude and Codex (OAuth), and [ccusage](https://github.com/ryoppippi/ccusage) provides the cost breakdown. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
 
 | Waybar | TUI | KDE Plasma |
 |--------|-----|------------|
@@ -12,15 +12,15 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 
 - **Waybar module**: bar + percentage per provider with brand-colored icons, pango-markup tooltip mirroring the TUI card layout
 - **TUI dashboard** (ratatui): per-provider sidebar, Session / Weekly / Sonnet-only / Tertiary windows, Extra usage rates, cost breakdown
-- **Native GTK4 popover**: bundled `tokengauge-popover` (gtk4-layer-shell) gives a click-to-open GUI panel with codexbar-style provider tabs, real provider brand logos (SVG, from [CodexBar](https://github.com/steipete/CodexBar); falls back to glyph icons when a logo is missing), color-tiered usage bars, monospace-aligned cost rows, and a collapsible 7-day chart. Pick `tui` or `popover` per `[waybar].click_action`.
+- **Native GTK4 popover**: bundled `tokengauge-popover` (gtk4-layer-shell) gives a click-to-open GUI panel with provider tabs, real provider brand logos (SVG, falling back to glyph icons when a logo is missing), color-tiered usage bars, monospace-aligned cost rows, and a collapsible 7-day chart. Pick `tui` or `popover` per `[waybar].click_action`.
 - **KDE Plasma 6 applet**: native panel widget (QML plasmoid) mirroring the popover - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, a 7-day chart, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
 - **Cost tracking via ccusage**: today, month, 7-day rolling, per-model split, current burn rate $/hr, 7-day chart, trend vs 7d average
-- **Multi-provider**: Claude, Codex, Copilot, Z.ai, Kimi, MiniMax (mix OAuth + API key providers)
+- **Multi-provider**: Claude and Codex (OAuth)
 - **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary
 - **Threshold notifications**: `notify-send` alerts at 50/80/95% (configurable) - one-shot per threshold, resets on window roll-over
 - **Daemon mode**: optional long-lived process for near-instant waybar polls, background notifications, and SIGHUP config reload
 - **Self-update**: `tokengauge-waybar --update` pulls the arch-matching build from GitHub releases; the daemon checks periodically and notifies, and the popover / Plasma widget expose an **Update** button
-- **`--doctor`**: diagnostic checklist for codexbar, ccusage, notifications, providers, waybar wiring, click action launcher
+- **`--doctor`**: diagnostic checklist for credentials, ccusage, notifications, providers, waybar wiring, click action launcher
 - **CSS tier classes**: waybar text class flips to `tokengauge-warn` / `tokengauge-crit` past usage thresholds for theme-driven coloring
 
 ## Supported Providers
@@ -29,11 +29,8 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 |----------|------|--------|
 | Codex | OAuth | `codex = true` |
 | Claude | OAuth | `claude = true` |
-| Kimi K2 | API | `[providers.kimik2]` with `api_key` |
-| z.ai | API | `[providers.zai]` with `api_key` |
-| Copilot | API | `[providers.copilot]` with `api_key` |
-| MiniMax | API | `[providers.minimax]` with `api_key` |
-| Kimi | API | `[providers.kimi]` with `api_key` |
+
+Claude reads `~/.claude/.credentials.json` (sign in with the `claude` CLI); Codex reads `$CODEX_HOME/auth.json` (sign in with the `codex` CLI). Codex refreshes its own token; Claude is read-only, so run `claude` to refresh it.
 
 ## Installation
 
@@ -89,16 +86,14 @@ Edit `~/.config/tokengauge/config.toml`:
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| `codexbar_bin` | Path to CodexBar CLI | `codexbar` |
 | `refresh_secs` | Cache refresh interval (seconds) | `600` |
 | `cache_file` | Cache file location | OS temp dir + `tokengauge-usage.json` (`/tmp/…` on Linux, `%TEMP%\…` on Windows) |
-| `timeout_secs` | Per-provider codexbar timeout | `10` |
+| `timeout_secs` | Per-provider fetch timeout | `20` |
 | `stagger_ms` | Delay (ms) between provider fetch starts, to avoid 429 bursts (0 = all at once) | `0` |
 | `ccusage_enabled` | Fetch cost data via `ccusage` | `true` |
 | `ccusage_timeout_secs` | Per-call ccusage timeout (cold starts are slow) | `15` |
 | `providers.codex` | Enable Codex (OAuth) | `true` |
 | `providers.claude` | Enable Claude (OAuth) | `true` |
-| `providers.<name>.api_key` | API key for API providers | — |
 | `waybar.window` | Show `daily` or `weekly` usage in the bar | `daily` |
 | `waybar.placement` | `left` or `right` in the waybar | `right` |
 | `waybar.primary` | Provider key shown in the bar text (unset = stack all) | unset |
@@ -152,7 +147,7 @@ systemctl --user enable --now tokengauge-daemon
 
 When the daemon is running:
 
-- The 60-second waybar polls become near-instant: the bare `tokengauge-waybar` binary fetches the daemon's in-memory state via a Unix socket instead of spawning codexbar/ccusage on every tick.
+- The 60-second waybar polls become near-instant: the bare `tokengauge-waybar` binary fetches the daemon's in-memory state via a Unix socket instead of fetching usage and spawning ccusage on every tick.
 - Right-click refresh, scroll rotate, and middle/back click for dashboard/status all route through the daemon so the next waybar snapshot reflects the new state immediately.
 - Threshold notifications fire from the daemon even if you never interact with waybar.
 
@@ -172,7 +167,7 @@ Left-click goes through `tokengauge-waybar --click`, which reads
 
 - `click_action = "popover"`: opens the bundled GTK4 popover
   (`tokengauge-popover --toggle`). The popover anchors under the waybar
-  using `gtk4-layer-shell`, shows codexbar-style provider tabs with
+  using `gtk4-layer-shell`, shows provider tabs with
   brand-coloured icons + tier-tinted session bars, monospace-aligned
   cost rows, and a collapsible 7-day chart. A second click on the waybar
   module toggles it closed. Tune `popover_margin_top` /
@@ -181,8 +176,6 @@ Left-click goes through `tokengauge-waybar --click`, which reads
   (Codex / Claude) and pick which provider is pinned to the bar (or
   `Highest`). Changes are written to `config.toml` live (comments
   preserved) and the daemon is signalled to reload - no restart needed.
-  API-key providers are shown read-only there (enable them by adding an
-  `api_key` to the config).
 
 `tokengauge-waybar --doctor` reports the resolved click target and warns
 when its leading binary isn't on `$PATH`. `popover_command` accepts any
@@ -228,7 +221,8 @@ Run `tokengauge-waybar --doctor` to print a grouped checklist:
 
 ```
 Config        config loads
-Dependencies  codexbar, ccusage runner, notify-send, xdg-open on PATH
+Credentials   Claude / Codex sign-in present
+Dependencies  ccusage runner, notify-send, xdg-open on PATH
 Filesystem    cache directory writable
 Providers     enabled list + per-provider live fetch result
 Waybar        module wired in ~/.config/waybar/config.jsonc
@@ -270,9 +264,6 @@ The shell installers still work if you prefer them:
 ```bash
 # Update TokenGauge
 curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/update.sh | bash
-
-# Update CodexBar CLI
-curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/update-codexbar.sh | bash
 ```
 
 ## Manual waybar wiring
@@ -317,7 +308,6 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
    ```bash
    mkdir -p ~/.config/tokengauge
    cat > ~/.config/tokengauge/config.toml <<'EOF'
-   codexbar_bin = "codexbar"
    refresh_secs = 600
    cache_file = "/tmp/tokengauge-usage.json"
 
@@ -340,7 +330,7 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 
 4. Add the module to `~/.config/waybar/config.jsonc` (see the **Without Omarchy** section for the full JSON snippet). Place `"custom/tokengauge"` in either `modules-left` (after `"hyprland/workspaces"`) or `modules-right`.
 
-5. Install [CodexBar CLI](https://github.com/steipete/CodexBar) if not already installed. Optionally install [ccusage](https://github.com/ryoppippi/ccusage) globally (`npm i -g ccusage` or `bun i -g ccusage`) for faster cost fetches.
+5. Sign in to the providers you want: run `codex` (Codex) and/or `claude` (Claude) so TokenGauge can read their OAuth credentials. Optionally install [ccusage](https://github.com/ryoppippi/ccusage) globally (`npm i -g ccusage` or `bun i -g ccusage`) for faster cost fetches.
 
 6. (Optional) Set up the daemon - see **Daemon mode** above.
 
@@ -353,17 +343,14 @@ The Waybar module, the GTK4 popover, and the KDE Plasma applet are Linux-only
 are supported, both building and running natively on Windows 10: the
 **TUI dashboard** (`tokengauge-tui.exe`) and a **system-tray GUI**
 (`tokengauge-tray.exe`, see [Tray GUI](#tray-gui-tokengauge-tray) below).
-TokenGauge builds its rows from `codexbar` data, so you
-need a codexbar-compatible binary for anything to show — upstream
-[CodexBar](https://github.com/steipete/CodexBar) doesn't ship one for Windows,
-but Win-CodexBar works as a drop-in (see **Limits on Windows** below). `ccusage`
-then layers on **cost/token** detail per provider.
+Usage limits are fetched natively over HTTP; just sign in to the `codex`
+and/or `claude` CLIs so TokenGauge can read their OAuth credentials.
+`ccusage` then layers on **cost/token** detail per provider.
 
 ### Prerequisites
 
-- **A codexbar-compatible binary** - **required** for any provider rows to
-  appear (TokenGauge builds its rows from codexbar data). Upstream CodexBar has
-  no Windows build; use Win-CodexBar - see **Limits on Windows** below.
+- **Sign in to the `codex` and/or `claude` CLIs** so TokenGauge can read their
+  OAuth credentials and fetch usage natively.
 - *(Optional)* **[Node.js](https://nodejs.org/)** (or [Bun](https://bun.sh/)) -
   lets `ccusage` add **cost/token** detail to those rows. TokenGauge auto-detects
   `ccusage`, then `bunx ccusage`, then `npx --yes ccusage` on your `PATH`
@@ -397,7 +384,6 @@ On first run a default config is created at
 `%TEMP%\tokengauge-usage.json`. A minimal config:
 
 ```toml
-codexbar_bin = "codexbar"
 refresh_secs = 600
 
 [providers]
@@ -434,32 +420,11 @@ cargo build --release -p tokengauge-tray
   window hides it back to the tray.
 - Right-click the tray icon for **Show / Refresh now / Update TokenGauge / Quit**
   (**Update** runs `tokengauge-tui --update`; restart the tray afterward).
-- It reads limits from the same `codexbar_bin` as the TUI, so set that up first
-  (see **Limits on Windows** below). This crate is Windows-only.
+- It reads the same OAuth credentials as the TUI, so sign in to the `codex`
+  and/or `claude` CLIs first. This crate is Windows-only.
 
 ### Limits on Windows
 
-Upstream CodexBar ships a `codexbar` CLI for macOS and Linux only. Without a
-codexbar binary, every provider errors ("failed to spawn codexbar") and the TUI
-has nothing to show, since rows are built from codexbar data. To get real data
-on Windows, use **[Win-CodexBar](https://github.com/Finesssee/Win-CodexBar)**, a
-faithful Windows port whose bundled `codexbar-cli.exe` speaks the same
-`usage --provider … --source oauth --format json` interface and emits the same
-JSON schema TokenGauge parses.
-
-1. Install it: `winget install Finesssee.Win-CodexBar`, then sign in so it can
-   read your Claude/Codex usage.
-2. Point TokenGauge at its CLI in `%APPDATA%\tokengauge\config.toml`:
-
-   ```toml
-   # full path, or just "codexbar-cli" if its folder is on PATH
-   codexbar_bin = "C:\\Program Files\\Win-CodexBar\\codexbar-cli.exe"
-   ```
-
-3. Restart `tokengauge-tui`.
-
-TokenGauge omits the `--json-only` flag on Windows automatically (Win-CodexBar's
-`usage` command doesn't define it, and `--format json` already yields clean
-JSON), so `codexbar-cli.exe` works as a drop-in. `codexbar_bin` may point at an
-`.exe`, or a `.cmd`/`.bat` shim (those are run via `cmd /C`); use its full path
-if it isn't on `PATH`.
+Usage limits are fetched natively over HTTP on Windows, same as on Linux - no
+extra binary is needed. Sign in to the `codex` and/or `claude` CLIs so
+TokenGauge can read their OAuth credentials, then run `tokengauge-tui`.

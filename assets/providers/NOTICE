@@ -26,9 +26,9 @@ same MIT license:
     TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
     SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-Individual brand marks (Anthropic, OpenAI, Microsoft, z.ai, MiniMax,
-Moonshot/Kimi, etc.) remain the property of their respective owners and are
-used here under nominative fair use to identify the corresponding provider.
+Individual brand marks (Anthropic, OpenAI) remain the property of their
+respective owners and are used here under nominative fair use to identify the
+corresponding provider.
 
 The install script recolours the monochrome (currentColor) marks to the
 popover's neutral foreground when copying them into the data directory; the

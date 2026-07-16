@@ -349,14 +349,6 @@ Item {
                         onToggled: if (checked) root.action("--set-primary " + modelData.provider.toLowerCase())
                     }
                 }
-                PlasmaComponents.Label {
-                    visible: full.settingsOpen
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    opacity: 0.6
-                    font: Kirigami.Theme.smallFont
-                    text: i18n("API-key providers are enabled by adding an api_key in config.toml.")
-                }
             }
         }
     }

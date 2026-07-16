@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Usage limits are now fetched natively over HTTP for Claude and Codex; the external `codexbar` CLI is no longer required.
+- Windows fetches Claude/Codex usage natively - Win-CodexBar is no longer needed.
+
+### Removed
+
+- **BREAKING**: Dropped the zai, kimik2, copilot, minimax, and kimi providers. TokenGauge now supports only Claude and Codex.
+- **BREAKING**: Removed the `codexbar_bin` config key (old configs still load; `--doctor` and the daemon log warn about it and any leftover `[providers.*]` keys).
+
+### Fixed
+
+- Guarded a u8 overflow in threshold notifications.
+- Guarded a UTF-8 panic when truncating long error messages.
+
+### Notes
+
+- `socks5://` proxies now require building with reqwest's `socks` feature; `HTTP_PROXY`/`HTTPS_PROXY` still work.
+
 ## [0.10.1] - 2026-07-16
 
 ### Fixed

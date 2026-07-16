@@ -2,6 +2,7 @@
 name = "tokengauge-core"
 version = "0.10.1"
 edition = "2024"
+rust-version.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
@@ -11,6 +12,10 @@ serde_json = { workspace = true }
 toml = "0.8"
 toml_edit = "0.22"
 dirs = "5.0"
+# ponytail: blocking+json+rustls are already compiled via self_update, so this
+# adds zero new crates. Not feature-gated - tray needs it and popover already
+# links GTK4, so the weight is noise; gate later only if popover build bites.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
 self_update = { version = "0.44", default-features = false, features = ["reqwest", "rustls", "archive-tar", "compression-flate2", "archive-zip", "compression-zip-deflate"], optional = true }
 http = { version = "1", optional = true }
 

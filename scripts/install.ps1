@@ -11,10 +11,10 @@
     This script installs only the TUI. The system-tray GUI (tokengauge-tray) is
     a separate binary - build it with `cargo build --release -p tokengauge-tray`
     (see the README's "Tray GUI" section). The Waybar module, GTK4 popover, and
-    KDE Plasma applet are Linux-only. TokenGauge builds its rows from codexbar
-    data, so a codexbar-compatible binary is required for anything to show;
-    upstream CodexBar doesn't ship one for Windows (Win-CodexBar works as a
-    drop-in). ccusage (needs Node.js/Bun on PATH) then adds cost/token detail.
+    KDE Plasma applet are Linux-only. Usage limits are fetched natively over
+    HTTP; sign in to the `codex` and/or `claude` CLIs so TokenGauge can read
+    their OAuth credentials. ccusage (needs Node.js/Bun on PATH) then adds
+    cost/token detail.
 
 .PARAMETER Repo
     GitHub repo to install from. Default: Arzaroth/TokenGauge.
@@ -136,10 +136,9 @@ if (-not (Test-Path $configFile)) {
     # cache_file is intentionally omitted so it defaults to %TEMP%.
     $config = @'
 # TokenGauge configuration (Windows)
-# TokenGauge builds its rows from codexbar data, so a codexbar-compatible binary
-# is required for anything to show (e.g. Win-CodexBar's codexbar-cli.exe);
-# ccusage then adds cost/token detail. codexbar_bin may be an .exe or .cmd/.bat.
-codexbar_bin = "codexbar"
+# Usage limits are fetched natively over HTTP; sign in to the codex and/or
+# claude CLIs so TokenGauge can read their OAuth credentials. ccusage then adds
+# cost/token detail.
 refresh_secs = 600
 
 [providers]
@@ -162,7 +161,7 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue) -and
     -not (Get-Command bun  -ErrorAction SilentlyContinue) -and
     -not (Get-Command ccusage -ErrorAction SilentlyContinue)) {
     Write-Warned "No Node.js / Bun / ccusage found on PATH. Install Node.js (https://nodejs.org) so"
-    Write-Warned "'npx ccusage' can add cost/token detail. (Limits still show via codexbar; costs won't.)"
+    Write-Warned "'npx ccusage' can add cost/token detail. (Limits still show natively; costs won't.)"
 }
 if ($NoPath) {
     Write-Good "Done. Run it with:  & `"$(Join-Path $InstallDir 'tokengauge-tui.exe')`""

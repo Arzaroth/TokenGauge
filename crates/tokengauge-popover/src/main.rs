@@ -463,42 +463,16 @@ fn render_settings(scroller: &ScrolledWindow, body: &GBox, config_path: &Rc<Path
         sw.connect_state_set(move |_, state| {
             if let Err(e) = config_set_oauth_provider(&path, &k, state) {
                 eprintln!("tokengauge-popover: failed to update config: {e:#}");
-            } else {
-                signal_daemon_reload();
-                rerender();
+                // Config write failed: stop GTK applying the visual toggle so the
+                // switch keeps reflecting the persisted (unchanged) state.
+                return Propagation::Stop;
             }
+            signal_daemon_reload();
+            rerender();
             Propagation::Proceed
         });
         row.append(&name);
         row.append(&sw);
-        body.append(&row);
-    }
-    // API providers are enabled by adding an api_key to the config; show their
-    // state read-only here.
-    for (label, on) in [
-        ("z.ai", config.providers.zai.is_some()),
-        ("Kimi K2", config.providers.kimik2.is_some()),
-        ("Copilot", config.providers.copilot.is_some()),
-        ("MiniMax", config.providers.minimax.is_some()),
-        ("Kimi", config.providers.kimi.is_some()),
-    ] {
-        let row = GBox::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(8)
-            .build();
-        let name = Label::builder()
-            .label(label)
-            .halign(Align::Start)
-            .hexpand(true)
-            .css_classes(vec!["tg-dim".to_string()])
-            .build();
-        let state = Label::builder()
-            .label(if on { "on (api_key)" } else { "needs api_key" })
-            .css_classes(vec!["tg-dim".to_string()])
-            .halign(Align::End)
-            .build();
-        row.append(&name);
-        row.append(&state);
         body.append(&row);
     }
 
@@ -513,15 +487,18 @@ fn render_settings(scroller: &ScrolledWindow, body: &GBox, config_path: &Rc<Path
 
     let mut prev = highest.clone();
     for provider in config.providers.enabled_providers() {
-        let name = provider.name.clone();
+        let name = provider.to_string();
         let rb = CheckButton::builder().label(provider_label(&name)).build();
         rb.set_group(Some(&prev));
         rb.set_active(current.as_deref() == Some(name.as_str()));
         let path = Rc::clone(config_path);
+        let rerender = Rc::clone(&rerender);
         rb.connect_toggled(move |b| {
             if b.is_active() {
                 if let Err(e) = config_set_primary(&path, Some(&name)) {
                     eprintln!("tokengauge-popover: failed to update config: {e:#}");
+                    // Write failed: reload the saved config so the radio reverts.
+                    rerender();
                 } else {
                     signal_daemon_reload();
                 }
@@ -532,10 +509,12 @@ fn render_settings(scroller: &ScrolledWindow, body: &GBox, config_path: &Rc<Path
     }
     // Connect "Highest" last so the set_active calls above don't fire it.
     let path = Rc::clone(config_path);
+    let rerender = Rc::clone(&rerender);
     highest.connect_toggled(move |b| {
         if b.is_active() {
             if let Err(e) = config_set_primary(&path, None) {
                 eprintln!("tokengauge-popover: failed to update config: {e:#}");
+                rerender();
             } else {
                 signal_daemon_reload();
             }

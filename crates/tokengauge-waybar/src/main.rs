@@ -344,7 +344,7 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
         .providers
         .enabled_providers()
         .into_iter()
-        .map(|p| p.name)
+        .map(|p| p.to_string())
         .collect();
 
     let row_values: Vec<serde_json::Value> = rows
@@ -877,17 +877,13 @@ fn handle_doctor(config_path: &Path) -> i32 {
         record(DoctorCheck {
             label: "providers enabled".into(),
             ok: false,
-            detail: "set [providers] codex/claude = true or add an API provider".into(),
+            detail: "set [providers] codex = true and/or claude = true".into(),
         });
     } else {
         record(DoctorCheck {
             label: format!("{} provider(s) enabled", enabled.len()),
             ok: true,
-            detail: enabled
-                .iter()
-                .map(|p| p.name.clone())
-                .collect::<Vec<_>>()
-                .join(", "),
+            detail: enabled.join(", "),
         });
         let result = fetch_all_providers(&cfg);
         for payload in &result.payloads {

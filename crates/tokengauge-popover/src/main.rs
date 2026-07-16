@@ -473,34 +473,6 @@ fn render_settings(scroller: &ScrolledWindow, body: &GBox, config_path: &Rc<Path
         row.append(&sw);
         body.append(&row);
     }
-    // API providers are enabled by adding an api_key to the config; show their
-    // state read-only here.
-    for (label, on) in [
-        ("z.ai", config.providers.zai.is_some()),
-        ("Kimi K2", config.providers.kimik2.is_some()),
-        ("Copilot", config.providers.copilot.is_some()),
-        ("MiniMax", config.providers.minimax.is_some()),
-        ("Kimi", config.providers.kimi.is_some()),
-    ] {
-        let row = GBox::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(8)
-            .build();
-        let name = Label::builder()
-            .label(label)
-            .halign(Align::Start)
-            .hexpand(true)
-            .css_classes(vec!["tg-dim".to_string()])
-            .build();
-        let state = Label::builder()
-            .label(if on { "on (api_key)" } else { "needs api_key" })
-            .css_classes(vec!["tg-dim".to_string()])
-            .halign(Align::End)
-            .build();
-        row.append(&name);
-        row.append(&state);
-        body.append(&row);
-    }
 
     // --- Bar pin ---
     body.append(&settings_section("Bar pin"));
@@ -513,7 +485,7 @@ fn render_settings(scroller: &ScrolledWindow, body: &GBox, config_path: &Rc<Path
 
     let mut prev = highest.clone();
     for provider in config.providers.enabled_providers() {
-        let name = provider.name.clone();
+        let name = provider.to_string();
         let rb = CheckButton::builder().label(provider_label(&name)).build();
         rb.set_group(Some(&prev));
         rb.set_active(current.as_deref() == Some(name.as_str()));

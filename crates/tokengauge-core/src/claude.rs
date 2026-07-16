@@ -203,21 +203,26 @@ fn plan_label(subscription_type: Option<&str>, tier: Option<&str>) -> Option<Str
 }
 
 /// The routines extra window, if any alias key is present.
+///
+/// A populated alias (one carrying a real `utilization`) wins. An *explicit*
+/// `null` alias still emits a 0% placeholder so the bar stays visible. A present
+/// but malformed value (no utilization, unparseable) is ignored rather than
+/// manufactured into a live 0% - that would suppress the stale-cache fallback.
 fn routines_window(rest: &Map<String, Value>) -> Option<ExtraRateWindow> {
-    let mut placeholder = false;
+    let mut explicit_null = false;
     let mut populated: Option<Win> = None;
     for key in ROUTINE_ALIASES {
-        if let Some(v) = rest.get(*key) {
-            placeholder = true;
-            if !v.is_null()
-                && let Ok(w) = serde_json::from_value::<Win>(v.clone())
-            {
-                populated = Some(w);
-                break;
-            }
+        let Some(v) = rest.get(*key) else { continue };
+        if v.is_null() {
+            explicit_null = true;
+        } else if let Ok(w) = serde_json::from_value::<Win>(v.clone())
+            && w.utilization.is_some()
+        {
+            populated = Some(w);
+            break;
         }
     }
-    let window = match (populated, placeholder) {
+    let window = match (populated, explicit_null) {
         (Some(w), _) => UsageWindow {
             used_percent: Some(pct_u8(w.utilization.unwrap_or(0.0))),
             reset_description: None,
@@ -243,7 +248,8 @@ fn routines_window(rest: &Map<String, Value>) -> Option<ExtraRateWindow> {
 fn scoped_weekly_windows(limits: &[Limit]) -> Vec<ExtraRateWindow> {
     let mut out: Vec<ExtraRateWindow> = Vec::new();
     for limit in limits {
-        if limit.group.as_deref() != Some("weekly") || limit.kind.as_deref() != Some("weekly_scoped")
+        if limit.group.as_deref() != Some("weekly")
+            || limit.kind.as_deref() != Some("weekly_scoped")
         {
             continue;
         }
@@ -285,21 +291,60 @@ fn scoped_weekly_windows(limits: &[Limit]) -> Vec<ExtraRateWindow> {
     out
 }
 
-fn to_payload(resp: UsageResponse, plan: Option<String>, now: DateTime<Utc>) -> ProviderPayload {
-    let primary = to_window(resp.five_hour.as_ref(), 300)
-        .or_else(|| to_window(resp.seven_day.as_ref(), 10080))
-        .or_else(|| to_window(resp.seven_day_oauth_apps.as_ref(), 10080))
-        .or_else(|| to_window(resp.seven_day_sonnet.as_ref(), 10080))
-        .or_else(|| to_window(resp.seven_day_opus.as_ref(), 10080));
-    let secondary = to_window(resp.seven_day.as_ref(), 10080);
-    let tertiary = to_window(resp.seven_day_sonnet.as_ref(), 10080)
-        .or_else(|| to_window(resp.seven_day_opus.as_ref(), 10080));
+fn to_payload(
+    resp: UsageResponse,
+    plan: Option<String>,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    // Primary falls back through the 5h/weekly windows, remembering which source
+    // it used so the same window isn't also emitted as secondary/tertiary (which
+    // would render a "Session" row showing weekly data).
+    let primary_chain = [
+        ("five_hour", resp.five_hour.as_ref(), 300u32),
+        ("seven_day", resp.seven_day.as_ref(), 10080),
+        (
+            "seven_day_oauth_apps",
+            resp.seven_day_oauth_apps.as_ref(),
+            10080,
+        ),
+        ("seven_day_sonnet", resp.seven_day_sonnet.as_ref(), 10080),
+        ("seven_day_opus", resp.seven_day_opus.as_ref(), 10080),
+    ];
+    let (primary_key, primary) = primary_chain
+        .iter()
+        .find_map(|(k, w, m)| to_window(*w, *m).map(|uw| (Some(*k), Some(uw))))
+        .unwrap_or((None, None));
+
+    let taken = |key: &str| primary_key == Some(key);
+    let secondary = if taken("seven_day") {
+        None
+    } else {
+        to_window(resp.seven_day.as_ref(), 10080)
+    };
+    let tertiary = if taken("seven_day_sonnet") {
+        to_window(resp.seven_day_opus.as_ref(), 10080)
+    } else if taken("seven_day_opus") {
+        None
+    } else {
+        to_window(resp.seven_day_sonnet.as_ref(), 10080)
+            .or_else(|| to_window(resp.seven_day_opus.as_ref(), 10080))
+    };
 
     let mut extra_rate_windows = Vec::new();
     extra_rate_windows.extend(routines_window(&resp.rest));
     extra_rate_windows.extend(scoped_weekly_windows(&resp.limits));
 
-    ProviderPayload {
+    // An all-empty snapshot must be an error so the stale-cache fallback keeps
+    // the last-good number instead of rendering a blank row.
+    if primary.is_none()
+        && secondary.is_none()
+        && tertiary.is_none()
+        && extra_rate_windows.is_empty()
+    {
+        return Err(anyhow!("Claude returned no usage windows"));
+    }
+
+    Ok(ProviderPayload {
         provider: "claude".to_string(),
         version: None,
         source: Some("oauth".to_string()),
@@ -314,7 +359,7 @@ fn to_payload(resp: UsageResponse, plan: Option<String>, now: DateTime<Utc>) -> 
         credits: None,
         error: None,
         stale: false,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -352,7 +397,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         oauth.subscription_type.as_deref(),
         oauth.rate_limit_tier.as_deref(),
     );
-    Ok(vec![to_payload(body, plan, now)])
+    Ok(vec![to_payload(body, plan, now)?])
 }
 
 #[cfg(test)]
@@ -380,7 +425,7 @@ mod tests {
         }"#,
         );
         let plan = plan_label(Some("max"), Some("default_claude_max_20x"));
-        let payload = to_payload(body, plan, Utc::now());
+        let payload = to_payload(body, plan, Utc::now()).unwrap();
         let usage = payload.usage.unwrap();
 
         assert_eq!(usage.primary.as_ref().unwrap().used_percent, Some(5));
@@ -404,7 +449,7 @@ mod tests {
     #[test]
     fn null_routine_alias_emits_placeholder() {
         let body = resp(r#"{"five_hour":{"utilization":1.0},"seven_day_routines":null}"#);
-        let payload = to_payload(body, None, Utc::now());
+        let payload = to_payload(body, None, Utc::now()).unwrap();
         let w = &payload.usage.unwrap().extra_rate_windows[0];
         assert_eq!(w.id.as_deref(), Some("claude-routines"));
         assert_eq!(w.window.as_ref().unwrap().used_percent, Some(0));
@@ -412,9 +457,19 @@ mod tests {
     }
 
     #[test]
+    fn utilization_free_routine_alias_is_ignored() {
+        // Present, non-null, but no utilization -> not a real measurement, and
+        // no explicit null alias either, so the routines window is omitted
+        // rather than manufactured as a live 0%.
+        let body = resp(r#"{"five_hour":{"utilization":1.0},"routines":{"resets_at":"x"}}"#);
+        let payload = to_payload(body, None, Utc::now()).unwrap();
+        assert!(payload.usage.unwrap().extra_rate_windows.is_empty());
+    }
+
+    #[test]
     fn absent_routine_alias_omits_window() {
         let body = resp(r#"{"five_hour":{"utilization":1.0}}"#);
-        let payload = to_payload(body, None, Utc::now());
+        let payload = to_payload(body, None, Utc::now()).unwrap();
         assert!(payload.usage.unwrap().extra_rate_windows.is_empty());
     }
 
@@ -425,7 +480,7 @@ mod tests {
             r#"{"five_hour":{"utilization":1.0},"routines":null,
                 "cowork":{"utilization":30.0}}"#,
         );
-        let payload = to_payload(body, None, Utc::now());
+        let payload = to_payload(body, None, Utc::now()).unwrap();
         let w = &payload.usage.unwrap().extra_rate_windows[0];
         assert_eq!(w.window.as_ref().unwrap().used_percent, Some(30));
     }
@@ -433,10 +488,19 @@ mod tests {
     #[test]
     fn primary_falls_back_when_five_hour_absent() {
         let body = resp(r#"{"seven_day":{"utilization":42.0}}"#);
-        let payload = to_payload(body, None, Utc::now());
+        let payload = to_payload(body, None, Utc::now()).unwrap();
         let usage = payload.usage.unwrap();
         assert_eq!(usage.primary.as_ref().unwrap().used_percent, Some(42));
         assert_eq!(usage.primary.as_ref().unwrap().window_minutes, Some(10080));
+        // seven_day was consumed as primary, so it is not duplicated in secondary.
+        assert!(usage.secondary.is_none());
+    }
+
+    #[test]
+    fn empty_snapshot_is_error() {
+        // No windows, no extras -> error so the stale fallback keeps last-good.
+        let body = resp(r#"{"seven_day":null}"#);
+        assert!(to_payload(body, None, Utc::now()).is_err());
     }
 
     #[test]
@@ -455,7 +519,7 @@ mod tests {
                "scope":{"model":{"display_name":""}}}
             ]}"#,
         );
-        let payload = to_payload(body, None, Utc::now());
+        let payload = to_payload(body, None, Utc::now()).unwrap();
         let windows = payload.usage.unwrap().extra_rate_windows;
         // "All models" and "claude/all_models" skipped; empty display skipped;
         // duplicate "Fable" collapses to the first (30%).
@@ -507,7 +571,10 @@ mod tests {
         .unwrap();
         let err = read_credentials(&path, Utc::now()).unwrap_err().to_string();
         assert!(err.contains("expired"), "{err}");
-        assert!(err.len() <= 60, "message too long for clean_error_message: {err}");
+        assert!(
+            err.len() <= 60,
+            "message too long for clean_error_message: {err}"
+        );
 
         // Missing scope.
         std::fs::write(

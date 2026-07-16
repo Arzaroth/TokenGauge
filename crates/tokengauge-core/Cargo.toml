@@ -1,6 +1,6 @@
 [package]
 name = "tokengauge-core"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2024"
 
 [dependencies]
@@ -12,6 +12,7 @@ toml = "0.8"
 toml_edit = "0.22"
 dirs = "5.0"
 self_update = { version = "0.44", default-features = false, features = ["reqwest", "rustls", "archive-tar", "compression-flate2", "archive-zip", "compression-zip-deflate"], optional = true }
+http = { version = "1", optional = true }
 
 [features]
-self-update = ["dep:self_update"]
+self-update = ["dep:self_update", "dep:http"]

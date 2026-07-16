@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-07-16
+
+### Fixed
+
+- `--update` downloads the release binary again instead of failing with `extract failed: invalid gzip header`. The download hit GitHub's asset API URL without an `Accept: application/octet-stream` header, so GitHub returned the asset's ~1.6 KiB JSON metadata rather than the tarball, and extraction choked on the non-gzip bytes.
+
 ## [0.10.0] - 2026-07-16
 
 Provider toggles apply immediately across all frontends.

@@ -921,14 +921,15 @@ fn push_gauge_row(
 }
 
 fn pace_badge_color(pace: &UsagePace) -> Option<&'static str> {
+    let t = theme();
     if pace.stage.is_ahead() {
         Some(if pace.delta_percent.abs() > 6.0 {
-            "#f38ba8"
+            t.red.as_str()
         } else {
-            "#f9e2af"
+            t.yellow.as_str()
         })
     } else if pace.stage.is_behind() {
-        Some("#a6e3a1")
+        Some(t.green.as_str())
     } else {
         None
     }

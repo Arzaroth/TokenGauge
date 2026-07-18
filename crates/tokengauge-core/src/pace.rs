@@ -126,7 +126,7 @@ impl UsagePace {
     /// (reserve) / `on pace`.
     pub fn badge(&self) -> String {
         let magnitude = self.delta_percent.abs().round() as i64;
-        if magnitude == 0 {
+        if self.stage == PaceStage::OnTrack || magnitude == 0 {
             return "on pace".to_string();
         }
         let sign = if self.delta_percent >= 0.0 { "+" } else { "-" };
@@ -148,7 +148,8 @@ impl UsagePace {
         let right = if self.will_last_to_reset {
             Some("lasts until reset".to_string())
         } else {
-            self.eta_seconds.map(|s| format!("empty in {}", format_eta(s)))
+            self.eta_seconds
+                .map(|s| format!("empty in {}", format_eta(s)))
         };
 
         match right {

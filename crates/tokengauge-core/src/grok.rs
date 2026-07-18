@@ -68,7 +68,7 @@ fn parse_credentials(text: &str, now: DateTime<Utc>) -> Result<Credentials> {
             selected = Some(entry);
             break;
         }
-        if selected.is_none() || scope.contains("/sign-in") {
+        if selected.is_none() {
             selected = Some(entry);
         }
     }
@@ -414,6 +414,18 @@ mod tests {
         let creds = parse_credentials(auth, Utc::now()).unwrap();
         assert_eq!(creds.access_token, "oidc");
         assert_eq!(creds.login_method.as_deref(), Some("SuperGrok"));
+    }
+
+    #[test]
+    fn keeps_first_fallback_over_later_sign_in() {
+        // No OIDC entry: the first keyed fallback must not be displaced by a
+        // later sign-in entry.
+        let auth = r#"{
+            "https://a.example::x": {"key": "first"},
+            "https://z.example/sign-in": {"key": "later"}
+        }"#;
+        let creds = parse_credentials(auth, Utc::now()).unwrap();
+        assert_eq!(creds.access_token, "first");
     }
 
     #[test]

@@ -176,6 +176,105 @@ pub fn grok_auth_path() -> PathBuf {
     grok::auth_path()
 }
 
+/// The CLI a provider's credentials come from, if any. `None` means the
+/// provider authenticates with an API key / env var and needs no CLI.
+pub fn provider_cli_name(provider: &str) -> Option<&'static str> {
+    Some(match provider.to_lowercase().as_str() {
+        "claude" => "claude",
+        "codex" => "codex",
+        "kimi" => "kimi-code",
+        "grok" => "grok",
+        _ => return None,
+    })
+}
+
+/// Whether a provider's credentials are currently available, and where from.
+pub struct AuthStatus {
+    /// At least one accepted auth source is present.
+    pub ok: bool,
+    /// What was found (or what is missing).
+    pub detail: String,
+    /// How to satisfy it when missing (empty when `ok`).
+    pub hint: &'static str,
+}
+
+fn env_var_present(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .is_some_and(|v| !v.trim().is_empty())
+}
+
+fn file_auth_status(path: PathBuf, hint: &'static str) -> AuthStatus {
+    if path.exists() {
+        AuthStatus {
+            ok: true,
+            detail: path.display().to_string(),
+            hint: "",
+        }
+    } else {
+        AuthStatus {
+            ok: false,
+            detail: format!("{} not found", path.display()),
+            hint,
+        }
+    }
+}
+
+/// Report a provider's credential presence without doing a network fetch.
+/// Mirrors the auth sources each native fetcher actually reads.
+pub fn provider_auth_status(provider: &str) -> AuthStatus {
+    match provider.to_lowercase().as_str() {
+        "claude" => file_auth_status(claude_credentials_path(), "run `claude` to sign in"),
+        "codex" => file_auth_status(codex_auth_path(), "run `codex` to sign in"),
+        "grok" => file_auth_status(grok_auth_path(), "run `grok login` to sign in"),
+        "kimi" => {
+            let path = kimi_credentials_path();
+            if path.exists() {
+                AuthStatus {
+                    ok: true,
+                    detail: format!("{} (kimi-code CLI)", path.display()),
+                    hint: "",
+                }
+            } else if env_var_present("KIMI_CODE_API_KEY") {
+                AuthStatus {
+                    ok: true,
+                    detail: "KIMI_CODE_API_KEY set".to_string(),
+                    hint: "",
+                }
+            } else {
+                AuthStatus {
+                    ok: false,
+                    detail: format!("no {} and KIMI_CODE_API_KEY unset", path.display()),
+                    hint: "sign in with `kimi-code` or set KIMI_CODE_API_KEY",
+                }
+            }
+        }
+        "glm" => {
+            if let Some(var) = ["Z_AI_API_KEY", "ZAI_API_TOKEN"]
+                .into_iter()
+                .find(|v| env_var_present(v))
+            {
+                AuthStatus {
+                    ok: true,
+                    detail: format!("{var} set"),
+                    hint: "",
+                }
+            } else {
+                AuthStatus {
+                    ok: false,
+                    detail: "Z_AI_API_KEY unset".to_string(),
+                    hint: "set Z_AI_API_KEY (legacy ZAI_API_TOKEN also works)",
+                }
+            }
+        }
+        other => AuthStatus {
+            ok: false,
+            detail: format!("unknown provider {other}"),
+            hint: "",
+        },
+    }
+}
+
 // ============================================================================
 // Configuration Types
 // ============================================================================
@@ -3192,6 +3291,27 @@ mod tests {
         let (fire, notified) = thresholds_to_fire(75, &[50, 80], &[50, 80]);
         assert!(fire.is_empty());
         assert_eq!(notified, vec![50, 80]);
+    }
+
+    #[test]
+    fn provider_cli_names() {
+        assert_eq!(provider_cli_name("kimi"), Some("kimi-code"));
+        assert_eq!(provider_cli_name("grok"), Some("grok"));
+        assert_eq!(provider_cli_name("claude"), Some("claude"));
+        // GLM authenticates with an API key - no CLI.
+        assert_eq!(provider_cli_name("glm"), None);
+        assert_eq!(provider_cli_name("nope"), None);
+    }
+
+    #[test]
+    fn provider_auth_status_covers_all_providers() {
+        // Never panics and always yields a hint when not satisfied.
+        for provider in PROVIDERS {
+            let status = provider_auth_status(provider);
+            if !status.ok {
+                assert!(!status.hint.is_empty(), "{provider} missing hint");
+            }
+        }
     }
 
     #[test]

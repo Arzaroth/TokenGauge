@@ -816,43 +816,35 @@ fn handle_doctor(config_path: &Path) -> i32 {
 
     let cfg = config.unwrap_or_default();
 
-    // Credentials (read by the native fetchers)
+    // Credentials (read by the native fetchers) - one line per enabled
+    // provider, keyed off the auth sources each fetcher actually reads.
     section("Credentials");
-    for (provider, path, hint) in [
-        (
-            "claude",
-            tokengauge_core::claude_credentials_path(),
-            "run `claude` to sign in",
-        ),
-        (
-            "codex",
-            tokengauge_core::codex_auth_path(),
-            "run `codex` to sign in",
-        ),
-        (
-            "kimi",
-            tokengauge_core::kimi_credentials_path(),
-            "sign in with `kimi-code` or set KIMI_CODE_API_KEY",
-        ),
-        (
-            "grok",
-            tokengauge_core::grok_auth_path(),
-            "run `grok login` to sign in",
-        ),
-    ] {
+    for provider in tokengauge_core::PROVIDERS {
         if !cfg.providers.is_enabled(provider) {
             continue;
         }
-        let exists = path.exists();
+        let status = tokengauge_core::provider_auth_status(provider);
         record(DoctorCheck {
             label: format!("{provider} credentials"),
-            ok: exists,
-            detail: if exists {
-                path.display().to_string()
+            ok: status.ok,
+            detail: if status.ok {
+                status.detail
             } else {
-                format!("{} not found - {hint}", path.display())
+                format!("{} - {}", status.detail, status.hint)
             },
         });
+        // When creds are missing and a sign-in CLI exists, report whether it's
+        // installed so the fix is actionable. (TokenGauge reads the credential
+        // file/env at runtime, not the CLI, so this only matters for sign-in.)
+        if !status.ok
+            && let Some(cli) = tokengauge_core::provider_cli_name(provider)
+        {
+            record(check_binary(
+                cli,
+                &format!("{provider} sign-in"),
+                &format!("install the {cli} CLI to sign in"),
+            ));
+        }
     }
 
     // Unknown / removed config keys
@@ -920,29 +912,41 @@ fn handle_doctor(config_path: &Path) -> i32 {
     // Providers
     section("Providers");
     let enabled = cfg.providers.enabled_providers();
-    if enabled.is_empty() {
+    let disabled: Vec<&str> = tokengauge_core::PROVIDERS
+        .iter()
+        .copied()
+        .filter(|p| !cfg.providers.is_enabled(p))
+        .collect();
+    record(DoctorCheck {
+        label: "enabled".into(),
+        ok: !enabled.is_empty(),
+        detail: if enabled.is_empty() {
+            "none - set e.g. [providers] claude = true".into()
+        } else {
+            enabled.join(", ")
+        },
+    });
+    if !disabled.is_empty() {
+        // Surface the rest of the catalog so disabled providers are discoverable.
         record(DoctorCheck {
-            label: "providers enabled".into(),
-            ok: false,
-            detail: "set [providers] codex = true and/or claude = true".into(),
-        });
-    } else {
-        record(DoctorCheck {
-            label: format!("{} provider(s) enabled", enabled.len()),
+            label: "available (disabled)".into(),
             ok: true,
-            detail: enabled.join(", "),
+            detail: disabled.join(", "),
         });
+    }
+    if !enabled.is_empty() {
+        // The definitive check: a live fetch per enabled provider.
         let result = fetch_all_providers(&cfg);
         for payload in &result.payloads {
             record(DoctorCheck {
-                label: format!("fetch {}", payload.provider),
+                label: format!("live fetch {}", payload.provider),
                 ok: true,
                 detail: payload.source.clone().unwrap_or_default(),
             });
         }
         for err in &result.errors {
             record(DoctorCheck {
-                label: format!("fetch {}", err.provider),
+                label: format!("live fetch {}", err.provider),
                 ok: false,
                 detail: err.message.clone(),
             });

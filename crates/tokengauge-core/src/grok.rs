@@ -176,17 +176,27 @@ fn parse_grpc_web_response(
         .min_by(|a, b| a.path.len().cmp(&b.path.len()).then(a.order.cmp(&b.order)))
         .map(|f| f.value as f64);
 
+    // The reset timestamp is the varint at protobuf path [1, 5, 1]; prefer it so
+    // an unrelated future-epoch varint elsewhere can't be mistaken for the reset.
+    // Fall back to the earliest plausible future epoch when that field is absent.
+    let as_future_epoch = |value: u64| {
+        (1_700_000_000..=2_100_000_000)
+            .contains(&value)
+            .then(|| Utc.timestamp_opt(value as i64, 0).single())
+            .flatten()
+            .filter(|dt| *dt > now)
+    };
     let resets_at = scan
         .varints
         .iter()
-        .filter_map(|v| {
-            (1_700_000_000..=2_100_000_000)
-                .contains(v)
-                .then(|| Utc.timestamp_opt(*v as i64, 0).single())
-                .flatten()
+        .find(|f| f.path == [1, 5, 1])
+        .and_then(|f| as_future_epoch(f.value))
+        .or_else(|| {
+            scan.varints
+                .iter()
+                .filter_map(|f| as_future_epoch(f.value))
+                .min()
         })
-        .filter(|dt| *dt > now)
-        .min()
         .map(|dt| dt.to_rfc3339());
 
     // proto3 omits a zeroed percent field, so a percent-less snapshot is only a
@@ -255,7 +265,7 @@ fn grpc_web_trailer_status(data: &[u8]) -> Option<u16> {
 #[derive(Default)]
 struct ProtoScan {
     fixed32: Vec<Fixed32Field>,
-    varints: Vec<u64>,
+    varints: Vec<VarintField>,
     order: usize,
 }
 
@@ -263,6 +273,11 @@ struct Fixed32Field {
     path: Vec<u64>,
     value: f32,
     order: usize,
+}
+
+struct VarintField {
+    path: Vec<u64>,
+    value: u64,
 }
 
 impl ProtoScan {
@@ -293,7 +308,7 @@ impl ProtoScan {
         wire: u64,
     ) -> Option<usize> {
         match wire {
-            0 => self.scan_varint(data, i),
+            0 => self.scan_varint(data, i, path),
             2 => self.scan_length_delimited(data, i, path, depth),
             5 => self.scan_fixed32(data, i, path),
             1 => i.checked_add(8),
@@ -301,9 +316,12 @@ impl ProtoScan {
         }
     }
 
-    fn scan_varint(&mut self, data: &[u8], i: usize) -> Option<usize> {
+    fn scan_varint(&mut self, data: &[u8], i: usize, path: &[u64]) -> Option<usize> {
         let (value, next) = read_varint(data, i)?;
-        self.varints.push(value);
+        self.varints.push(VarintField {
+            path: path.to_vec(),
+            value,
+        });
         Some(next)
     }
 
@@ -589,6 +607,48 @@ mod tests {
             Err(e) => e.to_string(),
         };
         assert!(err.contains("no usable data"), "{err}");
+    }
+
+    #[test]
+    fn prefers_reset_field_path() {
+        fn varint(mut v: u64) -> Vec<u8> {
+            let mut out = Vec::new();
+            loop {
+                let b = (v & 0x7f) as u8;
+                v >>= 7;
+                if v != 0 {
+                    out.push(b | 0x80);
+                } else {
+                    out.push(b);
+                    break;
+                }
+            }
+            out
+        }
+        fn frame(payload: &[u8]) -> Vec<u8> {
+            let mut out = vec![0u8];
+            out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            out.extend_from_slice(payload);
+            out
+        }
+        // Reset epoch (later) nested at path [1, 5, 1].
+        let mut inner = vec![0x08]; // field 1, wire 0 (varint)
+        inner.extend(varint(2_000_000_000));
+        let mut mid = vec![0x2A]; // field 5, wire 2 (message)
+        mid.extend(varint(inner.len() as u64));
+        mid.extend_from_slice(&inner);
+        let mut payload = vec![0x0A]; // field 1, wire 2 (message)
+        payload.extend(varint(mid.len() as u64));
+        payload.extend_from_slice(&mid);
+        // Unrelated earlier future epoch at top-level field 9.
+        payload.push(0x48); // field 9, wire 0 (varint)
+        payload.extend(varint(1_800_000_000));
+
+        let billing = parse_grpc_web_response(&frame(&payload), Some(0), Utc::now()).unwrap();
+        assert!(
+            billing.resets_at.unwrap().starts_with("2033"),
+            "should prefer the [1, 5, 1] reset field over an unrelated epoch"
+        );
     }
 
     #[test]

@@ -219,19 +219,19 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
     // secondary, the shorter token quota (5-hour) tertiary. Only limits that map
     // to a usable window take a slot, so an unusable limit can't occupy one and
     // no usable window is dropped.
-    let mut tokens: Vec<&Limit> = limits.iter().filter(|l| is_token_limit(l)).collect();
+    let mut tokens: Vec<&Limit> = limits
+        .iter()
+        .filter(|l| is_token_limit(l) && to_window(l).is_some())
+        .collect();
     tokens.sort_by_key(|l| std::cmp::Reverse(window_minutes(l).unwrap_or(0)));
-
-    let primary_token = tokens.first().copied();
-    let remaining_tokens: Vec<&Limit> = tokens.iter().skip(1).copied().collect();
     let time_limit = limits
         .iter()
         .find(|l| !is_token_limit(l) && to_window(l).is_some());
 
     let mut ordered: Vec<&Limit> = Vec::new();
-    ordered.extend(primary_token);
+    ordered.extend(tokens.first().copied());
     ordered.extend(time_limit);
-    ordered.extend(remaining_tokens);
+    ordered.extend(tokens.iter().skip(1).copied());
     for l in &limits {
         if to_window(l).is_some() && !ordered.iter().any(|o| std::ptr::eq(*o, l)) {
             ordered.push(l);
@@ -377,6 +377,22 @@ mod tests {
         assert_eq!(usage.primary.unwrap().used_percent, Some(80));
         assert_eq!(usage.secondary.unwrap().used_percent, Some(10));
         assert_eq!(usage.tertiary.unwrap().used_percent, Some(30));
+    }
+
+    #[test]
+    fn unusable_longest_token_does_not_take_primary_slot() {
+        let body = resp(
+            r#"{"code": 0, "data": {"limits": [
+                {"type": "TOKENS_LIMIT", "unit": 6, "number": 1},
+                {"type": "TOKENS_LIMIT", "percentage": 40, "unit": 3, "number": 5},
+                {"type": "TIME_LIMIT", "percentage": 10, "unit": 1, "number": 30}
+            ]}}"#,
+        );
+        let usage = to_payload(body, Utc::now()).unwrap().usage.unwrap();
+        // Unusable longest token is skipped: shorter token primary, time secondary.
+        assert_eq!(usage.primary.unwrap().used_percent, Some(40));
+        assert_eq!(usage.secondary.unwrap().used_percent, Some(10));
+        assert!(usage.tertiary.is_none());
     }
 
     #[test]

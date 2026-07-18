@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Brand SVG logos for Kimi, Grok, and GLM in the popover / Plasma tab strips.
 - `--doctor` now covers every supported provider: per-enabled-provider credential status (file or env key, including GLM's `Z_AI_API_KEY`), a sign-in CLI-on-PATH check when credentials are missing, a list of available-but-disabled providers, and a labeled live-fetch result per enabled provider.
 
+## [0.12.0] - 2026-07-18
+
+### Added
+
+- **Pace tracking**: the session and weekly windows compute whether you're burning quota faster (deficit) or slower (reserve) than an even-consumption rate, plus a projected run-out. Shown as a `+8%` / `-3%` badge in the Waybar tooltip, TUI, popover, and Plasma applet (hidden until 3% of the window has elapsed).
+
+## [0.11.1] - 2026-07-18
+
+### Fixed
+
+- Threshold notifications no longer spam when a usage window resets. Roll-over is now detected from the window's `resets_at` timestamp advancing, not a fragile "percent dropped 10 points" heuristic - which mis-fired when a freshly-reset window briefly reported a stale-high percent, or when the value wobbled near the top and cleared + re-fired the one-shot guard on every poll. An already-notified threshold fires again only after the window genuinely rolls over.
+
 ## [0.11.0] - 2026-07-16
 
 Usage limits are now fetched natively - no external CodexBar CLI.

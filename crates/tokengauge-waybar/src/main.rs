@@ -13,13 +13,13 @@ use serde::Serialize;
 use tokengauge_core::update;
 use tokengauge_core::{
     CostInfo, ExtraWindowRow, FetchResult, ProviderFetchError, ProviderPayload, ProviderRow, Theme,
-    TokenGaugeConfig, WaybarState, WaybarWindow, config_set_oauth_provider, config_set_primary,
-    ensure_cache_dir, fetch_all_providers, format_tokens, format_updated_relative, load_config,
-    notify_state_path, payload_to_rows_with_costs, provider_icon, provider_icon_svg_path,
-    provider_label, read_cache_full, read_notify_state, read_waybar_state, refresh_in_progress,
-    refresh_sentinel_deadline_ms, refresh_sentinel_path, retain_enabled, signal_daemon_reload,
-    theme, thresholds_to_fire, waybar_state_path, window_labels, write_cache_full,
-    write_default_config, write_notify_state, write_waybar_state,
+    TokenGaugeConfig, UsagePace, WaybarState, WaybarWindow, config_set_oauth_provider,
+    config_set_primary, ensure_cache_dir, fetch_all_providers, format_tokens,
+    format_updated_relative, load_config, notify_state_path, payload_to_rows_with_costs,
+    provider_icon, provider_icon_svg_path, provider_label, read_cache_full, read_notify_state,
+    read_waybar_state, refresh_in_progress, refresh_sentinel_deadline_ms, refresh_sentinel_path,
+    retain_enabled, signal_daemon_reload, theme, thresholds_to_fire, waybar_state_path,
+    window_labels, write_cache_full, write_default_config, write_notify_state, write_waybar_state,
 };
 
 fn theme_palette() -> (
@@ -367,6 +367,12 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
                 );
                 map.insert("glyph".into(), icon.glyph.into());
                 map.insert("color".into(), icon.color_hex.into());
+                let pace_badge = |pace: Option<UsagePace>| {
+                    pace.map(|p| serde_json::Value::from(p.badge()))
+                        .unwrap_or(serde_json::Value::Null)
+                };
+                map.insert("session_pace".into(), pace_badge(r.session_pace));
+                map.insert("weekly_pace".into(), pace_badge(r.weekly_pace));
             }
             v
         })
@@ -514,30 +520,51 @@ fn check_and_notify(
     if !config.notifications.enabled || config.notifications.thresholds.is_empty() {
         return;
     }
-    let rows = payload_to_rows_with_costs(payloads.to_vec(), costs);
-    if rows.is_empty() {
-        return;
-    }
+    let _ = costs; // costs no longer needed here; kept for a stable signature.
 
     let path = notify_state_path(&config.cache_file);
     let mut state = read_notify_state(&path);
     let thresholds = &config.notifications.thresholds;
 
-    for row in &rows {
-        let (s_label, w_label, t_label) = tokengauge_core::window_labels(&row.provider);
-        let windows: [(&str, Option<u8>, &str, &str); 3] = [
-            ("session", row.session_used, &row.session_reset, s_label),
-            ("weekly", row.weekly_used, &row.weekly_reset, w_label),
-            ("tertiary", row.tertiary_used, &row.tertiary_reset, t_label),
+    for payload in payloads {
+        if payload.has_error() {
+            continue;
+        }
+        let Some(usage) = &payload.usage else {
+            continue;
+        };
+        let name = provider_label(&payload.provider);
+        let (s_label, w_label, t_label) = tokengauge_core::window_labels(&payload.provider);
+        // Notify off the raw windows so we can key roll-over on the actual
+        // reset timestamp instead of the formatted "in 2h" countdown string.
+        let windows = [
+            ("session", usage.primary.as_ref(), s_label),
+            ("weekly", usage.secondary.as_ref(), w_label),
+            ("tertiary", usage.tertiary.as_ref(), t_label),
         ];
-        for (slot, used_opt, reset, label) in windows {
-            let Some(pct) = used_opt else { continue };
-            let key = format!("{}:{}", row.provider.to_lowercase(), slot);
+        for (slot, window, label) in windows {
+            let Some(window) = window else { continue };
+            let Some(pct) = window.used_percent.map(|pct| pct.min(100)) else {
+                continue;
+            };
+            let source = payload.source.as_deref().unwrap_or_default();
+            let key = format!("{}:{}:{}", payload.provider.to_lowercase(), source, slot);
             let entry = state.entries.entry(key).or_default();
-            let (to_fire, new_notified) = thresholds_to_fire(pct, thresholds, &entry.notified);
+            let resets_at = window.resets_at.as_deref();
+            let (to_fire, new_notified) = thresholds_to_fire(
+                pct,
+                resets_at,
+                entry.resets_at.as_deref(),
+                thresholds,
+                &entry.notified,
+            );
             entry.notified = new_notified;
-            for threshold in to_fire {
-                fire_notification(&row.provider, label, pct, threshold, reset);
+            entry.resets_at = window.resets_at.clone();
+            if !to_fire.is_empty() {
+                let (_, _, reset_str) = tokengauge_core::format_window(Some(window.clone()));
+                for threshold in to_fire {
+                    fire_notification(name, label, pct, threshold, &reset_str);
+                }
             }
         }
     }
@@ -1929,8 +1956,13 @@ fn icon_markup(label: &str) -> String {
     )
 }
 
-fn format_provider_line(label: &str, used: Option<u8>, reset: &str) -> String {
-    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
+fn format_provider_line(
+    label: &str,
+    used: Option<u8>,
+    reset: &str,
+    pace: Option<&UsagePace>,
+) -> String {
+    let (dim, _separator, green, yellow, red, _neutral) = theme_palette();
     match used {
         Some(pct) => {
             let bar = tooltip_bar(pct);
@@ -1941,8 +1973,28 @@ fn format_provider_line(label: &str, used: Option<u8>, reset: &str) -> String {
             } else {
                 format!("resets {}", pango_escape(reset))
             };
+            let pace_part = match pace {
+                Some(pace) => {
+                    let pace_color = if pace.stage.is_ahead() {
+                        if pace.delta_percent.abs() > 6.0 {
+                            red
+                        } else {
+                            yellow
+                        }
+                    } else if pace.stage.is_behind() {
+                        green
+                    } else {
+                        dim
+                    };
+                    format!(
+                        "  <span foreground=\"{pace_color}\">· {}</span>",
+                        pango_escape(&pace.badge())
+                    )
+                }
+                None => String::new(),
+            };
             format!(
-                "  {label:<16}  [<span foreground=\"{color}\">{bar}</span>]  <span foreground=\"{color}\">{pct_cell}</span>   {reset_part}"
+                "  {label:<16}  [<span foreground=\"{color}\">{bar}</span>]  <span foreground=\"{color}\">{pct_cell}</span>   {reset_part}{pace_part}"
             )
         }
         None => {
@@ -2089,14 +2141,17 @@ fn format_provider_card(row: &ProviderRow) -> String {
             session_label,
             row.session_used,
             &row.session_reset,
+            row.session_pace.as_ref(),
         )),
         Some(format_provider_line(
             weekly_label,
             row.weekly_used,
             &row.weekly_reset,
+            row.weekly_pace.as_ref(),
         )),
-        (row.tertiary_used.is_some() || row.tertiary_reset != "—")
-            .then(|| format_provider_line(tertiary_label, row.tertiary_used, &row.tertiary_reset)),
+        (row.tertiary_used.is_some() || row.tertiary_reset != "—").then(|| {
+            format_provider_line(tertiary_label, row.tertiary_used, &row.tertiary_reset, None)
+        }),
     ];
 
     let extras_section: Vec<String> = if row.extra_windows.is_empty() {
@@ -2320,9 +2375,11 @@ mod tests {
             session_used: Some(67),
             session_window_minutes: Some(300),
             session_reset: "in 2h 34m".to_string(),
+            session_pace: None,
             weekly_used: Some(19),
             weekly_window_minutes: Some(10080),
             weekly_reset: "in 4d 11h".to_string(),
+            weekly_pace: None,
             tertiary_used: None,
             tertiary_reset: "—".to_string(),
             credits: "—".to_string(),

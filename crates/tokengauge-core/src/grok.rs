@@ -129,25 +129,25 @@ fn parse_grpc_web_response(
     header_status: Option<u16>,
     now: DateTime<Utc>,
 ) -> Result<Billing> {
+    // A gRPC status (trailer frame or HTTP header) is authoritative whenever
+    // present: reject a non-zero status before trusting any body.
+    let status = grpc_web_trailer_status(data).or(header_status);
+    match status {
+        Some(16) => return Err(anyhow!("Grok unauthorized - run `grok login`")),
+        Some(code) if code != 0 => return Err(anyhow!("Grok billing gRPC status {code}")),
+        _ => {}
+    }
+
     let frames = grpc_web_data_frames(data);
-    let messages: Vec<&[u8]> = if frames.is_empty() {
-        // No gRPC-Web framing: treat the whole body as a raw protobuf message.
-        // A bare protobuf body carries no trailer/status frame to check.
-        if data.is_empty() {
-            return Err(anyhow!("Grok billing returned no payload"));
-        }
-        vec![data]
-    } else {
-        // Framed response: gRPC-Web signals completion with grpc-status: 0 in the
-        // trailer (or the HTTP header for unary calls). A framed reply carrying
-        // neither is incomplete, so never treat its frames as billing data.
-        match grpc_web_trailer_status(data).or(header_status) {
-            None => return Err(anyhow!("Grok billing missing gRPC status")),
-            Some(16) => return Err(anyhow!("Grok unauthorized - run `grok login`")),
-            Some(code) if code != 0 => return Err(anyhow!("Grok billing gRPC status {code}")),
-            Some(_) => {}
-        }
-        frames.iter().map(Vec::as_slice).collect()
+    let messages: Vec<&[u8]> = match (frames.is_empty(), status) {
+        // Framed success: grpc-status: 0 was signalled.
+        (false, Some(_)) => frames.iter().map(Vec::as_slice).collect(),
+        // Framed reply with no status is incomplete - never trust its frames.
+        (false, None) => return Err(anyhow!("Grok billing missing gRPC status")),
+        // No framing and no status: treat the whole body as a raw protobuf message.
+        (true, None) if !data.is_empty() => vec![data],
+        // Empty body, or a status with no data frames: no usable payload.
+        _ => return Err(anyhow!("Grok billing returned no payload")),
     };
 
     let mut scan = ProtoScan::default();
@@ -548,5 +548,17 @@ mod tests {
         data.extend_from_slice(&37.0f32.to_le_bytes());
         let billing = parse_grpc_web_response(&data, None, Utc::now()).unwrap();
         assert_eq!(billing.used_percent, 37);
+    }
+
+    #[test]
+    fn raw_body_with_error_status_is_rejected() {
+        // A bare body carrying grpc-status: 16 must not be accepted as 0% usage.
+        let mut data = vec![0x0D];
+        data.extend_from_slice(&37.0f32.to_le_bytes());
+        let err = match parse_grpc_web_response(&data, Some(16), Utc::now()) {
+            Ok(_) => panic!("expected error status to be rejected"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("unauthorized"), "{err}");
     }
 }

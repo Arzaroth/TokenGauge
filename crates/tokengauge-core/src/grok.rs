@@ -124,14 +124,19 @@ struct Billing {
     resets_at: Option<String>,
 }
 
-fn parse_grpc_web_response(data: &[u8], now: DateTime<Utc>) -> Result<Billing> {
-    if let Some(code) = grpc_web_trailer_status(data) {
-        if code == 16 {
-            return Err(anyhow!("Grok unauthorized - run `grok login`"));
-        }
-        if code != 0 {
-            return Err(anyhow!("Grok billing gRPC status {code}"));
-        }
+fn parse_grpc_web_response(
+    data: &[u8],
+    header_status: Option<u16>,
+    now: DateTime<Utc>,
+) -> Result<Billing> {
+    // gRPC-Web signals completion with grpc-status: 0 in the trailer frame (or
+    // the HTTP header for unary calls). A reply carrying neither is incomplete,
+    // so never treat its frames as billing data.
+    match grpc_web_trailer_status(data).or(header_status) {
+        None => return Err(anyhow!("Grok billing missing gRPC status")),
+        Some(16) => return Err(anyhow!("Grok unauthorized - run `grok login`")),
+        Some(code) if code != 0 => return Err(anyhow!("Grok billing gRPC status {code}")),
+        Some(_) => {}
     }
 
     let frames = grpc_web_data_frames(data);
@@ -384,23 +389,15 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         return Err(anyhow!("Grok billing HTTP {}", status.as_u16()));
     }
 
-    // gRPC carries its own status; 16 = unauthenticated.
-    let grpc_status = resp
+    // gRPC carries its own status (HTTP header for unary, else the trailer frame).
+    let header_status = resp
         .headers()
         .get("grpc-status")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u16>().ok());
-    if let Some(code) = grpc_status {
-        if code == 16 {
-            return Err(anyhow!("Grok unauthorized - run `grok login`"));
-        }
-        if code != 0 {
-            return Err(anyhow!("Grok billing gRPC status {code}"));
-        }
-    }
 
     let bytes = resp.bytes().context("Grok billing read failed")?;
-    let billing = parse_grpc_web_response(&bytes, now)?;
+    let billing = parse_grpc_web_response(&bytes, header_status, now)?;
     Ok(vec![to_payload(billing, creds.login_method, now)])
 }
 
@@ -447,11 +444,22 @@ mod tests {
             len as u8,
         ]);
         data.extend_from_slice(trailer);
-        let err = match parse_grpc_web_response(&data, Utc::now()) {
+        let err = match parse_grpc_web_response(&data, None, Utc::now()) {
             Ok(_) => panic!("expected non-zero trailer status to error"),
             Err(e) => e.to_string(),
         };
         assert!(err.contains("unauthorized"), "{err}");
+    }
+
+    #[test]
+    fn missing_grpc_status_is_rejected() {
+        // A lone data frame with no trailer and no header status is incomplete.
+        let data = [0u8, 0, 0, 0, 1, 42];
+        let err = match parse_grpc_web_response(&data, None, Utc::now()) {
+            Ok(_) => panic!("expected missing gRPC status to error"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("missing gRPC status"), "{err}");
     }
 
     #[test]
@@ -482,7 +490,7 @@ mod tests {
         payload.push(0x28); // field 5, wire type 0 (varint)
         payload.extend(varint(2_000_000_000)); // future unix seconds
 
-        let billing = parse_grpc_web_response(&frame(&payload), Utc::now()).unwrap();
+        let billing = parse_grpc_web_response(&frame(&payload), Some(0), Utc::now()).unwrap();
         assert_eq!(billing.used_percent, 42);
         assert!(billing.resets_at.is_some());
     }

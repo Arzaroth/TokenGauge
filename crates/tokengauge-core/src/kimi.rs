@@ -241,16 +241,14 @@ fn to_payload(
 ) -> Result<ProviderPayload> {
     // Primary = the weekly coding quota; secondary = the first rolling rate limit.
     let primary = to_window(&resp.usage, Some(10080));
-    let secondary = resp
-        .limits
-        .as_ref()
-        .and_then(|limits| limits.first())
-        .and_then(|limit| {
+    let secondary = resp.limits.as_ref().and_then(|limits| {
+        limits.iter().find_map(|limit| {
             to_window(
                 &limit.detail,
                 limit.window.as_ref().and_then(window_minutes),
             )
-        });
+        })
+    });
 
     // An all-empty snapshot must be an error so the stale-cache fallback keeps
     // the last-good number instead of rendering a blank row.
@@ -315,7 +313,14 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Err(anyhow!("Kimi unauthorized - run `kimi` to log in"));
+        // The API key keeps precedence over the CLI file, so point the user at
+        // whichever source actually supplied the rejected token.
+        let hint = if auth.source == "code-api" {
+            "check KIMI_CODE_API_KEY"
+        } else {
+            "run `kimi` to log in"
+        };
+        return Err(anyhow!("Kimi unauthorized - {hint}"));
     }
     if status == reqwest::StatusCode::FORBIDDEN {
         return Err(anyhow!(

@@ -368,7 +368,8 @@ provider (it does not create provider rows on its own).
 
 - **Sign in to the providers you enable** so TokenGauge can read their
   credentials and fetch usage natively: `codex` / `claude` (OAuth CLIs), `kimi`
-  or `KIMI_CODE_API_KEY`, `grok login`, and `Z_AI_API_KEY` for GLM.
+  or `KIMI_CODE_API_KEY`, `grok login`, and `Z_AI_API_KEY` (legacy
+  `ZAI_API_TOKEN`) for GLM.
 - *(Optional)* **[Node.js](https://nodejs.org/)** (or [Bun](https://bun.sh/)) -
   lets `ccusage` add **cost/token** detail to those rows. TokenGauge auto-detects
   `ccusage`, then `bunx ccusage`, then `npx --yes ccusage` on your `PATH`

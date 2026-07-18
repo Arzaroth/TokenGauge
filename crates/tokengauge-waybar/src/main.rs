@@ -938,10 +938,17 @@ fn handle_doctor(config_path: &Path) -> i32 {
         // The definitive check: a live fetch per enabled provider.
         let result = fetch_all_providers(&cfg);
         for payload in &result.payloads {
+            // A stale payload is last-good cache served because the live fetch
+            // failed - report it as not-ok so --doctor doesn't read as success.
+            let detail = payload.source.clone().unwrap_or_default();
             record(DoctorCheck {
                 label: format!("live fetch {}", payload.provider),
-                ok: true,
-                detail: payload.source.clone().unwrap_or_default(),
+                ok: !payload.stale,
+                detail: if payload.stale {
+                    format!("{detail} (stale cache - live fetch failed)")
+                } else {
+                    detail
+                },
             });
         }
         for err in &result.errors {

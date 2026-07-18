@@ -1559,6 +1559,12 @@ pub fn thresholds_to_fire(
     notified: &[u8],
 ) -> (Vec<u8>, Vec<u8>) {
     let mut current = notified.to_vec();
+    let pct_drop = || {
+        current
+            .iter()
+            .max()
+            .is_some_and(|&max_notified| pct.saturating_add(10) < max_notified)
+    };
     let rolled_over = match (resets_at, prev_resets_at) {
         // Only a strictly forward move is a new window. A stale/older payload
         // must not clear the guard, else the real timestamp returns next poll
@@ -1568,15 +1574,13 @@ pub fn thresholds_to_fire(
             DateTime::parse_from_rfc3339(prev),
         ) {
             (Ok(now), Ok(prev)) => now > prev,
-            _ => now != prev,
+            // Malformed timestamp: treat as unavailable, fall back to heuristic.
+            _ => pct_drop(),
         },
         // First time we see a timestamp for this window: not a roll-over.
         (Some(_), None) => false,
         // No timestamp available: legacy pct-drop heuristic.
-        (None, _) => current
-            .iter()
-            .max()
-            .is_some_and(|&max_notified| pct.saturating_add(10) < max_notified),
+        (None, _) => pct_drop(),
     };
     if rolled_over {
         current.clear();
@@ -3186,6 +3190,32 @@ mod tests {
         );
         assert!(fire.is_empty(), "older timestamp must not re-fire");
         assert_eq!(notified, vec![50, 80, 95]);
+    }
+
+    #[test]
+    fn thresholds_to_fire_malformed_timestamp_falls_back_to_heuristic() {
+        // A malformed resets_at must be treated as unavailable: no clearing on
+        // the raw inequality. With a still-high percent the guard holds.
+        let (fire, notified) = thresholds_to_fire(
+            100,
+            Some("not-a-date"),
+            Some("2026-07-20T00:00:00Z"),
+            &[50, 80, 95],
+            &[50, 80, 95],
+        );
+        assert!(fire.is_empty(), "malformed timestamp must not re-fire");
+        assert_eq!(notified, vec![50, 80, 95]);
+
+        // Same malformed input but a dropped percent: legacy heuristic rolls it.
+        let (fire, notified) = thresholds_to_fire(
+            60,
+            Some("not-a-date"),
+            Some("2026-07-20T00:00:00Z"),
+            &[50, 80, 95],
+            &[50, 80, 95],
+        );
+        assert_eq!(fire, vec![50]);
+        assert_eq!(notified, vec![50]);
     }
 
     #[test]

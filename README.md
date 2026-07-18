@@ -323,7 +323,7 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
    claude = true
    # kimi = true   # reads the `kimi` CLI token or KIMI_CODE_API_KEY
    # grok = true   # reads the `grok login` token
-   # glm = true    # reads Z_AI_API_KEY
+   # glm = true    # reads Z_AI_API_KEY (legacy ZAI_API_TOKEN)
 
    [waybar]
    window = "daily"
@@ -344,7 +344,7 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
    - **Codex**: run `codex`; **Claude**: run `claude` (reads their OAuth credentials).
    - **Kimi**: run `kimi` to sign in, or set `KIMI_CODE_API_KEY`.
    - **Grok**: run `grok login`.
-   - **GLM**: set `Z_AI_API_KEY` (add `Z_AI_API_HOST=open.bigmodel.cn` for the China BigModel region, or `Z_AI_QUOTA_URL` to override the full quota endpoint).
+   - **GLM**: set `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`; add `Z_AI_API_HOST=open.bigmodel.cn` for the China BigModel region, or `Z_AI_QUOTA_URL` to override the full quota endpoint).
 
    Optionally install [ccusage](https://github.com/ryoppippi/ccusage) globally (`npm i -g ccusage` or `bun i -g ccusage`) for faster cost fetches.
 

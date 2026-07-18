@@ -1497,6 +1497,10 @@ pub struct NotifyState {
 pub struct NotifyEntry {
     #[serde(default)]
     pub notified: Vec<u8>,
+    /// The window's reset timestamp when we last fired. A change means the
+    /// window rolled over, which clears the one-shot guard.
+    #[serde(default)]
+    pub resets_at: Option<String>,
 }
 
 /// Cached result of the last GitHub release check. Written by the waybar
@@ -1565,17 +1569,52 @@ pub fn write_notify_state(path: &Path, state: &NotifyState) -> Result<()> {
         .with_context(|| format!("failed to write notify state {}", path.display()))
 }
 
-/// Pure decision logic: given current pct and previously-notified thresholds,
-/// returns (thresholds_to_fire, updated_notified_list).
+/// Pure decision logic: given the current pct, the window's reset timestamp,
+/// and the previously-notified thresholds, returns (thresholds_to_fire,
+/// updated_notified_list).
 ///
-/// Reset: if pct dropped 10+ points below the highest previously-notified
-/// threshold, treat as window roll-over and clear the notified list before
-/// considering thresholds. Avoids needing to track raw reset timestamps.
-pub fn thresholds_to_fire(pct: u8, thresholds: &[u8], notified: &[u8]) -> (Vec<u8>, Vec<u8>) {
+/// Window roll-over clears the one-shot guard so the new window can alert
+/// again. The reset timestamp is the reliable signal: when `resets_at` advances
+/// to a new value the window rolled. Only when a provider gives no timestamp do
+/// we fall back to the legacy heuristic (pct fell 10+ points below the highest
+/// fired threshold) - which mis-fires when a fresh window briefly reports a
+/// stale-high percent, or when the value wobbles near the top and clears + re-
+/// fires on every poll, spamming alerts.
+pub fn thresholds_to_fire(
+    pct: u8,
+    resets_at: Option<&str>,
+    prev_resets_at: Option<&str>,
+    thresholds: &[u8],
+    notified: &[u8],
+) -> (Vec<u8>, Vec<u8>) {
     let mut current = notified.to_vec();
-    if let Some(&max_notified) = current.iter().max()
-        && pct.saturating_add(10) < max_notified
-    {
+    let pct_drop = || {
+        current
+            .iter()
+            .max()
+            .is_some_and(|&max_notified| pct.saturating_add(10) < max_notified)
+    };
+    let rolled_over = match (resets_at, prev_resets_at) {
+        // Only a strictly forward move is a new window. A stale/older payload
+        // must not clear the guard, else the real timestamp returns next poll
+        // and notifications re-fire.
+        (Some(now), Some(prev)) => match (
+            DateTime::parse_from_rfc3339(now),
+            DateTime::parse_from_rfc3339(prev),
+        ) {
+            (Ok(now), Ok(prev)) => now > prev,
+            // Malformed timestamp: treat as unavailable, fall back to heuristic.
+            _ => pct_drop(),
+        },
+        // First time we see a timestamp for this window: not a roll-over -
+        // unless it is malformed, then treat it as unavailable.
+        (Some(now), None) => DateTime::parse_from_rfc3339(now)
+            .map(|_| false)
+            .unwrap_or_else(|_| pct_drop()),
+        // No timestamp available: legacy pct-drop heuristic.
+        (None, _) => pct_drop(),
+    };
+    if rolled_over {
         current.clear();
     }
     let mut sorted = thresholds.to_vec();
@@ -3094,54 +3133,142 @@ mod tests {
 
     #[test]
     fn thresholds_to_fire_below_no_trigger() {
-        let (fire, notified) = thresholds_to_fire(40, &[50, 80, 95], &[]);
+        let (fire, notified) = thresholds_to_fire(40, None, None, &[50, 80, 95], &[]);
         assert!(fire.is_empty());
         assert!(notified.is_empty());
     }
 
     #[test]
     fn thresholds_to_fire_crosses_50_once() {
-        let (fire, notified) = thresholds_to_fire(55, &[50, 80, 95], &[]);
+        let (fire, notified) = thresholds_to_fire(55, None, None, &[50, 80, 95], &[]);
         assert_eq!(fire, vec![50]);
         assert_eq!(notified, vec![50]);
     }
 
     #[test]
     fn thresholds_to_fire_already_notified_50_now_at_60() {
-        let (fire, notified) = thresholds_to_fire(60, &[50, 80, 95], &[50]);
+        let (fire, notified) = thresholds_to_fire(60, None, None, &[50, 80, 95], &[50]);
         assert!(fire.is_empty());
         assert_eq!(notified, vec![50]);
     }
 
     #[test]
     fn thresholds_to_fire_jumps_past_two() {
-        let (fire, notified) = thresholds_to_fire(82, &[50, 80, 95], &[]);
+        let (fire, notified) = thresholds_to_fire(82, None, None, &[50, 80, 95], &[]);
         assert_eq!(fire, vec![50, 80]);
         assert_eq!(notified, vec![50, 80]);
     }
 
     #[test]
     fn thresholds_to_fire_resets_on_pct_drop() {
-        // notified up to 80, but pct dropped to 5 (window rolled over)
-        let (fire, notified) = thresholds_to_fire(5, &[50, 80, 95], &[50, 80]);
+        // No timestamp: legacy heuristic. notified up to 80, pct dropped to 5.
+        let (fire, notified) = thresholds_to_fire(5, None, None, &[50, 80, 95], &[50, 80]);
         assert!(fire.is_empty());
         assert!(notified.is_empty(), "drop below 80-10=70 must clear");
     }
 
     #[test]
     fn thresholds_to_fire_resets_then_recrosses() {
-        // dropped to 0, then climbed to 60
-        let (fire, notified) = thresholds_to_fire(60, &[50, 80, 95], &[50, 80]);
+        // No timestamp: dropped to 0, then climbed to 60.
+        let (fire, notified) = thresholds_to_fire(60, None, None, &[50, 80, 95], &[50, 80]);
         assert_eq!(fire, vec![50]);
         assert_eq!(notified, vec![50]);
     }
 
     #[test]
     fn thresholds_to_fire_small_fluctuation_no_reset() {
-        // notified 80, pct dipped to 75 (within 10) - shouldn't reset
-        let (fire, notified) = thresholds_to_fire(75, &[50, 80], &[50, 80]);
+        // No timestamp: notified 80, pct dipped to 75 (within 10) - no reset.
+        let (fire, notified) = thresholds_to_fire(75, None, None, &[50, 80], &[50, 80]);
         assert!(fire.is_empty());
         assert_eq!(notified, vec![50, 80]);
+    }
+
+    #[test]
+    fn thresholds_to_fire_same_reset_no_respam_on_wobble() {
+        // Same window (same resets_at). A stale-high or wobbling percent must
+        // NOT re-fire an already-notified threshold - this is the spam bug.
+        let rat = Some("2026-07-20T00:00:00Z");
+        let (fire, notified) = thresholds_to_fire(100, rat, rat, &[50, 80, 95], &[50, 80, 95]);
+        assert!(fire.is_empty(), "same window must not re-fire");
+        assert_eq!(notified, vec![50, 80, 95]);
+    }
+
+    #[test]
+    fn thresholds_to_fire_new_reset_clears_and_refires() {
+        // The window rolled over (resets_at advanced). The one-shot guard clears
+        // so the fresh window can alert again from a genuinely high percent.
+        let (fire, notified) = thresholds_to_fire(
+            96,
+            Some("2026-07-27T00:00:00Z"),
+            Some("2026-07-20T00:00:00Z"),
+            &[50, 80, 95],
+            &[50, 80, 95],
+        );
+        assert_eq!(fire, vec![50, 80, 95]);
+        assert_eq!(notified, vec![50, 80, 95]);
+    }
+
+    #[test]
+    fn thresholds_to_fire_stale_older_timestamp_no_clear() {
+        // A stale payload reports an OLDER resets_at than what we last saw. It
+        // must not clear the guard - otherwise the real timestamp returns on
+        // the next poll and every already-notified threshold re-fires.
+        let (fire, notified) = thresholds_to_fire(
+            100,
+            Some("2026-07-13T00:00:00Z"),
+            Some("2026-07-20T00:00:00Z"),
+            &[50, 80, 95],
+            &[50, 80, 95],
+        );
+        assert!(fire.is_empty(), "older timestamp must not re-fire");
+        assert_eq!(notified, vec![50, 80, 95]);
+    }
+
+    #[test]
+    fn thresholds_to_fire_malformed_timestamp_falls_back_to_heuristic() {
+        // A malformed resets_at must be treated as unavailable: no clearing on
+        // the raw inequality. With a still-high percent the guard holds.
+        let (fire, notified) = thresholds_to_fire(
+            100,
+            Some("not-a-date"),
+            Some("2026-07-20T00:00:00Z"),
+            &[50, 80, 95],
+            &[50, 80, 95],
+        );
+        assert!(fire.is_empty(), "malformed timestamp must not re-fire");
+        assert_eq!(notified, vec![50, 80, 95]);
+
+        // Same malformed input but a dropped percent: legacy heuristic rolls it.
+        let (fire, notified) = thresholds_to_fire(
+            60,
+            Some("not-a-date"),
+            Some("2026-07-20T00:00:00Z"),
+            &[50, 80, 95],
+            &[50, 80, 95],
+        );
+        assert_eq!(fire, vec![50]);
+        assert_eq!(notified, vec![50]);
+
+        // Malformed with no prev (legacy state has no resets_at): a dropped
+        // percent must still roll over via the heuristic, not stay guarded.
+        let (fire, notified) =
+            thresholds_to_fire(60, Some("not-a-date"), None, &[50, 80, 95], &[50, 80, 95]);
+        assert_eq!(fire, vec![50]);
+        assert_eq!(notified, vec![50]);
+    }
+
+    #[test]
+    fn thresholds_to_fire_first_timestamp_sighting_no_clear() {
+        // First time we see a timestamp (prev None) is not a roll-over.
+        let (fire, notified) = thresholds_to_fire(
+            96,
+            Some("2026-07-20T00:00:00Z"),
+            None,
+            &[50, 80, 95],
+            &[50, 80, 95],
+        );
+        assert!(fire.is_empty());
+        assert_eq!(notified, vec![50, 80, 95]);
     }
 
     #[test]

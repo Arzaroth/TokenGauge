@@ -1577,8 +1577,11 @@ pub fn thresholds_to_fire(
             // Malformed timestamp: treat as unavailable, fall back to heuristic.
             _ => pct_drop(),
         },
-        // First time we see a timestamp for this window: not a roll-over.
-        (Some(_), None) => false,
+        // First time we see a timestamp for this window: not a roll-over -
+        // unless it is malformed, then treat it as unavailable.
+        (Some(now), None) => DateTime::parse_from_rfc3339(now)
+            .map(|_| false)
+            .unwrap_or_else(|_| pct_drop()),
         // No timestamp available: legacy pct-drop heuristic.
         (None, _) => pct_drop(),
     };
@@ -3214,6 +3217,13 @@ mod tests {
             &[50, 80, 95],
             &[50, 80, 95],
         );
+        assert_eq!(fire, vec![50]);
+        assert_eq!(notified, vec![50]);
+
+        // Malformed with no prev (legacy state has no resets_at): a dropped
+        // percent must still roll over via the heuristic, not stay guarded.
+        let (fire, notified) =
+            thresholds_to_fire(60, Some("not-a-date"), None, &[50, 80, 95], &[50, 80, 95]);
         assert_eq!(fire, vec![50]);
         assert_eq!(notified, vec![50]);
     }

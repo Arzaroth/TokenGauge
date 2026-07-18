@@ -1019,9 +1019,11 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
     let mut weekly_pace = None;
 
     if let Some(usage) = payload.usage {
-        let now = Utc::now();
-        session_pace = usage.primary.as_ref().and_then(|w| window_pace(w, now));
-        weekly_pace = usage.secondary.as_ref().and_then(|w| window_pace(w, now));
+        if !payload.stale {
+            let now = Utc::now();
+            session_pace = usage.primary.as_ref().and_then(|w| window_pace(w, now));
+            weekly_pace = usage.secondary.as_ref().and_then(|w| window_pace(w, now));
+        }
 
         let (s_used, s_win, s_reset) = format_window(usage.primary);
         session_used = s_used;

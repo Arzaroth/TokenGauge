@@ -477,7 +477,10 @@ fn render_usage(frame: &mut Frame, area: Rect, row: &ProviderRow) {
                 } else {
                     dim()
                 };
-                spans.push(Span::styled(format!(" · {badge}"), Style::default().fg(color)));
+                spans.push(Span::styled(
+                    format!(" · {badge}"),
+                    Style::default().fg(color),
+                ));
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), trail_area);
         }

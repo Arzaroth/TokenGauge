@@ -14,13 +14,12 @@ use tokengauge_core::update;
 use tokengauge_core::{
     CostInfo, ExtraWindowRow, FetchResult, ProviderFetchError, ProviderPayload, ProviderRow, Theme,
     TokenGaugeConfig, UsagePace, WaybarState, WaybarWindow, config_set_oauth_provider,
-    config_set_primary,
-    ensure_cache_dir, fetch_all_providers, format_tokens, format_updated_relative, load_config,
-    notify_state_path, payload_to_rows_with_costs, provider_icon, provider_icon_svg_path,
-    provider_label, read_cache_full, read_notify_state, read_waybar_state, refresh_in_progress,
-    refresh_sentinel_deadline_ms, refresh_sentinel_path, retain_enabled, signal_daemon_reload,
-    theme, thresholds_to_fire, waybar_state_path, window_labels, write_cache_full,
-    write_default_config, write_notify_state, write_waybar_state,
+    config_set_primary, ensure_cache_dir, fetch_all_providers, format_tokens,
+    format_updated_relative, load_config, notify_state_path, payload_to_rows_with_costs,
+    provider_icon, provider_icon_svg_path, provider_label, read_cache_full, read_notify_state,
+    read_waybar_state, refresh_in_progress, refresh_sentinel_deadline_ms, refresh_sentinel_path,
+    retain_enabled, signal_daemon_reload, theme, thresholds_to_fire, waybar_state_path,
+    window_labels, write_cache_full, write_default_config, write_notify_state, write_waybar_state,
 };
 
 fn theme_palette() -> (
@@ -1935,7 +1934,11 @@ fn format_provider_line(
             let pace_part = match pace {
                 Some(pace) => {
                     let pace_color = if pace.stage.is_ahead() {
-                        if pace.delta_percent.abs() > 6.0 { red } else { yellow }
+                        if pace.delta_percent.abs() > 6.0 {
+                            red
+                        } else {
+                            yellow
+                        }
                     } else if pace.stage.is_behind() {
                         green
                     } else {

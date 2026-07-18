@@ -828,7 +828,14 @@ fn provider_card_contents(row: &ProviderRow) -> GBox {
     );
     idx += 1;
     if row.tertiary_used.is_some() || row.tertiary_reset != "—" {
-        push_gauge_row(&grid, idx, t_label, row.tertiary_used, &row.tertiary_reset, None);
+        push_gauge_row(
+            &grid,
+            idx,
+            t_label,
+            row.tertiary_used,
+            &row.tertiary_reset,
+            None,
+        );
         idx += 1;
     }
     for extra in &row.extra_windows {

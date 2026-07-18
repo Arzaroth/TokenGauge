@@ -16,6 +16,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **KDE Plasma 6 applet**: native panel widget (QML plasmoid) mirroring the popover - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, a 7-day chart, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
 - **Cost tracking via ccusage**: today, month, 7-day rolling, per-model split, current burn rate $/hr, 7-day chart, trend vs 7d average
 - **Multi-provider**: Claude, Codex, Kimi, Grok, and GLM (z.ai)
+- **Pace tracking**: the session and weekly windows show whether you're burning quota faster (`+8%`, deficit) or slower (`-3%`, reserve) than an even-consumption rate, with a projected run-out - shown in the Waybar tooltip, TUI, popover, and Plasma applet (hidden until 3% of the window has elapsed)
 - **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary
 - **Threshold notifications**: `notify-send` alerts at 50/80/95% (configurable) - one-shot per threshold, resets on window roll-over
 - **Daemon mode**: optional long-lived process for near-instant waybar polls, background notifications, and SIGHUP config reload

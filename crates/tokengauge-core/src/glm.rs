@@ -215,10 +215,11 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         .or(resp.limits)
         .unwrap_or_default();
 
-    // Slot contract: longest token quota (weekly) primary, the time-based limit
-    // secondary, the shorter token quota (5-hour) tertiary. Only limits that map
-    // to a usable window take a slot, so an unusable limit can't occupy one and
-    // no usable window is dropped.
+    // Fixed semantic slots matching window_labels("glm"): the longest token
+    // quota is the weekly primary, the time-based limit the 30-day secondary,
+    // and the shorter token quota the 5-hour tertiary. Slots stay in place (no
+    // compacting), so a window is never shown under the wrong label. Only limits
+    // that map to a usable window are considered.
     let mut tokens: Vec<&Limit> = limits
         .iter()
         .filter(|l| is_token_limit(l) && to_window(l).is_some())
@@ -228,20 +229,9 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         .iter()
         .find(|l| !is_token_limit(l) && to_window(l).is_some());
 
-    let mut ordered: Vec<&Limit> = Vec::new();
-    ordered.extend(tokens.first().copied());
-    ordered.extend(time_limit);
-    ordered.extend(tokens.iter().skip(1).copied());
-    for l in &limits {
-        if to_window(l).is_some() && !ordered.iter().any(|o| std::ptr::eq(*o, l)) {
-            ordered.push(l);
-        }
-    }
-
-    let mut windows = ordered.into_iter().filter_map(to_window);
-    let primary = windows.next();
-    let secondary = windows.next();
-    let tertiary = windows.next();
+    let primary = tokens.first().copied().and_then(to_window);
+    let secondary = time_limit.and_then(to_window);
+    let tertiary = tokens.get(1).copied().and_then(to_window);
 
     if primary.is_none() && secondary.is_none() && tertiary.is_none() {
         return Err(anyhow!("z.ai returned no usage - check region/token"));
@@ -410,15 +400,18 @@ mod tests {
     }
 
     #[test]
-    fn time_only_does_not_duplicate_into_both_windows() {
+    fn time_only_fills_the_secondary_slot() {
+        // A lone time limit belongs in the 30-day (secondary) slot, not primary,
+        // so it is never shown under the "Weekly" label.
         let body = resp(
             r#"{"code": 0, "data": {"limits": [
                 {"type": "TIME_LIMIT", "percentage": 42, "unit": 1, "number": 30}
             ]}}"#,
         );
         let usage = to_payload(body, Utc::now()).unwrap().usage.unwrap();
-        assert_eq!(usage.primary.unwrap().used_percent, Some(42));
-        assert!(usage.secondary.is_none());
+        assert!(usage.primary.is_none());
+        assert_eq!(usage.secondary.unwrap().used_percent, Some(42));
+        assert!(usage.tertiary.is_none());
     }
 
     #[test]

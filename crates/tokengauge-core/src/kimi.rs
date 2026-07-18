@@ -18,7 +18,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
+use crate::{ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
 const DEFAULT_BASE_URL: &str = "https://api.kimi.com";
 const API_KEY_ENV: &str = "KIMI_CODE_API_KEY";
@@ -239,16 +239,33 @@ fn to_payload(
     login_method: &str,
     now: DateTime<Utc>,
 ) -> Result<ProviderPayload> {
-    // Primary = the weekly coding quota; secondary = the first rolling rate limit.
+    // Primary = the weekly coding quota. Kimi can return several rolling rate
+    // limits: expose the first as secondary and keep the rest so none are lost.
     let primary = to_window(&resp.usage, Some(10080));
-    let secondary = resp.limits.as_ref().and_then(|limits| {
-        limits.iter().find_map(|limit| {
-            to_window(
-                &limit.detail,
-                limit.window.as_ref().and_then(window_minutes),
-            )
+    let mut rate_windows: Vec<UsageWindow> = resp
+        .limits
+        .as_ref()
+        .map(|limits| {
+            limits
+                .iter()
+                .filter_map(|limit| {
+                    to_window(
+                        &limit.detail,
+                        limit.window.as_ref().and_then(window_minutes),
+                    )
+                })
+                .collect()
         })
-    });
+        .unwrap_or_default();
+    let secondary = (!rate_windows.is_empty()).then(|| rate_windows.remove(0));
+    let extra_rate_windows: Vec<ExtraRateWindow> = rate_windows
+        .into_iter()
+        .map(|window| ExtraRateWindow {
+            id: None,
+            title: window.window_minutes.map(|m| format!("{m}-minute window")),
+            window: Some(window),
+        })
+        .collect();
 
     // An all-empty snapshot must be an error so the stale-cache fallback keeps
     // the last-good number instead of rendering a blank row.
@@ -266,7 +283,7 @@ fn to_payload(
             tertiary: None,
             updated_at: Some(now.to_rfc3339()),
             login_method: Some(login_method.to_string()),
-            extra_rate_windows: Vec::new(),
+            extra_rate_windows,
         }),
         credits: None,
         error: None,
@@ -386,6 +403,31 @@ mod tests {
         assert_eq!(secondary.used_percent, Some(70)); // 139 / 200
         assert_eq!(secondary.window_minutes, Some(300));
         assert_eq!(usage.login_method.as_deref(), Some("API Key"));
+    }
+
+    #[test]
+    fn keeps_every_rate_limit_window() {
+        let body = resp(
+            r#"{
+                "usage": {"limit": "2048", "used": "214"},
+                "limits": [
+                    {"window": {"duration": 5, "timeUnit": "TIME_UNIT_HOUR"},
+                     "detail": {"limit": 200, "used": 100}},
+                    {"window": {"duration": 1, "timeUnit": "TIME_UNIT_MINUTE"},
+                     "detail": {"limit": 60, "used": 30}}
+                ]
+            }"#,
+        );
+        let usage = to_payload(body, "code-api", "API Key", Utc::now())
+            .unwrap()
+            .usage
+            .unwrap();
+        // First rolling limit is secondary; the remaining ones are retained.
+        assert_eq!(usage.secondary.unwrap().used_percent, Some(50)); // 100 / 200
+        assert_eq!(usage.extra_rate_windows.len(), 1);
+        let extra = usage.extra_rate_windows[0].window.as_ref().unwrap();
+        assert_eq!(extra.used_percent, Some(50)); // 30 / 60
+        assert_eq!(extra.window_minutes, Some(1));
     }
 
     #[test]

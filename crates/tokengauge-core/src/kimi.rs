@@ -328,6 +328,14 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         ));
     }
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        // Kimi returns 429 for both transient rate limits and an exhausted usage
+        // quota - inspect the body so the hint matches the actual cause.
+        let body = resp.text().unwrap_or_default().to_lowercase();
+        if body.contains("quota") || body.contains("exhaust") || body.contains("insufficient") {
+            return Err(anyhow!(
+                "Kimi quota exhausted - upgrade your plan or wait for the reset"
+            ));
+        }
         return Err(anyhow!("Kimi rate-limited - try again shortly"));
     }
     if !status.is_success() {

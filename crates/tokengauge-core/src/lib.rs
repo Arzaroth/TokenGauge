@@ -1493,7 +1493,7 @@ pub fn window_labels(provider: &str) -> (&'static str, &'static str, &'static st
         "claude" => ("Session", "Weekly (all)", "Weekly (Sonnet)"),
         "kimi" => ("Weekly", "Rate Limit", "Tertiary"),
         "grok" => ("Weekly", "On-demand", "Tertiary"),
-        "glm" => ("Primary", "Secondary", "Tertiary"),
+        "glm" => ("Weekly", "30-day", "5-hour"),
         _ => ("Session", "Weekly", "Tertiary"),
     }
 }

@@ -129,26 +129,34 @@ fn parse_grpc_web_response(
     header_status: Option<u16>,
     now: DateTime<Utc>,
 ) -> Result<Billing> {
-    // gRPC-Web signals completion with grpc-status: 0 in the trailer frame (or
-    // the HTTP header for unary calls). A reply carrying neither is incomplete,
-    // so never treat its frames as billing data.
-    match grpc_web_trailer_status(data).or(header_status) {
-        None => return Err(anyhow!("Grok billing missing gRPC status")),
-        Some(16) => return Err(anyhow!("Grok unauthorized - run `grok login`")),
-        Some(code) if code != 0 => return Err(anyhow!("Grok billing gRPC status {code}")),
-        Some(_) => {}
-    }
-
     let frames = grpc_web_data_frames(data);
-    if frames.is_empty() {
-        return Err(anyhow!("Grok billing returned no payload"));
-    }
+    let messages: Vec<&[u8]> = if frames.is_empty() {
+        // No gRPC-Web framing: treat the whole body as a raw protobuf message.
+        // A bare protobuf body carries no trailer/status frame to check.
+        if data.is_empty() {
+            return Err(anyhow!("Grok billing returned no payload"));
+        }
+        vec![data]
+    } else {
+        // Framed response: gRPC-Web signals completion with grpc-status: 0 in the
+        // trailer (or the HTTP header for unary calls). A framed reply carrying
+        // neither is incomplete, so never treat its frames as billing data.
+        match grpc_web_trailer_status(data).or(header_status) {
+            None => return Err(anyhow!("Grok billing missing gRPC status")),
+            Some(16) => return Err(anyhow!("Grok unauthorized - run `grok login`")),
+            Some(code) if code != 0 => return Err(anyhow!("Grok billing gRPC status {code}")),
+            Some(_) => {}
+        }
+        frames.iter().map(Vec::as_slice).collect()
+    };
 
     let mut scan = ProtoScan::default();
-    for frame in &frames {
-        scan.scan_message(frame, &mut Vec::new(), 0);
+    for message in &messages {
+        scan.scan_message(message, &mut Vec::new(), 0);
     }
 
+    // proto3 omits zero-valued fields, so a fresh account with no usage yet
+    // carries no percent field - treat that as 0% rather than a failure.
     let used = scan
         .fixed32
         .iter()
@@ -157,7 +165,7 @@ fn parse_grpc_web_response(
         })
         .min_by(|a, b| a.path.len().cmp(&b.path.len()).then(a.order.cmp(&b.order)))
         .map(|f| f.value as f64)
-        .ok_or_else(|| anyhow!("Grok billing percent missing"))?;
+        .unwrap_or(0.0);
 
     let resets_at = scan
         .varints
@@ -505,5 +513,40 @@ mod tests {
         let billing = parse_grpc_web_response(&frame(&payload), Some(0), Utc::now()).unwrap();
         assert_eq!(billing.used_percent, 42);
         assert!(billing.resets_at.is_some());
+    }
+
+    #[test]
+    fn zero_use_snapshot_maps_to_zero_percent() {
+        // Fresh account: framed, status 0, only a reset varint, no percent field.
+        fn frame(payload: &[u8]) -> Vec<u8> {
+            let mut out = vec![0u8];
+            out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            out.extend_from_slice(payload);
+            out
+        }
+        let mut payload = vec![0x28]; // field 5, varint
+        let mut v = 2_000_000_000u64;
+        loop {
+            let b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v != 0 {
+                payload.push(b | 0x80);
+            } else {
+                payload.push(b);
+                break;
+            }
+        }
+        let billing = parse_grpc_web_response(&frame(&payload), Some(0), Utc::now()).unwrap();
+        assert_eq!(billing.used_percent, 0);
+        assert!(billing.resets_at.is_some());
+    }
+
+    #[test]
+    fn accepts_raw_protobuf_body() {
+        // No gRPC-Web framing at all: a bare protobuf message carrying a percent.
+        let mut data = vec![0x0D]; // field 1, wire type 5 (fixed32)
+        data.extend_from_slice(&37.0f32.to_le_bytes());
+        let billing = parse_grpc_web_response(&data, None, Utc::now()).unwrap();
+        assert_eq!(billing.used_percent, 37);
     }
 }

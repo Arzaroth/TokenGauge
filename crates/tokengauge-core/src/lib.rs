@@ -182,7 +182,7 @@ pub fn provider_cli_name(provider: &str) -> Option<&'static str> {
     Some(match provider.to_lowercase().as_str() {
         "claude" => "claude",
         "codex" => "codex",
-        "kimi" => "kimi-code",
+        "kimi" => "kimi",
         "grok" => "grok",
         _ => return None,
     })
@@ -232,7 +232,7 @@ pub fn provider_auth_status(provider: &str) -> AuthStatus {
             if path.exists() {
                 AuthStatus {
                     ok: true,
-                    detail: format!("{} (kimi-code CLI)", path.display()),
+                    detail: format!("{} (kimi CLI)", path.display()),
                     hint: "",
                 }
             } else if env_var_present("KIMI_CODE_API_KEY") {
@@ -245,7 +245,7 @@ pub fn provider_auth_status(provider: &str) -> AuthStatus {
                 AuthStatus {
                     ok: false,
                     detail: format!("no {} and KIMI_CODE_API_KEY unset", path.display()),
-                    hint: "sign in with `kimi-code` or set KIMI_CODE_API_KEY",
+                    hint: "sign in with `kimi` or set KIMI_CODE_API_KEY",
                 }
             }
         }
@@ -2201,9 +2201,9 @@ popover_command = "tokengauge-popover --toggle"
 # OAuth providers - set to true/false to enable/disable
 codex = true
 claude = true
-# Kimi Code (kimi.com/code). Reads the kimi-code CLI token
+# Kimi Code (kimi.com/code). Reads the kimi CLI token
 # (~/.kimi-code/credentials/kimi-code.json) or the KIMI_CODE_API_KEY env var.
-# Disabled by default; set to true after signing in with kimi-code.
+# Disabled by default; set to true after signing in with kimi.
 # kimi = true
 # Grok build (x.ai). Reads the grok CLI token (~/.grok/auth.json).
 # Disabled by default; set to true after signing in with `grok login`.
@@ -3295,7 +3295,7 @@ mod tests {
 
     #[test]
     fn provider_cli_names() {
-        assert_eq!(provider_cli_name("kimi"), Some("kimi-code"));
+        assert_eq!(provider_cli_name("kimi"), Some("kimi"));
         assert_eq!(provider_cli_name("grok"), Some("grok"));
         assert_eq!(provider_cli_name("claude"), Some("claude"));
         // GLM authenticates with an API key - no CLI.

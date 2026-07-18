@@ -314,8 +314,13 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let resp = request.send().context("Kimi usage request failed")?;
 
     let status = resp.status();
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+    if status == reqwest::StatusCode::UNAUTHORIZED {
         return Err(anyhow!("Kimi unauthorized - run `kimi` to log in"));
+    }
+    if status == reqwest::StatusCode::FORBIDDEN {
+        return Err(anyhow!(
+            "Kimi access denied - check your plan or account access"
+        ));
     }
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         return Err(anyhow!("Kimi rate-limited - try again shortly"));

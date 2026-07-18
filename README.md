@@ -33,7 +33,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 | Grok | CLI | `grok = true` | `~/.grok/auth.json` (`grok login`) |
 | GLM | API key | `glm = true` | `Z_AI_API_KEY` env (legacy `ZAI_API_TOKEN`) |
 
-All providers are read-only: TokenGauge never refreshes a token. Codex refreshes its own; for the others, re-run the respective CLI (`claude`, `kimi`, `grok login`) when a token expires.
+All providers are read-only: TokenGauge never refreshes a token. Codex refreshes its own. For CLI-based providers, re-run the respective CLI (`claude`, `kimi`, `grok login`) when a token expires. GLM has no sign-in CLI, so update `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`) instead.
 
 - **Kimi** (kimi.com/code): reuses the `kimi` CLI token, or set `KIMI_CODE_API_KEY`. `KIMI_CODE_HOME` overrides the CLI home.
 - **Grok** (x.ai build): reads the `grok login` token. `GROK_HOME` overrides the auth directory.
@@ -359,14 +359,16 @@ The Waybar module, the GTK4 popover, and the KDE Plasma applet are Linux-only
 are supported, both building and running natively on Windows 10: the
 **TUI dashboard** (`tokengauge-tui.exe`) and a **system-tray GUI**
 (`tokengauge-tray.exe`, see [Tray GUI](#tray-gui-tokengauge-tray) below).
-Usage limits are fetched natively over HTTP; just sign in to the `codex`
-and/or `claude` CLIs so TokenGauge can read their OAuth credentials.
-`ccusage` then layers on **cost/token** detail per provider.
+Usage limits for every supported provider (Codex, Claude, Kimi, Grok, GLM) are
+fetched natively over HTTP; sign in to the providers you enable so TokenGauge can
+read their credentials. `ccusage` then layers on **cost/token** detail per
+provider (it does not create provider rows on its own).
 
 ### Prerequisites
 
-- **Sign in to the `codex` and/or `claude` CLIs** so TokenGauge can read their
-  OAuth credentials and fetch usage natively.
+- **Sign in to the providers you enable** so TokenGauge can read their
+  credentials and fetch usage natively: `codex` / `claude` (OAuth CLIs), `kimi`
+  or `KIMI_CODE_API_KEY`, `grok login`, and `Z_AI_API_KEY` for GLM.
 - *(Optional)* **[Node.js](https://nodejs.org/)** (or [Bun](https://bun.sh/)) -
   lets `ccusage` add **cost/token** detail to those rows. TokenGauge auto-detects
   `ccusage`, then `bunx ccusage`, then `npx --yes ccusage` on your `PATH`

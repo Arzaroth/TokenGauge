@@ -443,6 +443,9 @@ fn render_settings(scroller: &ScrolledWindow, body: &GBox, config_path: &Rc<Path
     for (key, label, enabled) in [
         ("codex", "Codex", config.providers.codex.unwrap_or(false)),
         ("claude", "Claude", config.providers.claude.unwrap_or(false)),
+        ("kimi", "Kimi", config.providers.kimi.unwrap_or(false)),
+        ("grok", "Grok", config.providers.grok.unwrap_or(false)),
+        ("glm", "GLM", config.providers.glm.unwrap_or(false)),
     ] {
         let row = GBox::builder()
             .orientation(Orientation::Horizontal)

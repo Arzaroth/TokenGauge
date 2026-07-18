@@ -514,30 +514,51 @@ fn check_and_notify(
     if !config.notifications.enabled || config.notifications.thresholds.is_empty() {
         return;
     }
-    let rows = payload_to_rows_with_costs(payloads.to_vec(), costs);
-    if rows.is_empty() {
-        return;
-    }
+    let _ = costs; // costs no longer needed here; kept for a stable signature.
 
     let path = notify_state_path(&config.cache_file);
     let mut state = read_notify_state(&path);
     let thresholds = &config.notifications.thresholds;
 
-    for row in &rows {
-        let (s_label, w_label, t_label) = tokengauge_core::window_labels(&row.provider);
-        let windows: [(&str, Option<u8>, &str, &str); 3] = [
-            ("session", row.session_used, &row.session_reset, s_label),
-            ("weekly", row.weekly_used, &row.weekly_reset, w_label),
-            ("tertiary", row.tertiary_used, &row.tertiary_reset, t_label),
+    for payload in payloads {
+        if payload.has_error() {
+            continue;
+        }
+        let Some(usage) = &payload.usage else {
+            continue;
+        };
+        let name = provider_label(&payload.provider);
+        let (s_label, w_label, t_label) = tokengauge_core::window_labels(&payload.provider);
+        // Notify off the raw windows so we can key roll-over on the actual
+        // reset timestamp instead of the formatted "in 2h" countdown string.
+        let windows = [
+            ("session", usage.primary.as_ref(), s_label),
+            ("weekly", usage.secondary.as_ref(), w_label),
+            ("tertiary", usage.tertiary.as_ref(), t_label),
         ];
-        for (slot, used_opt, reset, label) in windows {
-            let Some(pct) = used_opt else { continue };
-            let key = format!("{}:{}", row.provider.to_lowercase(), slot);
+        for (slot, window, label) in windows {
+            let Some(window) = window else { continue };
+            let Some(pct) = window.used_percent.map(|pct| pct.min(100)) else {
+                continue;
+            };
+            let source = payload.source.as_deref().unwrap_or_default();
+            let key = format!("{}:{}:{}", payload.provider.to_lowercase(), source, slot);
             let entry = state.entries.entry(key).or_default();
-            let (to_fire, new_notified) = thresholds_to_fire(pct, thresholds, &entry.notified);
+            let resets_at = window.resets_at.as_deref();
+            let (to_fire, new_notified) = thresholds_to_fire(
+                pct,
+                resets_at,
+                entry.resets_at.as_deref(),
+                thresholds,
+                &entry.notified,
+            );
             entry.notified = new_notified;
-            for threshold in to_fire {
-                fire_notification(&row.provider, label, pct, threshold, reset);
+            entry.resets_at = window.resets_at.clone();
+            if !to_fire.is_empty() {
+                let (_, _, reset_str) = tokengauge_core::format_window(Some(window.clone()));
+                for threshold in to_fire {
+                    fire_notification(name, label, pct, threshold, &reset_str);
+                }
             }
         }
     }

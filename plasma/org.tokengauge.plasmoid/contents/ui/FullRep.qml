@@ -32,6 +32,7 @@ Item {
         property string label: ""
         property var value: null
         property string reset: ""
+        property string pace: ""
         spacing: 2
         Layout.fillWidth: true
 
@@ -64,8 +65,12 @@ Item {
             }
         }
         PlasmaComponents.Label {
-            visible: reset !== ""
-            text: reset
+            visible: reset !== "" || pace !== ""
+            text: {
+                if (pace === "")
+                    return reset
+                return reset === "" ? pace : reset + "  ·  " + pace
+            }
             opacity: 0.7
             font: Kirigami.Theme.smallFont
         }
@@ -220,12 +225,14 @@ Item {
                     label: full.row && full.row.window_labels ? full.row.window_labels[0] : i18n("Session")
                     value: full.row ? full.row.session_used : null
                     reset: full.row ? full.row.session_reset : ""
+                    pace: full.row && full.row.session_pace ? full.row.session_pace : ""
                 }
                 Meter {
                     visible: !full.settingsOpen && full.row && full.row.weekly_used !== null && full.row.weekly_used !== undefined
                     label: full.row && full.row.window_labels ? full.row.window_labels[1] : i18n("Weekly")
                     value: full.row ? full.row.weekly_used : null
                     reset: full.row ? full.row.weekly_reset : ""
+                    pace: full.row && full.row.weekly_pace ? full.row.weekly_pace : ""
                 }
                 Meter {
                     visible: !full.settingsOpen && full.row && full.row.tertiary_used !== null && full.row.tertiary_used !== undefined

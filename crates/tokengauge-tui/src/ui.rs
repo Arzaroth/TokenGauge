@@ -8,7 +8,8 @@ use ratatui::widgets::{
     Paragraph, Wrap,
 };
 use tokengauge_core::{
-    CostInfo, ModelCost, ProviderRow, format_tokens, format_updated_relative, theme, window_labels,
+    CostInfo, ModelCost, ProviderRow, UsagePace, format_tokens, format_updated_relative, theme,
+    window_labels,
 };
 
 use crate::app::AppState;
@@ -292,6 +293,7 @@ struct UsageRow {
     label: String,
     used: Option<u8>,
     reset: String,
+    pace: Option<UsagePace>,
 }
 
 fn collect_usage_rows(row: &ProviderRow) -> Vec<UsageRow> {
@@ -301,11 +303,13 @@ fn collect_usage_rows(row: &ProviderRow) -> Vec<UsageRow> {
             label: session_label.to_string(),
             used: row.session_used,
             reset: row.session_reset.clone(),
+            pace: row.session_pace,
         },
         UsageRow {
             label: weekly_label.to_string(),
             used: row.weekly_used,
             reset: row.weekly_reset.clone(),
+            pace: row.weekly_pace,
         },
     ];
     if row.tertiary_used.is_some() || row.tertiary_reset != "—" {
@@ -313,6 +317,7 @@ fn collect_usage_rows(row: &ProviderRow) -> Vec<UsageRow> {
             label: tertiary_label.to_string(),
             used: row.tertiary_used,
             reset: row.tertiary_reset.clone(),
+            pace: None,
         });
     }
     for extra in &row.extra_windows {
@@ -320,6 +325,7 @@ fn collect_usage_rows(row: &ProviderRow) -> Vec<UsageRow> {
             label: extra.title.clone(),
             used: extra.used,
             reset: extra.reset.clone(),
+            pace: None,
         });
     }
     rows
@@ -446,13 +452,34 @@ fn render_usage(frame: &mut Frame, area: Rect, row: &ProviderRow) {
                 (None, _) => "no data".to_string(),
                 (Some(0), "—") => String::new(),
                 (Some(_), "—") => "not started".to_string(),
-                (Some(_), reset) => truncate(&format!("resets {reset}"), trail_w as usize - 1),
+                (Some(_), reset) => format!("resets {reset}"),
             };
-            let trail = Paragraph::new(Line::from(Span::styled(
-                trailing,
+            let mut spans = Vec::new();
+            let pace_badge = urow.pace.map(|p| p.badge());
+            let reset_budget = match &pace_badge {
+                // Reserve room for " · {badge}" so the pace stays visible.
+                Some(badge) => (trail_w as usize).saturating_sub(badge.chars().count() + 4),
+                None => trail_w as usize - 1,
+            };
+            spans.push(Span::styled(
+                truncate(&trailing, reset_budget),
                 Style::default().fg(dim()),
-            )));
-            frame.render_widget(trail, trail_area);
+            ));
+            if let (Some(pace), Some(badge)) = (urow.pace, pace_badge) {
+                let color = if pace.stage.is_ahead() {
+                    if pace.delta_percent.abs() > 6.0 {
+                        color_for(90)
+                    } else {
+                        color_for(60)
+                    }
+                } else if pace.stage.is_behind() {
+                    green()
+                } else {
+                    dim()
+                };
+                spans.push(Span::styled(format!(" · {badge}"), Style::default().fg(color)));
+            }
+            frame.render_widget(Paragraph::new(Line::from(spans)), trail_area);
         }
     }
 }

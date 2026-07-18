@@ -155,17 +155,14 @@ fn parse_grpc_web_response(
         scan.scan_message(message, &mut Vec::new(), 0);
     }
 
-    // proto3 omits zero-valued fields, so a fresh account with no usage yet
-    // carries no percent field - treat that as 0% rather than a failure.
-    let used = scan
+    let used_percent = scan
         .fixed32
         .iter()
         .filter(|f| {
             f.path.last() == Some(&1) && f.value.is_finite() && f.value >= 0.0 && f.value <= 100.0
         })
         .min_by(|a, b| a.path.len().cmp(&b.path.len()).then(a.order.cmp(&b.order)))
-        .map(|f| f.value as f64)
-        .unwrap_or(0.0);
+        .map(|f| f.value as f64);
 
     let resets_at = scan
         .varints
@@ -179,6 +176,15 @@ fn parse_grpc_web_response(
         .filter(|dt| *dt > now)
         .min()
         .map(|dt| dt.to_rfc3339());
+
+    // proto3 omits a zeroed percent field, so a percent-less snapshot is only a
+    // genuine 0% when another billing signal (a valid reset) corroborates it;
+    // otherwise there is nothing usable and the stale-cache fallback should win.
+    let used = match used_percent {
+        Some(value) => value,
+        None if resets_at.is_some() => 0.0,
+        None => return Err(anyhow!("Grok billing had no usable data")),
+    };
 
     Ok(Billing {
         used_percent: pct_u8(used),
@@ -548,6 +554,18 @@ mod tests {
         data.extend_from_slice(&37.0f32.to_le_bytes());
         let billing = parse_grpc_web_response(&data, None, Utc::now()).unwrap();
         assert_eq!(billing.used_percent, 37);
+    }
+
+    #[test]
+    fn no_billing_signal_errors() {
+        // Framed status-0 reply with an empty payload: no percent and no reset,
+        // so there is nothing usable and the stale fallback should apply.
+        let data = [0u8, 0, 0, 0, 0]; // one zero-length data frame
+        let err = match parse_grpc_web_response(&data, Some(0), Utc::now()) {
+            Ok(_) => panic!("expected missing billing signal to error"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("no usable data"), "{err}");
     }
 
     #[test]

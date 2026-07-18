@@ -216,9 +216,9 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         .unwrap_or_default();
 
     // Priority order: token quotas longest-window first (weekly), shortest last
-    // (5-hour), then any remaining limit (time-based fallback) in wire order.
-    // Assign slots from limits that actually map to a usable window, so an
-    // unusable first limit can't occupy a slot and hide later valid windows.
+    // (5-hour), then any remaining limit (time-based) in wire order. Assign the
+    // three slots from limits that actually map to a usable window, so an
+    // unusable limit can't occupy a slot and no usable window is dropped.
     let mut ordered: Vec<&Limit> = limits.iter().filter(|l| is_token_limit(l)).collect();
     ordered.sort_by_key(|l| std::cmp::Reverse(window_minutes(l).unwrap_or(0)));
     for l in &limits {
@@ -230,8 +230,9 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
     let mut windows = ordered.into_iter().filter_map(to_window);
     let primary = windows.next();
     let secondary = windows.next();
+    let tertiary = windows.next();
 
-    if primary.is_none() && secondary.is_none() {
+    if primary.is_none() && secondary.is_none() && tertiary.is_none() {
         return Err(anyhow!("z.ai returned no usage - check region/token"));
     }
 
@@ -242,7 +243,7 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         usage: Some(UsageSnapshot {
             primary,
             secondary,
-            tertiary: None,
+            tertiary,
             updated_at: Some(now.to_rfc3339()),
             login_method: plan,
             extra_rate_windows: Vec::new(),
@@ -345,6 +346,21 @@ mod tests {
         let body = resp(r#"{"code": 401, "msg": "bad key"}"#);
         let err = to_payload(body, Utc::now()).unwrap_err().to_string();
         assert!(err.contains("bad key"), "{err}");
+    }
+
+    #[test]
+    fn maps_time_limit_into_tertiary() {
+        let body = resp(
+            r#"{"code": 0, "data": {"limits": [
+                {"type": "TOKENS_LIMIT", "percentage": 80, "unit": 6, "number": 1},
+                {"type": "TOKENS_LIMIT", "percentage": 30, "unit": 3, "number": 5},
+                {"type": "TIME_LIMIT", "percentage": 10, "unit": 1, "number": 30}
+            ]}}"#,
+        );
+        let usage = to_payload(body, Utc::now()).unwrap().usage.unwrap();
+        assert_eq!(usage.primary.unwrap().used_percent, Some(80));
+        assert_eq!(usage.secondary.unwrap().used_percent, Some(30));
+        assert_eq!(usage.tertiary.unwrap().used_percent, Some(10));
     }
 
     #[test]

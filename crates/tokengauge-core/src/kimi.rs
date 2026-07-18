@@ -107,6 +107,13 @@ fn is_fresh(expires_at: Option<&Value>, now_unix: f64) -> bool {
     expires_secs > now_unix + CREDENTIAL_MIN_TTL_SECS
 }
 
+/// Validate the credentials the fetcher would use (API key, else the CLI's
+/// fresh token), so `--doctor` matches fetch-time behavior rather than only
+/// checking that the CLI file exists.
+pub(crate) fn credentials_valid() -> Result<()> {
+    resolve_auth(unix_now_secs()).map(drop)
+}
+
 /// Prefer an explicit API key, else fall back to the CLI's own fresh token.
 fn resolve_auth(now_unix: f64) -> Result<Auth> {
     if let Some(key) = cleaned(std::env::var(API_KEY_ENV).ok()) {

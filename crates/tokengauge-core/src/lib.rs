@@ -115,6 +115,9 @@ pub fn provider_label(name: &str) -> &str {
 
 mod claude;
 mod codex;
+pub mod pace;
+
+pub use pace::{PaceStage, UsagePace};
 
 /// Round and clamp a float percentage into the `0..=100` byte range the render
 /// layer expects. Mirrors the old `de_opt_percent` serde hook, now called from
@@ -588,9 +591,13 @@ pub struct ProviderRow {
     pub session_used: Option<u8>,
     pub session_window_minutes: Option<u32>,
     pub session_reset: String,
+    /// Burn pace for the session window, when it has a duration + reset time.
+    pub session_pace: Option<UsagePace>,
     pub weekly_used: Option<u8>,
     pub weekly_window_minutes: Option<u32>,
     pub weekly_reset: String,
+    /// Burn pace for the weekly window.
+    pub weekly_pace: Option<UsagePace>,
     pub tertiary_used: Option<u8>,
     pub tertiary_reset: String,
     pub credits: String,
@@ -910,6 +917,17 @@ fn lookup_cost(provider: &str, costs: &HashMap<String, CostInfo>) -> Option<Cost
         .map(|(_, v)| v.clone())
 }
 
+/// Compute burn pace for a usage window, if it has the percent, duration and
+/// reset time pace needs.
+fn window_pace(window: &UsageWindow, now: DateTime<Utc>) -> Option<UsagePace> {
+    UsagePace::for_window(
+        window.used_percent?,
+        window.window_minutes,
+        window.resets_at.as_deref(),
+        now,
+    )
+}
+
 pub fn format_window(window: Option<UsageWindow>) -> (Option<u8>, Option<u32>, String) {
     if let Some(window) = window {
         let used = window.used_percent.map(|used| used.min(100));
@@ -997,7 +1015,16 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
     let mut plan_label = None;
     let mut extra_windows = Vec::new();
 
+    let mut session_pace = None;
+    let mut weekly_pace = None;
+
     if let Some(usage) = payload.usage {
+        if !payload.stale {
+            let now = Utc::now();
+            session_pace = usage.primary.as_ref().and_then(|w| window_pace(w, now));
+            weekly_pace = usage.secondary.as_ref().and_then(|w| window_pace(w, now));
+        }
+
         let (s_used, s_win, s_reset) = format_window(usage.primary);
         session_used = s_used;
         session_window = s_win;
@@ -1045,9 +1072,11 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
         session_used,
         session_window_minutes: session_window,
         session_reset,
+        session_pace,
         weekly_used,
         weekly_window_minutes: weekly_window,
         weekly_reset,
+        weekly_pace,
         tertiary_used,
         tertiary_reset,
         credits,

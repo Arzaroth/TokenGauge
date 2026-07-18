@@ -524,7 +524,9 @@ fn check_and_notify(
         if payload.has_error() {
             continue;
         }
-        let Some(usage) = &payload.usage else { continue };
+        let Some(usage) = &payload.usage else {
+            continue;
+        };
         let name = provider_label(&payload.provider);
         let (s_label, w_label, t_label) = tokengauge_core::window_labels(&payload.provider);
         // Notify off the raw windows so we can key roll-over on the actual
@@ -536,8 +538,11 @@ fn check_and_notify(
         ];
         for (slot, window, label) in windows {
             let Some(window) = window else { continue };
-            let Some(pct) = window.used_percent else { continue };
-            let key = format!("{}:{}", payload.provider.to_lowercase(), slot);
+            let Some(pct) = window.used_percent.map(|pct| pct.min(100)) else {
+                continue;
+            };
+            let source = payload.source.as_deref().unwrap_or_default();
+            let key = format!("{}:{}:{}", payload.provider.to_lowercase(), source, slot);
             let entry = state.entries.entry(key).or_default();
             let resets_at = window.resets_at.as_deref();
             let (to_fire, new_notified) = thresholds_to_fire(

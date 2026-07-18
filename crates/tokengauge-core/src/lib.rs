@@ -1560,8 +1560,16 @@ pub fn thresholds_to_fire(
 ) -> (Vec<u8>, Vec<u8>) {
     let mut current = notified.to_vec();
     let rolled_over = match (resets_at, prev_resets_at) {
-        // Timestamp advanced to a new window.
-        (Some(now), Some(prev)) => now != prev,
+        // Only a strictly forward move is a new window. A stale/older payload
+        // must not clear the guard, else the real timestamp returns next poll
+        // and notifications re-fire.
+        (Some(now), Some(prev)) => match (
+            DateTime::parse_from_rfc3339(now),
+            DateTime::parse_from_rfc3339(prev),
+        ) {
+            (Ok(now), Ok(prev)) => now > prev,
+            _ => now != prev,
+        },
         // First time we see a timestamp for this window: not a roll-over.
         (Some(_), None) => false,
         // No timestamp available: legacy pct-drop heuristic.
@@ -3161,6 +3169,22 @@ mod tests {
             &[50, 80, 95],
         );
         assert_eq!(fire, vec![50, 80, 95]);
+        assert_eq!(notified, vec![50, 80, 95]);
+    }
+
+    #[test]
+    fn thresholds_to_fire_stale_older_timestamp_no_clear() {
+        // A stale payload reports an OLDER resets_at than what we last saw. It
+        // must not clear the guard - otherwise the real timestamp returns on
+        // the next poll and every already-notified threshold re-fires.
+        let (fire, notified) = thresholds_to_fire(
+            100,
+            Some("2026-07-13T00:00:00Z"),
+            Some("2026-07-20T00:00:00Z"),
+            &[50, 80, 95],
+            &[50, 80, 95],
+        );
+        assert!(fire.is_empty(), "older timestamp must not re-fire");
         assert_eq!(notified, vec![50, 80, 95]);
     }
 

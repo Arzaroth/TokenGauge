@@ -16,7 +16,7 @@ use gtk4::{
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use tokengauge_core::{
-    ClickAction, CostInfo, ProviderRow, TokenGaugeConfig, WaybarPlacement,
+    ClickAction, CostInfo, ProviderRow, TokenGaugeConfig, UsagePace, WaybarPlacement,
     config_set_oauth_provider, config_set_primary, format_tokens, format_updated_relative,
     load_config, payload_to_rows_with_costs, provider_icon, provider_icon_svg_path, provider_label,
     read_cache_full, read_update_status, read_waybar_state, refresh_in_progress,
@@ -809,16 +809,30 @@ fn provider_card_contents(row: &ProviderRow) -> GBox {
         .build();
     let (s_label, w_label, t_label) = window_labels(&row.provider);
     let mut idx: i32 = 0;
-    push_gauge_row(&grid, idx, s_label, row.session_used, &row.session_reset);
+    push_gauge_row(
+        &grid,
+        idx,
+        s_label,
+        row.session_used,
+        &row.session_reset,
+        row.session_pace.as_ref(),
+    );
     idx += 1;
-    push_gauge_row(&grid, idx, w_label, row.weekly_used, &row.weekly_reset);
+    push_gauge_row(
+        &grid,
+        idx,
+        w_label,
+        row.weekly_used,
+        &row.weekly_reset,
+        row.weekly_pace.as_ref(),
+    );
     idx += 1;
     if row.tertiary_used.is_some() || row.tertiary_reset != "—" {
-        push_gauge_row(&grid, idx, t_label, row.tertiary_used, &row.tertiary_reset);
+        push_gauge_row(&grid, idx, t_label, row.tertiary_used, &row.tertiary_reset, None);
         idx += 1;
     }
     for extra in &row.extra_windows {
-        push_gauge_row(&grid, idx, &extra.title, extra.used, &extra.reset);
+        push_gauge_row(&grid, idx, &extra.title, extra.used, &extra.reset, None);
         idx += 1;
     }
     inner.append(&grid);
@@ -837,7 +851,14 @@ fn provider_card_contents(row: &ProviderRow) -> GBox {
     inner
 }
 
-fn push_gauge_row(grid: &Grid, row: i32, label: &str, used: Option<u8>, reset: &str) {
+fn push_gauge_row(
+    grid: &Grid,
+    row: i32,
+    label: &str,
+    used: Option<u8>,
+    reset: &str,
+    pace: Option<&UsagePace>,
+) {
     let l = Label::builder()
         .label(label.to_string())
         .css_classes(vec!["tg-row-label".to_string()])
@@ -863,12 +884,20 @@ fn push_gauge_row(grid: &Grid, row: i32, label: &str, used: Option<u8>, reset: &
         }
     }
     grid.attach(&bar, 1, row, 1, 1);
-    let trailing = match (used, reset) {
+    let mut trailing = match (used, reset) {
         (None, _) => "no data".to_string(),
         (Some(0), "—") => String::new(),
         (Some(_), "—") => "not started".to_string(),
         (Some(_), r) => format!("resets {r}"),
     };
+    if let Some(pace) = pace {
+        let badge = pace.badge();
+        if trailing.is_empty() {
+            trailing = badge;
+        } else {
+            trailing = format!("{trailing}  ·  {badge}");
+        }
+    }
     let t = Label::builder()
         .label(trailing)
         .css_classes(vec!["tg-dim".to_string()])

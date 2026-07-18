@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pace tracking**: each usage window computes whether you're burning quota faster (deficit) or slower (reserve) than an even-consumption rate, plus a projected run-out. Shown as a `+8%` / `-3%` badge in the Waybar tooltip, TUI, and popover (hidden until 3% of the window has elapsed).
+
 ## [0.11.0] - 2026-07-16
 
 Usage limits are now fetched natively - no external CodexBar CLI.

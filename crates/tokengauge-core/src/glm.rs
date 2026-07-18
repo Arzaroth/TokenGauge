@@ -56,7 +56,7 @@ fn quota_url() -> String {
 struct QuotaResponse {
     #[serde(default)]
     code: Option<i64>,
-    #[serde(default)]
+    #[serde(default, alias = "msg")]
     message: Option<String>,
     #[serde(default)]
     data: Option<QuotaData>,
@@ -338,6 +338,13 @@ mod tests {
         let body = resp(r#"{"code": 401, "message": "invalid token"}"#);
         let err = to_payload(body, Utc::now()).unwrap_err().to_string();
         assert!(err.contains("invalid token"), "{err}");
+    }
+
+    #[test]
+    fn error_code_surfaces_msg_alias() {
+        let body = resp(r#"{"code": 401, "msg": "bad key"}"#);
+        let err = to_payload(body, Utc::now()).unwrap_err().to_string();
+        assert!(err.contains("bad key"), "{err}");
     }
 
     #[test]

@@ -829,6 +829,16 @@ fn handle_doctor(config_path: &Path) -> i32 {
             tokengauge_core::codex_auth_path(),
             "run `codex` to sign in",
         ),
+        (
+            "kimi",
+            tokengauge_core::kimi_credentials_path(),
+            "sign in with `kimi-code` or set KIMI_CODE_API_KEY",
+        ),
+        (
+            "grok",
+            tokengauge_core::grok_auth_path(),
+            "run `grok login` to sign in",
+        ),
     ] {
         if !cfg.providers.is_enabled(provider) {
             continue;

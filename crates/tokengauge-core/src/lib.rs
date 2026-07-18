@@ -98,13 +98,16 @@ impl ProviderPayload {
 // ============================================================================
 
 /// The providers TokenGauge fetches natively, both OAuth.
-pub const PROVIDERS: &[&str] = &["codex", "claude"];
+pub const PROVIDERS: &[&str] = &["codex", "claude", "kimi", "grok", "glm"];
 
 /// Get the display label for a provider.
 pub fn provider_label(name: &str) -> &str {
     match name {
         "codex" => "Codex",
         "claude" => "Claude",
+        "kimi" => "Kimi",
+        "grok" => "Grok",
+        "glm" => "GLM",
         other => other,
     }
 }
@@ -115,6 +118,9 @@ pub fn provider_label(name: &str) -> &str {
 
 mod claude;
 mod codex;
+mod glm;
+mod grok;
+mod kimi;
 
 /// Round and clamp a float percentage into the `0..=100` byte range the render
 /// layer expects. Mirrors the old `de_opt_percent` serde hook, now called from
@@ -159,6 +165,17 @@ pub fn codex_auth_path() -> PathBuf {
     codex::auth_path()
 }
 
+/// Path to the Kimi Code CLI credential file the native fetcher reads (honors
+/// `KIMI_CODE_HOME`).
+pub fn kimi_credentials_path() -> PathBuf {
+    kimi::credentials_path()
+}
+
+/// Path to the Grok CLI auth file the native fetcher reads (honors `GROK_HOME`).
+pub fn grok_auth_path() -> PathBuf {
+    grok::auth_path()
+}
+
 // ============================================================================
 // Configuration Types
 // ============================================================================
@@ -169,6 +186,9 @@ pub fn codex_auth_path() -> PathBuf {
 pub struct ProvidersConfig {
     pub codex: Option<bool>,
     pub claude: Option<bool>,
+    pub kimi: Option<bool>,
+    pub grok: Option<bool>,
+    pub glm: Option<bool>,
     /// Removed-provider keys (e.g. `[providers.zai]`) left over from older
     /// configs. Captured so `--doctor` can warn instead of silently ignoring.
     #[serde(flatten)]
@@ -185,6 +205,15 @@ impl ProvidersConfig {
         if self.claude.unwrap_or(false) {
             enabled.push("claude");
         }
+        if self.kimi.unwrap_or(false) {
+            enabled.push("kimi");
+        }
+        if self.grok.unwrap_or(false) {
+            enabled.push("grok");
+        }
+        if self.glm.unwrap_or(false) {
+            enabled.push("glm");
+        }
         enabled
     }
 
@@ -193,6 +222,9 @@ impl ProvidersConfig {
         match provider {
             "codex" => self.codex.unwrap_or(false),
             "claude" => self.claude.unwrap_or(false),
+            "kimi" => self.kimi.unwrap_or(false),
+            "grok" => self.grok.unwrap_or(false),
+            "glm" => self.glm.unwrap_or(false),
             _ => false,
         }
     }
@@ -403,6 +435,9 @@ impl Default for TokenGaugeConfig {
             providers: ProvidersConfig {
                 codex: Some(true),
                 claude: Some(true),
+                kimi: None,
+                grok: None,
+                glm: None,
                 unknown: HashMap::new(),
             },
             waybar: WaybarConfig::default(),
@@ -722,6 +757,9 @@ pub fn fetch_single_provider(provider: &str, timeout: Duration) -> Result<Vec<Pr
     match provider {
         "claude" => claude::fetch(timeout),
         "codex" => codex::fetch(timeout),
+        "kimi" => kimi::fetch(timeout),
+        "grok" => grok::fetch(timeout),
+        "glm" => glm::fetch(timeout),
         other => Err(anyhow!("unknown provider {other}")),
     }
 }
@@ -1296,6 +1334,18 @@ pub fn provider_icon(label: &str) -> ProviderIcon {
             glyph: "\u{f0b2b}",
             color_hex: "#74AA9C",
         },
+        "kimi" => ProviderIcon {
+            glyph: "\u{f06a9}",
+            color_hex: "#FE603C",
+        },
+        "grok" => ProviderIcon {
+            glyph: "\u{f06a9}",
+            color_hex: "#000000",
+        },
+        "glm" => ProviderIcon {
+            glyph: "\u{f06a9}",
+            color_hex: "#E85A6A",
+        },
         _ => ProviderIcon {
             glyph: "\u{f06a9}",
             color_hex: NEUTRAL_HEX,
@@ -1308,6 +1358,9 @@ pub fn provider_icon_slug(label: &str) -> Option<&'static str> {
     Some(match label.to_lowercase().as_str() {
         "claude" => "claude",
         "codex" => "codex",
+        "kimi" => "kimi",
+        "grok" => "grok",
+        "glm" => "glm",
         _ => return None,
     })
 }
@@ -1338,6 +1391,9 @@ pub fn provider_icon_svg_path(label: &str) -> Option<PathBuf> {
 pub fn window_labels(provider: &str) -> (&'static str, &'static str, &'static str) {
     match provider.to_lowercase().as_str() {
         "claude" => ("Session", "Weekly (all)", "Weekly (Sonnet)"),
+        "kimi" => ("Weekly", "Rate Limit", "Tertiary"),
+        "grok" => ("Monthly", "On-demand", "Tertiary"),
+        "glm" => ("Weekly", "5-hour", "Tertiary"),
         _ => ("Session", "Weekly", "Tertiary"),
     }
 }
@@ -1357,6 +1413,18 @@ pub fn provider_urls(provider: &str) -> ProviderUrls {
         "codex" => ProviderUrls {
             dashboard: Some("https://platform.openai.com/usage"),
             status: Some("https://status.openai.com"),
+        },
+        "kimi" => ProviderUrls {
+            dashboard: Some("https://www.kimi.com/code/console"),
+            status: None,
+        },
+        "grok" => ProviderUrls {
+            dashboard: Some("https://grok.com/?_s=usage"),
+            status: Some("https://status.x.ai"),
+        },
+        "glm" => ProviderUrls {
+            dashboard: Some("https://zcode.z.ai/en"),
+            status: None,
         },
         _ => ProviderUrls {
             dashboard: None,
@@ -2034,6 +2102,17 @@ popover_command = "tokengauge-popover --toggle"
 # OAuth providers - set to true/false to enable/disable
 codex = true
 claude = true
+# Kimi Code (kimi.com/code). Reads the kimi-code CLI token
+# (~/.kimi-code/credentials/kimi-code.json) or the KIMI_CODE_API_KEY env var.
+# Disabled by default; set to true after signing in with kimi-code.
+# kimi = true
+# Grok build (x.ai). Reads the grok CLI token (~/.grok/auth.json).
+# Disabled by default; set to true after signing in with `grok login`.
+# grok = true
+# GLM Coding Plan (z.ai / zcode.z.ai). Reads the Z_AI_API_KEY env var
+# (legacy ZAI_API_TOKEN). Set Z_AI_API_HOST for the China BigModel region.
+# Disabled by default.
+# glm = true
 "#;
     fs::write(path, contents)
         .with_context(|| format!("failed to write config {}", path.display()))?;

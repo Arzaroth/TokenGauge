@@ -2,7 +2,7 @@
 
 [![GitHub release](https://img.shields.io/github/v/release/Arzaroth/TokenGauge)](https://github.com/Arzaroth/TokenGauge/releases)
 
-Monitor token usage, costs, and limits for AI coding assistants from your Waybar, KDE Plasma panel, and TUI. Usage limits are fetched natively over HTTP for Claude and Codex (OAuth), and [ccusage](https://github.com/ryoppippi/ccusage) provides the cost breakdown. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
+Monitor token usage, costs, and limits for AI coding assistants from your Waybar, KDE Plasma panel, and TUI. Usage limits are fetched natively over HTTP for Claude, Codex, Kimi, Grok, and GLM (z.ai), and [ccusage](https://github.com/ryoppippi/ccusage) provides the cost breakdown. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
 
 | Waybar | TUI | KDE Plasma |
 |--------|-----|------------|
@@ -15,7 +15,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **Native GTK4 popover**: bundled `tokengauge-popover` (gtk4-layer-shell) gives a click-to-open GUI panel with provider tabs, real provider brand logos (SVG, falling back to glyph icons when a logo is missing), color-tiered usage bars, monospace-aligned cost rows, and a collapsible 7-day chart. Pick `tui` or `popover` per `[waybar].click_action`.
 - **KDE Plasma 6 applet**: native panel widget (QML plasmoid) mirroring the popover - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, a 7-day chart, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
 - **Cost tracking via ccusage**: today, month, 7-day rolling, per-model split, current burn rate $/hr, 7-day chart, trend vs 7d average
-- **Multi-provider**: Claude and Codex (OAuth)
+- **Multi-provider**: Claude, Codex, Kimi, Grok, and GLM (z.ai)
 - **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary
 - **Threshold notifications**: `notify-send` alerts at 50/80/95% (configurable) - one-shot per threshold, resets on window roll-over
 - **Daemon mode**: optional long-lived process for near-instant waybar polls, background notifications, and SIGHUP config reload
@@ -25,12 +25,19 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 
 ## Supported Providers
 
-| Provider | Type | Config |
-|----------|------|--------|
-| Codex | OAuth | `codex = true` |
-| Claude | OAuth | `claude = true` |
+| Provider | Type | Config | Credentials |
+|----------|------|--------|-------------|
+| Codex | OAuth | `codex = true` | `$CODEX_HOME/auth.json` (`codex` CLI) |
+| Claude | OAuth | `claude = true` | `~/.claude/.credentials.json` (`claude` CLI) |
+| Kimi | CLI / API key | `kimi = true` | `~/.kimi-code/credentials/kimi-code.json` or `KIMI_CODE_API_KEY` |
+| Grok | CLI | `grok = true` | `~/.grok/auth.json` (`grok login`) |
+| GLM | API key | `glm = true` | `Z_AI_API_KEY` env (legacy `ZAI_API_TOKEN`) |
 
-Claude reads `~/.claude/.credentials.json` (sign in with the `claude` CLI); Codex reads `$CODEX_HOME/auth.json` (sign in with the `codex` CLI). Codex refreshes its own token; Claude is read-only, so run `claude` to refresh it.
+All providers are read-only: TokenGauge never refreshes a token. Codex refreshes its own; for the others, re-run the respective CLI (`claude`, `kimi-code`, `grok login`) when a token expires.
+
+- **Kimi** (kimi.com/code): reuses the `kimi-code` CLI token, or set `KIMI_CODE_API_KEY`. `KIMI_CODE_HOME` overrides the CLI home.
+- **Grok** (x.ai build): reads the `grok login` token. `GROK_HOME` overrides the auth directory.
+- **GLM** (z.ai / zcode.z.ai): the GLM Coding Plan has no local credential file, so set `Z_AI_API_KEY` (the same key you use for `ANTHROPIC_AUTH_TOKEN`). Set `Z_AI_API_HOST=open.bigmodel.cn` for the China BigModel region.
 
 ## Installation
 

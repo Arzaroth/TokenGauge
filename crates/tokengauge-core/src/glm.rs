@@ -215,14 +215,25 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         .or(resp.limits)
         .unwrap_or_default();
 
-    // Priority order: token quotas longest-window first (weekly), shortest last
-    // (5-hour), then any remaining limit (time-based) in wire order. Assign the
-    // three slots from limits that actually map to a usable window, so an
-    // unusable limit can't occupy a slot and no usable window is dropped.
-    let mut ordered: Vec<&Limit> = limits.iter().filter(|l| is_token_limit(l)).collect();
-    ordered.sort_by_key(|l| std::cmp::Reverse(window_minutes(l).unwrap_or(0)));
+    // Slot contract: longest token quota (weekly) primary, the time-based limit
+    // secondary, the shorter token quota (5-hour) tertiary. Only limits that map
+    // to a usable window take a slot, so an unusable limit can't occupy one and
+    // no usable window is dropped.
+    let mut tokens: Vec<&Limit> = limits.iter().filter(|l| is_token_limit(l)).collect();
+    tokens.sort_by_key(|l| std::cmp::Reverse(window_minutes(l).unwrap_or(0)));
+
+    let primary_token = tokens.first().copied();
+    let remaining_tokens: Vec<&Limit> = tokens.iter().skip(1).copied().collect();
+    let time_limit = limits
+        .iter()
+        .find(|l| !is_token_limit(l) && to_window(l).is_some());
+
+    let mut ordered: Vec<&Limit> = Vec::new();
+    ordered.extend(primary_token);
+    ordered.extend(time_limit);
+    ordered.extend(remaining_tokens);
     for l in &limits {
-        if !ordered.iter().any(|o| std::ptr::eq(*o, l)) {
+        if to_window(l).is_some() && !ordered.iter().any(|o| std::ptr::eq(*o, l)) {
             ordered.push(l);
         }
     }
@@ -315,13 +326,17 @@ mod tests {
         );
         let payload = to_payload(body, Utc::now()).unwrap();
         let usage = payload.usage.unwrap();
-        // Longest token window (weekly, 10080m) is primary; shorter (5h) secondary.
+        // Slot contract: longest token (weekly, 10080m) primary, time limit
+        // (30 days, 43200m) secondary, shorter token (5h, 300m) tertiary.
         let primary = usage.primary.unwrap();
         assert_eq!(primary.used_percent, Some(80));
         assert_eq!(primary.window_minutes, Some(10080));
         let secondary = usage.secondary.unwrap();
-        assert_eq!(secondary.used_percent, Some(30));
-        assert_eq!(secondary.window_minutes, Some(300));
+        assert_eq!(secondary.used_percent, Some(10));
+        assert_eq!(secondary.window_minutes, Some(43200));
+        let tertiary = usage.tertiary.unwrap();
+        assert_eq!(tertiary.used_percent, Some(30));
+        assert_eq!(tertiary.window_minutes, Some(300));
         assert_eq!(usage.login_method.as_deref(), Some("GLM Coding Plan"));
     }
 
@@ -349,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_time_limit_into_tertiary() {
+    fn maps_time_limit_into_secondary() {
         let body = resp(
             r#"{"code": 0, "data": {"limits": [
                 {"type": "TOKENS_LIMIT", "percentage": 80, "unit": 6, "number": 1},
@@ -358,9 +373,10 @@ mod tests {
             ]}}"#,
         );
         let usage = to_payload(body, Utc::now()).unwrap().usage.unwrap();
+        // Longest token primary, time limit secondary, shorter token tertiary.
         assert_eq!(usage.primary.unwrap().used_percent, Some(80));
-        assert_eq!(usage.secondary.unwrap().used_percent, Some(30));
-        assert_eq!(usage.tertiary.unwrap().used_percent, Some(10));
+        assert_eq!(usage.secondary.unwrap().used_percent, Some(10));
+        assert_eq!(usage.tertiary.unwrap().used_percent, Some(30));
     }
 
     #[test]

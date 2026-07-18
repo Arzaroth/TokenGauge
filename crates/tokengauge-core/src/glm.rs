@@ -215,21 +215,21 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         .or(resp.limits)
         .unwrap_or_default();
 
-    // Token quotas ordered longest-window first (weekly), shortest last (5-hour);
-    // any time-based limit becomes the fallback secondary window.
-    let mut token: Vec<&Limit> = limits.iter().filter(|l| is_token_limit(l)).collect();
-    token.sort_by_key(|l| std::cmp::Reverse(window_minutes(l).unwrap_or(0)));
-    let time_limit = limits.iter().find(|l| !is_token_limit(l));
+    // Priority order: token quotas longest-window first (weekly), shortest last
+    // (5-hour), then any remaining limit (time-based fallback) in wire order.
+    // Assign slots from limits that actually map to a usable window, so an
+    // unusable first limit can't occupy a slot and hide later valid windows.
+    let mut ordered: Vec<&Limit> = limits.iter().filter(|l| is_token_limit(l)).collect();
+    ordered.sort_by_key(|l| std::cmp::Reverse(window_minutes(l).unwrap_or(0)));
+    for l in &limits {
+        if !ordered.iter().any(|o| std::ptr::eq(*o, l)) {
+            ordered.push(l);
+        }
+    }
 
-    let primary_limit = token.first().copied().or_else(|| limits.first());
-    let secondary_limit = token
-        .get(1)
-        .copied()
-        .or(time_limit)
-        .filter(|l| primary_limit.is_none_or(|p| !std::ptr::eq(*l, p)));
-
-    let primary = primary_limit.and_then(to_window);
-    let secondary = secondary_limit.and_then(to_window);
+    let mut windows = ordered.into_iter().filter_map(to_window);
+    let primary = windows.next();
+    let secondary = windows.next();
 
     if primary.is_none() && secondary.is_none() {
         return Err(anyhow!("z.ai returned no usage - check region/token"));
@@ -336,6 +336,20 @@ mod tests {
         let body = resp(r#"{"code": 401, "message": "invalid token"}"#);
         let err = to_payload(body, Utc::now()).unwrap_err().to_string();
         assert!(err.contains("invalid token"), "{err}");
+    }
+
+    #[test]
+    fn skips_unusable_first_limit() {
+        // Longest limit has no derivable percent; the valid shorter one takes primary.
+        let body = resp(
+            r#"{"code": 0, "data": {"limits": [
+                {"type": "TOKENS_LIMIT", "unit": 6, "number": 1},
+                {"type": "TOKENS_LIMIT", "percentage": 55, "unit": 3, "number": 5}
+            ]}}"#,
+        );
+        let usage = to_payload(body, Utc::now()).unwrap().usage.unwrap();
+        assert_eq!(usage.primary.unwrap().used_percent, Some(55));
+        assert!(usage.secondary.is_none());
     }
 
     #[test]

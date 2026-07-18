@@ -218,9 +218,9 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
     // Fixed semantic slots matching window_labels("glm"): weekly token quota
     // primary, time-based limit 30-day secondary, 5-hour token quota tertiary.
     // Token quotas are classified by window duration so each lands under the
-    // right label - a lone short rolling quota stays in the 5-hour slot instead
-    // of being promoted into "Weekly". Only limits that map to a usable window
-    // are considered.
+    // right label: a short rolling quota fills the 5-hour slot and is never
+    // promoted into "Weekly". A token whose duration metadata is missing falls
+    // back to the weekly slot. Only limits that map to a usable window count.
     const SHORT_WINDOW_MAX_MINUTES: u32 = 1440; // under a day = the 5-hour rolling quota
     let mut tokens: Vec<&Limit> = limits
         .iter()
@@ -238,7 +238,7 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
     let weekly_token = tokens
         .iter()
         .copied()
-        .find(|l| short_token.is_none_or(|s| !std::ptr::eq(*l, s)));
+        .find(|l| window_minutes(l).is_none_or(|m| m >= SHORT_WINDOW_MAX_MINUTES));
 
     let primary = weekly_token.and_then(to_window);
     let secondary = time_limit.and_then(to_window);
@@ -395,6 +395,22 @@ mod tests {
         assert!(usage.primary.is_none());
         assert_eq!(usage.secondary.unwrap().used_percent, Some(10));
         assert_eq!(usage.tertiary.unwrap().used_percent, Some(40));
+    }
+
+    #[test]
+    fn unknown_short_window_is_not_promoted_to_weekly() {
+        // Two short token windows (300m and 60m) and no weekly quota: the 5-hour
+        // (300m) limit fills the tertiary slot; the 60m limit is not promoted
+        // into the "Weekly" primary slot.
+        let body = resp(
+            r#"{"code": 0, "data": {"limits": [
+                {"type": "TOKENS_LIMIT", "percentage": 50, "unit": 3, "number": 5},
+                {"type": "TOKENS_LIMIT", "percentage": 20, "unit": 3, "number": 1}
+            ]}}"#,
+        );
+        let usage = to_payload(body, Utc::now()).unwrap().usage.unwrap();
+        assert!(usage.primary.is_none());
+        assert_eq!(usage.tertiary.unwrap().used_percent, Some(50));
     }
 
     #[test]

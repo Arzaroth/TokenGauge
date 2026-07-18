@@ -337,12 +337,12 @@ fn to_payload(
     login_method: Option<String>,
     now: DateTime<Utc>,
 ) -> ProviderPayload {
-    // Grok exposes a single monthly billing cycle (no rolling sub-windows).
+    // Grok exposes a single shared weekly usage pool (no rolling sub-windows).
     let primary = UsageWindow {
         used_percent: Some(billing.used_percent),
         reset_description: None,
         resets_at: billing.resets_at,
-        window_minutes: None,
+        window_minutes: Some(10080),
     };
     ProviderPayload {
         provider: "grok".to_string(),

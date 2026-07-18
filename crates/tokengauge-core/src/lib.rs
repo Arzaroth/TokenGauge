@@ -1492,7 +1492,7 @@ pub fn window_labels(provider: &str) -> (&'static str, &'static str, &'static st
     match provider.to_lowercase().as_str() {
         "claude" => ("Session", "Weekly (all)", "Weekly (Sonnet)"),
         "kimi" => ("Weekly", "Rate Limit", "Tertiary"),
-        "grok" => ("Monthly", "On-demand", "Tertiary"),
+        "grok" => ("Weekly", "On-demand", "Tertiary"),
         "glm" => ("Primary", "Secondary", "Tertiary"),
         _ => ("Session", "Weekly", "Tertiary"),
     }

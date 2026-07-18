@@ -33,11 +33,11 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 | Grok | CLI | `grok = true` | `~/.grok/auth.json` (`grok login`) |
 | GLM | API key | `glm = true` | `Z_AI_API_KEY` env (legacy `ZAI_API_TOKEN`) |
 
-All providers are read-only: TokenGauge never refreshes a token. Codex refreshes its own; for the others, re-run the respective CLI (`claude`, `kimi-code`, `grok login`) when a token expires.
+All providers are read-only: TokenGauge never refreshes a token. Codex refreshes its own; for the others, re-run the respective CLI (`claude`, `kimi`, `grok login`) when a token expires.
 
-- **Kimi** (kimi.com/code): reuses the `kimi-code` CLI token, or set `KIMI_CODE_API_KEY`. `KIMI_CODE_HOME` overrides the CLI home.
+- **Kimi** (kimi.com/code): reuses the `kimi` CLI token, or set `KIMI_CODE_API_KEY`. `KIMI_CODE_HOME` overrides the CLI home.
 - **Grok** (x.ai build): reads the `grok login` token. `GROK_HOME` overrides the auth directory.
-- **GLM** (z.ai / zcode.z.ai): the GLM Coding Plan has no local credential file, so set `Z_AI_API_KEY` (the same key you use for `ANTHROPIC_AUTH_TOKEN`). Set `Z_AI_API_HOST=open.bigmodel.cn` for the China BigModel region.
+- **GLM** (z.ai / zcode.z.ai): the GLM Coding Plan has no local credential file, so set `Z_AI_API_KEY` (the same key you use for `ANTHROPIC_AUTH_TOKEN`). Set `Z_AI_API_HOST=open.bigmodel.cn` for the China BigModel region, or `Z_AI_QUOTA_URL` to override the full quota endpoint.
 
 ## Installation
 
@@ -321,6 +321,9 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
    [providers]
    codex = true
    claude = true
+   # kimi = true   # reads the `kimi` CLI token or KIMI_CODE_API_KEY
+   # grok = true   # reads the `grok login` token
+   # glm = true    # reads Z_AI_API_KEY
 
    [waybar]
    window = "daily"
@@ -337,7 +340,13 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 
 4. Add the module to `~/.config/waybar/config.jsonc` (see the **Without Omarchy** section for the full JSON snippet). Place `"custom/tokengauge"` in either `modules-left` (after `"hyprland/workspaces"`) or `modules-right`.
 
-5. Sign in to the providers you want: run `codex` (Codex) and/or `claude` (Claude) so TokenGauge can read their OAuth credentials. Optionally install [ccusage](https://github.com/ryoppippi/ccusage) globally (`npm i -g ccusage` or `bun i -g ccusage`) for faster cost fetches.
+5. Sign in to the providers you want and enable them under `[providers]`:
+   - **Codex**: run `codex`; **Claude**: run `claude` (reads their OAuth credentials).
+   - **Kimi**: run `kimi` to sign in, or set `KIMI_CODE_API_KEY`.
+   - **Grok**: run `grok login`.
+   - **GLM**: set `Z_AI_API_KEY` (add `Z_AI_API_HOST=open.bigmodel.cn` for the China BigModel region, or `Z_AI_QUOTA_URL` to override the full quota endpoint).
+
+   Optionally install [ccusage](https://github.com/ryoppippi/ccusage) globally (`npm i -g ccusage` or `bun i -g ccusage`) for faster cost fetches.
 
 6. (Optional) Set up the daemon - see **Daemon mode** above.
 

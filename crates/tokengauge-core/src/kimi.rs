@@ -3,7 +3,7 @@
 //! Read-only: TokenGauge reads the Kimi Code CLI's own credential file
 //! (`~/.kimi-code/credentials/kimi-code.json`, honoring `KIMI_CODE_HOME`) or a
 //! `KIMI_CODE_API_KEY` env override, then calls the Kimi Code usage endpoint. It
-//! never refreshes or rewrites that file - the `kimi-code` CLI owns refresh. On
+//! never refreshes or rewrites that file - the `kimi` CLI owns refresh. On
 //! an expired token we surface an error and let the stale-cache fallback keep
 //! the last-good number visible until the CLI is next run.
 //!
@@ -120,11 +120,11 @@ fn resolve_auth(now_unix: f64) -> Result<Auth> {
 
     let home = code_home();
     let cred = read_credential(&credentials_path())
-        .ok_or_else(|| anyhow!("Kimi not logged in - run `kimi-code`"))?;
+        .ok_or_else(|| anyhow!("Kimi not logged in - run `kimi`"))?;
     let token = cleaned(Some(cred.access_token))
-        .ok_or_else(|| anyhow!("Kimi not logged in - run `kimi-code`"))?;
+        .ok_or_else(|| anyhow!("Kimi not logged in - run `kimi`"))?;
     if !is_fresh(cred.expires_at.as_ref(), now_unix) {
-        return Err(anyhow!("Kimi token expired - run `kimi-code` to log in"));
+        return Err(anyhow!("Kimi token expired - run `kimi` to log in"));
     }
     Ok(Auth {
         token,
@@ -315,7 +315,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Err(anyhow!("Kimi unauthorized - run `kimi-code` to log in"));
+        return Err(anyhow!("Kimi unauthorized - run `kimi` to log in"));
     }
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         return Err(anyhow!("Kimi rate-limited - try again shortly"));

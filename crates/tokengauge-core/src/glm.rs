@@ -271,7 +271,9 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
 
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Err(anyhow!("z.ai unauthorized - check Z_AI_API_KEY"));
+        return Err(anyhow!(
+            "z.ai unauthorized - check Z_AI_API_KEY (legacy ZAI_API_TOKEN)"
+        ));
     }
     if !status.is_success() {
         return Err(anyhow!("z.ai usage HTTP {}", status.as_u16()));

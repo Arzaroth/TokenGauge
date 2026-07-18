@@ -229,16 +229,17 @@ pub fn provider_auth_status(provider: &str) -> AuthStatus {
         "grok" => file_auth_status(grok_auth_path(), "run `grok login` to sign in"),
         "kimi" => {
             let path = kimi_credentials_path();
-            if path.exists() {
-                AuthStatus {
-                    ok: true,
-                    detail: format!("{} (kimi CLI)", path.display()),
-                    hint: "",
-                }
-            } else if env_var_present("KIMI_CODE_API_KEY") {
+            // Mirror kimi::resolve_auth, which prefers KIMI_CODE_API_KEY over the CLI file.
+            if env_var_present("KIMI_CODE_API_KEY") {
                 AuthStatus {
                     ok: true,
                     detail: "KIMI_CODE_API_KEY set".to_string(),
+                    hint: "",
+                }
+            } else if path.exists() {
+                AuthStatus {
+                    ok: true,
+                    detail: format!("{} (kimi CLI)", path.display()),
                     hint: "",
                 }
             } else {
@@ -1492,7 +1493,7 @@ pub fn window_labels(provider: &str) -> (&'static str, &'static str, &'static st
         "claude" => ("Session", "Weekly (all)", "Weekly (Sonnet)"),
         "kimi" => ("Weekly", "Rate Limit", "Tertiary"),
         "grok" => ("Monthly", "On-demand", "Tertiary"),
-        "glm" => ("Weekly", "5-hour", "Tertiary"),
+        "glm" => ("Primary", "Secondary", "Tertiary"),
         _ => ("Session", "Weekly", "Tertiary"),
     }
 }

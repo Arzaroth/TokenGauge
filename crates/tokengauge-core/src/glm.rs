@@ -215,11 +215,13 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         .or(resp.limits)
         .unwrap_or_default();
 
-    // Fixed semantic slots matching window_labels("glm"): the longest token
-    // quota is the weekly primary, the time-based limit the 30-day secondary,
-    // and the shorter token quota the 5-hour tertiary. Slots stay in place (no
-    // compacting), so a window is never shown under the wrong label. Only limits
-    // that map to a usable window are considered.
+    // Fixed semantic slots matching window_labels("glm"): weekly token quota
+    // primary, time-based limit 30-day secondary, 5-hour token quota tertiary.
+    // Token quotas are classified by window duration so each lands under the
+    // right label - a lone short rolling quota stays in the 5-hour slot instead
+    // of being promoted into "Weekly". Only limits that map to a usable window
+    // are considered.
+    const SHORT_WINDOW_MAX_MINUTES: u32 = 1440; // under a day = the 5-hour rolling quota
     let mut tokens: Vec<&Limit> = limits
         .iter()
         .filter(|l| is_token_limit(l) && to_window(l).is_some())
@@ -229,9 +231,18 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         .iter()
         .find(|l| !is_token_limit(l) && to_window(l).is_some());
 
-    let primary = tokens.first().copied().and_then(to_window);
+    let short_token = tokens
+        .iter()
+        .copied()
+        .find(|l| window_minutes(l).is_some_and(|m| m < SHORT_WINDOW_MAX_MINUTES));
+    let weekly_token = tokens
+        .iter()
+        .copied()
+        .find(|l| short_token.is_none_or(|s| !std::ptr::eq(*l, s)));
+
+    let primary = weekly_token.and_then(to_window);
     let secondary = time_limit.and_then(to_window);
-    let tertiary = tokens.get(1).copied().and_then(to_window);
+    let tertiary = short_token.and_then(to_window);
 
     if primary.is_none() && secondary.is_none() && tertiary.is_none() {
         return Err(anyhow!("z.ai returned no usage - check region/token"));
@@ -370,7 +381,9 @@ mod tests {
     }
 
     #[test]
-    fn unusable_longest_token_does_not_take_primary_slot() {
+    fn lone_short_token_fills_the_tertiary_slot() {
+        // Unusable weekly token plus a valid 5-hour token and a time limit: the
+        // 5-hour quota stays in the tertiary slot, never promoted to "Weekly".
         let body = resp(
             r#"{"code": 0, "data": {"limits": [
                 {"type": "TOKENS_LIMIT", "unit": 6, "number": 1},
@@ -379,15 +392,15 @@ mod tests {
             ]}}"#,
         );
         let usage = to_payload(body, Utc::now()).unwrap().usage.unwrap();
-        // Unusable longest token is skipped: shorter token primary, time secondary.
-        assert_eq!(usage.primary.unwrap().used_percent, Some(40));
+        assert!(usage.primary.is_none());
         assert_eq!(usage.secondary.unwrap().used_percent, Some(10));
-        assert!(usage.tertiary.is_none());
+        assert_eq!(usage.tertiary.unwrap().used_percent, Some(40));
     }
 
     #[test]
     fn skips_unusable_first_limit() {
-        // Longest limit has no derivable percent; the valid shorter one takes primary.
+        // Longest limit has no derivable percent; the valid 5-hour quota lands in
+        // the tertiary slot (its semantic label), leaving the Weekly slot empty.
         let body = resp(
             r#"{"code": 0, "data": {"limits": [
                 {"type": "TOKENS_LIMIT", "unit": 6, "number": 1},
@@ -395,8 +408,9 @@ mod tests {
             ]}}"#,
         );
         let usage = to_payload(body, Utc::now()).unwrap().usage.unwrap();
-        assert_eq!(usage.primary.unwrap().used_percent, Some(55));
+        assert!(usage.primary.is_none());
         assert!(usage.secondary.is_none());
+        assert_eq!(usage.tertiary.unwrap().used_percent, Some(55));
     }
 
     #[test]

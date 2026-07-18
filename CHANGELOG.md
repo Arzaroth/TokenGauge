@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-18
+
 ### Added
 
 - Native Kimi provider (kimi.com/code): reads the `kimi` CLI token (`~/.kimi-code/credentials/kimi-code.json`, `KIMI_CODE_HOME` override) or `KIMI_CODE_API_KEY`, and fetches the Code API usage (weekly quota + rate-limit window). Enable with `kimi = true`.

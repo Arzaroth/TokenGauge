@@ -226,27 +226,40 @@ pub fn provider_auth_status(provider: &str) -> AuthStatus {
     match provider.to_lowercase().as_str() {
         "claude" => file_auth_status(claude_credentials_path(), "run `claude` to sign in"),
         "codex" => file_auth_status(codex_auth_path(), "run `codex` to sign in"),
-        "grok" => file_auth_status(grok_auth_path(), "run `grok login` to sign in"),
+        "grok" => match grok::credentials_valid(Utc::now()) {
+            Ok(()) => AuthStatus {
+                ok: true,
+                detail: grok_auth_path().display().to_string(),
+                hint: "",
+            },
+            Err(err) => AuthStatus {
+                ok: false,
+                detail: err.to_string(),
+                hint: "run `grok login` to sign in",
+            },
+        },
         "kimi" => {
             let path = kimi_credentials_path();
-            // Mirror kimi::resolve_auth, which prefers KIMI_CODE_API_KEY over the CLI file.
+            // Mirror kimi::resolve_auth, which prefers KIMI_CODE_API_KEY over the
+            // CLI file and validates the file (parse + freshness) when used.
             if env_var_present("KIMI_CODE_API_KEY") {
                 AuthStatus {
                     ok: true,
                     detail: "KIMI_CODE_API_KEY set".to_string(),
                     hint: "",
                 }
-            } else if path.exists() {
-                AuthStatus {
-                    ok: true,
-                    detail: format!("{} (kimi CLI)", path.display()),
-                    hint: "",
-                }
             } else {
-                AuthStatus {
-                    ok: false,
-                    detail: format!("no {} and KIMI_CODE_API_KEY unset", path.display()),
-                    hint: "sign in with `kimi` or set KIMI_CODE_API_KEY",
+                match kimi::credentials_valid() {
+                    Ok(()) => AuthStatus {
+                        ok: true,
+                        detail: format!("{} (kimi CLI)", path.display()),
+                        hint: "",
+                    },
+                    Err(err) => AuthStatus {
+                        ok: false,
+                        detail: err.to_string(),
+                        hint: "sign in with `kimi` or set KIMI_CODE_API_KEY",
+                    },
                 }
             }
         }

@@ -47,6 +47,12 @@ fn read_credentials(path: &Path, now: DateTime<Utc>) -> Result<Credentials> {
     parse_credentials(&text, now)
 }
 
+/// Validate the on-disk credentials the fetcher would use, so `--doctor` matches
+/// fetch-time behavior instead of only checking that the file exists.
+pub(crate) fn credentials_valid(now: DateTime<Utc>) -> Result<()> {
+    read_credentials(&auth_path(), now).map(drop)
+}
+
 /// True when the entry carries an `expires_at` that is at or before `now`.
 fn is_expired(entry: &Value, now: DateTime<Utc>) -> bool {
     entry
@@ -169,7 +175,11 @@ fn parse_grpc_web_response(
 
     let mut scan = ProtoScan::default();
     for message in &messages {
-        scan.scan_message(message, &mut Vec::new(), 0);
+        // The top-level frame must parse in full; a valid prefix followed by a
+        // malformed/truncated suffix is not accepted as complete billing data.
+        if !scan.scan_message(message, &mut Vec::new(), 0) {
+            return Err(anyhow!("Grok billing response was malformed"));
+        }
     }
 
     let used_percent = scan
@@ -289,22 +299,27 @@ struct VarintField {
 }
 
 impl ProtoScan {
-    fn scan_message(&mut self, data: &[u8], path: &mut Vec<u64>, depth: usize) {
+    /// Returns true when the whole message parsed cleanly. Callers that require
+    /// a well-formed message (the top-level frame) reject a `false` result;
+    /// nested length-delimited fields are best-effort (a bytes/string field
+    /// won't parse as a sub-message, which is expected) and ignore it.
+    fn scan_message(&mut self, data: &[u8], path: &mut Vec<u64>, depth: usize) -> bool {
         if depth > 8 {
-            return;
+            return false;
         }
         let mut i = 0;
         while i < data.len() {
             let Some((field, wire, next)) = read_key(data, i) else {
-                break;
+                return false;
             };
             i = next;
             path.push(field);
             let advanced = self.scan_field(data, i, path, depth, wire);
             path.pop();
-            let Some(next) = advanced else { break };
+            let Some(next) = advanced else { return false };
             i = next;
         }
+        true
     }
 
     fn scan_field(
@@ -319,7 +334,7 @@ impl ProtoScan {
             0 => self.scan_varint(data, i, path),
             2 => self.scan_length_delimited(data, i, path, depth),
             5 => self.scan_fixed32(data, i, path),
-            1 => i.checked_add(8),
+            1 => i.checked_add(8).filter(|end| *end <= data.len()),
             _ => None,
         }
     }
@@ -344,7 +359,9 @@ impl ProtoScan {
         let end = start
             .checked_add(len as usize)
             .filter(|end| *end <= data.len())?;
-        self.scan_message(&data[start..end], path, depth + 1);
+        // Best-effort: a bytes/string field won't parse as a sub-message, and
+        // that's fine - only the top-level frame must be fully consumed.
+        let _ = self.scan_message(&data[start..end], path, depth + 1);
         Some(end)
     }
 
@@ -677,6 +694,27 @@ mod tests {
             billing.resets_at.unwrap().starts_with("2033"),
             "should prefer the [1, 5, 1] reset field over an unrelated epoch"
         );
+    }
+
+    #[test]
+    fn dangling_top_level_field_is_rejected() {
+        fn frame(payload: &[u8]) -> Vec<u8> {
+            let mut out = vec![0u8];
+            out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            out.extend_from_slice(payload);
+            out
+        }
+        // A valid percent fixed32 followed by a truncated varint (continuation
+        // bit set, no terminating byte) must fail, not be accepted as billing.
+        let mut payload = vec![0x0D]; // field 1, wire 5 (fixed32)
+        payload.extend_from_slice(&42.0f32.to_le_bytes());
+        payload.push(0x28); // field 5, wire 0 (varint)
+        payload.push(0x80); // continuation bit set, no more bytes -> truncated
+        let err = match parse_grpc_web_response(&frame(&payload), Some(0), Utc::now()) {
+            Ok(_) => panic!("expected a malformed message to error"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("malformed"), "{err}");
     }
 
     #[test]

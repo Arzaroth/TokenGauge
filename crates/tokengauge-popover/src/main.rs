@@ -891,14 +891,19 @@ fn push_gauge_row(
         }
     }
     grid.attach(&bar, 1, row, 1, 1);
-    let mut trailing = match (used, reset) {
+    let base = match (used, reset) {
         (None, _) => "no data".to_string(),
         (Some(0), "—") => String::new(),
         (Some(_), "—") => "not started".to_string(),
         (Some(_), r) => format!("resets {r}"),
     };
+    let mut trailing = gtk4::glib::markup_escape_text(&base).to_string();
     if let Some(pace) = pace {
-        let badge = pace.badge();
+        let badge = gtk4::glib::markup_escape_text(&pace.badge()).to_string();
+        let badge = match pace_badge_color(pace) {
+            Some(hex) => format!("<span foreground=\"{hex}\">{badge}</span>"),
+            None => badge,
+        };
         if trailing.is_empty() {
             trailing = badge;
         } else {
@@ -907,11 +912,26 @@ fn push_gauge_row(
     }
     let t = Label::builder()
         .label(trailing)
+        .use_markup(true)
         .css_classes(vec!["tg-dim".to_string()])
         .halign(Align::End)
         .wrap(true)
         .build();
     grid.attach(&t, 2, row, 1, 1);
+}
+
+fn pace_badge_color(pace: &UsagePace) -> Option<&'static str> {
+    if pace.stage.is_ahead() {
+        Some(if pace.delta_percent.abs() > 6.0 {
+            "#f38ba8"
+        } else {
+            "#f9e2af"
+        })
+    } else if pace.stage.is_behind() {
+        Some("#a6e3a1")
+    } else {
+        None
+    }
 }
 
 fn tier_class(pct: u8) -> &'static str {

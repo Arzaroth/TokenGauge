@@ -151,14 +151,19 @@ fn parse_grpc_web_response(
     }
 
     let frames = grpc_web_data_frames(data);
-    let messages: Vec<&[u8]> = match (frames.is_empty(), status) {
-        // Framed success: grpc-status: 0 was signalled.
-        (false, Some(_)) => frames.iter().map(Vec::as_slice).collect(),
-        // Framed reply with no status is incomplete - never trust its frames.
-        (false, None) => return Err(anyhow!("Grok billing missing gRPC status")),
+    let messages: Vec<&[u8]> = match (&frames, status) {
+        // Cleanly framed with a success status: use the data frames.
+        (Some(frames), Some(_)) if !frames.is_empty() => frames.iter().map(Vec::as_slice).collect(),
+        // Cleanly framed but no status is incomplete - never trust its frames.
+        (Some(frames), None) if !frames.is_empty() => {
+            return Err(anyhow!("Grok billing missing gRPC status"));
+        }
+        // Truncated/malformed framing while a status marks a framed response:
+        // reject rather than accept the partially parsed prefix.
+        (None, Some(_)) => return Err(anyhow!("Grok billing response was truncated")),
         // No framing and no status: treat the whole body as a raw protobuf message.
-        (true, None) if !data.is_empty() => vec![data],
-        // Empty body, or a status with no data frames: no usable payload.
+        (None, None) if !data.is_empty() => vec![data],
+        // Empty body, empty frames, or a status with no data frames: nothing usable.
         _ => return Err(anyhow!("Grok billing returned no payload")),
     };
 
@@ -215,26 +220,29 @@ fn parse_grpc_web_response(
 }
 
 /// Split a gRPC-web body into its data frames, skipping trailer frames (the
-/// high bit of the flags byte marks a trailer).
-fn grpc_web_data_frames(data: &[u8]) -> Vec<Vec<u8>> {
+/// high bit of the flags byte marks a trailer). Returns `None` when the body is
+/// truncated or malformed (a frame runs past the end, or trailing bytes are too
+/// short for a frame header) so a partial prefix is never treated as complete.
+fn grpc_web_data_frames(data: &[u8]) -> Option<Vec<Vec<u8>>> {
     let mut frames = Vec::new();
     let mut index = 0;
-    while index + 5 <= data.len() {
+    while index < data.len() {
+        if index + 5 > data.len() {
+            return None;
+        }
         let flags = data[index];
         let len = ((data[index + 1] as usize) << 24)
             | ((data[index + 2] as usize) << 16)
             | ((data[index + 3] as usize) << 8)
             | (data[index + 4] as usize);
         let start = index + 5;
-        let Some(end) = start.checked_add(len).filter(|end| *end <= data.len()) else {
-            break;
-        };
+        let end = start.checked_add(len).filter(|end| *end <= data.len())?;
         if flags & 0x80 == 0 {
             frames.push(data[start..end].to_vec());
         }
         index = end;
     }
-    frames
+    Some(frames)
 }
 
 /// Extract `grpc-status` from the gRPC-web trailer frame (high flags bit set),
@@ -501,7 +509,21 @@ mod tests {
     fn splits_data_frames_skipping_trailers() {
         // One data frame [1,2], then a trailer frame (flags 0x80) that is dropped.
         let data = [0, 0, 0, 0, 2, 1, 2, 0x80, 0, 0, 0, 1, b'x'];
-        assert_eq!(grpc_web_data_frames(&data), vec![vec![1, 2]]);
+        assert_eq!(grpc_web_data_frames(&data), Some(vec![vec![1, 2]]));
+    }
+
+    #[test]
+    fn truncated_frame_is_rejected() {
+        // A valid data frame followed by a second frame whose declared length
+        // runs past the body: with grpc-status: 0 this must fail, not use the
+        // valid prefix as complete billing data.
+        let mut data = vec![0, 0, 0, 0, 1, 42]; // frame 1: len 1, payload [42]
+        data.extend_from_slice(&[0, 0, 0, 0, 8, 1, 2]); // frame 2: len 8, only 2 bytes follow
+        let err = match parse_grpc_web_response(&data, Some(0), Utc::now()) {
+            Ok(_) => panic!("expected truncated framing to error"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("truncated"), "{err}");
     }
 
     #[test]

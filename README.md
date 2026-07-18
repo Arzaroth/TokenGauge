@@ -33,7 +33,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 | Grok | CLI | `grok = true` | `~/.grok/auth.json` (`grok login`) |
 | GLM | API key | `glm = true` | `Z_AI_API_KEY` env (legacy `ZAI_API_TOKEN`) |
 
-All providers are read-only: TokenGauge never refreshes a token. Codex refreshes its own. For CLI-based providers, re-run the respective CLI (`claude`, `kimi`, `grok login`) when a token expires. GLM has no sign-in CLI, so update `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`) instead.
+All providers are read-only: TokenGauge never refreshes a token. Codex refreshes its own. For CLI-backed credentials, re-run the respective CLI (`claude`, `kimi`, `grok login`) when a token expires. For env-key providers, update the variable instead: `KIMI_CODE_API_KEY` for Kimi (when set, it takes precedence over the CLI token) and `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`) for GLM, which has no sign-in CLI.
 
 - **Kimi** (kimi.com/code): reuses the `kimi` CLI token, or set `KIMI_CODE_API_KEY`. `KIMI_CODE_HOME` overrides the CLI home.
 - **Grok** (x.ai build): reads the `grok login` token. `GROK_HOME` overrides the auth directory.

@@ -133,10 +133,10 @@ fi
 # (currentColor) marks are visible on the popover's dark background. Best
 # effort - the popover falls back to glyph icons when a logo is missing.
 ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/tokengauge/icons"
-ICON_BASE="https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/assets/providers"
+ICON_BASE="https://raw.githubusercontent.com/$REPO/$latest/assets/providers"
 ICON_FG="#cdd6f4"
 mkdir -p "$ICON_DIR"
-for icon in claude codex; do
+for icon in claude codex kimi grok glm; do
   if curl -fsSL "$ICON_BASE/ProviderIcon-$icon.svg" -o "$TMP_DIR/ProviderIcon-$icon.svg" 2>/dev/null; then
     sed "s/currentColor/$ICON_FG/g" "$TMP_DIR/ProviderIcon-$icon.svg" \
       > "$ICON_DIR/ProviderIcon-$icon.svg"

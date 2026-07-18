@@ -98,13 +98,16 @@ impl ProviderPayload {
 // ============================================================================
 
 /// The providers TokenGauge fetches natively, both OAuth.
-pub const PROVIDERS: &[&str] = &["codex", "claude"];
+pub const PROVIDERS: &[&str] = &["codex", "claude", "kimi", "grok", "glm"];
 
 /// Get the display label for a provider.
 pub fn provider_label(name: &str) -> &str {
     match name {
         "codex" => "Codex",
         "claude" => "Claude",
+        "kimi" => "Kimi",
+        "grok" => "Grok",
+        "glm" => "GLM",
         other => other,
     }
 }
@@ -115,6 +118,9 @@ pub fn provider_label(name: &str) -> &str {
 
 mod claude;
 mod codex;
+mod glm;
+mod grok;
+mod kimi;
 pub mod pace;
 
 pub use pace::{PaceStage, UsagePace};
@@ -162,6 +168,130 @@ pub fn codex_auth_path() -> PathBuf {
     codex::auth_path()
 }
 
+/// Path to the Kimi Code CLI credential file the native fetcher reads (honors
+/// `KIMI_CODE_HOME`).
+pub fn kimi_credentials_path() -> PathBuf {
+    kimi::credentials_path()
+}
+
+/// Path to the Grok CLI auth file the native fetcher reads (honors `GROK_HOME`).
+pub fn grok_auth_path() -> PathBuf {
+    grok::auth_path()
+}
+
+/// The CLI a provider's credentials come from, if any. `None` means the
+/// provider authenticates with an API key / env var and needs no CLI.
+pub fn provider_cli_name(provider: &str) -> Option<&'static str> {
+    Some(match provider.to_lowercase().as_str() {
+        "claude" => "claude",
+        "codex" => "codex",
+        "kimi" => "kimi",
+        "grok" => "grok",
+        _ => return None,
+    })
+}
+
+/// Whether a provider's credentials are currently available, and where from.
+pub struct AuthStatus {
+    /// At least one accepted auth source is present.
+    pub ok: bool,
+    /// What was found (or what is missing).
+    pub detail: String,
+    /// How to satisfy it when missing (empty when `ok`).
+    pub hint: &'static str,
+}
+
+fn env_var_present(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .is_some_and(|v| !v.trim().is_empty())
+}
+
+fn file_auth_status(path: PathBuf, hint: &'static str) -> AuthStatus {
+    if path.exists() {
+        AuthStatus {
+            ok: true,
+            detail: path.display().to_string(),
+            hint: "",
+        }
+    } else {
+        AuthStatus {
+            ok: false,
+            detail: format!("{} not found", path.display()),
+            hint,
+        }
+    }
+}
+
+/// Report a provider's credential presence without doing a network fetch.
+/// Mirrors the auth sources each native fetcher actually reads.
+pub fn provider_auth_status(provider: &str) -> AuthStatus {
+    match provider.to_lowercase().as_str() {
+        "claude" => file_auth_status(claude_credentials_path(), "run `claude` to sign in"),
+        "codex" => file_auth_status(codex_auth_path(), "run `codex` to sign in"),
+        "grok" => match grok::credentials_valid(Utc::now()) {
+            Ok(()) => AuthStatus {
+                ok: true,
+                detail: grok_auth_path().display().to_string(),
+                hint: "",
+            },
+            Err(err) => AuthStatus {
+                ok: false,
+                detail: err.to_string(),
+                hint: "run `grok login` to sign in",
+            },
+        },
+        "kimi" => {
+            let path = kimi_credentials_path();
+            // Mirror kimi::resolve_auth, which prefers KIMI_CODE_API_KEY over the
+            // CLI file and validates the file (parse + freshness) when used.
+            if env_var_present("KIMI_CODE_API_KEY") {
+                AuthStatus {
+                    ok: true,
+                    detail: "KIMI_CODE_API_KEY set".to_string(),
+                    hint: "",
+                }
+            } else {
+                match kimi::credentials_valid() {
+                    Ok(()) => AuthStatus {
+                        ok: true,
+                        detail: format!("{} (kimi CLI)", path.display()),
+                        hint: "",
+                    },
+                    Err(err) => AuthStatus {
+                        ok: false,
+                        detail: err.to_string(),
+                        hint: "sign in with `kimi` or set KIMI_CODE_API_KEY",
+                    },
+                }
+            }
+        }
+        "glm" => {
+            if let Some(var) = ["Z_AI_API_KEY", "ZAI_API_TOKEN"]
+                .into_iter()
+                .find(|v| env_var_present(v))
+            {
+                AuthStatus {
+                    ok: true,
+                    detail: format!("{var} set"),
+                    hint: "",
+                }
+            } else {
+                AuthStatus {
+                    ok: false,
+                    detail: "Z_AI_API_KEY unset".to_string(),
+                    hint: "set Z_AI_API_KEY (legacy ZAI_API_TOKEN also works)",
+                }
+            }
+        }
+        other => AuthStatus {
+            ok: false,
+            detail: format!("unknown provider {other}"),
+            hint: "",
+        },
+    }
+}
+
 // ============================================================================
 // Configuration Types
 // ============================================================================
@@ -172,6 +302,9 @@ pub fn codex_auth_path() -> PathBuf {
 pub struct ProvidersConfig {
     pub codex: Option<bool>,
     pub claude: Option<bool>,
+    pub kimi: Option<bool>,
+    pub grok: Option<bool>,
+    pub glm: Option<bool>,
     /// Removed-provider keys (e.g. `[providers.zai]`) left over from older
     /// configs. Captured so `--doctor` can warn instead of silently ignoring.
     #[serde(flatten)]
@@ -188,6 +321,15 @@ impl ProvidersConfig {
         if self.claude.unwrap_or(false) {
             enabled.push("claude");
         }
+        if self.kimi.unwrap_or(false) {
+            enabled.push("kimi");
+        }
+        if self.grok.unwrap_or(false) {
+            enabled.push("grok");
+        }
+        if self.glm.unwrap_or(false) {
+            enabled.push("glm");
+        }
         enabled
     }
 
@@ -196,6 +338,9 @@ impl ProvidersConfig {
         match provider {
             "codex" => self.codex.unwrap_or(false),
             "claude" => self.claude.unwrap_or(false),
+            "kimi" => self.kimi.unwrap_or(false),
+            "grok" => self.grok.unwrap_or(false),
+            "glm" => self.glm.unwrap_or(false),
             _ => false,
         }
     }
@@ -406,6 +551,9 @@ impl Default for TokenGaugeConfig {
             providers: ProvidersConfig {
                 codex: Some(true),
                 claude: Some(true),
+                kimi: None,
+                grok: None,
+                glm: None,
                 unknown: HashMap::new(),
             },
             waybar: WaybarConfig::default(),
@@ -729,6 +877,9 @@ pub fn fetch_single_provider(provider: &str, timeout: Duration) -> Result<Vec<Pr
     match provider {
         "claude" => claude::fetch(timeout),
         "codex" => codex::fetch(timeout),
+        "kimi" => kimi::fetch(timeout),
+        "grok" => grok::fetch(timeout),
+        "glm" => glm::fetch(timeout),
         other => Err(anyhow!("unknown provider {other}")),
     }
 }
@@ -1325,6 +1476,18 @@ pub fn provider_icon(label: &str) -> ProviderIcon {
             glyph: "\u{f0b2b}",
             color_hex: "#74AA9C",
         },
+        "kimi" => ProviderIcon {
+            glyph: "\u{f06a9}",
+            color_hex: "#FE603C",
+        },
+        "grok" => ProviderIcon {
+            glyph: "\u{f06a9}",
+            color_hex: "#000000",
+        },
+        "glm" => ProviderIcon {
+            glyph: "\u{f06a9}",
+            color_hex: "#E85A6A",
+        },
         _ => ProviderIcon {
             glyph: "\u{f06a9}",
             color_hex: NEUTRAL_HEX,
@@ -1337,6 +1500,9 @@ pub fn provider_icon_slug(label: &str) -> Option<&'static str> {
     Some(match label.to_lowercase().as_str() {
         "claude" => "claude",
         "codex" => "codex",
+        "kimi" => "kimi",
+        "grok" => "grok",
+        "glm" => "glm",
         _ => return None,
     })
 }
@@ -1367,6 +1533,9 @@ pub fn provider_icon_svg_path(label: &str) -> Option<PathBuf> {
 pub fn window_labels(provider: &str) -> (&'static str, &'static str, &'static str) {
     match provider.to_lowercase().as_str() {
         "claude" => ("Session", "Weekly (all)", "Weekly (Sonnet)"),
+        "kimi" => ("Weekly", "Rate Limit", "Tertiary"),
+        "grok" => ("Weekly", "On-demand", "Tertiary"),
+        "glm" => ("Weekly", "30-day", "5-hour"),
         _ => ("Session", "Weekly", "Tertiary"),
     }
 }
@@ -1386,6 +1555,18 @@ pub fn provider_urls(provider: &str) -> ProviderUrls {
         "codex" => ProviderUrls {
             dashboard: Some("https://platform.openai.com/usage"),
             status: Some("https://status.openai.com"),
+        },
+        "kimi" => ProviderUrls {
+            dashboard: Some("https://www.kimi.com/code/console"),
+            status: None,
+        },
+        "grok" => ProviderUrls {
+            dashboard: Some("https://grok.com/?_s=usage"),
+            status: Some("https://status.x.ai"),
+        },
+        "glm" => ProviderUrls {
+            dashboard: Some("https://zcode.z.ai/en"),
+            status: None,
         },
         _ => ProviderUrls {
             dashboard: None,
@@ -2102,6 +2283,17 @@ popover_command = "tokengauge-popover --toggle"
 # OAuth providers - set to true/false to enable/disable
 codex = true
 claude = true
+# Kimi Code (kimi.com/code). Reads the kimi CLI token
+# (~/.kimi-code/credentials/kimi-code.json) or the KIMI_CODE_API_KEY env var.
+# Disabled by default; set to true after signing in with kimi.
+# kimi = true
+# Grok build (x.ai). Reads the grok CLI token (~/.grok/auth.json).
+# Disabled by default; set to true after signing in with `grok login`.
+# grok = true
+# GLM Coding Plan (z.ai / zcode.z.ai). Reads the Z_AI_API_KEY env var
+# (legacy ZAI_API_TOKEN). Set Z_AI_API_HOST for the China BigModel region.
+# Disabled by default.
+# glm = true
 "#;
     fs::write(path, contents)
         .with_context(|| format!("failed to write config {}", path.display()))?;
@@ -3181,6 +3373,27 @@ mod tests {
         let (fire, notified) = thresholds_to_fire(75, None, None, &[50, 80], &[50, 80]);
         assert!(fire.is_empty());
         assert_eq!(notified, vec![50, 80]);
+    }
+
+    #[test]
+    fn provider_cli_names() {
+        assert_eq!(provider_cli_name("kimi"), Some("kimi"));
+        assert_eq!(provider_cli_name("grok"), Some("grok"));
+        assert_eq!(provider_cli_name("claude"), Some("claude"));
+        // GLM authenticates with an API key - no CLI.
+        assert_eq!(provider_cli_name("glm"), None);
+        assert_eq!(provider_cli_name("nope"), None);
+    }
+
+    #[test]
+    fn provider_auth_status_covers_all_providers() {
+        // Never panics and always yields a hint when not satisfied.
+        for provider in PROVIDERS {
+            let status = provider_auth_status(provider);
+            if !status.ok {
+                assert!(!status.hint.is_empty(), "{provider} missing hint");
+            }
+        }
     }
 
     #[test]

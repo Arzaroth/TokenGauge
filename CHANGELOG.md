@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Threshold notifications no longer spam when a usage window resets. Roll-over is now detected from the window's `resets_at` timestamp advancing, not a fragile "percent dropped 10 points" heuristic - which mis-fired when a freshly-reset window briefly reported a stale-high percent, or when the value wobbled near the top and cleared + re-fired the one-shot guard on every poll. An already-notified threshold fires again only after the window genuinely rolls over.
+
 ## [0.11.0] - 2026-07-16
 
 Usage limits are now fetched natively - no external CodexBar CLI.

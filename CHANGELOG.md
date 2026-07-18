@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Native Kimi provider (kimi.com/code): reads the `kimi-code` CLI token (`~/.kimi-code/credentials/kimi-code.json`, `KIMI_CODE_HOME` override) or `KIMI_CODE_API_KEY`, and fetches the Code API usage (weekly quota + rate-limit window). Enable with `kimi = true`.
 - Native Grok provider (x.ai build): reads the `grok login` token (`~/.grok/auth.json`, `GROK_HOME` override) and fetches the grok.com build-billing usage over gRPC-web. Enable with `grok = true`.
-- Native GLM provider (z.ai / zcode.z.ai): reads `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`) and fetches the GLM Coding Plan quota. `Z_AI_API_HOST` / `Z_AI_QUOTA_URL` target the China BigModel region. Enable with `glm = true`.
+- Native GLM provider (z.ai / zcode.z.ai): reads `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`) and fetches the GLM Coding Plan quota. Set `Z_AI_API_HOST` for the China BigModel region, or use `Z_AI_QUOTA_URL` to override the full quota endpoint. Enable with `glm = true`.
 - Brand SVG logos for Kimi, Grok, and GLM in the popover / Plasma tab strips.
 - `--doctor` now covers every supported provider: per-enabled-provider credential status (file or env key, including GLM's `Z_AI_API_KEY`), a sign-in CLI-on-PATH check when credentials are missing, a list of available-but-disabled providers, and a labeled live-fetch result per enabled provider.
 

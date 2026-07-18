@@ -354,7 +354,13 @@ impl ProtoScan {
 
 fn read_key(data: &[u8], i: usize) -> Option<(u64, u64, usize)> {
     let (key, next) = read_varint(data, i)?;
-    Some((key >> 3, key & 0x07, next))
+    let field = key >> 3;
+    // Field numbers start at 1; a zero field means this isn't a valid protobuf
+    // tag, so fail closed rather than misreading arbitrary bytes as fields.
+    if field == 0 {
+        return None;
+    }
+    Some((field, key & 0x07, next))
 }
 
 fn read_varint(data: &[u8], mut i: usize) -> Option<(u64, usize)> {

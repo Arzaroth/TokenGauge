@@ -170,7 +170,11 @@ fn used_percent(l: &Limit) -> Option<u8> {
 
 fn epoch_to_rfc3339(ms: f64) -> Option<String> {
     // Accept both millisecond and second epochs.
-    let secs = if ms > 10_000_000_000.0 { ms / 1000.0 } else { ms };
+    let secs = if ms > 10_000_000_000.0 {
+        ms / 1000.0
+    } else {
+        ms
+    };
     Utc.timestamp_opt(secs as i64, 0)
         .single()
         .map(|dt| dt.to_rfc3339())
@@ -217,14 +221,15 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
     token.sort_by_key(|l| std::cmp::Reverse(window_minutes(l).unwrap_or(0)));
     let time_limit = limits.iter().find(|l| !is_token_limit(l));
 
-    let primary = token
-        .first()
-        .and_then(|l| to_window(l))
-        .or_else(|| limits.first().and_then(to_window));
-    let secondary = token
+    let primary_limit = token.first().copied().or_else(|| limits.first());
+    let secondary_limit = token
         .get(1)
-        .and_then(|l| to_window(l))
-        .or_else(|| time_limit.and_then(to_window));
+        .copied()
+        .or(time_limit)
+        .filter(|l| primary_limit.is_none_or(|p| !std::ptr::eq(*l, p)));
+
+    let primary = primary_limit.and_then(to_window);
+    let secondary = secondary_limit.and_then(to_window);
 
     if primary.is_none() && secondary.is_none() {
         return Err(anyhow!("z.ai returned no usage - check region/token"));
@@ -319,7 +324,9 @@ mod tests {
 
     #[test]
     fn derives_percent_from_limit_and_remaining() {
-        let body = resp(r#"{"data": {"limits": [{"type": "TOKENS_LIMIT", "limit": 1000, "remaining": 250}]}}"#);
+        let body = resp(
+            r#"{"data": {"limits": [{"type": "TOKENS_LIMIT", "limit": 1000, "remaining": 250}]}}"#,
+        );
         let usage = to_payload(body, Utc::now()).unwrap().usage.unwrap();
         assert_eq!(usage.primary.unwrap().used_percent, Some(75));
     }
@@ -329,6 +336,18 @@ mod tests {
         let body = resp(r#"{"code": 401, "message": "invalid token"}"#);
         let err = to_payload(body, Utc::now()).unwrap_err().to_string();
         assert!(err.contains("invalid token"), "{err}");
+    }
+
+    #[test]
+    fn time_only_does_not_duplicate_into_both_windows() {
+        let body = resp(
+            r#"{"code": 0, "data": {"limits": [
+                {"type": "TIME_LIMIT", "percentage": 42, "unit": 1, "number": 30}
+            ]}}"#,
+        );
+        let usage = to_payload(body, Utc::now()).unwrap().usage.unwrap();
+        assert_eq!(usage.primary.unwrap().used_percent, Some(42));
+        assert!(usage.secondary.is_none());
     }
 
     #[test]

@@ -212,7 +212,11 @@ fn window_minutes(w: &Window) -> Option<u32> {
 /// A window counts only when it carries a positive `limit` and a used value we
 /// can derive (directly, or from `limit - remaining`).
 fn to_window(detail: &Detail, window_minutes: Option<u32>) -> Option<UsageWindow> {
-    let limit = detail.limit.as_ref().and_then(value_as_f64).filter(|l| *l > 0.0)?;
+    let limit = detail
+        .limit
+        .as_ref()
+        .and_then(value_as_f64)
+        .filter(|l| *l > 0.0)?;
     let used = match (
         detail.used.as_ref().and_then(value_as_f64),
         detail.remaining.as_ref().and_then(value_as_f64),
@@ -241,7 +245,12 @@ fn to_payload(
         .limits
         .as_ref()
         .and_then(|limits| limits.first())
-        .and_then(|limit| to_window(&limit.detail, limit.window.as_ref().and_then(window_minutes)));
+        .and_then(|limit| {
+            to_window(
+                &limit.detail,
+                limit.window.as_ref().and_then(window_minutes),
+            )
+        });
 
     // An all-empty snapshot must be an error so the stale-cache fallback keeps
     // the last-good number instead of rendering a blank row.
@@ -273,17 +282,21 @@ fn to_payload(
 
 /// Build the usage endpoint, tolerating a `KIMI_CODE_BASE_URL` override that
 /// already carries part of the `coding/v1` path.
-fn usage_endpoint() -> String {
-    let base = cleaned(std::env::var(BASE_URL_ENV).ok())
-        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+fn usage_endpoint() -> Result<String> {
+    let base =
+        cleaned(std::env::var(BASE_URL_ENV).ok()).unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
     let base = base.trim_end_matches('/');
-    if base.ends_with("/coding/v1") {
+    if !base.starts_with("https://") {
+        return Err(anyhow!("Kimi base URL must use HTTPS"));
+    }
+    let endpoint = if base.ends_with("/coding/v1") {
         format!("{base}/usages")
     } else if base.ends_with("/coding") {
         format!("{base}/v1/usages")
     } else {
         format!("{base}/coding/v1/usages")
-    }
+    };
+    Ok(endpoint)
 }
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
@@ -292,7 +305,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
 
     let client = http_client(timeout)?;
     let mut request = client
-        .get(usage_endpoint())
+        .get(usage_endpoint()?)
         .header("authorization", format!("Bearer {}", auth.token))
         .header("accept", "application/json");
     for (name, value) in &auth.identity_headers {
@@ -361,7 +374,10 @@ mod tests {
     fn derives_used_from_remaining() {
         let body = resp(r#"{"usage": {"limit": "1000", "remaining": "750"}}"#);
         let payload = to_payload(body, "code-cli", "Kimi Code", Utc::now()).unwrap();
-        assert_eq!(payload.usage.unwrap().primary.unwrap().used_percent, Some(25));
+        assert_eq!(
+            payload.usage.unwrap().primary.unwrap().used_percent,
+            Some(25)
+        );
     }
 
     #[test]

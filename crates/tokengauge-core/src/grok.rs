@@ -125,6 +125,15 @@ struct Billing {
 }
 
 fn parse_grpc_web_response(data: &[u8], now: DateTime<Utc>) -> Result<Billing> {
+    if let Some(code) = grpc_web_trailer_status(data) {
+        if code == 16 {
+            return Err(anyhow!("Grok unauthorized - run `grok login`"));
+        }
+        if code != 0 {
+            return Err(anyhow!("Grok billing gRPC status {code}"));
+        }
+    }
+
     let frames = grpc_web_data_frames(data);
     if frames.is_empty() {
         return Err(anyhow!("Grok billing returned no payload"));
@@ -185,6 +194,31 @@ fn grpc_web_data_frames(data: &[u8]) -> Vec<Vec<u8>> {
         index = end;
     }
     frames
+}
+
+/// Extract `grpc-status` from the gRPC-web trailer frame (high flags bit set),
+/// whose body carries HTTP/1-style `grpc-status: N` header lines.
+fn grpc_web_trailer_status(data: &[u8]) -> Option<u16> {
+    let mut index = 0;
+    while index + 5 <= data.len() {
+        let flags = data[index];
+        let len = ((data[index + 1] as usize) << 24)
+            | ((data[index + 2] as usize) << 16)
+            | ((data[index + 3] as usize) << 8)
+            | (data[index + 4] as usize);
+        let start = index + 5;
+        let end = start.checked_add(len).filter(|end| *end <= data.len())?;
+        if flags & 0x80 != 0 {
+            let text = String::from_utf8_lossy(&data[start..end]);
+            for line in text.split(['\r', '\n']) {
+                if let Some(rest) = line.trim().strip_prefix("grpc-status:") {
+                    return rest.trim().parse::<u16>().ok();
+                }
+            }
+        }
+        index = end;
+    }
+    None
 }
 
 #[derive(Default)]
@@ -250,7 +284,9 @@ impl ProtoScan {
         depth: usize,
     ) -> Option<usize> {
         let (len, start) = read_varint(data, i)?;
-        let end = start.checked_add(len as usize).filter(|end| *end <= data.len())?;
+        let end = start
+            .checked_add(len as usize)
+            .filter(|end| *end <= data.len())?;
         self.scan_message(&data[start..end], path, depth + 1);
         Some(end)
     }
@@ -291,7 +327,11 @@ fn read_varint(data: &[u8], mut i: usize) -> Option<(u64, usize)> {
 // Mapping + network
 // ---------------------------------------------------------------------------
 
-fn to_payload(billing: Billing, login_method: Option<String>, now: DateTime<Utc>) -> ProviderPayload {
+fn to_payload(
+    billing: Billing,
+    login_method: Option<String>,
+    now: DateTime<Utc>,
+) -> ProviderPayload {
     // Grok exposes a single monthly billing cycle (no rolling sub-windows).
     let primary = UsageWindow {
         used_percent: Some(billing.used_percent),
@@ -381,7 +421,8 @@ mod tests {
 
     #[test]
     fn expired_token_errors() {
-        let auth = r#"{"https://auth.x.ai::a": {"key": "t", "expires_at": "2000-01-01T00:00:00Z"}}"#;
+        let auth =
+            r#"{"https://auth.x.ai::a": {"key": "t", "expires_at": "2000-01-01T00:00:00Z"}}"#;
         let err = parse_credentials(auth, Utc::now()).unwrap_err().to_string();
         assert!(err.contains("expired"), "{err}");
     }
@@ -391,6 +432,26 @@ mod tests {
         // One data frame [1,2], then a trailer frame (flags 0x80) that is dropped.
         let data = [0, 0, 0, 0, 2, 1, 2, 0x80, 0, 0, 0, 1, b'x'];
         assert_eq!(grpc_web_data_frames(&data), vec![vec![1, 2]]);
+    }
+
+    #[test]
+    fn trailer_nonzero_status_is_rejected() {
+        let trailer = b"grpc-status:16\r\ngrpc-message:unauthenticated";
+        let len = trailer.len();
+        let mut data = vec![0u8, 0, 0, 0, 1, 0]; // one empty-ish data frame
+        data.push(0x80);
+        data.extend_from_slice(&[
+            (len >> 24) as u8,
+            (len >> 16) as u8,
+            (len >> 8) as u8,
+            len as u8,
+        ]);
+        data.extend_from_slice(trailer);
+        let err = match parse_grpc_web_response(&data, Utc::now()) {
+            Ok(_) => panic!("expected non-zero trailer status to error"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("unauthorized"), "{err}");
     }
 
     #[test]

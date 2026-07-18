@@ -47,21 +47,38 @@ fn read_credentials(path: &Path, now: DateTime<Utc>) -> Result<Credentials> {
     parse_credentials(&text, now)
 }
 
+/// True when the entry carries an `expires_at` that is at or before `now`.
+fn is_expired(entry: &Value, now: DateTime<Utc>) -> bool {
+    entry
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
+        .is_some_and(|expires| expires.with_timezone(&Utc) <= now)
+}
+
 /// `auth.json` is an object keyed by OIDC scope URL. Prefer the SuperGrok/OIDC
 /// entry (`https://auth.x.ai::`), else the first entry carrying a `key`.
+/// Expired entries are skipped so a stale preferred token never wins.
 fn parse_credentials(text: &str, now: DateTime<Utc>) -> Result<Credentials> {
     let root: Value = serde_json::from_str(text).context("Grok auth.json was invalid")?;
     let map = root
         .as_object()
         .ok_or_else(|| anyhow!("Grok auth.json was invalid"))?;
 
+    // Skip expired entries during selection, so an expired preferred (OIDC)
+    // token never masks a later still-valid keyed fallback.
     let mut selected: Option<&Value> = None;
+    let mut saw_expired = false;
     for (scope, entry) in map {
         let has_key = entry
             .get("key")
             .and_then(Value::as_str)
             .is_some_and(|s| !s.is_empty());
         if !has_key {
+            continue;
+        }
+        if is_expired(entry, now) {
+            saw_expired = true;
             continue;
         }
         if scope.starts_with("https://auth.x.ai::") {
@@ -73,22 +90,17 @@ fn parse_credentials(text: &str, now: DateTime<Utc>) -> Result<Credentials> {
         }
     }
 
-    let entry = selected.ok_or_else(|| anyhow!("Grok not logged in - run `grok login`"))?;
+    let entry = match selected {
+        Some(entry) => entry,
+        None if saw_expired => return Err(anyhow!("Grok token expired - run `grok login`")),
+        None => return Err(anyhow!("Grok not logged in - run `grok login`")),
+    };
     let access_token = entry
         .get("key")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow!("Grok not logged in - run `grok login`"))?
         .to_string();
-
-    if let Some(expires) = entry
-        .get("expires_at")
-        .and_then(Value::as_str)
-        .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
-        && expires.with_timezone(&Utc) <= now
-    {
-        return Err(anyhow!("Grok token expired - run `grok login`"));
-    }
 
     Ok(Credentials {
         access_token,
@@ -440,6 +452,17 @@ mod tests {
         }"#;
         let creds = parse_credentials(auth, Utc::now()).unwrap();
         assert_eq!(creds.access_token, "first");
+    }
+
+    #[test]
+    fn expired_oidc_falls_back_to_valid_key() {
+        // Expired OIDC entry must not mask a later still-valid keyed fallback.
+        let auth = r#"{
+            "https://auth.x.ai::a": {"key": "oidc", "auth_mode": "oidc", "expires_at": "2000-01-01T00:00:00Z"},
+            "https://accounts.x.ai/sign-in": {"key": "valid"}
+        }"#;
+        let creds = parse_credentials(auth, Utc::now()).unwrap();
+        assert_eq!(creds.access_token, "valid");
     }
 
     #[test]

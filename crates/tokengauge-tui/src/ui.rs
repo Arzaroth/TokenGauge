@@ -570,7 +570,7 @@ fn cost_summary(cost: &CostInfo) -> Paragraph<'static> {
     let mut lines: Vec<Line> = Vec::new();
 
     if let Some(br) = cost.burn_rate.as_ref() {
-        let mut spans = vec![
+        lines.push(Line::from(vec![
             Span::raw(pad),
             Span::styled(
                 format!("{:<label_w$}", "Rate"),
@@ -580,25 +580,7 @@ fn cost_summary(cost: &CostInfo) -> Paragraph<'static> {
                 format!("{:>value_w$}/hr", format!("${:.2}", br.cost_per_hour)),
                 Style::default().fg(green()),
             ),
-        ];
-        if let Some(avg) = cost.avg_hourly_cost().filter(|a| *a > 0.0) {
-            let pct = ((br.cost_per_hour - avg) / avg) * 100.0;
-            let arrow = if pct >= 0.0 { "↑" } else { "↓" };
-            let trend_color = if pct >= 25.0 {
-                hex_to_color(&theme().red)
-            } else if pct >= -10.0 {
-                hex_to_color(&theme().yellow)
-            } else {
-                green()
-            };
-            spans.push(Span::raw("  "));
-            spans.push(Span::styled(
-                format!("{arrow}{:.0}%", pct.abs()),
-                Style::default().fg(trend_color),
-            ));
-            spans.push(Span::styled(" vs 7d avg", Style::default().fg(dim())));
-        }
-        lines.push(Line::from(spans));
+        ]));
     }
 
     let money_row = |label: &str, usd: f64| {
@@ -622,7 +604,7 @@ fn cost_summary(cost: &CostInfo) -> Paragraph<'static> {
     }
     let today_tokens = format_tokens(cost.today_tokens);
     let month_tokens = format_tokens(cost.monthly_tokens);
-    lines.push(Line::from(vec![
+    let mut today_spans = vec![
         Span::raw(pad),
         Span::styled(
             format!("{:<label_w$}", "Today"),
@@ -632,11 +614,28 @@ fn cost_summary(cost: &CostInfo) -> Paragraph<'static> {
             format!("{:>value_w$}", format!("${:.2}", cost.today_usd)),
             Style::default().fg(green()),
         ),
-        Span::styled(
-            format!("  ·  {today_tokens} tokens"),
-            Style::default().fg(dim()),
-        ),
-    ]));
+    ];
+    if let Some(pct) = cost.today_vs_avg_percent() {
+        let arrow = if pct >= 0.0 { "↑" } else { "↓" };
+        let trend_color = if pct >= 25.0 {
+            hex_to_color(&theme().red)
+        } else if pct >= -10.0 {
+            hex_to_color(&theme().yellow)
+        } else {
+            green()
+        };
+        today_spans.push(Span::raw("  "));
+        today_spans.push(Span::styled(
+            format!("{arrow}{:.0}%", pct.abs()),
+            Style::default().fg(trend_color),
+        ));
+        today_spans.push(Span::styled(" vs 7d avg", Style::default().fg(dim())));
+    }
+    today_spans.push(Span::styled(
+        format!("  ·  {today_tokens} tokens"),
+        Style::default().fg(dim()),
+    ));
+    lines.push(Line::from(today_spans));
     lines.push(Line::from(vec![
         Span::raw(pad),
         Span::styled(

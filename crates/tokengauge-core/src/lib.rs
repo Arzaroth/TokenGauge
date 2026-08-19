@@ -697,18 +697,25 @@ pub struct CostInfo {
 }
 
 impl CostInfo {
-    /// Average hourly cost over the available days of history.
-    /// Returns None if history is empty or sum is zero.
-    pub fn avg_hourly_cost(&self) -> Option<f64> {
-        if self.weekly_cost_history.is_empty() {
+    /// Average daily cost over the previous days of history, excluding today
+    /// (the newest entry) so a partial day doesn't dilute its own baseline.
+    /// Returns None with fewer than two days of history, or a zero sum.
+    pub fn avg_daily_cost(&self) -> Option<f64> {
+        let prior = self.weekly_cost_history.split_last()?.1;
+        if prior.is_empty() {
             return None;
         }
-        let sum: f64 = self.weekly_cost_history.iter().sum();
+        let sum: f64 = prior.iter().sum();
         if sum <= 0.0 {
             return None;
         }
-        let hours = self.weekly_cost_history.len() as f64 * 24.0;
-        Some(sum / hours)
+        Some(sum / prior.len() as f64)
+    }
+
+    /// Today's spend as a percentage change against `avg_daily_cost`.
+    pub fn today_vs_avg_percent(&self) -> Option<f64> {
+        let avg = self.avg_daily_cost().filter(|a| *a > 0.0)?;
+        Some((self.today_usd - avg) / avg * 100.0)
     }
 }
 
@@ -3321,6 +3328,31 @@ mod tests {
         assert!(lookup_cost("claude-code", &costs).is_some());
         assert!(lookup_cost("CLAUDE", &costs).is_some());
         assert!(lookup_cost("zai", &costs).is_none());
+    }
+
+    #[test]
+    fn today_vs_avg_excludes_today_from_the_baseline() {
+        let cost = CostInfo {
+            today_usd: 20.0,
+            today_tokens: 0,
+            monthly_usd: 0.0,
+            monthly_tokens: 0,
+            today_models: Vec::new(),
+            monthly_models: Vec::new(),
+            burn_rate: None,
+            session_usd: 0.0,
+            weekly_usd: 0.0,
+            // Three prior days at $10 plus today's partial entry.
+            weekly_cost_history: vec![10.0, 10.0, 10.0, 20.0],
+        };
+        assert_eq!(cost.avg_daily_cost(), Some(10.0));
+        assert_eq!(cost.today_vs_avg_percent(), Some(100.0));
+
+        let single_day = CostInfo {
+            weekly_cost_history: vec![20.0],
+            ..cost
+        };
+        assert_eq!(single_day.today_vs_avg_percent(), None);
     }
 
     #[test]

@@ -629,7 +629,7 @@ fn cost_summary(cost: &CostInfo) -> Paragraph<'static> {
             format!("{arrow}{:.0}%", pct.abs()),
             Style::default().fg(trend_color),
         ));
-        today_spans.push(Span::styled(" vs 7d avg", Style::default().fg(dim())));
+        today_spans.push(Span::styled(" vs prior avg", Style::default().fg(dim())));
     }
     today_spans.push(Span::styled(
         format!("  ·  {today_tokens} tokens"),

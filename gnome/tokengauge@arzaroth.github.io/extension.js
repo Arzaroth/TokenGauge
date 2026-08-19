@@ -545,7 +545,9 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         section.add_child(label(_('Pin to bar'), 'tokengauge-section-title'));
 
         const strip = box(false, {style_class: 'tokengauge-tabs', x_expand: true});
-        const choices = [{name: 'highest', text: _('Highest')}].concat(
+        // `--set-primary highest` clears the pin; the bar then shows the first
+        // enabled provider, not the busiest one.
+        const choices = [{name: 'highest', text: _('Auto')}].concat(
             this._rows.map(row => ({
                 name: (row.provider || '').toLowerCase(),
                 text: row.label || row.provider,

@@ -1,0 +1,131 @@
+.tokengauge-panel-glyph {
+    font-family: "Symbols Nerd Font", monospace;
+    padding-right: 4px;
+}
+
+.tokengauge-panel-percent {
+    font-weight: bold;
+}
+
+.tokengauge-menu {
+    spacing: 8px;
+    min-width: 300px;
+}
+
+.tokengauge-header {
+    spacing: 4px;
+}
+
+.tokengauge-title {
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+.tokengauge-icon-button {
+    padding: 4px;
+    border-radius: 6px;
+}
+
+.tokengauge-icon-button:hover,
+.tokengauge-icon-button:focus {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.tokengauge-button {
+    padding: 4px 10px;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.tokengauge-button:hover,
+.tokengauge-button:focus {
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.tokengauge-banner,
+.tokengauge-card {
+    spacing: 8px;
+}
+
+.tokengauge-card-title {
+    font-weight: bold;
+}
+
+.tokengauge-tabs {
+    spacing: 4px;
+}
+
+.tokengauge-tab {
+    padding: 3px 8px;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.07);
+}
+
+.tokengauge-tab:hover,
+.tokengauge-tab:focus {
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+.tokengauge-tab-active {
+    background-color: rgba(255, 255, 255, 0.22);
+}
+
+.tokengauge-tab-content {
+    spacing: 4px;
+}
+
+.tokengauge-meter {
+    spacing: 2px;
+}
+
+.tokengauge-meter-value {
+    font-weight: bold;
+}
+
+.tokengauge-meter-track {
+    height: 8px;
+    border-radius: 4px;
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.tokengauge-meter-fill {
+    height: 8px;
+    border-radius: 4px;
+}
+
+.tokengauge-section {
+    spacing: 2px;
+}
+
+.tokengauge-section-title {
+    font-weight: bold;
+    padding-top: 4px;
+}
+
+.tokengauge-cost-value {
+    font-family: monospace;
+}
+
+.tokengauge-chart {
+    spacing: 2px;
+    padding-top: 2px;
+}
+
+.tokengauge-chart-bar {
+    border-radius: 2px;
+    background-color: rgba(255, 255, 255, 0.45);
+}
+
+.tokengauge-dim,
+.tokengauge-footer {
+    font-size: 0.9em;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.tokengauge-footer {
+    padding-top: 4px;
+}
+
+.tokengauge-error {
+    font-size: 0.9em;
+}

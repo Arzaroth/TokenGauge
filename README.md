@@ -215,7 +215,8 @@ open dashboard/status, provider toggles, pin) through the same
 `tokengauge-waybar` binary, so the daemon stays the single source of truth and
 threshold notifications keep firing.
 
-Panel behaviour matches Waybar: left-click opens the popup, right-click
+Panel behaviour matches Waybar (with `click_action = "popover"`; the default
+is `"tui"`): left-click opens the popup, right-click
 refreshes, middle-click opens the dashboard, back-button opens the status page,
 scroll rotates the shown provider. Point the applet at a non-default binary or
 change its poll interval in the widget's own settings.

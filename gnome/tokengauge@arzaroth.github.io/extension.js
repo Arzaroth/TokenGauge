@@ -65,6 +65,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         this._userSelected = false;
         this._updating = false;
         this._cancellable = null;
+        this._requestId = 0;
         this._timeoutId = 0;
         this._menuDirty = true;
 
@@ -135,8 +136,12 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
     // gnome-shell inherits the session PATH, which often lacks the user bin dirs
     // the installer drops the binaries into.
+    // A superseded request must not touch shared state: its cancellation lands
+    // after the newer request has already set it up.
     _run(command, onDone) {
         this._cancel();
+        const requestId = ++this._requestId;
+        const isCurrent = () => requestId === this._requestId;
         this._cancellable = new Gio.Cancellable();
         const wrapped = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ${command}`;
         let proc;
@@ -151,10 +156,12 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             return;
         }
         proc.communicate_utf8_async(null, this._cancellable, (source, result) => {
-            let ok, stdout, stderr;
+            let stdout, stderr;
             try {
-                [ok, stdout, stderr] = source.communicate_utf8_finish(result);
+                [, stdout, stderr] = source.communicate_utf8_finish(result);
             } catch (e) {
+                if (!isCurrent())
+                    return;
                 this._updating = false;
                 if (!e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) {
                     this._lastError = `${e}`;
@@ -162,7 +169,8 @@ class TokenGaugeIndicator extends PanelMenu.Button {
                 }
                 return;
             }
-            void ok;
+            if (!isCurrent())
+                return;
             onDone(source.get_successful(), stdout ?? '', stderr ?? '');
         });
     }

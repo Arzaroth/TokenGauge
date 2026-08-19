@@ -115,10 +115,14 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
                     title: titleCase(name),
                     active: enabled.includes(name),
                 });
+                // The row stays insensitive until its write lands, so a second
+                // toggle cannot finish first and leave the config inverted.
                 row.connect('notify::active', () => {
                     const value = row.active ? 'true' : 'false';
                     const arg = shellQuote(`${name}=${value}`);
+                    row.sensitive = false;
                     run(`${bin()} --set-provider ${arg}`, cancellable, (ok, _out, err) => {
+                        row.sensitive = true;
                         if (!ok) {
                             row.subtitle = (err || '').trim().split('\n')[0] ||
                                 _('could not update the config');

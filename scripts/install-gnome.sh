@@ -58,12 +58,17 @@ glib-compile-schemas "$EXT_DIR/schemas"
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
-  *) warn "Note: $INSTALL_DIR is not on your PATH. The extension prepends it anyway; set the binary path in its preferences if you installed elsewhere." ;;
+  *) warn "Note: $INSTALL_DIR is not on your PATH. The extension only prepends ~/.local/bin, ~/bin and /usr/local/bin, so set its waybar-binary preference to $INSTALL_DIR/tokengauge-waybar." ;;
 esac
 
 if command -v gnome-extensions >/dev/null 2>&1; then
-  gnome-extensions enable "$UUID" 2>/dev/null && success "Extension enabled." || \
+  if gnome-extensions enable "$UUID" 2>/dev/null; then
+    success "Extension enabled."
+  else
     warn "Could not enable the extension yet - restart the shell first, then: gnome-extensions enable $UUID"
+  fi
+else
+  warn "gnome-extensions not found - enable it after restarting the shell: gnome-extensions enable $UUID"
 fi
 
 success "Done."

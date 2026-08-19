@@ -215,6 +215,11 @@ open dashboard/status, provider toggles, pin) through the same
 `tokengauge-waybar` binary, so the daemon stays the single source of truth and
 threshold notifications keep firing.
 
+Panel behaviour matches Waybar: left-click opens the popup, right-click
+refreshes, middle-click opens the dashboard, back-button opens the status page,
+scroll rotates the shown provider. Point the applet at a non-default binary or
+change its poll interval in the widget's own settings.
+
 ## GNOME Shell extension
 
 On GNOME 45+, TokenGauge ships a Shell extension that puts the same panel
@@ -242,15 +247,6 @@ provider toggles live in the extension's preferences
 Like the Plasma applet it polls `tokengauge-waybar --json` and routes every
 action back through the same binary, so the shared config, cache, daemon, and
 threshold notifications are untouched.
-
-Panel behaviour matches Waybar: left-click opens the popup, right-click
-refreshes, middle-click opens the dashboard, back-button opens the status page,
-scroll rotates the shown provider. Point the applet at a non-default binary or
-change its poll interval in the widget's own settings.
-
-> GNOME Shell is not supported yet. The `tokengauge-waybar --json` seam is
-> desktop-agnostic, so a GNOME extension can be built on the same contract
-> later.
 
 ## Diagnostics
 

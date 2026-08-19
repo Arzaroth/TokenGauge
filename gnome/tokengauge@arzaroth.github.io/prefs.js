@@ -10,7 +10,7 @@ function shellQuote(s) {
 
 // gnome-shell and gnome-extensions-app both inherit the session PATH, which
 // often lacks the user bin dirs the installer drops the binaries into.
-function run(command, callback) {
+function run(command, cancellable, callback) {
     const wrapped = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ${command}`;
     let proc;
     try {
@@ -21,11 +21,13 @@ function run(command, callback) {
         callback(false, '', `${e}`);
         return;
     }
-    proc.communicate_utf8_async(null, null, (source, result) => {
+    proc.communicate_utf8_async(null, cancellable, (source, result) => {
         try {
             const [, stdout, stderr] = source.communicate_utf8_finish(result);
             callback(source.get_successful(), stdout ?? '', stderr ?? '');
         } catch (e) {
+            if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                return;
             callback(false, '', `${e}`);
         }
     });
@@ -38,15 +40,21 @@ function titleCase(name) {
 export default class TokenGaugePreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
+        // Callbacks touch rows that die with the window.
+        const cancellable = new Gio.Cancellable();
+        window.connect('close-request', () => cancellable.cancel());
         const page = new Adw.PreferencesPage();
         window.add(page);
 
         const panel = new Adw.PreferencesGroup({title: _('Panel')});
         page.add(panel);
 
-        const binary = new Adw.EntryRow({title: _('tokengauge-waybar binary')});
+        const binary = new Adw.EntryRow({
+            title: _('tokengauge-waybar binary'),
+            show_apply_button: true,
+        });
         binary.text = settings.get_string('waybar-binary');
-        binary.connect('changed', () => settings.set_string('waybar-binary', binary.text));
+        binary.connect('apply', () => settings.set_string('waybar-binary', binary.text));
         panel.add(binary);
 
         const interval = new Adw.SpinRow({
@@ -69,17 +77,17 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
             description: _('Written to ~/.config/tokengauge/config.toml, shared with the Waybar module'),
         });
         page.add(providers);
-        this._fillProviders(settings, providers);
+        this._fillProviders(settings, providers, cancellable);
     }
 
     // The provider list and their enabled state live in the shared config, not
     // in GSettings, so both come from the snapshot the binary emits.
-    _fillProviders(settings, group) {
+    _fillProviders(settings, group, cancellable) {
         const status = new Adw.ActionRow({title: _('Reading providers…')});
         group.add(status);
 
         const bin = () => shellQuote(settings.get_string('waybar-binary') || 'tokengauge-waybar');
-        run(`${bin()} --json`, (successful, stdout, stderr) => {
+        run(`${bin()} --json`, cancellable, (successful, stdout, stderr) => {
             if (!successful) {
                 status.title = _('Could not read providers');
                 status.subtitle = (stderr || '').trim().split('\n')[0] || _('snapshot command failed');
@@ -109,7 +117,8 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
                 });
                 row.connect('notify::active', () => {
                     const value = row.active ? 'true' : 'false';
-                    run(`${bin()} --set-provider ${name}=${value}`, (ok, _out, err) => {
+                    const arg = shellQuote(`${name}=${value}`);
+                    run(`${bin()} --set-provider ${arg}`, cancellable, (ok, _out, err) => {
                         if (!ok) {
                             row.subtitle = (err || '').trim().split('\n')[0] ||
                                 _('could not update the config');

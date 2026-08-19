@@ -388,6 +388,7 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
         "rows": row_values,
         "errors": errors,
         "enabled": enabled,
+        "providers": tokengauge_core::PROVIDERS,
         "primary": config.waybar.primary,
         "window": window,
         "theme": {

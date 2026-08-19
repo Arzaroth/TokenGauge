@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-19
+
 ### Changed
 
 - **Pace tracking** now projects where a window lands at reset instead of reporting a signed delta against an even-consumption rate. The `+8%` / `-3%` badge was percentage points against an expectation that never appeared on screen; it now reads `ends ~16%` while the window lasts, or `empty in 2h 15m` when the current rate runs it out first.

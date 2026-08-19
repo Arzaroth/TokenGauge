@@ -66,6 +66,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         this._updating = false;
         this._cancellable = null;
         this._timeoutId = 0;
+        this._menuDirty = true;
 
         const panelBox = box(false, {style_class: 'panel-status-menu-box tokengauge-panel'});
         this._panelIcon = new St.Icon({style_class: 'system-status-icon'});
@@ -81,6 +82,12 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         item.add_child(this._content);
         this.menu.addMenuItem(item);
 
+        this.menu.connect('open-state-changed', (_menu, open) => {
+            if (open && this._menuDirty) {
+                this._menuDirty = false;
+                this._renderMenu();
+            }
+        });
         this.connect('scroll-event', (_actor, event) => this._onScroll(event));
         this._settingsChangedId = this._settings.connect('changed', (_s, key) => {
             if (key === 'refresh-interval')
@@ -138,6 +145,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
                 ['sh', '-c', wrapped],
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
         } catch (e) {
+            this._updating = false;
             this._lastError = `${e}`;
             this._render();
             return;
@@ -147,6 +155,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             try {
                 [ok, stdout, stderr] = source.communicate_utf8_finish(result);
             } catch (e) {
+                this._updating = false;
                 if (!e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) {
                     this._lastError = `${e}`;
                     this._render();
@@ -186,9 +195,10 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         this._refreshSnapshot(`${shellQuote(this._binary())} --json`);
     }
 
-    _action(flag) {
+    _action(flag, arg) {
         const bin = shellQuote(this._binary());
-        this._refreshSnapshot(`${bin} ${flag} && ${bin} --json`);
+        const suffix = arg === undefined ? '' : ` ${shellQuote(arg)}`;
+        this._refreshSnapshot(`${bin} ${flag}${suffix} && ${bin} --json`);
     }
 
     // --update's human-readable stdout is discarded so only the JSON payload
@@ -284,7 +294,12 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
     _render() {
         this._renderPanel();
-        this._renderMenu();
+        if (this.menu.isOpen) {
+            this._menuDirty = false;
+            this._renderMenu();
+        } else {
+            this._menuDirty = true;
+        }
     }
 
     _renderPanel() {
@@ -543,7 +558,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
                 label: choice.text,
                 can_focus: true,
             });
-            button.connect('clicked', () => this._action(`--set-primary ${choice.name}`));
+            button.connect('clicked', () => this._action('--set-primary', choice.name));
             strip.add_child(button);
         }
         section.add_child(strip);

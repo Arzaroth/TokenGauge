@@ -2074,7 +2074,7 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
                 "#a6e3a1"
             };
             format!(
-                "  <span foreground=\"{color}\">{arrow}{:.0}%</span> <span foreground=\"{dim}\">vs 7d avg</span>",
+                "  <span foreground=\"{color}\">{arrow}{:.0}%</span> <span foreground=\"{dim}\">vs prior avg</span>",
                 pct.abs()
             )
         })

@@ -14,7 +14,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **TUI dashboard** (ratatui): per-provider sidebar, Session / Weekly / Sonnet-only / Tertiary windows, Extra usage rates, cost breakdown
 - **Native GTK4 popover**: bundled `tokengauge-popover` (gtk4-layer-shell) gives a click-to-open GUI panel with provider tabs, real provider brand logos (SVG, falling back to glyph icons when a logo is missing), color-tiered usage bars, monospace-aligned cost rows, and a collapsible 7-day chart. Pick `tui` or `popover` per `[waybar].click_action`.
 - **KDE Plasma 6 applet**: native panel widget (QML plasmoid) mirroring the popover - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, a 7-day chart, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
-- **Cost tracking via ccusage**: today, month, 7-day rolling, per-model split, current burn rate $/hr, 7-day chart, today's spend vs the 7-day daily average
+- **Cost tracking via ccusage**: today, month, 7-day rolling, per-model split, current burn rate $/hr, 7-day chart, today's spend vs the average of the prior days
 - **Multi-provider**: Claude, Codex, Kimi, Grok, and GLM (z.ai)
 - **Pace tracking**: each usage window projects where it lands at reset from the current burn rate (`ends ~16%`, or `empty in 2h 15m` when it runs out first) - shown next to each reset in the Waybar tooltip, TUI, popover, and Plasma applet (hidden until 3% of the window has elapsed)
 - **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary

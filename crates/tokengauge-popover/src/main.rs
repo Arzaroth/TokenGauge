@@ -1015,7 +1015,7 @@ fn cost_section(cost: &CostInfo) -> GBox {
         &fmt_money(cost.today_usd),
         &match cost.today_vs_avg_percent() {
             Some(pct) => format!(
-                "{}{:.0}% vs 7d avg  ·  {} tokens",
+                "{}{:.0}% vs prior avg  ·  {} tokens",
                 if pct >= 0.0 { "↑" } else { "↓" },
                 pct.abs(),
                 format_tokens(cost.today_tokens)

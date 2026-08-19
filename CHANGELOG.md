@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Pace tracking** now projects where a window lands at reset instead of reporting a signed delta against an even-consumption rate. The `+8%` / `-3%` badge was percentage points against an expectation that never appeared on screen; it now reads `ends ~16%` while the window lasts, or `empty in 2h 15m` when the current rate runs it out first.
+
+### Fixed
+
+- The cost trend percentage compared the active burn rate against a weekly average smeared over all 24 hours of each day, idle ones included, which made it read absurdly high. It now compares today's spend against the average of the previous days - excluding today's own partial entry from that baseline - and sits on the `Today` row where both sides share a unit.
+
 ## [0.13.0] - 2026-07-18
 
 ### Added

@@ -40,6 +40,8 @@ pub struct UsagePace {
     pub stage: PaceStage,
     /// actual% - expected%. Positive = ahead/deficit, negative = behind/reserve.
     pub delta_percent: f64,
+    /// Where the window lands at reset if the current rate holds.
+    pub projected_percent: f64,
     /// Seconds until the window is projected to hit 100%, if that happens before
     /// the reset.
     pub eta_seconds: Option<i64>,
@@ -117,44 +119,18 @@ impl UsagePace {
         Some(Self {
             stage: stage_for_delta(delta),
             delta_percent: delta,
+            projected_percent: (actual / elapsed * duration_secs).clamp(0.0, 100.0),
             eta_seconds,
             will_last_to_reset,
         })
     }
 
-    /// Compact signed badge for the bar/menu, e.g. `+8%` (deficit) / `-3%`
-    /// (reserve) / `on pace`.
+    /// Compact projection badge for the bar/menu: where the window lands at
+    /// reset (`ends ~16%`), or when it runs out first (`empty in 2h 15m`).
     pub fn badge(&self) -> String {
-        let magnitude = self.delta_percent.abs().round() as i64;
-        if self.stage == PaceStage::OnTrack || magnitude == 0 {
-            return "on pace".to_string();
-        }
-        let sign = if self.delta_percent >= 0.0 { "+" } else { "-" };
-        format!("{sign}{magnitude}%")
-    }
-
-    /// One-line human summary, e.g. `8% in deficit · empty in 2h 15m` or
-    /// `3% in reserve · lasts until reset`.
-    pub fn summary(&self) -> String {
-        let magnitude = self.delta_percent.abs().round() as i64;
-        let left = if self.stage == PaceStage::OnTrack || magnitude == 0 {
-            "on pace".to_string()
-        } else if self.stage.is_ahead() {
-            format!("{magnitude}% in deficit")
-        } else {
-            format!("{magnitude}% in reserve")
-        };
-
-        let right = if self.will_last_to_reset {
-            Some("lasts until reset".to_string())
-        } else {
-            self.eta_seconds
-                .map(|s| format!("empty in {}", format_eta(s)))
-        };
-
-        match right {
-            Some(right) => format!("{left} · {right}"),
-            None => left,
+        match self.eta_seconds {
+            Some(seconds) => format!("empty in {}", format_eta(seconds)),
+            None => format!("ends ~{}%", self.projected_percent.round() as i64),
         }
     }
 }
@@ -186,11 +162,10 @@ mod tests {
         let pace = UsagePace::for_window(80, Some(300), Some(&at(now, 150)), now).unwrap();
         assert!(pace.stage.is_ahead());
         assert!(pace.delta_percent > 12.0);
-        assert!(pace.badge().starts_with('+'));
-        assert!(pace.summary().contains("in deficit"));
         // Burning at 80%/150min -> runs out before the 150 min remaining.
         assert!(!pace.will_last_to_reset);
         assert!(pace.eta_seconds.is_some());
+        assert!(pace.badge().starts_with("empty in "));
     }
 
     #[test]
@@ -199,9 +174,10 @@ mod tests {
         // Half elapsed, only 10% used -> far behind, lasts to reset.
         let pace = UsagePace::for_window(10, Some(300), Some(&at(now, 150)), now).unwrap();
         assert!(pace.stage.is_behind());
-        assert!(pace.badge().starts_with('-'));
         assert!(pace.will_last_to_reset);
-        assert!(pace.summary().contains("lasts until reset"));
+        // 10% at half the window -> lands near 20% at reset.
+        assert_eq!(pace.projected_percent.round() as i64, 20);
+        assert_eq!(pace.badge(), "ends ~20%");
     }
 
     #[test]

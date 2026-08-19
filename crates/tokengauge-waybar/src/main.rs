@@ -2060,27 +2060,25 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
         .max(monthly_tokens.chars().count());
     let rate_line = cost.burn_rate.as_ref().map(|br| {
         let rate_str = format!("${:.2}", br.cost_per_hour);
-        let trend = cost
-            .avg_hourly_cost()
-            .filter(|avg| *avg > 0.0)
-            .map(|avg| {
-                let pct = ((br.cost_per_hour - avg) / avg) * 100.0;
-                let arrow = if pct >= 0.0 { "↑" } else { "↓" };
-                let color = if pct >= 25.0 {
-                    "#f38ba8"
-                } else if pct >= -10.0 {
-                    "#f9e2af"
-                } else {
-                    "#a6e3a1"
-                };
-                format!(
-                    "  <span foreground=\"{color}\">{arrow}{:.0}%</span> <span foreground=\"{dim}\">vs 7d avg</span>",
-                    pct.abs()
-                )
-            })
-            .unwrap_or_default();
-        format!("  Rate      <span foreground=\"{dim}\">{rate_str:>usd_width$}/hr</span>{trend}")
+        format!("  Rate      <span foreground=\"{dim}\">{rate_str:>usd_width$}/hr</span>")
     });
+    let today_trend = cost
+        .today_vs_avg_percent()
+        .map(|pct| {
+            let arrow = if pct >= 0.0 { "↑" } else { "↓" };
+            let color = if pct >= 25.0 {
+                "#f38ba8"
+            } else if pct >= -10.0 {
+                "#f9e2af"
+            } else {
+                "#a6e3a1"
+            };
+            format!(
+                "  <span foreground=\"{color}\">{arrow}{:.0}%</span> <span foreground=\"{dim}\">vs prior avg</span>",
+                pct.abs()
+            )
+        })
+        .unwrap_or_default();
 
     let session_line = (cost.session_usd > 0.0).then(|| {
         format!("  Session   <span foreground=\"{dim}\">{session_usd:>usd_width$}</span>")
@@ -2090,7 +2088,7 @@ fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
     let blank = (session_line.is_some() || weekly_line.is_some()).then(String::new);
 
     let today_line = format!(
-        "  Today     <span foreground=\"{dim}\">{today_usd:>usd_width$}  ·  {today_tokens:>tokens_width$} tokens</span>"
+        "  Today     <span foreground=\"{dim}\">{today_usd:>usd_width$}</span>{today_trend}<span foreground=\"{dim}\">  ·  {today_tokens:>tokens_width$} tokens</span>"
     );
     let month_line = format!(
         "  Month     <span foreground=\"{dim}\">{monthly_usd:>usd_width$}  ·  {monthly_tokens:>tokens_width$} tokens</span>"

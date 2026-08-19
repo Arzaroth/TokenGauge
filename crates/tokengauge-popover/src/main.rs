@@ -997,16 +997,7 @@ fn cost_section(cost: &CostInfo) -> GBox {
     let fmt_money = |v: f64| -> String { format!("{:>w$}", format!("${v:.2}"), w = widest_money) };
 
     if let Some(br) = cost.burn_rate.as_ref() {
-        let trend = cost
-            .avg_hourly_cost()
-            .filter(|a| *a > 0.0)
-            .map(|avg| {
-                let pct = ((br.cost_per_hour - avg) / avg) * 100.0;
-                let arrow = if pct >= 0.0 { "↑" } else { "↓" };
-                format!("/hr   {arrow}{:.0}% vs 7d avg", pct.abs())
-            })
-            .unwrap_or_else(|| "/hr".to_string());
-        push_cost_row(&grid, row, "Rate", &fmt_money(br.cost_per_hour), &trend);
+        push_cost_row(&grid, row, "Rate", &fmt_money(br.cost_per_hour), "/hr");
         row += 1;
     }
     if cost.session_usd > 0.0 {
@@ -1022,7 +1013,15 @@ fn cost_section(cost: &CostInfo) -> GBox {
         row,
         "Today",
         &fmt_money(cost.today_usd),
-        &format!("·  {} tokens", format_tokens(cost.today_tokens)),
+        &match cost.today_vs_avg_percent() {
+            Some(pct) => format!(
+                "{}{:.0}% vs prior avg  ·  {} tokens",
+                if pct >= 0.0 { "↑" } else { "↓" },
+                pct.abs(),
+                format_tokens(cost.today_tokens)
+            ),
+            None => format!("·  {} tokens", format_tokens(cost.today_tokens)),
+        },
     );
     row += 1;
     push_cost_row(

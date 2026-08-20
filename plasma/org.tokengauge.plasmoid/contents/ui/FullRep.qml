@@ -18,7 +18,7 @@ Item {
     readonly property var row: root.rows.length > 0
         ? root.rows[Math.min(root.selectedIndex, root.rows.length - 1)]
         : null
-    readonly property var oauthProviders: ["codex", "claude"]
+    readonly property var oauthProviders: root.snapshot.providers || ["codex", "claude"]
 
     function chartMax(hist) {
         var m = 0

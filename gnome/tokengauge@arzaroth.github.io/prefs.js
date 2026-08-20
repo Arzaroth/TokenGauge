@@ -116,17 +116,26 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
                     active: enabled.includes(name),
                 });
                 // The row stays insensitive until its write lands, so a second
-                // toggle cannot finish first and leave the config inverted.
+                // toggle cannot finish first and leave the config inverted, and
+                // a failed write snaps the switch back to what the config holds.
+                let confirmed = row.active;
+                let reverting = false;
                 row.connect('notify::active', () => {
-                    const value = row.active ? 'true' : 'false';
-                    const arg = shellQuote(`${name}=${value}`);
+                    if (reverting)
+                        return;
+                    const desired = row.active;
+                    const arg = shellQuote(`${name}=${desired ? 'true' : 'false'}`);
                     row.sensitive = false;
                     run(`${bin()} --set-provider ${arg}`, cancellable, (ok, _out, err) => {
                         row.sensitive = true;
                         if (!ok) {
                             row.subtitle = (err || '').trim().split('\n')[0] ||
                                 _('could not update the config');
+                            reverting = true;
+                            row.active = confirmed;
+                            reverting = false;
                         } else {
+                            confirmed = desired;
                             row.subtitle = '';
                         }
                     });

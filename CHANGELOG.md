@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-20
+
 ### Added
 
 - **GNOME Shell extension** (`gnome/tokengauge@arzaroth.github.io`, GNOME 45+): panel indicator with the provider brand icon and usage percent, and a popup carrying provider tabs, tier-coloured usage meters with reset + pace, cost rows, a 7-day chart, pin-to-bar, and the update banner. Scroll the panel button to cycle providers, middle-click to refresh. Preferences (binary path, refresh interval, panel percent, OAuth provider toggles) are an Adwaita window. Install with `scripts/install-gnome.sh`.

@@ -140,7 +140,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
     // after the newer request has already set it up.
     _run(command, onDone) {
         this._cancel();
-        const requestId = ++this._requestId;
+        const requestId = this._requestId;
         const isCurrent = () => requestId === this._requestId;
         this._cancellable = new Gio.Cancellable();
         const wrapped = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ${command}`;
@@ -243,7 +243,10 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         this._reload();
     }
 
+    // Also invalidates the in-flight request, so a queued callback cannot render
+    // through a destroyed indicator.
     _cancel() {
+        this._requestId++;
         if (this._cancellable) {
             this._cancellable.cancel();
             this._cancellable = null;

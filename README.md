@@ -2,7 +2,7 @@
 
 [![GitHub release](https://img.shields.io/github/v/release/Arzaroth/TokenGauge)](https://github.com/Arzaroth/TokenGauge/releases)
 
-Monitor token usage, costs, and limits for AI coding assistants from your Waybar, KDE Plasma panel, and TUI. Usage limits are fetched natively over HTTP for Claude, Codex, Kimi, Grok, and GLM (z.ai), and [ccusage](https://github.com/ryoppippi/ccusage) provides the cost breakdown. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
+Monitor token usage, costs, and limits for AI coding assistants from your Waybar, KDE Plasma panel, GNOME Shell panel, and TUI. Usage limits are fetched natively over HTTP for Claude, Codex, Kimi, Grok, and GLM (z.ai), and [ccusage](https://github.com/ryoppippi/ccusage) provides the cost breakdown. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
 
 | Waybar | TUI | KDE Plasma |
 |--------|-----|------------|
@@ -16,6 +16,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **KDE Plasma 6 applet**: native panel widget (QML plasmoid) mirroring the popover - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, a 7-day chart, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
 - **Cost tracking via ccusage**: today, month, 7-day rolling, per-model split, current burn rate $/hr, 7-day chart, today's spend vs the average of the prior days
 - **Multi-provider**: Claude, Codex, Kimi, Grok, and GLM (z.ai)
+- **GNOME Shell extension**: panel indicator for GNOME 45+ mirroring the Plasma applet - brand icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, a 7-day chart, and pin-to-bar, plus an Adwaita preferences window for the provider toggles. Shares the same config, cache, and daemon as the Waybar module.
 - **Pace tracking**: each usage window projects where it lands at reset from the current burn rate (`ends ~16%`, or `empty in 2h 15m` when it runs out first) - shown next to each reset in the Waybar tooltip, TUI, popover, and Plasma applet (hidden until 3% of the window has elapsed)
 - **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary
 - **Threshold notifications**: `notify-send` alerts at 50/80/95% (configurable) - one-shot per threshold, resets on window roll-over
@@ -214,14 +215,39 @@ open dashboard/status, provider toggles, pin) through the same
 `tokengauge-waybar` binary, so the daemon stays the single source of truth and
 threshold notifications keep firing.
 
-Panel behaviour matches Waybar: left-click opens the popup, right-click
-refreshes, middle-click opens the dashboard, back-button opens the status page,
-scroll rotates the shown provider. Point the applet at a non-default binary or
-change its poll interval in the widget's own settings.
+Panel behaviour matches Waybar configured with `click_action = "popover"` (the
+default is `"tui"`): left-click opens the popup, right-click refreshes,
+middle-click opens the dashboard, back-button opens the status page, scroll
+rotates the shown provider. Point the applet at a non-default binary or change
+its poll interval in the widget's own settings.
 
-> GNOME Shell is not supported yet. The `tokengauge-waybar --json` seam is
-> desktop-agnostic, so a GNOME extension can be built on the same contract
-> later.
+## GNOME Shell extension
+
+On GNOME 45+, TokenGauge ships a Shell extension that puts the same panel
+indicator and popup on GNOME - additive like the Plasma applet, so the Waybar
+module keeps working. From a local checkout:
+
+```bash
+bash scripts/install-gnome.sh
+```
+
+The script builds the release binaries, installs the provider logos to
+`~/.local/share/tokengauge/icons`, copies the extension into
+`~/.local/share/gnome-shell/extensions/tokengauge@arzaroth.github.io`, compiles
+its GSettings schema, and enables it. Reload the shell afterwards - Alt+F2 then
+`r` on Xorg, or log out and back in on Wayland.
+
+The panel button shows the pinned provider's brand icon and usage percent;
+scroll it to cycle providers, middle-click to force a refresh, left-click for
+the popup (provider tabs, tier-coloured usage bars with reset + pace, cost
+rows, a 7-day chart, pin-to-bar, and the **Update** button when a release is
+available). Binary path, refresh interval, panel percent, and the OAuth
+provider toggles live in the extension's preferences
+(`gnome-extensions prefs tokengauge@arzaroth.github.io`).
+
+Like the Plasma applet it polls `tokengauge-waybar --json` and routes every
+action back through the same binary, so the shared config, cache, daemon, and
+threshold notifications are untouched.
 
 ## Diagnostics
 
@@ -355,8 +381,9 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 
 ## Windows 10
 
-The Waybar module, the GTK4 popover, and the KDE Plasma applet are Linux-only
-(they depend on Waybar / `gtk4-layer-shell` / Plasma). On Windows two surfaces
+The Waybar module, the GTK4 popover, the KDE Plasma applet, and the GNOME
+Shell extension are Linux-only (they depend on Waybar / `gtk4-layer-shell` /
+Plasma / GNOME Shell). On Windows two surfaces
 are supported, both building and running natively on Windows 10: the
 **TUI dashboard** (`tokengauge-tui.exe`) and a **system-tray GUI**
 (`tokengauge-tray.exe`, see [Tray GUI](#tray-gui-tokengauge-tray) below).

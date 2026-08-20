@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="tokengauge">
+  <schema id="org.gnome.shell.extensions.tokengauge" path="/org/gnome/shell/extensions/tokengauge/">
+    <key name="waybar-binary" type="s">
+      <default>'tokengauge-waybar'</default>
+      <summary>tokengauge-waybar binary</summary>
+      <description>Command used to read the usage snapshot. A bare name is looked up on PATH, with ~/.local/bin and ~/bin prepended.</description>
+    </key>
+    <key name="refresh-interval" type="i">
+      <range min="15" max="3600"/>
+      <default>60</default>
+      <summary>Refresh interval in seconds</summary>
+      <description>How often the snapshot is re-read. The cache and daemon decide when a network fetch actually happens.</description>
+    </key>
+    <key name="show-percent" type="b">
+      <default>true</default>
+      <summary>Show the usage percent in the panel</summary>
+      <description>When off, the panel shows only the provider icon.</description>
+    </key>
+  </schema>
+</schemalist>

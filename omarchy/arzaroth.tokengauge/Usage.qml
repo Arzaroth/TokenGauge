@@ -51,7 +51,31 @@ Item {
     root.loading = true
     snapshotProcess.command = command(tail)
     snapshotProcess.running = true
+    watchdog.restart()
     return true
+  }
+
+  // A run that never returns would pin `running` true and block every later
+  // refresh for the life of the shell. SIGTERM first, because a wedged fetch
+  // still gets to clean up; SIGKILL only if it ignores that.
+  Timer {
+    id: watchdog
+    interval: 90000
+    repeat: false
+    onTriggered: {
+      if (!snapshotProcess.running) return
+      console.warn("tokengauge", "snapshot run timed out, terminating")
+      root.lastError = "Snapshot timed out"
+      snapshotProcess.running = false
+      killTimer.restart()
+    }
+  }
+
+  Timer {
+    id: killTimer
+    interval: 5000
+    repeat: false
+    onTriggered: if (snapshotProcess.running) snapshotProcess.signal(9)
   }
 
   function reload() {
@@ -69,14 +93,33 @@ Item {
   }
 
   // Both of these rewrite ~/.config/tokengauge/config.toml and reload the
-  // daemon, so the follow-up --json in the same subprocess already reflects
-  // the change.
+  // daemon. The follow-up --json in the same subprocess sees the new config
+  // but renders from the cache, and a provider enabled for the first time has
+  // nothing cached yet - so its row, and the chip that switches to it, only
+  // appear once the daemon has actually fetched it. Re-read for a while
+  // afterwards rather than leaving the panel looking like the toggle failed.
   function setProvider(name, enable) {
     action("--set-provider " + shellQuote(name + "=" + (enable ? "true" : "false")))
+    settle.restart()
   }
 
   function setPrimary(name) {
     action("--set-primary " + shellQuote(name))
+    settle.restart()
+  }
+
+  Timer {
+    id: settle
+    interval: 4000
+    repeat: true
+    triggeredOnStart: false
+    property int remaining: 0
+    onRunningChanged: if (running) remaining = 4
+    onTriggered: {
+      root.reload()
+      remaining--
+      if (remaining <= 0) stop()
+    }
   }
 
   function applyUpdate() {
@@ -92,6 +135,8 @@ Item {
     running: false
 
     onExited: function(exitCode) {
+      watchdog.stop()
+      killTimer.stop()
       root.loading = false
       root.updating = false
       if (exitCode !== 0 && root.lastError === "")

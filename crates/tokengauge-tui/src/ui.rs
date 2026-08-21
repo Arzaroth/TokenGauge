@@ -321,6 +321,12 @@ fn collect_usage_rows(row: &ProviderRow) -> Vec<UsageRow> {
         });
     }
     for extra in &row.extra_windows {
+        // A window the provider exposes a slot for but reports nothing in is a
+        // permanently empty row on a dashboard. The waybar tooltip keeps them
+        // so its shape does not shift; here there is nothing to hold in place.
+        if extra.placeholder {
+            continue;
+        }
         rows.push(UsageRow {
             label: extra.title.clone(),
             used: extra.used,
@@ -959,6 +965,10 @@ fn render_help_popup(frame: &mut Frame, area: Rect) {
         binding_line("?", "toggle this help", key, desc),
         binding_line("q / esc", "quit", key, desc),
         Line::from(""),
+        Line::from(Span::styled(
+            format!("  TokenGauge v{}", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(dim()),
+        )),
         Line::from(Span::styled(
             "  press any key to close",
             Style::default().fg(dim()),

@@ -367,8 +367,14 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             this._content.add_child(this._meter(windowLabels[1], row.weekly_used, row.weekly_reset, row.weekly_pace));
         if (row.tertiary_used !== null && row.tertiary_used !== undefined)
             this._content.add_child(this._meter(windowLabels[2], row.tertiary_used, row.tertiary_reset, null));
-        for (const extra of row.extra_windows || [])
+        // Skip the windows the provider exposes a slot for but reports nothing
+        // in; they are a permanently empty meter here. The waybar tooltip keeps
+        // them so its shape does not shift.
+        for (const extra of row.extra_windows || []) {
+            if (extra.placeholder === true)
+                continue;
             this._content.add_child(this._meter(extra.title, extra.used, extra.reset, null));
+        }
 
         if (row.cost) {
             this._content.add_child(this._costSection(row.cost));

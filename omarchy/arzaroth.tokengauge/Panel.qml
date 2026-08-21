@@ -929,6 +929,17 @@ Panel {
             wrapMode: Text.WordWrap
           }
 
+          Text {
+            visible: root.settingsOpen
+            width: parent.width
+            // The binary's version, not the plugin manifest's: they are
+            // installed separately, and the binary is what produces the data.
+            text: usage.version !== "" ? "TokenGauge v" + usage.version : "TokenGauge"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
           // ---------- Errors ----------
           Repeater {
             model: usage.errors

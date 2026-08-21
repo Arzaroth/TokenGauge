@@ -78,28 +78,6 @@ if [[ ${#icons[@]} -eq 0 ]]; then
 fi
 install -m 0644 "${icons[@]}" "$ICON_DIR/"
 
-# The widget rides on omarchy shell internals that carry no stability promise,
-# and omarchy is pre-1.0 on that surface. A monthly check reports upstream
-# commits touching only the paths the widget actually depends on.
-info "Installing the upstream watcher..."
-install -m 0755 "$SCRIPT_DIR/tokengauge-omarchy-watch" "$INSTALL_DIR/tokengauge-omarchy-watch"
-
-if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
-  UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-  mkdir -p "$UNIT_DIR"
-  install -m 0644 "$SCRIPT_DIR/tokengauge-omarchy-watch.service" "$UNIT_DIR/"
-  install -m 0644 "$SCRIPT_DIR/tokengauge-omarchy-watch.timer" "$UNIT_DIR/"
-  systemctl --user daemon-reload
-  systemctl --user enable --now tokengauge-omarchy-watch.timer >/dev/null 2>&1 &&
-    info "Monthly upstream check enabled." ||
-    warn "Could not enable tokengauge-omarchy-watch.timer."
-  # Record today's upstream HEAD so the first scheduled run reports changes
-  # since the install rather than since the beginning of the repository.
-  "$INSTALL_DIR/tokengauge-omarchy-watch" --quiet --no-notify >/dev/null 2>&1 || true
-else
-  warn "No systemd --user session; run tokengauge-omarchy-watch by hand to check upstream."
-fi
-
 # The daemon keeps serving from the binary it started with, so a fresh build
 # only reaches the widget once the unit restarts.
 if systemctl --user is-active --quiet tokengauge-daemon 2>/dev/null; then
@@ -148,6 +126,3 @@ echo "  omarchy bar set $PLUGIN_ID refreshIntervalSec 300 --json"
 echo
 echo "Provider selection, thresholds, and everything else stay in"
 echo "~/.config/tokengauge/config.toml, shared with the Waybar module."
-echo
-echo "Upstream watch: tokengauge-omarchy-watch          (runs monthly via systemd)"
-echo "                systemctl --user list-timers tokengauge-omarchy-watch.timer"

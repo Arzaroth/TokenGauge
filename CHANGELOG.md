@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `tokengauge-omarchy-watch` and a monthly systemd user timer, installed by `scripts/install-omarchy.sh`. The Omarchy bar widget imports omarchy's own `qs.Ui` / `qs.Commons` components and rides on its plugin manifest schema and `shell.json` storage rules - internals with no stability promise in a project still tagged `4.0.0.alpha`. The check reports upstream commits touching only those paths, and notifies when it finds any. It reads and never modifies.
+- The Omarchy widget regains the mouse and keyboard bindings the Waybar module has: scroll the bar icon to move through providers, middle-click for the usage dashboard, back (mouse 8) for the status page, and `u` / `s` in the panel to open those same two - spelled the way the TUI spells them. The settings pane moves from `s` to `,` rather than shadowing the status-page key.
+- Each row in `tokengauge-waybar --json` carries `dashboard_url` and `status_url`. `--open` resolves the provider from the config rather than from the caller, so a frontend that keeps its own selection could not use it without opening the wrong provider.
 
 ### Changed
 

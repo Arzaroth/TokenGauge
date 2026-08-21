@@ -373,6 +373,23 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
                 };
                 map.insert("session_pace".into(), pace_badge(r.session_pace));
                 map.insert("weekly_pace".into(), pace_badge(r.weekly_pace));
+                // Frontends that keep their own provider selection cannot use
+                // `--open`, which resolves the provider from the config rather
+                // than from the caller. Carrying the URLs on the row lets them
+                // open exactly the provider they are displaying.
+                let urls = tokengauge_core::provider_urls(&r.provider);
+                map.insert(
+                    "dashboard_url".into(),
+                    urls.dashboard
+                        .map(serde_json::Value::from)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                map.insert(
+                    "status_url".into(),
+                    urls.status
+                        .map(serde_json::Value::from)
+                        .unwrap_or(serde_json::Value::Null),
+                );
             }
             v
         })

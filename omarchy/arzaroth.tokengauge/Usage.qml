@@ -44,11 +44,14 @@ Item {
     return ["sh", "-c", 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ' + tail]
   }
 
+  // Returns false when a run is already in flight, so callers that arm a
+  // spinner do not leave it spinning on a request that never started.
   function run(tail) {
-    if (snapshotProcess.running) return
+    if (snapshotProcess.running) return false
     root.loading = true
     snapshotProcess.command = command(tail)
     snapshotProcess.running = true
+    return true
   }
 
   function reload() {
@@ -77,11 +80,11 @@ Item {
   }
 
   function applyUpdate() {
-    if (snapshotProcess.running) return
-    root.updating = true
     // --update's human-readable stdout would break JSON.parse; its stderr is
-    // kept so a failed update still surfaces.
-    run(shellQuote(binary) + " --update >/dev/null && " + shellQuote(binary) + " --json")
+    // kept so a failed update still surfaces. The flag is armed only once the
+    // run is accepted, or a refused one strands the button on "Updating…".
+    root.updating = run(shellQuote(binary) + " --update >/dev/null && "
+                        + shellQuote(binary) + " --json")
   }
 
   Process {

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "arzaroth.tokengauge",
+  "name": "TokenGauge",
+  "version": "0.15.0",
+  "author": "Arzaroth",
+  "license": "MIT",
+  "description": "Token usage, limits, pace, and cost for Claude, Codex, Kimi, Grok, and GLM in an Omarchy bar panel.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "TokenGauge",
+    "description": "One bar icon and one panel: usage limits with pace, ccusage cost breakdown, and a rolling history for every AI coding subscription.",
+    "category": "AI",
+    "defaultSection": "right",
+    "aliases": ["tokengauge", "token-gauge"],
+    "allowMultiple": false,
+    "defaults": {
+      "refreshIntervalSec": 600,
+      "binary": "tokengauge-waybar"
+    },
+    "schema": [
+      { "key": "refreshIntervalSec", "type": "integer", "label": "Refresh interval (seconds)", "min": 30, "max": 3600, "step": 30, "defaultValue": 600 },
+      { "key": "binary", "type": "string", "label": "tokengauge-waybar binary", "defaultValue": "tokengauge-waybar", "description": "Command used to read the usage snapshot. Override only for a non-standard install path." }
+    ]
+  }
+}

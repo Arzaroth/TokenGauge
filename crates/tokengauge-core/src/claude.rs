@@ -222,25 +222,35 @@ fn routines_window(rest: &Map<String, Value>) -> Option<ExtraRateWindow> {
             break;
         }
     }
-    let window = match (populated, explicit_null) {
-        (Some(w), _) => UsageWindow {
-            used_percent: Some(pct_u8(w.utilization.unwrap_or(0.0))),
-            reset_description: None,
-            resets_at: w.resets_at,
-            window_minutes: Some(10080),
-        },
-        (None, true) => UsageWindow {
-            used_percent: Some(0),
-            reset_description: None,
-            resets_at: None,
-            window_minutes: Some(10080),
-        },
+    // An explicit null means the account has no routines allowance at all, as
+    // opposed to one it holds and has not spent: the window is a placeholder,
+    // and only a frontend that must keep a fixed shape should draw it.
+    let (window, placeholder) = match (populated, explicit_null) {
+        (Some(w), _) => (
+            UsageWindow {
+                used_percent: Some(pct_u8(w.utilization.unwrap_or(0.0))),
+                reset_description: None,
+                resets_at: w.resets_at,
+                window_minutes: Some(10080),
+            },
+            false,
+        ),
+        (None, true) => (
+            UsageWindow {
+                used_percent: Some(0),
+                reset_description: None,
+                resets_at: None,
+                window_minutes: Some(10080),
+            },
+            true,
+        ),
         (None, false) => return None,
     };
     Some(ExtraRateWindow {
         id: Some("claude-routines".to_string()),
         title: Some("Daily Routines".to_string()),
         window: Some(window),
+        placeholder,
     })
 }
 
@@ -286,6 +296,7 @@ fn scoped_weekly_windows(limits: &[Limit]) -> Vec<ExtraRateWindow> {
                 resets_at: limit.resets_at.clone(),
                 window_minutes: Some(10080),
             }),
+            placeholder: false,
         });
     }
     out
@@ -454,6 +465,41 @@ mod tests {
         assert_eq!(w.id.as_deref(), Some("claude-routines"));
         assert_eq!(w.window.as_ref().unwrap().used_percent, Some(0));
         assert!(w.window.as_ref().unwrap().resets_at.is_none());
+        // The slot exists but the account has no allowance behind it, so a
+        // frontend with room only for real windows can drop it.
+        assert!(w.placeholder);
+    }
+
+    #[test]
+    fn populated_routine_alias_is_not_a_placeholder() {
+        let body =
+            resp(r#"{"five_hour":{"utilization":1.0},"seven_day_routines":{"utilization":12.0}}"#);
+        let payload = to_payload(body, None, Utc::now()).unwrap();
+        let w = &payload.usage.unwrap().extra_rate_windows[0];
+        assert_eq!(w.window.as_ref().unwrap().used_percent, Some(12));
+        assert!(!w.placeholder);
+    }
+
+    #[test]
+    fn unspent_scoped_weekly_window_is_not_a_placeholder() {
+        // A model-scoped week the account holds but has not spent reports 0%
+        // with no reset, which looks identical to the null-alias placeholder
+        // by value alone - only its provenance separates them.
+        let body = resp(
+            r#"{"five_hour":{"utilization":1.0},
+                "limits":[{"group":"weekly","kind":"weekly_scoped","percent":0,
+                           "resets_at":null,
+                           "scope":{"model":{"display_name":"Fable"}}}]}"#,
+        );
+        let payload = to_payload(body, None, Utc::now()).unwrap();
+        let windows = payload.usage.unwrap().extra_rate_windows;
+        let fable = windows
+            .iter()
+            .find(|w| w.title.as_deref() == Some("Fable only"))
+            .expect("scoped weekly window");
+        assert_eq!(fable.window.as_ref().unwrap().used_percent, Some(0));
+        assert!(fable.window.as_ref().unwrap().resets_at.is_none());
+        assert!(!fable.placeholder);
     }
 
     #[test]

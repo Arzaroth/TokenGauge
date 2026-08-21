@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Days, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "self-update")]
@@ -42,6 +42,12 @@ pub struct ExtraRateWindow {
     pub id: Option<String>,
     pub title: Option<String>,
     pub window: Option<UsageWindow>,
+    /// True when the provider exposes a slot for this window but reports
+    /// nothing in it - a feature the account does not have, rather than one it
+    /// has and has not used. Frontends with room for only real windows drop
+    /// these; the waybar module keeps them so its shape does not shift.
+    #[serde(default)]
+    pub placeholder: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -694,6 +700,10 @@ pub struct CostInfo {
     /// Last N days of total cost per day (oldest -> newest). N = up to 7.
     #[serde(default)]
     pub weekly_cost_history: Vec<f64>,
+    /// Same window as `weekly_cost_history`, carrying the date and the token
+    /// count each day's cost was rated from.
+    #[serde(default)]
+    pub weekly_history: Vec<DayCost>,
 }
 
 impl CostInfo {
@@ -719,12 +729,29 @@ impl CostInfo {
     }
 }
 
+/// One day of spend, as ccusage rated it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DayCost {
+    /// ccusage `period`, `YYYY-MM-DD`.
+    pub date: String,
+    pub usd: f64,
+    pub tokens: u64,
+}
+
 /// Per-model cost slice (ccusage modelBreakdowns).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCost {
     pub model: String,
     pub usd: f64,
     pub tokens: u64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
 }
 
 /// Current burn rate + 5h-block projection from ccusage `blocks --active`.
@@ -772,6 +799,8 @@ pub struct ExtraWindowRow {
     pub title: String,
     pub used: Option<u8>,
     pub reset: String,
+    /// See [`ExtraRateWindow::placeholder`].
+    pub placeholder: bool,
 }
 
 // ============================================================================
@@ -1206,8 +1235,14 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
             .into_iter()
             .filter_map(|w| {
                 let title = w.title?;
+                let placeholder = w.placeholder;
                 let (used, _, reset) = format_window(w.window);
-                Some(ExtraWindowRow { title, used, reset })
+                Some(ExtraWindowRow {
+                    title,
+                    used,
+                    reset,
+                    placeholder,
+                })
             })
             .collect();
     }
@@ -1843,7 +1878,10 @@ pub fn model_to_provider(model: &str) -> Option<&'static str> {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Length of the rolling cost history, in days.
+const WEEKLY_HISTORY_DAYS: usize = 7;
+
+#[derive(Debug, Clone, Default, Deserialize)]
 struct CcusageDailyResponse {
     #[serde(default)]
     daily: Vec<CcusageDay>,
@@ -1878,11 +1916,32 @@ fn ccusage_total_tokens(b: &CcusageModelBreakdown) -> u64 {
     b.input_tokens + b.output_tokens + b.cache_creation_tokens + b.cache_read_tokens
 }
 
+/// Running per-model totals, minus the model name (it is the map key).
+#[derive(Default)]
+struct ModelTotals {
+    usd: f64,
+    tokens: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
+}
+
+impl ModelTotals {
+    fn add(&mut self, b: &CcusageModelBreakdown) {
+        self.usd += b.cost;
+        self.tokens += ccusage_total_tokens(b);
+        self.input_tokens += b.input_tokens;
+        self.output_tokens += b.output_tokens;
+        self.cache_creation_tokens += b.cache_creation_tokens;
+        self.cache_read_tokens += b.cache_read_tokens;
+    }
+}
+
 struct AggregatedProvider {
     total_usd: f64,
     total_tokens: u64,
-    /// per-model: model_name -> (usd, tokens)
-    models: HashMap<String, (f64, u64)>,
+    models: HashMap<String, ModelTotals>,
 }
 
 impl AggregatedProvider {
@@ -1890,7 +1949,15 @@ impl AggregatedProvider {
         let mut models: Vec<ModelCost> = self
             .models
             .into_iter()
-            .map(|(model, (usd, tokens))| ModelCost { model, usd, tokens })
+            .map(|(model, t)| ModelCost {
+                model,
+                usd: t.usd,
+                tokens: t.tokens,
+                input_tokens: t.input_tokens,
+                output_tokens: t.output_tokens,
+                cache_creation_tokens: t.cache_creation_tokens,
+                cache_read_tokens: t.cache_read_tokens,
+            })
             .collect();
         models.sort_by(|a, b| {
             b.usd
@@ -1901,35 +1968,59 @@ impl AggregatedProvider {
     }
 }
 
-/// Last `n` days of cost per provider, oldest first. Pads with 0.0 for any
-/// days missing from the response so the sparkline has consistent length.
-fn last_n_days_by_provider(response: &CcusageDailyResponse, n: usize) -> HashMap<String, Vec<f64>> {
-    // (provider, period) -> usd
-    let mut per_day: HashMap<String, HashMap<String, f64>> = HashMap::new();
-    let mut periods: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+/// The last `n` calendar days ending at `today`, oldest first.
+///
+/// ccusage omits days with no usage entirely, so the window has to be built
+/// from the calendar rather than from the response: an idle day is $0 spent,
+/// not a day that did not happen, and dropping it silently shortens the series
+/// and shifts every label in a chart drawn from it.
+fn recent_periods(today: NaiveDate, n: usize) -> Vec<String> {
+    (0..n)
+        .rev()
+        .filter_map(|offset| today.checked_sub_days(Days::new(offset as u64)))
+        .map(|date| date.format("%Y-%m-%d").to_string())
+        .collect()
+}
+
+/// Last `n` calendar days of cost and tokens per provider, oldest first. Every
+/// provider's series covers the same dates, zero-filled where it spent nothing.
+fn last_n_days_by_provider(
+    response: &CcusageDailyResponse,
+    today: NaiveDate,
+    n: usize,
+) -> HashMap<String, Vec<DayCost>> {
+    // (provider, period) -> (usd, tokens)
+    let mut per_day: HashMap<String, HashMap<String, (f64, u64)>> = HashMap::new();
     for day in &response.daily {
         if day.period.is_empty() {
             continue;
         }
-        periods.insert(day.period.clone());
         for b in &day.model_breakdowns {
             if let Some(provider) = model_to_provider(&b.model_name) {
-                *per_day
+                let entry = per_day
                     .entry(provider.to_string())
                     .or_default()
                     .entry(day.period.clone())
-                    .or_insert(0.0) += b.cost;
+                    .or_insert((0.0, 0));
+                entry.0 += b.cost;
+                entry.1 += ccusage_total_tokens(b);
             }
         }
     }
-    let periods: Vec<String> = periods.into_iter().rev().take(n).collect();
-    let periods: Vec<String> = periods.into_iter().rev().collect();
+    let periods = recent_periods(today, n);
     per_day
         .into_iter()
         .map(|(provider, days)| {
-            let series: Vec<f64> = periods
+            let series: Vec<DayCost> = periods
                 .iter()
-                .map(|p| days.get(p).copied().unwrap_or(0.0))
+                .map(|p| {
+                    let (usd, tokens) = days.get(p).copied().unwrap_or((0.0, 0));
+                    DayCost {
+                        date: p.clone(),
+                        usd,
+                        tokens,
+                    }
+                })
                 .collect();
             (provider, series)
         })
@@ -1949,12 +2040,9 @@ fn aggregate_ccusage(response: &CcusageDailyResponse) -> HashMap<String, Aggrega
                             total_tokens: 0,
                             models: HashMap::new(),
                         });
-                let tokens = ccusage_total_tokens(b);
                 entry.total_usd += b.cost;
-                entry.total_tokens += tokens;
-                let model_entry = entry.models.entry(b.model_name.clone()).or_insert((0.0, 0));
-                model_entry.0 += b.cost;
-                model_entry.1 += tokens;
+                entry.total_tokens += ccusage_total_tokens(b);
+                entry.models.entry(b.model_name.clone()).or_default().add(b);
             }
         }
     }
@@ -2180,7 +2268,20 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
     let mut today_agg = aggregate_ccusage(&daily);
     let mut monthly_agg = aggregate_ccusage(&monthly);
     let mut active_blocks = fetch_active_blocks(timeout);
-    let mut weekly_history = last_n_days_by_provider(&monthly, 7);
+
+    // The rolling 7-day window needs its own query: `monthly` starts at the
+    // 1st, so for the first six days of a month the window reaches back into
+    // the previous one and every day before the 1st would zero-fill - which
+    // reads as "spent nothing" rather than "not asked for", understating
+    // `weekly_usd` and inflating the today-vs-average baseline.
+    let today_date = Local::now().date_naive();
+    let week_start = today_date
+        .checked_sub_days(Days::new(WEEKLY_HISTORY_DAYS as u64 - 1))
+        .unwrap_or(today_date)
+        .format("%Y%m%d")
+        .to_string();
+    let weekly = run_ccusage(&["daily", "--since", &week_start], timeout).unwrap_or_default();
+    let mut weekly_history = last_n_days_by_provider(&weekly, today_date, WEEKLY_HISTORY_DAYS);
 
     let mut result = HashMap::new();
     let providers: std::collections::HashSet<String> = today_agg
@@ -2202,7 +2303,8 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
             .remove(&provider)
             .map(|a| (a.burn, a.session_usd))
             .unwrap_or((None, 0.0));
-        let weekly_cost_history = weekly_history.remove(&provider).unwrap_or_default();
+        let history = weekly_history.remove(&provider).unwrap_or_default();
+        let weekly_cost_history: Vec<f64> = history.iter().map(|d| d.usd).collect();
         let weekly_usd = weekly_cost_history.iter().sum();
         result.insert(
             provider,
@@ -2217,6 +2319,7 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
                 session_usd,
                 weekly_usd,
                 weekly_cost_history,
+                weekly_history: history,
             },
         );
     }
@@ -3322,6 +3425,7 @@ mod tests {
                 session_usd: 0.0,
                 weekly_usd: 0.0,
                 weekly_cost_history: Vec::new(),
+                weekly_history: Vec::new(),
             },
         );
         assert!(lookup_cost("Claude", &costs).is_some());
@@ -3344,6 +3448,7 @@ mod tests {
             weekly_usd: 0.0,
             // Three prior days at $10 plus today's partial entry.
             weekly_cost_history: vec![10.0, 10.0, 10.0, 20.0],
+            weekly_history: Vec::new(),
         };
         assert_eq!(cost.avg_daily_cost(), Some(10.0));
         assert_eq!(cost.today_vs_avg_percent(), Some(100.0));
@@ -3353,6 +3458,122 @@ mod tests {
             ..cost
         };
         assert_eq!(single_day.today_vs_avg_percent(), None);
+    }
+
+    fn ccusage_fixture() -> CcusageDailyResponse {
+        serde_json::from_str(
+            r#"{
+              "daily": [
+                {
+                  "period": "2026-08-18",
+                  "modelBreakdowns": [
+                    { "modelName": "claude-opus-5", "cost": 1.5,
+                      "inputTokens": 10, "outputTokens": 20,
+                      "cacheCreationTokens": 30, "cacheReadTokens": 40 }
+                  ]
+                },
+                {
+                  "period": "2026-08-20",
+                  "modelBreakdowns": [
+                    { "modelName": "claude-opus-5", "cost": 2.5,
+                      "inputTokens": 1, "outputTokens": 2,
+                      "cacheCreationTokens": 3, "cacheReadTokens": 4 },
+                    { "modelName": "gpt-5-codex", "cost": 9.0,
+                      "inputTokens": 5, "outputTokens": 5,
+                      "cacheCreationTokens": 0, "cacheReadTokens": 0 }
+                  ]
+                }
+              ]
+            }"#,
+        )
+        .expect("parse ccusage fixture")
+    }
+
+    fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).expect("valid date")
+    }
+
+    #[test]
+    fn daily_history_carries_dates_and_tokens() {
+        let history = last_n_days_by_provider(&ccusage_fixture(), day(2026, 8, 20), 4);
+        let claude = history.get("claude").expect("claude history");
+
+        // ccusage omits days with no usage, so the series is built from the
+        // calendar: the 17th predates the fixture and the 19th is idle, and
+        // both still get a zeroed entry rather than vanishing.
+        assert_eq!(
+            claude.iter().map(|d| d.date.as_str()).collect::<Vec<_>>(),
+            vec!["2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20"]
+        );
+        assert_eq!(
+            claude.iter().map(|d| d.tokens).collect::<Vec<_>>(),
+            vec![0, 100, 0, 10]
+        );
+        assert_eq!(claude[2].usd, 0.0);
+
+        // Every provider covers the same window: codex only spent on the 20th.
+        let codex = history.get("codex").expect("codex history");
+        assert_eq!(
+            codex.iter().map(|d| d.date.as_str()).collect::<Vec<_>>(),
+            claude.iter().map(|d| d.date.as_str()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            codex.iter().map(|d| d.tokens).collect::<Vec<_>>(),
+            vec![0, 0, 0, 10]
+        );
+    }
+
+    #[test]
+    fn daily_history_ends_on_today_and_ignores_later_entries() {
+        // A day past the window - a machine whose clock ran ahead, or a stale
+        // cache read after midnight - must not push the window forward.
+        let history = last_n_days_by_provider(&ccusage_fixture(), day(2026, 8, 19), 2);
+        let claude = history.get("claude").expect("claude history");
+        assert_eq!(
+            claude.iter().map(|d| d.date.as_str()).collect::<Vec<_>>(),
+            vec!["2026-08-18", "2026-08-19"]
+        );
+        assert_eq!(
+            claude.iter().map(|d| d.tokens).collect::<Vec<_>>(),
+            vec![100, 0]
+        );
+    }
+
+    #[test]
+    fn recent_periods_spans_a_month_boundary() {
+        assert_eq!(
+            recent_periods(day(2026, 3, 2), 3),
+            vec![
+                "2026-02-28".to_string(),
+                "2026-03-01".to_string(),
+                "2026-03-02".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn model_costs_carry_the_token_split() {
+        let mut agg = aggregate_ccusage(&ccusage_fixture());
+        let (usd, tokens, models) = agg.remove("claude").expect("claude").into_model_costs();
+
+        assert_eq!(usd, 4.0);
+        assert_eq!(tokens, 110);
+        assert_eq!(models.len(), 1);
+
+        let opus = &models[0];
+        assert_eq!(opus.model, "claude-opus-5");
+        assert_eq!(opus.tokens, 110);
+        assert_eq!(opus.input_tokens, 11);
+        assert_eq!(opus.output_tokens, 22);
+        assert_eq!(opus.cache_creation_tokens, 33);
+        assert_eq!(opus.cache_read_tokens, 44);
+        assert_eq!(
+            opus.input_tokens
+                + opus.output_tokens
+                + opus.cache_creation_tokens
+                + opus.cache_read_tokens,
+            opus.tokens
+        );
     }
 
     #[test]

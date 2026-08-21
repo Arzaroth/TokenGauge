@@ -271,6 +271,7 @@ fn to_payload(
             id: None,
             title: window.window_minutes.map(|m| format!("{m}-minute window")),
             window: Some(window),
+            placeholder: false,
         })
         .collect();
 

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `tokengauge-omarchy-watch` and a monthly systemd user timer, installed by `scripts/install-omarchy.sh`. The Omarchy bar widget imports omarchy's own `qs.Ui` / `qs.Commons` components and rides on its plugin manifest schema and `shell.json` storage rules - internals with no stability promise in a project still tagged `4.0.0.alpha`. The check reports upstream commits touching only those paths, and notifies when it finds any. It reads and never modifies.
+
+### Changed
+
+- The Omarchy widget's bar icon no longer carries a tooltip. It repeated the provider and plan that the panel's hero shows one click away, which is why the first-party widgets suppress theirs too. The per-row tooltips inside the panel stay - they carry the token split and exact figures, which are not on screen otherwise.
+
 ## [0.16.0] - 2026-08-21
 
 ### Added

@@ -27,6 +27,7 @@ Item {
   // needs the full list to draw a switch for each.
   readonly property var allProviders: snapshot && Array.isArray(snapshot.providers) ? snapshot.providers : []
   readonly property string primary: snapshot ? String(snapshot.primary || "") : ""
+  readonly property string version: snapshot ? String(snapshot.version || "") : ""
   readonly property var updateStatus: snapshot ? snapshot.update : null
 
   function setting(name, fallback) {

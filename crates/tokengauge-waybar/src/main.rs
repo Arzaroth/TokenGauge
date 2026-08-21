@@ -402,6 +402,9 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
     };
     let update_status = tokengauge_core::read_update_status(&config.cache_file);
     let out = serde_json::json!({
+        // Frontends show this in their settings pane; `update` only carries a
+        // version once a release check has run, and is null until then.
+        "version": env!("CARGO_PKG_VERSION"),
         "rows": row_values,
         "errors": errors,
         "enabled": enabled,

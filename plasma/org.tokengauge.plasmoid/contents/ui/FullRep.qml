@@ -241,7 +241,12 @@ Item {
                     reset: full.row ? full.row.tertiary_reset : ""
                 }
                 Repeater {
-                    model: !full.settingsOpen && full.row && full.row.extra_windows ? full.row.extra_windows : []
+                    // Drop the windows the provider exposes a slot for but
+                    // reports nothing in; they are a permanently empty meter
+                    // here. The waybar tooltip keeps them for its shape.
+                    model: !full.settingsOpen && full.row && full.row.extra_windows
+                           ? full.row.extra_windows.filter(function(w) { return w.placeholder !== true })
+                           : []
                     Meter {
                         required property var modelData
                         label: modelData.title
@@ -355,6 +360,16 @@ Item {
                         checked: root.snapshot.primary === modelData.provider.toLowerCase()
                         onToggled: if (checked) root.action("--set-primary " + modelData.provider.toLowerCase())
                     }
+                }
+                Kirigami.Separator {
+                    Layout.fillWidth: true
+                    visible: full.settingsOpen
+                }
+                PlasmaComponents.Label {
+                    visible: full.settingsOpen
+                    opacity: 0.5
+                    font: Kirigami.Theme.smallFont
+                    text: root.snapshot.version ? i18n("TokenGauge v%1", root.snapshot.version) : "TokenGauge"
                 }
             }
         }

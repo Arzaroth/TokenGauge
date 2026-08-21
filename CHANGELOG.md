@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Every panel frontend now shows the version it is running: the popover and Omarchy settings panes, the Plasma settings pane, the TUI's help popup, and an About row in the GNOME preferences. The GUIs read the binary's version rather than their own, since a frontend and the binary it reads from are installed separately - the release tarball ships only the Waybar module and the TUI, so a popover built from source can sit at a different version. `tokengauge-waybar --json` carries it as a top-level `version`.
+
+### Fixed
+
+- The TUI, popover, Plasma applet, and GNOME extension no longer draw a permanently empty meter for a limit the provider exposes a slot for but reports nothing in - "Daily Routines" on an account without it, most visibly. The Omarchy widget already dropped these; the others were still rendering them from the same `placeholder` flag they were ignoring. The Waybar tooltip keeps them, which is what the flag exists for: its layout is fixed and a row appearing or vanishing shifts it.
+
 ## [0.17.0] - 2026-08-21
 
 ### Added

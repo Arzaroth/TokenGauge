@@ -87,6 +87,24 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
         group.add(status);
 
         const bin = () => shellQuote(settings.get_string('waybar-binary') || 'tokengauge-waybar');
+
+        // The binary's version rather than the extension's: the extension is a
+        // thin client over it, and the two are installed separately, so the one
+        // that produces the data is the one worth reading.
+        const about = new Adw.PreferencesGroup({title: _('About')});
+        const version = new Adw.ActionRow({
+            title: _('TokenGauge'),
+            subtitle: _('Reading version…'),
+        });
+        about.add(version);
+
+        run(`${bin()} --version`, cancellable, (ok, stdout, stderr) => {
+            const text = (stdout || '').trim().split(/\s+/).pop();
+            version.subtitle = ok && text
+                ? `v${text}`
+                : ((stderr || '').trim().split('\n')[0] || _('could not read the version'));
+        });
+
         run(`${bin()} --json`, cancellable, (successful, stdout, stderr) => {
             if (!successful) {
                 status.title = _('Could not read providers');
@@ -143,5 +161,7 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
                 group.add(row);
             }
         });
+
+        page.add(about);
     }
 }

@@ -523,6 +523,18 @@ fn render_settings(scroller: &ScrolledWindow, body: &GBox, config_path: &Rc<Path
             }
         }
     });
+
+    // --- Version ---
+    // This binary's own version, not the daemon's: the release tarball ships
+    // only the waybar module and the TUI, so a popover built from source can
+    // sit at a different version and that is worth being able to see.
+    let version = Label::builder()
+        .label(format!("TokenGauge v{}", env!("CARGO_PKG_VERSION")))
+        .halign(Align::Start)
+        .css_classes(vec!["dim-label".to_string()])
+        .margin_top(12)
+        .build();
+    body.append(&version);
 }
 
 fn render_body(
@@ -842,6 +854,11 @@ fn provider_card_contents(row: &ProviderRow) -> GBox {
         idx += 1;
     }
     for extra in &row.extra_windows {
+        // See the TUI: a slot the provider reports nothing in is a permanently
+        // empty row here, however useful it is for the waybar tooltip's shape.
+        if extra.placeholder {
+            continue;
+        }
         push_gauge_row(&grid, idx, &extra.title, extra.used, &extra.reset, None);
         idx += 1;
     }

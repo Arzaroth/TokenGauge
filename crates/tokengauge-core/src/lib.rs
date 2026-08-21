@@ -2042,11 +2042,7 @@ fn aggregate_ccusage(response: &CcusageDailyResponse) -> HashMap<String, Aggrega
                         });
                 entry.total_usd += b.cost;
                 entry.total_tokens += ccusage_total_tokens(b);
-                entry
-                    .models
-                    .entry(b.model_name.clone())
-                    .or_default()
-                    .add(b);
+                entry.models.entry(b.model_name.clone()).or_default().add(b);
             }
         }
     }
@@ -3521,9 +3517,10 @@ mod tests {
             codex.iter().map(|d| d.date.as_str()).collect::<Vec<_>>(),
             claude.iter().map(|d| d.date.as_str()).collect::<Vec<_>>()
         );
-        assert_eq!(codex.iter().map(|d| d.tokens).collect::<Vec<_>>(), vec![
-            0, 0, 0, 10
-        ]);
+        assert_eq!(
+            codex.iter().map(|d| d.tokens).collect::<Vec<_>>(),
+            vec![0, 0, 0, 10]
+        );
     }
 
     #[test]
@@ -3536,18 +3533,22 @@ mod tests {
             claude.iter().map(|d| d.date.as_str()).collect::<Vec<_>>(),
             vec!["2026-08-18", "2026-08-19"]
         );
-        assert_eq!(claude.iter().map(|d| d.tokens).collect::<Vec<_>>(), vec![
-            100, 0
-        ]);
+        assert_eq!(
+            claude.iter().map(|d| d.tokens).collect::<Vec<_>>(),
+            vec![100, 0]
+        );
     }
 
     #[test]
     fn recent_periods_spans_a_month_boundary() {
-        assert_eq!(recent_periods(day(2026, 3, 2), 3), vec![
-            "2026-02-28".to_string(),
-            "2026-03-01".to_string(),
-            "2026-03-02".to_string(),
-        ]);
+        assert_eq!(
+            recent_periods(day(2026, 3, 2), 3),
+            vec![
+                "2026-02-28".to_string(),
+                "2026-03-01".to_string(),
+                "2026-03-02".to_string(),
+            ]
+        );
     }
 
     #[test]

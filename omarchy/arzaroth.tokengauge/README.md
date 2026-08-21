@@ -86,6 +86,24 @@ The daemon serves from the binary it started with, so after rebuilding run
 `systemctl --user restart tokengauge-daemon` (the installer does this for you)
 or the widget keeps reading the old snapshot shape.
 
+## Keeping up with Omarchy
+
+The widget imports omarchy's own `qs.Ui` / `qs.Commons` components and rides on
+the plugin manifest schema and the `shell.json` storage rules - internals with
+no stability promise, in a project still on a `4.0.0.alpha` tag. The installer
+enables a monthly systemd timer that reports upstream commits touching only the
+paths the widget actually depends on:
+
+```bash
+tokengauge-omarchy-watch                 # check now
+tokengauge-omarchy-watch --reset         # re-baseline on the current upstream HEAD
+systemctl --user list-timers tokengauge-omarchy-watch.timer
+```
+
+The watched paths, and the ones deliberately left out, are listed at the top of
+`scripts/tokengauge-omarchy-watch`. It only ever reads: a hit means "read the
+diff", not "you are broken".
+
 ## Developing
 
 The shell watches the plugin folder and logs `Local plugin changed, reloading`,

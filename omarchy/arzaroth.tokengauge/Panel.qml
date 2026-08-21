@@ -470,7 +470,10 @@ Panel {
     text: root.vertical ? root.barGlyph : root.barText
     hasVisualContent: text !== ""
     active: root.alarming
-    tooltipText: root.provider ? String(root.provider.plan_label || root.provider.label || "") : "TokenGauge"
+    // Suppressed because the panel is the detail view: the hero already says
+    // the provider and the plan, and a hover that repeats one click's worth of
+    // information is noise. Same reasoning as the first-party widgets.
+    tooltipText: ""
 
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) usage.refreshNow()

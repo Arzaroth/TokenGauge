@@ -46,8 +46,10 @@ and Fireworks. Both can sit in the bar at once; drop theirs with
   cache-read split.
 - **Update banner** - when a newer TokenGauge release is out, an Update button
   installs it in place.
-- **Settings** - the gear on the hero opens provider toggles and the
-  pin-to-bar picker, both writing straight to `config.toml`.
+- **Settings** - the gear on the hero (or `s`) opens provider toggles and the
+  pin-to-bar picker, both writing straight to `config.toml`. A provider enabled
+  for the first time has nothing cached yet, so its tab appears a few seconds
+  later, once the daemon has fetched it.
 
 ## Interactions
 
@@ -55,6 +57,8 @@ and Fireworks. Both can sit in the bar at once; drop theirs with
 - Panel: `h`/`l` switch provider, `j`/`k` scroll, `r` or Enter refresh, `s`
   toggles the settings pane, Tab moves to the neighboring bar panel, Esc
   closes.
+- Settings pane: a number key toggles the provider on that row, `p` walks the
+  pin through Highest and each enabled provider.
 - IPC: `omarchy-shell arzaroth.tokengauge <open|close|toggle|refresh|next>`.
 
 ## Settings

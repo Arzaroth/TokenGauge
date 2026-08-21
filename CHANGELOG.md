@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- The Omarchy widget regains the mouse and keyboard bindings the Waybar module has: scroll the bar icon to move through providers, middle-click for the usage dashboard, back (mouse 8) for the status page, and `u` / `s` in the panel to open those same two - spelled the way the TUI spells them. The settings pane moves from `s` to `,` rather than shadowing the status-page key.
+- Each row in `tokengauge-waybar --json` carries `dashboard_url` and `status_url`. `--open` resolves the provider from the config rather than from the caller, so a frontend that keeps its own selection could not use it without opening the wrong provider.
+
+### Changed
+
+- The Omarchy widget's bar icon no longer carries a tooltip. It repeated the provider and plan that the panel's hero shows one click away, which is why the first-party widgets suppress theirs too. The per-row tooltips inside the panel stay - they carry the token split and exact figures, which are not on screen otherwise.
+
 ## [0.16.0] - 2026-08-21
 
 ### Added

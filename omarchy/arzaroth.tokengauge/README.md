@@ -53,10 +53,14 @@ and Fireworks. Both can sit in the bar at once; drop theirs with
 
 ## Interactions
 
-- Bar icon: left = panel, right = refresh, middle = next provider.
-- Panel: `h`/`l` switch provider, `j`/`k` scroll, `r` or Enter refresh, `s`
-  toggles the settings pane, Tab moves to the neighboring bar panel, Esc
-  closes.
+- Bar icon: left = panel, right = refresh, middle = usage dashboard, back
+  (mouse 8) = status page, scroll = previous / next provider. The same set the
+  Waybar module binds, minus its rotate-and-persist: scrolling here moves the
+  panel's own selection and leaves `config.toml` alone.
+- Panel: `h`/`l` switch provider, `j`/`k` scroll, `r` or Enter refresh, `u` and
+  `s` open the active provider's usage dashboard and status page, `,` toggles
+  the settings pane, Tab moves to the neighboring bar panel, Esc closes.
+  `u` and `s` mean what they mean in the TUI.
 - Settings pane: a number key toggles the provider on that row, `p` walks the
   pin through Highest and each enabled provider.
 - IPC: `omarchy-shell arzaroth.tokengauge <open|close|toggle|refresh|next>`.

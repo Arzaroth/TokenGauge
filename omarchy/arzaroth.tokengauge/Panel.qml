@@ -45,6 +45,7 @@ Panel {
   readonly property bool alarming: !!headline && headline.percent >= 90
 
   property bool settingsOpen: false
+  property real wheelAccumulator: 0
 
   // Each section's header and its body read the same named predicate, so an
   // edit to one cannot leave a header with no rows under it.
@@ -80,6 +81,17 @@ Panel {
     var current = present(usage.primary) === "" ? "highest" : String(usage.primary).toLowerCase()
     var at = choices.indexOf(current)
     usage.setPrimary(choices[(at + 1) % choices.length])
+  }
+
+  // `tokengauge-waybar --open` resolves the provider from the config, not from
+  // the caller, so it would open the pinned provider rather than the tab you
+  // are looking at. The row carries its own URLs instead.
+  function openProviderUrl(key) {
+    if (!provider) return
+    var url = present(provider[key])
+    if (url === "") return
+    if (bar) bar.run("xdg-open " + JSON.stringify(url))
+    else Quickshell.execDetached(["xdg-open", url])
   }
 
   function selectProvider(index) {
@@ -470,12 +482,25 @@ Panel {
     text: root.vertical ? root.barGlyph : root.barText
     hasVisualContent: text !== ""
     active: root.alarming
-    tooltipText: root.provider ? String(root.provider.plan_label || root.provider.label || "") : "TokenGauge"
+    // Suppressed because the panel is the detail view: the hero already says
+    // the provider and the plan, and a hover that repeats one click's worth of
+    // information is noise. Same reasoning as the first-party widgets.
+    tooltipText: ""
 
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) usage.refreshNow()
-      else if (buttonCode === Qt.MiddleButton) root.selectProvider(root.providerIndex + 1)
+      else if (buttonCode === Qt.MiddleButton) root.openProviderUrl("dashboard_url")
+      else if (buttonCode === Qt.BackButton) root.openProviderUrl("status_url")
       else root.toggle()
+    }
+
+    // One notch is one provider. The accumulator keeps a touchpad's sub-notch
+    // deltas from either being dropped or spinning through the whole list.
+    onWheelMoved: function(delta) {
+      var wheel = Util.wheelSteps(root.wheelAccumulator, delta)
+      root.wheelAccumulator = wheel.remainder
+      if (wheel.steps === 0) return
+      root.selectProvider(root.providerIndex - wheel.steps)
     }
   }
 
@@ -504,9 +529,11 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         if (t === "r" || t === "R") usage.refreshNow()
-        else if (t === "s" || t === "S") root.settingsOpen = !root.settingsOpen
+        else if (t === ",") root.settingsOpen = !root.settingsOpen
         else if (root.settingsOpen && (t === "p" || t === "P")) root.cyclePin()
         else if (root.settingsOpen && /^[1-9]$/.test(t)) root.toggleProviderAt(Number(t) - 1)
+        else if (t === "u" || t === "U") root.openProviderUrl("dashboard_url")
+        else if (t === "s" || t === "S") root.openProviderUrl("status_url")
       }
 
       Flickable {
@@ -895,7 +922,7 @@ Panel {
             visible: root.settingsOpen
             width: parent.width
             topPadding: Style.space(4)
-            text: "Press a number to toggle a provider, p to walk the pin. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml."
+            text: "A number toggles a provider, p walks the pin, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

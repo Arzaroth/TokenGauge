@@ -493,6 +493,7 @@ fn push_unique(out: &mut Vec<ExtraRateWindow>, id: String, title: String, w: Win
         id: Some(id),
         title: Some(title),
         window: Some(add_usage(w)),
+        placeholder: false,
     });
 }
 

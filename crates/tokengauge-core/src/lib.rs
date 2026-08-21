@@ -42,6 +42,12 @@ pub struct ExtraRateWindow {
     pub id: Option<String>,
     pub title: Option<String>,
     pub window: Option<UsageWindow>,
+    /// True when the provider exposes a slot for this window but reports
+    /// nothing in it - a feature the account does not have, rather than one it
+    /// has and has not used. Frontends with room for only real windows drop
+    /// these; the waybar module keeps them so its shape does not shift.
+    #[serde(default)]
+    pub placeholder: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -793,6 +799,8 @@ pub struct ExtraWindowRow {
     pub title: String,
     pub used: Option<u8>,
     pub reset: String,
+    /// See [`ExtraRateWindow::placeholder`].
+    pub placeholder: bool,
 }
 
 // ============================================================================
@@ -1227,8 +1235,14 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
             .into_iter()
             .filter_map(|w| {
                 let title = w.title?;
+                let placeholder = w.placeholder;
                 let (used, _, reset) = format_window(w.window);
-                Some(ExtraWindowRow { title, used, reset })
+                Some(ExtraWindowRow {
+                    title,
+                    used,
+                    reset,
+                    placeholder,
+                })
             })
             .collect();
     }
@@ -1864,7 +1878,10 @@ pub fn model_to_provider(model: &str) -> Option<&'static str> {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Length of the rolling cost history, in days.
+const WEEKLY_HISTORY_DAYS: usize = 7;
+
+#[derive(Debug, Clone, Default, Deserialize)]
 struct CcusageDailyResponse {
     #[serde(default)]
     daily: Vec<CcusageDay>,
@@ -2255,7 +2272,20 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
     let mut today_agg = aggregate_ccusage(&daily);
     let mut monthly_agg = aggregate_ccusage(&monthly);
     let mut active_blocks = fetch_active_blocks(timeout);
-    let mut weekly_history = last_n_days_by_provider(&monthly, Local::now().date_naive(), 7);
+
+    // The rolling 7-day window needs its own query: `monthly` starts at the
+    // 1st, so for the first six days of a month the window reaches back into
+    // the previous one and every day before the 1st would zero-fill - which
+    // reads as "spent nothing" rather than "not asked for", understating
+    // `weekly_usd` and inflating the today-vs-average baseline.
+    let today_date = Local::now().date_naive();
+    let week_start = today_date
+        .checked_sub_days(Days::new(WEEKLY_HISTORY_DAYS as u64 - 1))
+        .unwrap_or(today_date)
+        .format("%Y%m%d")
+        .to_string();
+    let weekly = run_ccusage(&["daily", "--since", &week_start], timeout).unwrap_or_default();
+    let mut weekly_history = last_n_days_by_provider(&weekly, today_date, WEEKLY_HISTORY_DAYS);
 
     let mut result = HashMap::new();
     let providers: std::collections::HashSet<String> = today_agg

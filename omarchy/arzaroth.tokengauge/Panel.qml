@@ -29,6 +29,12 @@ Panel {
   readonly property int providerIndex: {
     for (var i = 0; i < providers.length; i++)
       if (String(providers[i].provider) === selectedProviderId) return i
+    // Nothing chosen yet, so follow the pinned provider - the bar reports its
+    // percentage, and opening the panel on a different one reads as a bug.
+    var pinned = present(usage.primary).toLowerCase()
+    if (pinned !== "")
+      for (var j = 0; j < providers.length; j++)
+        if (String(providers[j].provider).toLowerCase() === pinned) return j
     return 0
   }
   readonly property var provider: providers.length > 0 ? providers[providerIndex] : null
@@ -40,6 +46,13 @@ Panel {
 
   property bool settingsOpen: false
 
+  // Each section's header and its body read the same named predicate, so an
+  // edit to one cannot leave a header with no rows under it.
+  readonly property bool showLimits: limits.length > 0 && !settingsOpen
+  readonly property bool showCost: !!cost && !settingsOpen
+  readonly property bool showHistory: history.length > 0 && !settingsOpen
+  readonly property bool showModels: modelRows.length > 0 && !settingsOpen
+
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
   function alpha(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
 
@@ -48,6 +61,25 @@ Panel {
   function present(value) {
     var text = String(value === null || value === undefined ? "" : value).trim()
     return text === "" || text === "-" || text === "—" ? "" : text
+  }
+
+  // The settings pane is a list of switches with no focus chain of its own:
+  // KeyboardPanel hands focus to the key catcher, whose movement keys are
+  // already spoken for by the provider tabs and the scroll. Number keys map to
+  // the switch rows in order, `p` walks the pin, so nothing in the pane is
+  // mouse-only.
+  function toggleProviderAt(index) {
+    var list = usage.allProviders
+    if (index < 0 || index >= list.length) return
+    var id = String(list[index])
+    usage.setProvider(id, usage.enabled.indexOf(id) < 0)
+  }
+
+  function cyclePin() {
+    var choices = ["highest"].concat(usage.enabled.map(function(id) { return String(id) }))
+    var current = present(usage.primary) === "" ? "highest" : String(usage.primary).toLowerCase()
+    var at = choices.indexOf(current)
+    usage.setPrimary(choices[(at + 1) % choices.length])
   }
 
   function selectProvider(index) {
@@ -82,18 +114,16 @@ Panel {
       out.push(limitWindow(labels[2], row.tertiary_used, row.tertiary_reset, null))
 
     // Anthropic's usage endpoint carries a slot for every limit kind it knows
-    // about, including features an account does not have: those come back as
-    // an explicit null, which the core turns into a 0% window with no reset so
-    // the bar keeps its shape. On a dashboard that is a permanently empty row
-    // ("Daily Routines", a model-scoped week never used), so drop the ones
-    // carrying neither usage nor a reset. A window an account really has
-    // always reports when it rolls over, even while it sits at 0%.
+    // about, and reports an explicit null for the ones this account does not
+    // have. The core marks those `placeholder` and still emits them so the
+    // waybar module keeps a fixed shape; here they are a permanently empty
+    // row, so they go. An allowance the account holds but has not spent this
+    // week is not a placeholder and stays at 0%.
     var extra = Array.isArray(row.extra_windows) ? row.extra_windows : []
     for (var i = 0; i < extra.length; i++) {
       var entry = extra[i] || {}
-      var window = limitWindow(entry.title, entry.used, entry.reset, null)
-      if (window.percent === 0 && window.reset === "") continue
-      out.push(window)
+      if (entry.placeholder === true) continue
+      out.push(limitWindow(entry.title, entry.used, entry.reset, null))
     }
     return out
   }
@@ -158,10 +188,16 @@ Panel {
 
   // ------------------------------------------------------------- history
 
-  // ccusage omits days with no spend, so each entry is labelled from its own
-  // date rather than by counting back from today - otherwise an idle day
-  // silently shifts every label in the chart.
-  readonly property string todayDate: Qt.formatDate(new Date(), "yyyy-MM-dd")
+  // Each entry is labelled from its own date rather than by counting back from
+  // today, and "today" is the newest entry rather than `new Date()`: the core
+  // always ends the window on the current date, and a bare `new Date()` has no
+  // notifying dependency, so a shell left running across midnight would keep
+  // the bold marker on yesterday until it restarted.
+  readonly property string todayDate: {
+    if (!cost || !Array.isArray(cost.weekly_history) || cost.weekly_history.length === 0) return ""
+    var last = cost.weekly_history[cost.weekly_history.length - 1] || {}
+    return String(last.date || "")
+  }
 
   readonly property var history: {
     if (!cost || !Array.isArray(cost.weekly_history)) return []
@@ -420,11 +456,8 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  readonly property string barText: {
-    if (!root.provider) return "󰊚"
-    var glyph = String(root.provider.glyph || "󰊚")
-    return root.headline ? glyph + " " + root.headline.percent + "%" : glyph
-  }
+  readonly property string barGlyph: provider ? String(provider.glyph || "󰊚") : "󰊚"
+  readonly property string barText: headline ? barGlyph + " " + headline.percent + "%" : barGlyph
 
   // WidgetButton rather than BarIconButton: the latter pins itself to a
   // one-glyph icon slot, which clips the percentage off.
@@ -432,8 +465,9 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.vertical ? "" : root.barText
-    labelVisible: !root.vertical
+    // A vertical bar has no room for the percentage, but an empty label would
+    // leave the button invisible and unclickable - so it keeps the glyph.
+    text: root.vertical ? root.barGlyph : root.barText
     hasVisualContent: text !== ""
     active: root.alarming
     tooltipText: root.provider ? String(root.provider.plan_label || root.provider.label || "") : "TokenGauge"
@@ -471,6 +505,8 @@ Panel {
       onTextKey: function(t) {
         if (t === "r" || t === "R") usage.refreshNow()
         else if (t === "s" || t === "S") root.settingsOpen = !root.settingsOpen
+        else if (root.settingsOpen && (t === "p" || t === "P")) root.cyclePin()
+        else if (root.settingsOpen && /^[1-9]$/.test(t)) root.toggleProviderAt(Number(t) - 1)
       }
 
       Flickable {
@@ -634,7 +670,8 @@ Panel {
 
           // ---------- Limits ----------
           PanelSectionHeader {
-            visible: root.limits.length > 0 && !root.settingsOpen
+            visible: root.showLimits
+          
             width: parent.width
             text: "LIMITS"
             foreground: root.foreground
@@ -644,7 +681,7 @@ Panel {
           Column {
             width: parent.width
             spacing: Style.space(10)
-            visible: root.limits.length > 0 && !root.settingsOpen
+            visible: root.showLimits
 
             Repeater {
               model: root.limits
@@ -667,7 +704,8 @@ Panel {
 
           // ---------- Cost ----------
           PanelSectionHeader {
-            visible: !!root.cost && !root.settingsOpen
+            visible: root.showCost
+          
             width: parent.width
             text: "COST"
             foreground: root.foreground
@@ -677,7 +715,7 @@ Panel {
           Column {
             width: parent.width
             spacing: Style.space(6)
-            visible: !!root.cost && !root.settingsOpen
+            visible: root.showCost
 
             Repeater {
               model: {
@@ -719,7 +757,8 @@ Panel {
 
           // ---------- Tokens by day ----------
           PanelSectionHeader {
-            visible: root.history.length > 0 && !root.settingsOpen
+            visible: root.showHistory
+          
             width: parent.width
             text: "TOKENS BY DAY"
             foreground: root.foreground
@@ -729,7 +768,7 @@ Panel {
           Column {
             width: parent.width
             spacing: Style.space(8)
-            visible: root.history.length > 0 && !root.settingsOpen
+            visible: root.showHistory
 
             Repeater {
               model: root.history
@@ -747,7 +786,8 @@ Panel {
 
           // ---------- Tokens by model ----------
           PanelSectionHeader {
-            visible: root.modelRows.length > 0 && !root.settingsOpen
+            visible: root.showModels
+          
             width: parent.width
             // The cost layer is scoped to the calendar month, unlike the
             // built-in agents widget whose model table is all-time. Two panels
@@ -761,7 +801,7 @@ Panel {
           Column {
             width: parent.width
             spacing: Style.space(4)
-            visible: root.modelRows.length > 0 && !root.settingsOpen
+            visible: root.showModels
 
             Repeater {
               model: root.modelRows
@@ -798,10 +838,12 @@ Panel {
                 width: parent.width
                 height: providerToggle.implicitHeight
 
+                required property int index
+
                 Text {
                   anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
-                  text: root.providerLabel(modelData)
+                  text: (parent.index < 9 ? (parent.index + 1) + "  " : "") + root.providerLabel(modelData)
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -853,7 +895,7 @@ Panel {
             visible: root.settingsOpen
             width: parent.width
             topPadding: Style.space(4)
-            text: "Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml."
+            text: "Press a number to toggle a provider, p to walk the pin. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

@@ -27,6 +27,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
   --placement=*) PLACEMENT="${1#*=}" ;;
   --placement)
+    # set -u would abort on an unset $2 before the check below ever ran.
+    [[ $# -ge 2 ]] || { fail "--placement needs a value (left, center, or right)"; exit 1; }
     PLACEMENT="$2"
     shift
     ;;

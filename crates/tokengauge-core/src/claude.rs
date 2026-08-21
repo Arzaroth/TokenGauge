@@ -472,9 +472,8 @@ mod tests {
 
     #[test]
     fn populated_routine_alias_is_not_a_placeholder() {
-        let body = resp(
-            r#"{"five_hour":{"utilization":1.0},"seven_day_routines":{"utilization":12.0}}"#,
-        );
+        let body =
+            resp(r#"{"five_hour":{"utilization":1.0},"seven_day_routines":{"utilization":12.0}}"#);
         let payload = to_payload(body, None, Utc::now()).unwrap();
         let w = &payload.usage.unwrap().extra_rate_windows[0];
         assert_eq!(w.window.as_ref().unwrap().used_percent, Some(12));

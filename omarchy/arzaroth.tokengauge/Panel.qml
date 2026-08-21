@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -80,10 +81,19 @@ Panel {
     if (row.tertiary_used !== null && row.tertiary_used !== undefined)
       out.push(limitWindow(labels[2], row.tertiary_used, row.tertiary_reset, null))
 
+    // Anthropic's usage endpoint carries a slot for every limit kind it knows
+    // about, including features an account does not have: those come back as
+    // an explicit null, which the core turns into a 0% window with no reset so
+    // the bar keeps its shape. On a dashboard that is a permanently empty row
+    // ("Daily Routines", a model-scoped week never used), so drop the ones
+    // carrying neither usage nor a reset. A window an account really has
+    // always reports when it rolls over, even while it sits at 0%.
     var extra = Array.isArray(row.extra_windows) ? row.extra_windows : []
     for (var i = 0; i < extra.length; i++) {
       var entry = extra[i] || {}
-      out.push(limitWindow(entry.title, entry.used, entry.reset, null))
+      var window = limitWindow(entry.title, entry.used, entry.reset, null)
+      if (window.percent === 0 && window.reset === "") continue
+      out.push(window)
     }
     return out
   }
@@ -220,6 +230,11 @@ Panel {
 
   // The installer drops the provider logos next to the binaries; the bar glyph
   // stands in whenever one is missing.
+  // Brand colour for the active provider's mark, from the snapshot; the bar
+  // foreground stands in when a provider ships no colour.
+  readonly property color markColor: provider && present(provider.color) !== ""
+    ? provider.color : foreground
+
   function markSource(row) {
     if (!row) return ""
     var path = root.present(row.icon_svg)
@@ -526,6 +541,10 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
 
+            // The bundled marks are monochrome on purpose - the popover
+            // recolours them to its neutral foreground - so painting the brand
+            // colour through the mark's own alpha is what makes them read as
+            // logos here. Colourising instead would leave the white ones white.
             iconComponent: Component {
               Item {
                 id: heroMark
@@ -539,6 +558,22 @@ Panel {
                   sourceSize.width: Style.font.display * 2
                   sourceSize.height: Style.font.display * 2
                   fillMode: Image.PreserveAspectFit
+                  visible: false
+                }
+
+                Rectangle {
+                  id: heroMarkInk
+                  anchors.fill: parent
+                  color: root.markColor
+                  visible: false
+                }
+
+                MultiEffect {
+                  anchors.fill: parent
+                  source: heroMarkInk
+                  visible: heroMarkImage.status === Image.Ready
+                  maskEnabled: true
+                  maskSource: heroMarkImage
                 }
 
                 // The bar glyph stands in while the logo is missing or failed.
@@ -546,8 +581,7 @@ Panel {
                   anchors.centerIn: parent
                   visible: heroMarkImage.status !== Image.Ready
                   text: root.provider ? String(root.provider.glyph || "") : ""
-                  color: root.provider && root.present(root.provider.color) !== ""
-                    ? root.provider.color : root.foreground
+                  color: root.markColor
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.display
                 }
@@ -715,7 +749,11 @@ Panel {
           PanelSectionHeader {
             visible: root.modelRows.length > 0 && !root.settingsOpen
             width: parent.width
-            text: "TOKENS BY MODEL"
+            // The cost layer is scoped to the calendar month, unlike the
+            // built-in agents widget whose model table is all-time. Two panels
+            // side by side with the same heading and different numbers is
+            // worse than a longer heading.
+            text: "TOKENS BY MODEL · THIS MONTH"
             foreground: root.foreground
             fontFamily: root.fontFamily
           }

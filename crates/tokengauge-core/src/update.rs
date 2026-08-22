@@ -27,7 +27,10 @@ pub struct FrontendOutcome {
     pub error: Option<String>,
 }
 
-fn install_frontends(source_root: &Path, targets: &[&'static Frontend]) -> Vec<FrontendOutcome> {
+fn install_frontends_from(
+    source_root: &Path,
+    targets: &[&'static Frontend],
+) -> Vec<FrontendOutcome> {
     targets
         .iter()
         .map(|f| match f.install_from(source_root) {
@@ -284,7 +287,7 @@ pub fn apply_full(cache_file: &Path) -> Result<Applied> {
         // install would fail with the same "payload not found". Say nothing
         // rather than reporting a failure per frontend for an old release.
         let frontends = if present.iter().any(|f| f.payload_in(&tmp).is_some()) {
-            install_frontends(&tmp, &present)
+            install_frontends_from(&tmp, &present)
         } else {
             Vec::new()
         };
@@ -318,7 +321,10 @@ pub fn apply_full(cache_file: &Path) -> Result<Applied> {
 /// whether or not it is already present. This is the "switched desktops" path:
 /// the payload always comes from the release the running binary belongs to, so
 /// the frontend cannot land out of step with it.
-pub fn install_frontend(target: &Frontend, version: &str) -> Result<PathBuf> {
+pub fn install_frontends(
+    targets: &[&'static Frontend],
+    version: &str,
+) -> Result<Vec<FrontendOutcome>> {
     let (owner, name) = repo();
     let releases = ReleaseList::configure()
         .repo_owner(&owner)
@@ -330,7 +336,7 @@ pub fn install_frontend(target: &Frontend, version: &str) -> Result<PathBuf> {
     let release = releases
         .iter()
         .find(|r| r.version.trim_start_matches('v') == wanted)
-        .ok_or_else(|| anyhow!("no release v{wanted} to install {} from", target.id))?;
+        .ok_or_else(|| anyhow!("no release v{wanted} to install frontends from"))?;
     let asset = release
         .asset_for(arch_target()?, None)
         .ok_or_else(|| anyhow!("release {} has no asset for this platform", release.version))?;
@@ -340,6 +346,8 @@ pub fn install_frontend(target: &Frontend, version: &str) -> Result<PathBuf> {
         .parent()
         .ok_or_else(|| anyhow!("cannot resolve install directory"))?
         .to_path_buf();
+    // One lock, one download, one extraction for the whole set: installing
+    // three frontends used to fetch the archive three times.
     let _lock = UpdateLock::acquire(&install_dir)?;
 
     let tmp = install_dir.join(".tg-frontend.tmp");
@@ -347,7 +355,7 @@ pub fn install_frontend(target: &Frontend, version: &str) -> Result<PathBuf> {
     std::fs::create_dir_all(&tmp)
         .with_context(|| format!("cannot create staging dir {}", tmp.display()))?;
 
-    let result = (|| -> Result<PathBuf> {
+    let result = (|| -> Result<Vec<FrontendOutcome>> {
         let archive = tmp.join(&asset.name);
         let f = std::fs::File::create(&archive)
             .with_context(|| format!("cannot create {}", archive.display()))?;
@@ -364,13 +372,14 @@ pub fn install_frontend(target: &Frontend, version: &str) -> Result<PathBuf> {
             .extract_into(&tmp)
             .context("extract failed")?;
 
-        if target.payload_in(&tmp).is_none() {
+        if !targets.iter().any(|t| t.payload_in(&tmp).is_some()) {
             bail!(
-                "release v{wanted} ships no {} payload - frontends were added to the archive after it",
-                target.id
+                "release v{wanted} ships no frontend payloads - they were added to the archive after it"
             );
         }
-        target.install_from(&tmp)
+        // Per-frontend failures are collected rather than propagated, so one
+        // unwritable destination does not skip the rest of the set.
+        Ok(install_frontends_from(&tmp, targets))
     })();
 
     let _ = std::fs::remove_dir_all(&tmp);

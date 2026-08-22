@@ -617,6 +617,7 @@ fn handle_update(config: &TokenGaugeConfig) -> Result<()> {
     let applied = update::apply_full(&config.cache_file)?;
     if !update::version_gt(&applied.version, current) {
         println!("Already up to date ({current}).");
+        report_frontend_skew(current);
         return Ok(());
     }
 
@@ -663,39 +664,62 @@ fn report_frontends(outcomes: &[update::FrontendOutcome]) {
     }
 }
 
+/// An installed frontend that disagrees with the binary is the failure this all
+/// exists to catch, so say so even on the path where nothing was updated.
+fn report_frontend_skew(binary: &str) {
+    use tokengauge_core::frontend;
+    for f in frontend::installed() {
+        match f.installed_version() {
+            Some(v) if v == binary => {}
+            Some(v) => println!(
+                "{} is still v{v} - update it: tokengauge-waybar --install-frontend {}",
+                f.label, f.id
+            ),
+            None => println!(
+                "{} has no readable version - reinstall it: tokengauge-waybar --install-frontend {}",
+                f.label, f.id
+            ),
+        }
+    }
+}
+
 fn handle_install_frontend(spec: &str) -> Result<()> {
-    let wanted: Vec<&'static tokengauge_core::frontend::Frontend> = if spec == "all" {
-        tokengauge_core::frontend::FRONTENDS.iter().collect()
+    use tokengauge_core::frontend;
+
+    // Same normalization `find` applies, so `ALL` and a stray space behave.
+    let spec = spec.trim().to_lowercase();
+    let wanted: Vec<&'static frontend::Frontend> = if spec == "all" {
+        frontend::FRONTENDS.iter().collect()
     } else {
-        vec![tokengauge_core::frontend::find(spec).ok_or_else(|| {
-            let ids: Vec<&str> = tokengauge_core::frontend::FRONTENDS
-                .iter()
-                .map(|f| f.id)
-                .collect();
+        vec![frontend::find(&spec).ok_or_else(|| {
+            let ids: Vec<&str> = frontend::FRONTENDS.iter().map(|f| f.id).collect();
             anyhow::anyhow!("unknown frontend '{spec}' (known: {}, all)", ids.join(", "))
         })?]
     };
 
     let version = update::current_version();
-    for target in wanted {
+    for target in &wanted {
         println!("Installing the {} from v{version}...", target.label);
-        match update::install_frontend(target, version) {
-            Ok(dest) => {
-                println!("  installed to {}", dest.display());
-                let urgency = if target.restart.needs_session_restart() {
-                    "required"
-                } else {
-                    "to load it"
-                };
-                println!("  {urgency}: {}", target.restart.hint());
-            }
-            Err(e) => {
-                eprintln!("  failed: {e:#}");
-                return Err(e);
-            }
-        }
     }
-    Ok(())
+
+    let outcomes = update::install_frontends(&wanted, version)?;
+    report_frontends(&outcomes);
+
+    // The error is returned rather than printed here: main prints it once.
+    let failed: Vec<&str> = outcomes
+        .iter()
+        .filter(|o| o.error.is_some())
+        .map(|o| o.id)
+        .collect();
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "{} frontend(s) failed to install: {}",
+            failed.len(),
+            failed.join(", ")
+        ))
+    }
 }
 
 /// Restart the systemd user daemon so the freshly-installed binary is loaded.

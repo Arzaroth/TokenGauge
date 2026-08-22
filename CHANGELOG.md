@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `--install-frontend <plasma|gnome|omarchy|all>` installs a desktop frontend from the release the running binary belongs to. Switching desktops - KDE to GNOME, Waybar to the Omarchy bar - is now one command rather than a checkout and an install script.
+- `--update` now also refreshes whichever desktop frontends are already installed, and prints what it touched plus the restart each one needs. It only refreshes what is present; it never decides a machine should grow a GNOME extension.
+- The release archive ships the Plasma applet, GNOME extension, and Omarchy widget under `frontends/`. Without them in the archive there was nothing for an update to install.
+- `--doctor` reports each installed frontend's own version against the binary's, and prints the exact `--install-frontend` command when they disagree.
+
+### Fixed
+
+- The desktop frontends are QML and JavaScript installed outside `~/.local/bin`, so `--update` replaced the binaries and left them untouched: a 0.18.0 binary drove whatever QML the machine already had. That surfaced as the Plasma applet still drawing the placeholder limit rows that 0.18.0 removed - the snapshot carried the flag, the applet predated the code reading it.
+- Each frontend now reports **its own** version rather than the binary's, and says so when the two differ. Showing only the binary's version - which is what 0.18.0 did - made that skew invisible: the applet would print "v0.18.0" while running older QML.
+
 ## [0.18.0] - 2026-08-21
 
 ### Added

@@ -100,6 +100,11 @@ struct Args {
     /// JSON. Does not install anything.
     #[arg(long)]
     check_update: bool,
+    /// Install a desktop frontend from the release this binary belongs to:
+    /// `plasma`, `gnome`, `omarchy`, or `all`. Use it after switching desktops;
+    /// `--update` already refreshes whichever are present.
+    #[arg(long, value_name = "NAME")]
+    install_frontend: Option<String>,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -200,6 +205,10 @@ fn main() -> Result<()> {
 
     if args.check_update {
         return handle_check_update(&config);
+    }
+
+    if let Some(spec) = &args.install_frontend {
+        return handle_install_frontend(spec);
     }
 
     if args.update {
@@ -605,18 +614,112 @@ fn handle_update(config: &TokenGaugeConfig) -> Result<()> {
     let current = update::current_version();
     println!("Current version: {current}");
     println!("Checking for updates...");
-    let installed = update::apply(&config.cache_file)?;
-    if update::version_gt(&installed, current) {
-        println!("Updated to {installed}.");
-        if restart_daemon() {
-            println!("Restarted tokengauge-daemon.service.");
-        } else {
-            println!("Restart to load it: systemctl --user restart tokengauge-daemon.service");
-        }
-    } else {
+    let applied = update::apply_full(&config.cache_file)?;
+    if !update::version_gt(&applied.version, current) {
         println!("Already up to date ({current}).");
+        report_frontend_skew(current);
+        return Ok(());
     }
+
+    println!("Updated to {}.", applied.version);
+    if restart_daemon() {
+        println!("Restarted tokengauge-daemon.service.");
+    } else {
+        println!("Restart to load it: systemctl --user restart tokengauge-daemon.service");
+    }
+    report_frontends(&applied.frontends);
     Ok(())
+}
+
+/// The desktop frontends are QML and JavaScript installed outside the binary
+/// directory, so an update that only swapped binaries used to leave them behind
+/// - silently, since they report the binary's version rather than their own.
+fn report_frontends(outcomes: &[update::FrontendOutcome]) {
+    if outcomes.is_empty() {
+        return;
+    }
+    println!();
+    for f in outcomes {
+        match &f.error {
+            Some(e) => eprintln!("{}: NOT updated - {e}", f.label),
+            None => match &f.version {
+                Some(v) => println!("{} updated to {v}.", f.label),
+                None => println!("{} updated.", f.label),
+            },
+        }
+    }
+    let hints: Vec<&update::FrontendOutcome> =
+        outcomes.iter().filter(|f| f.error.is_none()).collect();
+    if hints.is_empty() {
+        return;
+    }
+    println!();
+    for f in hints {
+        let urgency = if f.needs_session_restart {
+            "required"
+        } else {
+            "to load it"
+        };
+        println!("  {} ({urgency}): {}", f.label, f.restart_hint);
+    }
+}
+
+/// An installed frontend that disagrees with the binary is the failure this all
+/// exists to catch, so say so even on the path where nothing was updated.
+fn report_frontend_skew(binary: &str) {
+    use tokengauge_core::frontend;
+    for f in frontend::installed() {
+        match f.installed_version() {
+            Some(v) if v == binary => {}
+            Some(v) => println!(
+                "{} is still v{v} - update it: tokengauge-waybar --install-frontend {}",
+                f.label, f.id
+            ),
+            None => println!(
+                "{} has no readable version - reinstall it: tokengauge-waybar --install-frontend {}",
+                f.label, f.id
+            ),
+        }
+    }
+}
+
+fn handle_install_frontend(spec: &str) -> Result<()> {
+    use tokengauge_core::frontend;
+
+    // Same normalization `find` applies, so `ALL` and a stray space behave.
+    let spec = spec.trim().to_lowercase();
+    let wanted: Vec<&'static frontend::Frontend> = if spec == "all" {
+        frontend::FRONTENDS.iter().collect()
+    } else {
+        vec![frontend::find(&spec).ok_or_else(|| {
+            let ids: Vec<&str> = frontend::FRONTENDS.iter().map(|f| f.id).collect();
+            anyhow::anyhow!("unknown frontend '{spec}' (known: {}, all)", ids.join(", "))
+        })?]
+    };
+
+    let version = update::current_version();
+    for target in &wanted {
+        println!("Installing the {} from v{version}...", target.label);
+    }
+
+    let outcomes = update::install_frontends(&wanted, version)?;
+    report_frontends(&outcomes);
+
+    // The error is returned rather than printed here: main prints it once.
+    let failed: Vec<&str> = outcomes
+        .iter()
+        .filter(|o| o.error.is_some())
+        .map(|o| o.id)
+        .collect();
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "{} frontend(s) failed to install: {}",
+            failed.len(),
+            failed.join(", ")
+        ))
+    }
 }
 
 /// Restart the systemd user daemon so the freshly-installed binary is loaded.
@@ -1092,6 +1195,43 @@ fn handle_doctor(config_path: &Path) -> i32 {
             ok: true,
             detail: "run: tokengauge-waybar --check-update".into(),
         }),
+    }
+
+    section("Desktop frontends");
+    {
+        use tokengauge_core::frontend;
+        let binary = update::current_version();
+        let present = frontend::installed();
+        if present.is_empty() {
+            record(DoctorCheck {
+                label: "none installed".into(),
+                ok: true,
+                detail: "install one: tokengauge-waybar --install-frontend <plasma|gnome|omarchy>"
+                    .into(),
+            });
+        }
+        for f in present {
+            match f.installed_version() {
+                // A frontend is QML or JavaScript installed outside the binary
+                // directory, so it only moves when it is reinstalled. Skew here
+                // reads as a missing feature rather than a stale install.
+                Some(v) if v == binary => record(DoctorCheck {
+                    label: format!("{} v{v}", f.label),
+                    ok: true,
+                    detail: String::new(),
+                }),
+                Some(v) => record(DoctorCheck {
+                    label: format!("{} is v{v}, binary is v{binary}", f.label),
+                    ok: false,
+                    detail: format!("tokengauge-waybar --install-frontend {}", f.id),
+                }),
+                None => record(DoctorCheck {
+                    label: format!("{} version unreadable", f.label),
+                    ok: false,
+                    detail: format!("tokengauge-waybar --install-frontend {}", f.id),
+                }),
+            }
+        }
     }
 
     println!();

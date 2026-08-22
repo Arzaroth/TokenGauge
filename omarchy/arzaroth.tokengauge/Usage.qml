@@ -28,7 +28,27 @@ Item {
   readonly property var allProviders: snapshot && Array.isArray(snapshot.providers) ? snapshot.providers : []
   readonly property string primary: snapshot ? String(snapshot.primary || "") : ""
   readonly property string version: snapshot ? String(snapshot.version || "") : ""
+
   readonly property var updateStatus: snapshot ? snapshot.update : null
+
+  // The widget's own version, read from the manifest sitting next to this file.
+  // The plugin directory and the binary are installed separately, so the two
+  // can drift; reporting only the binary's version hides exactly that.
+  property string widgetVersion: ""
+
+  FileView {
+    path: Qt.resolvedUrl("manifest.json").toString().replace(/^file:\/\//, "")
+    watchChanges: false
+    printErrors: false
+    onLoaded: {
+      try {
+        root.widgetVersion = String((JSON.parse(text()) || {}).version || "")
+      } catch (e) {
+        root.widgetVersion = ""
+      }
+    }
+    onLoadFailed: root.widgetVersion = ""
+  }
 
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined

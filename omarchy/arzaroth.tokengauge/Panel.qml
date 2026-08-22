@@ -932,9 +932,17 @@ Panel {
           Text {
             visible: root.settingsOpen
             width: parent.width
-            // The binary's version, not the plugin manifest's: they are
-            // installed separately, and the binary is what produces the data.
-            text: usage.version !== "" ? "TokenGauge v" + usage.version : "TokenGauge"
+            wrapMode: Text.WordWrap
+            // Both, because they are installed separately: `--update` replaces
+            // binaries, and until the plugin directory is reinstalled it keeps
+            // driving whatever QML this box already had.
+            text: {
+              if (usage.version === "") return "TokenGauge"
+              if (usage.widgetVersion === "" || usage.widgetVersion === usage.version)
+                return "TokenGauge v" + usage.version
+              return "widget v" + usage.widgetVersion + ", binary v" + usage.version
+                + " — reinstall: tokengauge-waybar --install-frontend omarchy"
+            }
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

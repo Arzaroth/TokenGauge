@@ -10,6 +10,10 @@ use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Days, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
+// Path-and-copy only, so every crate gets it without the network stack that
+// `self-update` pulls in.
+pub mod frontend;
+
 #[cfg(feature = "self-update")]
 pub mod update;
 

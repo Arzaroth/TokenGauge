@@ -369,7 +369,26 @@ Item {
                     visible: full.settingsOpen
                     opacity: 0.5
                     font: Kirigami.Theme.smallFont
-                    text: root.snapshot.version ? i18n("TokenGauge v%1", root.snapshot.version) : "TokenGauge"
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                    // Both versions, because the applet and the binary are
+                    // installed separately: `--update` replaces binaries, and
+                    // until the applet is reinstalled it keeps driving whatever
+                    // QML this box already had. Showing only the binary's
+                    // version is what made that skew invisible.
+                    text: {
+                        var binary = root.snapshot.version || ""
+                        var applet = ""
+                        try {
+                            applet = String(Plasmoid.metaData.version || "")
+                        } catch (e) {
+                            applet = ""
+                        }
+                        if (binary === "") return "TokenGauge"
+                        if (applet === "" || applet === binary) return i18n("TokenGauge v%1", binary)
+                        return i18n("applet v%1, binary v%2 - reinstall: tokengauge-waybar --install-frontend plasma",
+                                    applet, binary)
+                    }
                 }
             }
         }

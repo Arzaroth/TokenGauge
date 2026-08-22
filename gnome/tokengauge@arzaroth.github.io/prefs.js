@@ -88,10 +88,12 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
 
         const bin = () => shellQuote(settings.get_string('waybar-binary') || 'tokengauge-waybar');
 
-        // The binary's version rather than the extension's: the extension is a
-        // thin client over it, and the two are installed separately, so the one
-        // that produces the data is the one worth reading.
+        // Both versions, because the extension and the binary are installed
+        // separately: `--update` replaces binaries, and until the extension is
+        // reinstalled it keeps driving whatever JavaScript this box already had.
+        // Showing only one of them is what made that skew invisible.
         const about = new Adw.PreferencesGroup({title: _('About')});
+        const extensionVersion = this.metadata['version-name'] || null;
         const version = new Adw.ActionRow({
             title: _('TokenGauge'),
             subtitle: _('Reading version…'),
@@ -99,10 +101,19 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
         about.add(version);
 
         run(`${bin()} --version`, cancellable, (ok, stdout, stderr) => {
-            const text = (stdout || '').trim().split(/\s+/).pop();
-            version.subtitle = ok && text
-                ? `v${text}`
-                : ((stderr || '').trim().split('\n')[0] || _('could not read the version'));
+            if (!ok) {
+                version.subtitle = (stderr || '').trim().split('\n')[0] ||
+                    _('could not read the version');
+                return;
+            }
+            const binaryVersion = (stdout || '').trim().split(/\s+/).pop();
+            if (!extensionVersion || extensionVersion === binaryVersion) {
+                version.subtitle = `v${binaryVersion}`;
+                return;
+            }
+            version.subtitle =
+                _('extension v%s, binary v%s - reinstall the extension: %s --install-frontend gnome')
+                    .format(extensionVersion, binaryVersion, 'tokengauge-waybar');
         });
 
         run(`${bin()} --json`, cancellable, (successful, stdout, stderr) => {

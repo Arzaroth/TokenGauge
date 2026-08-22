@@ -55,7 +55,15 @@ jobs:
           mkdir -p dist
           cp target/x86_64-unknown-linux-gnu/release/tokengauge-waybar dist/
           cp target/x86_64-unknown-linux-gnu/release/tokengauge-tui dist/
-          tar -czf "dist/tokengauge-${SAFE_REF}-linux-x86_64.tar.gz" -C dist tokengauge-waybar tokengauge-tui
+          # The Plasma applet, GNOME extension, and Omarchy widget are QML and
+          # JavaScript installed outside ~/.local/bin. Shipping them here is what
+          # lets --update refresh them and --install-frontend fetch one; without
+          # them a new binary keeps driving whatever QML the box already had.
+          mkdir -p dist/frontends
+          cp -r plasma dist/frontends/plasma
+          cp -r gnome dist/frontends/gnome
+          cp -r omarchy dist/frontends/omarchy
+          tar -czf "dist/tokengauge-${SAFE_REF}-linux-x86_64.tar.gz" -C dist tokengauge-waybar tokengauge-tui frontends
 
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -104,7 +112,15 @@ jobs:
           mkdir -p dist
           cp target/aarch64-unknown-linux-gnu/release/tokengauge-waybar dist/
           cp target/aarch64-unknown-linux-gnu/release/tokengauge-tui dist/
-          tar -czf "dist/tokengauge-${SAFE_REF}-linux-aarch64.tar.gz" -C dist tokengauge-waybar tokengauge-tui
+          # The Plasma applet, GNOME extension, and Omarchy widget are QML and
+          # JavaScript installed outside ~/.local/bin. Shipping them here is what
+          # lets --update refresh them and --install-frontend fetch one; without
+          # them a new binary keeps driving whatever QML the box already had.
+          mkdir -p dist/frontends
+          cp -r plasma dist/frontends/plasma
+          cp -r gnome dist/frontends/gnome
+          cp -r omarchy dist/frontends/omarchy
+          tar -czf "dist/tokengauge-${SAFE_REF}-linux-aarch64.tar.gz" -C dist tokengauge-waybar tokengauge-tui frontends
 
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

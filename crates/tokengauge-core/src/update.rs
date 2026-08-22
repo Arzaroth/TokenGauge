@@ -11,7 +11,48 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, anyhow, bail};
 use self_update::backends::github::ReleaseList;
 
+use crate::frontend::{self, Frontend};
 use crate::{UpdateStatus, read_update_status, write_update_status};
+
+/// What an update did to a non-binary frontend, for the caller to report.
+#[derive(Debug, Clone)]
+pub struct FrontendOutcome {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub version: Option<String>,
+    pub restart_hint: &'static str,
+    pub needs_session_restart: bool,
+    /// Set when the install failed; the binaries are already replaced by then,
+    /// so this is reported rather than propagated.
+    pub error: Option<String>,
+}
+
+fn install_frontends_from(
+    source_root: &Path,
+    targets: &[&'static Frontend],
+) -> Vec<FrontendOutcome> {
+    targets
+        .iter()
+        .map(|f| match f.install_from(source_root) {
+            Ok(_) => FrontendOutcome {
+                id: f.id,
+                label: f.label,
+                version: f.installed_version(),
+                restart_hint: f.restart.hint(),
+                needs_session_restart: f.restart.needs_session_restart(),
+                error: None,
+            },
+            Err(e) => FrontendOutcome {
+                id: f.id,
+                label: f.label,
+                version: None,
+                restart_hint: f.restart.hint(),
+                needs_session_restart: f.restart.needs_session_restart(),
+                error: Some(format!("{e:#}")),
+            },
+        })
+        .collect()
+}
 
 /// Binaries shipped in the release archive for this OS, in replace order.
 #[cfg(target_os = "windows")]
@@ -151,12 +192,26 @@ pub fn check(cache_file: &Path) -> Result<UpdateStatus> {
 /// Download the platform archive and replace every installed binary next to the
 /// running executable. Returns the version installed (unchanged when already
 /// current, so it never clobbers on a same-version run).
+/// Result of a successful [`apply`]: the version installed, plus what happened
+/// to each non-binary frontend that was already present.
+pub struct Applied {
+    pub version: String,
+    pub frontends: Vec<FrontendOutcome>,
+}
+
 pub fn apply(cache_file: &Path) -> Result<String> {
+    apply_full(cache_file).map(|a| a.version)
+}
+
+pub fn apply_full(cache_file: &Path) -> Result<Applied> {
     let target = arch_target()?;
     let release = latest_release()?;
     let current = current_version();
     if !version_gt(&release.version, current) {
-        return Ok(current.to_string());
+        return Ok(Applied {
+            version: current.to_string(),
+            frontends: Vec::new(),
+        });
     }
     let asset = release
         .asset_for(target, None)
@@ -178,7 +233,11 @@ pub fn apply(cache_file: &Path) -> Result<String> {
     std::fs::create_dir_all(&tmp)
         .with_context(|| format!("cannot create staging dir {}", tmp.display()))?;
 
-    let result = (|| -> Result<Vec<&'static str>> {
+    // Only what is already installed: this refreshes an existing frontend, it
+    // does not decide that a machine should grow a GNOME extension.
+    let present = frontend::installed();
+
+    let result = (|| -> Result<(Vec<&'static str>, Vec<FrontendOutcome>)> {
         let archive = tmp.join(&asset.name);
         let f = std::fs::File::create(&archive)
             .with_context(|| format!("cannot create {}", archive.display()))?;
@@ -223,11 +282,22 @@ pub fn apply(cache_file: &Path) -> Result<String> {
             }
             replaced.push(*bin);
         }
-        Ok(replaced)
+
+        // An archive predating the frontend payloads carries none, and every
+        // install would fail with the same "payload not found". Say nothing
+        // rather than reporting a failure per frontend for an old release.
+        let frontends = if present.iter().any(|f| f.payload_in(&tmp).is_some()) {
+            install_frontends_from(&tmp, &present)
+        } else {
+            Vec::new()
+        };
+
+        Ok((replaced, frontends))
     })();
 
+    let outcome = result;
     let _ = std::fs::remove_dir_all(&tmp);
-    let replaced = result?;
+    let (replaced, frontends) = outcome?;
     if replaced.is_empty() {
         bail!("release archive contained no known binaries");
     }
@@ -241,7 +311,79 @@ pub fn apply(cache_file: &Path) -> Result<String> {
     status.checked_ms = now_ms();
     let _ = write_update_status(cache_file, &status);
 
-    Ok(release.version)
+    Ok(Applied {
+        version: release.version,
+        frontends,
+    })
+}
+
+/// Download the release matching `version` and install one frontend from it,
+/// whether or not it is already present. This is the "switched desktops" path:
+/// the payload always comes from the release the running binary belongs to, so
+/// the frontend cannot land out of step with it.
+pub fn install_frontends(
+    targets: &[&'static Frontend],
+    version: &str,
+) -> Result<Vec<FrontendOutcome>> {
+    let (owner, name) = repo();
+    let releases = ReleaseList::configure()
+        .repo_owner(&owner)
+        .repo_name(&name)
+        .build()?
+        .fetch()
+        .context("failed to fetch releases from GitHub")?;
+    let wanted = version.trim_start_matches('v');
+    let release = releases
+        .iter()
+        .find(|r| r.version.trim_start_matches('v') == wanted)
+        .ok_or_else(|| anyhow!("no release v{wanted} to install frontends from"))?;
+    let asset = release
+        .asset_for(arch_target()?, None)
+        .ok_or_else(|| anyhow!("release {} has no asset for this platform", release.version))?;
+
+    let exe = std::env::current_exe().context("cannot resolve current executable")?;
+    let install_dir = exe
+        .parent()
+        .ok_or_else(|| anyhow!("cannot resolve install directory"))?
+        .to_path_buf();
+    // One lock, one download, one extraction for the whole set: installing
+    // three frontends used to fetch the archive three times.
+    let _lock = UpdateLock::acquire(&install_dir)?;
+
+    let tmp = install_dir.join(".tg-frontend.tmp");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp)
+        .with_context(|| format!("cannot create staging dir {}", tmp.display()))?;
+
+    let result = (|| -> Result<Vec<FrontendOutcome>> {
+        let archive = tmp.join(&asset.name);
+        let f = std::fs::File::create(&archive)
+            .with_context(|| format!("cannot create {}", archive.display()))?;
+        self_update::Download::from_url(&asset.download_url)
+            .set_header(
+                http::header::ACCEPT,
+                http::HeaderValue::from_static("application/octet-stream"),
+            )
+            .show_progress(true)
+            .download_to(f)
+            .context("download failed")?;
+        self_update::Extract::from_source(&archive)
+            .archive(archive_kind())
+            .extract_into(&tmp)
+            .context("extract failed")?;
+
+        if !targets.iter().any(|t| t.payload_in(&tmp).is_some()) {
+            bail!(
+                "release v{wanted} ships no frontend payloads - they were added to the archive after it"
+            );
+        }
+        // Per-frontend failures are collected rather than propagated, so one
+        // unwritable destination does not skip the rest of the set.
+        Ok(install_frontends_from(&tmp, targets))
+    })();
+
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
 }
 
 #[cfg(test)]

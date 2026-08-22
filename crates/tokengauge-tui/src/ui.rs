@@ -331,7 +331,7 @@ fn collect_usage_rows(row: &ProviderRow) -> Vec<UsageRow> {
             label: extra.title.clone(),
             used: extra.used,
             reset: extra.reset.clone(),
-            pace: None,
+            pace: extra.pace,
         });
     }
     rows

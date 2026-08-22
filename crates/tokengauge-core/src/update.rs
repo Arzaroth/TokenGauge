@@ -58,7 +58,7 @@ fn install_frontends_from(
 #[cfg(target_os = "windows")]
 const BINARIES: &[&str] = &["tokengauge-tui.exe", "tokengauge-tray.exe"];
 #[cfg(not(target_os = "windows"))]
-const BINARIES: &[&str] = &["tokengauge-waybar", "tokengauge-tui", "tokengauge-popover"];
+const BINARIES: &[&str] = &["tokengauge-waybar", "tokengauge-tui"];
 
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")

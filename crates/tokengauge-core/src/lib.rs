@@ -132,8 +132,10 @@ mod glm;
 mod grok;
 mod kimi;
 pub mod pace;
+pub mod panel;
 
 pub use pace::{PaceStage, UsagePace};
+pub use panel::{PanelRow, Section, SectionKind, Tone, panel_spec};
 
 /// Round and clamp a float percentage into the `0..=100` byte range the render
 /// layer expects. Mirrors the old `de_opt_percent` serde hook, now called from
@@ -363,20 +365,13 @@ pub struct WaybarConfig {
     pub placement: WaybarPlacement,
     pub primary: Option<String>,
     pub scroll_throttle_ms: u64,
-    /// What happens on left-click on the waybar module:
-    /// "tui" launches the terminal TUI, "popover" runs `popover_command`
-    /// (defaults to the bundled GTK4 panel).
+    /// What happens on left-click on the waybar module. Only the TUI is left;
+    /// `"popover"` still parses so an existing config keeps loading, and
+    /// resolves to the TUI.
     pub click_action: ClickAction,
     /// Shell command used when `click_action = "tui"`. Empty = auto-detect
     /// (omarchy-launch-or-focus-tui if available, else $TERMINAL -e tokengauge-tui).
     pub tui_command: String,
-    /// Shell command used when `click_action = "popover"`. Defaults to the
-    /// bundled `tokengauge-popover --toggle`.
-    pub popover_command: String,
-    /// Top-edge offset in pixels for the bundled `tokengauge-popover` window.
-    pub popover_margin_top: i32,
-    /// Side-edge (left/right matching `placement`) offset in pixels.
-    pub popover_margin_side: i32,
 }
 
 impl Default for WaybarConfig {
@@ -388,11 +383,6 @@ impl Default for WaybarConfig {
             scroll_throttle_ms: 250,
             click_action: ClickAction::default(),
             tui_command: String::new(),
-            popover_command: "tokengauge-popover --toggle".to_string(),
-            // Top edge: 0 sits flush under waybar when waybar reserves its
-            // own exclusive zone; bump up if you want a gap.
-            popover_margin_top: 4,
-            popover_margin_side: 8,
         }
     }
 }
@@ -418,6 +408,9 @@ pub enum WaybarPlacement {
 pub enum ClickAction {
     #[default]
     Tui,
+    /// Removed in 0.20.0 - the waybar tooltip is the panel now. Kept so a
+    /// config still carrying `click_action = "popover"` loads instead of
+    /// failing to parse; it resolves to the TUI.
     Popover,
 }
 
@@ -803,6 +796,8 @@ pub struct ExtraWindowRow {
     pub title: String,
     pub used: Option<u8>,
     pub reset: String,
+    /// Burn pace for this window, on the same terms as the session/weekly ones.
+    pub pace: Option<UsagePace>,
     /// See [`ExtraRateWindow::placeholder`].
     pub placeholder: bool,
 }
@@ -1210,8 +1205,9 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
     let mut weekly_pace = None;
 
     if let Some(usage) = payload.usage {
-        if !payload.stale {
-            let now = Utc::now();
+        let now = Utc::now();
+        let live = !payload.stale;
+        if live {
             session_pace = usage.primary.as_ref().and_then(|w| window_pace(w, now));
             weekly_pace = usage.secondary.as_ref().and_then(|w| window_pace(w, now));
         }
@@ -1240,11 +1236,19 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
             .filter_map(|w| {
                 let title = w.title?;
                 let placeholder = w.placeholder;
+                let pace = if live {
+                    w.window
+                        .as_ref()
+                        .and_then(|window| window_pace(window, now))
+                } else {
+                    None
+                };
                 let (used, _, reset) = format_window(w.window);
                 Some(ExtraWindowRow {
                     title,
                     used,
                     reset,
+                    pace,
                     placeholder,
                 })
             })
@@ -1567,7 +1571,7 @@ pub fn provider_icon_dir() -> PathBuf {
 }
 
 /// Path to a provider's bundled brand SVG, or None when no logo is installed
-/// (the popover then falls back to the glyph icon).
+/// (the frontend then falls back to the glyph icon).
 pub fn provider_icon_svg_path(label: &str) -> Option<PathBuf> {
     let slug = provider_icon_slug(label)?;
     let path = provider_icon_dir().join(format!("ProviderIcon-{slug}.svg"));
@@ -1732,7 +1736,7 @@ pub struct NotifyEntry {
 
 /// Cached result of the last GitHub release check. Written by the waybar
 /// binary (which owns the network code) and read by the GUIs so opening the
-/// popover/plasmoid never triggers a network call.
+/// a panel frontend never triggers a network call.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UpdateStatus {
     /// Currently-installed version (no leading `v`).
@@ -2384,14 +2388,11 @@ placement = "right"
 # Provider key shown in the waybar text. Unset = show all providers stacked.
 # Mouse scroll over the module rotates the selection (overrides this until restart).
 # primary = "claude"
-# Left-click action: "tui" opens the terminal TUI, "popover" runs
-# popover_command (defaults to the bundled GTK4 panel).
+# Left-click action: "tui" opens the terminal TUI.
 click_action = "tui"
 # Optional explicit launcher for click_action = "tui". Empty = auto-detect
 # (omarchy-launch-or-focus-tui if present, else $TERMINAL -e tokengauge-tui).
 # tui_command = "ghostty -e tokengauge-tui"
-# Shell command used when click_action = "popover".
-popover_command = "tokengauge-popover --toggle"
 
 [providers]
 # OAuth providers - set to true/false to enable/disable

@@ -106,14 +106,19 @@
     font-family: monospace;
 }
 
-.tokengauge-chart {
-    spacing: 2px;
-    padding-top: 2px;
+.tokengauge-bar-row {
+    border-radius: 3px;
+    background-color: rgba(255, 255, 255, 0.05);
+    margin-bottom: 1px;
 }
 
-.tokengauge-chart-bar {
-    border-radius: 2px;
-    background-color: rgba(255, 255, 255, 0.45);
+.tokengauge-bar-fill {
+    border-radius: 3px;
+    background-color: rgba(255, 255, 255, 0.14);
+}
+
+.tokengauge-bar-text {
+    padding: 2px 6px;
 }
 
 .tokengauge-dim,

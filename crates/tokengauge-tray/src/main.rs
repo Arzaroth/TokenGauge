@@ -1,9 +1,11 @@
 //! TokenGauge system-tray GUI for Windows.
 //!
-//! A small always-available window showing per-provider usage (session / weekly
-//! bars, reset times), backed by a system-tray icon that renders the current
-//! peak usage percentage. Windows-only; on other platforms this is a stub (the
-//! Linux surfaces are the Waybar module, GTK popover, and KDE applet).
+//! A small always-available window drawing the same panel every other frontend
+//! draws - limits, cost, tokens by day, tokens by model - from
+//! [`tokengauge_core::panel_spec`], backed by a system-tray icon that renders
+//! the current peak usage percentage. Windows-only; on other platforms this is
+//! a stub (the Linux surfaces are the Waybar module, KDE applet, GNOME
+//! extension and Quickshell widget).
 
 // Build as a GUI (windowless) binary on Windows so launching it doesn't pop a
 // console window - important when it runs at login / from the tray.
@@ -39,7 +41,8 @@ mod win {
 
     use eframe::egui::{self, Color32, ProgressBar, RichText, ViewportCommand};
     use tokengauge_core::{
-        ProviderRow, default_config_path, fetch_all_providers, load_config,
+        PROVIDERS, ProviderRow, Section, SectionKind, Tone, config_set_oauth_provider,
+        config_set_primary, default_config_path, fetch_all_providers, load_config, panel_spec,
         payload_to_rows_with_costs, read_cache_full, retain_enabled, write_cache_full,
         write_default_config,
     };
@@ -62,16 +65,20 @@ mod win {
     const RED: Color32 = Color32::from_rgb(0xf3, 0x8b, 0xa8);
     const DARK: Color32 = Color32::from_rgb(0x11, 0x11, 0x1b);
 
-    /// A rendered provider row (decoupled from core's `ProviderRow`).
+    /// A rendered provider row. The panel body is resolved by the core, so this
+    /// window draws the same sections in the same order as every other
+    /// frontend; only the chrome around them is egui's own.
     #[derive(Clone, Default)]
     struct Row {
         provider: String,
         plan: Option<String>,
         stale: bool,
+        updated: String,
+        credits: String,
+        /// Kept out of `panel` because the tray icon needs the raw number.
         session_used: Option<u8>,
-        session_reset: String,
         weekly_used: Option<u8>,
-        weekly_reset: String,
+        panel: Vec<Section>,
     }
 
     fn to_row(r: &ProviderRow) -> Row {
@@ -79,10 +86,11 @@ mod win {
             provider: r.provider.clone(),
             plan: r.plan_label.clone(),
             stale: r.stale,
+            updated: r.updated.clone(),
+            credits: r.credits.clone(),
             session_used: r.session_used,
-            session_reset: r.session_reset.clone(),
             weekly_used: r.weekly_used,
-            weekly_reset: r.weekly_reset.clone(),
+            panel: panel_spec(r),
         }
     }
 
@@ -91,11 +99,25 @@ mod win {
         rows: Vec<Row>,
         errors: Vec<String>,
         fetching: bool,
+        /// Every toggleable provider, not just the enabled ones - the settings
+        /// pane needs the full list to draw a switch for each.
+        enabled: Vec<String>,
+        primary: String,
+    }
+
+    /// A config mutation from the settings pane, applied on the fetch thread so
+    /// the UI never blocks on a file write.
+    enum Action {
+        Refresh,
+        SetProvider(String, bool),
+        SetPrimary(String),
     }
 
     pub struct TrayApp {
         shared: Arc<Mutex<Snapshot>>,
-        refresh_tx: mpsc::Sender<()>,
+        action_tx: mpsc::Sender<Action>,
+        selected: usize,
+        settings_open: bool,
         quit: Arc<AtomicBool>,
         tray: TrayIcon,
         _items: Vec<MenuItem>,
@@ -113,7 +135,7 @@ mod win {
             ctx.set_visuals(visuals);
 
             let shared = Arc::new(Mutex::new(Snapshot::default()));
-            let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
+            let (action_tx, action_rx) = mpsc::channel::<Action>();
 
             let cfg_path = default_config_path();
             if !cfg_path.exists() {
@@ -132,6 +154,13 @@ mod win {
                     .collect();
                 let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
                 s.rows = rows;
+                s.enabled = config
+                    .providers
+                    .enabled_providers()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect();
+                s.primary = config.waybar.primary.clone().unwrap_or_default();
                 s.errors = errors
                     .iter()
                     .map(|e| format!("{}: {}", e.provider, e.message))
@@ -142,7 +171,7 @@ mod win {
             {
                 let ctx = ctx.clone();
                 let shared = shared.clone();
-                thread::spawn(move || fetch_loop(ctx, shared, refresh_rx, cfg_path));
+                thread::spawn(move || fetch_loop(ctx, shared, action_rx, cfg_path));
             }
 
             // Tray icon + menu. Left-click shows the window (not the menu).
@@ -169,7 +198,7 @@ mod win {
             // while the window is hidden (the egui loop may not tick then).
             {
                 let ctx = ctx.clone();
-                let refresh_tx = refresh_tx.clone();
+                let action_tx = action_tx.clone();
                 let quit = quit.clone();
                 let (show_id, refresh_id, update_id, quit_id) = (
                     show_i.id().clone(),
@@ -179,14 +208,16 @@ mod win {
                 );
                 thread::spawn(move || {
                     tray_event_loop(
-                        ctx, refresh_tx, quit, show_id, refresh_id, update_id, quit_id,
+                        ctx, action_tx, quit, show_id, refresh_id, update_id, quit_id,
                     )
                 });
             }
 
             Ok(Self {
                 shared,
-                refresh_tx,
+                action_tx,
+                selected: 0,
+                settings_open: false,
                 quit,
                 tray,
                 _items: vec![show_i, refresh_i, update_i, quit_i],
@@ -237,6 +268,9 @@ mod win {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone();
+            if self.selected >= snap.rows.len() {
+                self.selected = 0;
+            }
 
             // Outer padding so content doesn't touch the window edges.
             egui::Frame::group(ui.style())
@@ -249,13 +283,25 @@ mod win {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("TokenGauge").size(22.0).strong().color(BLUE));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let btn =
-                                egui::Button::new(RichText::new("⟳ Refresh").strong().color(DARK))
-                                    .fill(BLUE)
-                                    .corner_radius(6)
-                                    .min_size(egui::vec2(0.0, 26.0));
+                            let gear = egui::Button::new(
+                                RichText::new("\u{2699} Settings")
+                                    .strong()
+                                    .color(if self.settings_open { DARK } else { SUB }),
+                            )
+                            .fill(if self.settings_open { BLUE } else { CARD })
+                            .corner_radius(6)
+                            .min_size(egui::vec2(0.0, 26.0));
+                            if ui.add(gear).clicked() {
+                                self.settings_open = !self.settings_open;
+                            }
+                            let btn = egui::Button::new(
+                                RichText::new("\u{27f3} Refresh").strong().color(DARK),
+                            )
+                            .fill(BLUE)
+                            .corner_radius(6)
+                            .min_size(egui::vec2(0.0, 26.0));
                             if ui.add(btn).clicked() {
-                                let _ = self.refresh_tx.send(());
+                                let _ = self.action_tx.send(Action::Refresh);
                             }
                             if snap.fetching {
                                 ui.spinner();
@@ -269,7 +315,7 @@ mod win {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            if snap.rows.is_empty() {
+                            if snap.rows.is_empty() && !self.settings_open {
                                 ui.add_space(24.0);
                                 ui.vertical_centered(|ui| {
                                     ui.label(
@@ -285,31 +331,13 @@ mod win {
                                 });
                             }
 
-                            for row in &snap.rows {
-                                card(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            RichText::new(cap(&row.provider)).size(16.0).strong(),
-                                        );
-                                        if row.stale {
-                                            ui.label(RichText::new("stale").small().color(PEACH));
-                                        }
-                                        if let Some(plan) = &row.plan {
-                                            ui.with_layout(
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| {
-                                                    ui.label(
-                                                        RichText::new(plan).small().color(MAUVE),
-                                                    );
-                                                },
-                                            );
-                                        }
-                                    });
-                                    ui.add_space(8.0);
-                                    usage_row(ui, "Session", row.session_used, &row.session_reset);
-                                    usage_row(ui, "Weekly", row.weekly_used, &row.weekly_reset);
-                                });
-                                ui.add_space(8.0);
+                            if self.settings_open {
+                                self.settings_pane(ui, &snap);
+                            } else {
+                                self.provider_tabs(ui, &snap);
+                                if let Some(row) = snap.rows.get(self.selected) {
+                                    self.provider_panel(ui, row);
+                                }
                             }
 
                             if !snap.errors.is_empty() {
@@ -331,6 +359,239 @@ mod win {
         }
     }
 
+    impl TrayApp {
+        /// One chip per provider. Hidden with a single provider, where a tab
+        /// strip is just a label repeating the card header below it.
+        fn provider_tabs(&mut self, ui: &mut egui::Ui, snap: &Snapshot) {
+            if snap.rows.len() < 2 {
+                return;
+            }
+            ui.horizontal_wrapped(|ui| {
+                for (i, row) in snap.rows.iter().enumerate() {
+                    let active = i == self.selected;
+                    let chip = egui::Button::new(
+                        RichText::new(cap(&row.provider)).strong().color(if active {
+                            DARK
+                        } else {
+                            SUB
+                        }),
+                    )
+                    .fill(if active { BLUE } else { CARD })
+                    .corner_radius(6);
+                    if ui.add(chip).clicked() {
+                        self.selected = i;
+                    }
+                }
+            });
+            ui.add_space(4.0);
+        }
+
+        /// The header card plus every section the core resolved, in order.
+        fn provider_panel(&mut self, ui: &mut egui::Ui, row: &Row) {
+            card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(cap(&row.provider)).size(16.0).strong());
+                    if row.stale {
+                        ui.label(RichText::new("stale").small().color(PEACH));
+                    }
+                    if let Some(plan) = &row.plan {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(RichText::new(plan).small().color(MAUVE));
+                        });
+                    }
+                });
+
+                for section in &row.panel {
+                    ui.add_space(10.0);
+                    ui.label(RichText::new(section.title).small().strong().color(SUB));
+                    ui.add_space(2.0);
+                    for panel_row in &section.rows {
+                        match section.kind {
+                            SectionKind::Meters => meter_row(ui, panel_row),
+                            SectionKind::Bars => bar_row(ui, panel_row),
+                            SectionKind::Rows => key_row(ui, panel_row),
+                        }
+                    }
+                }
+
+                if row.credits != "\u{2014}" && !row.credits.is_empty() {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(format!("Credits: ${}", row.credits))
+                            .small()
+                            .color(SUB),
+                    );
+                }
+                if !row.updated.is_empty() && row.updated != "\u{2014}" {
+                    ui.add_space(6.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(format!("Updated {}", row.updated))
+                                .small()
+                                .color(SUB),
+                        );
+                    });
+                }
+            });
+            ui.add_space(8.0);
+        }
+
+        /// Provider toggles and the bar pin - the same two controls the other
+        /// frontends put behind their gear button.
+        fn settings_pane(&mut self, ui: &mut egui::Ui, snap: &Snapshot) {
+            card(ui, |ui| {
+                ui.label(RichText::new("PROVIDERS").small().strong().color(SUB));
+                ui.add_space(4.0);
+                for provider in PROVIDERS {
+                    let mut on = snap.enabled.iter().any(|p| p == provider);
+                    if ui.checkbox(&mut on, cap(provider)).changed() {
+                        let _ = self
+                            .action_tx
+                            .send(Action::SetProvider((*provider).to_string(), on));
+                    }
+                }
+
+                ui.add_space(12.0);
+                ui.label(RichText::new("PIN TO BAR").small().strong().color(SUB));
+                ui.add_space(4.0);
+                let current = if snap.primary.is_empty() {
+                    "highest"
+                } else {
+                    snap.primary.as_str()
+                };
+                ui.horizontal_wrapped(|ui| {
+                    for choice in
+                        std::iter::once("highest").chain(snap.enabled.iter().map(String::as_str))
+                    {
+                        let active = choice == current;
+                        let chip = egui::Button::new(
+                            RichText::new(cap(choice)).strong().color(if active {
+                                DARK
+                            } else {
+                                SUB
+                            }),
+                        )
+                        .fill(if active { BLUE } else { CARD })
+                        .corner_radius(6);
+                        if ui.add(chip).clicked() {
+                            let _ = self.action_tx.send(Action::SetPrimary(choice.to_string()));
+                        }
+                    }
+                });
+            });
+            ui.add_space(8.0);
+        }
+    }
+
+    fn tone_color(tone: Tone) -> Color32 {
+        match tone {
+            Tone::Good => GREEN,
+            Tone::Warn => YELLOW,
+            Tone::Critical => RED,
+            Tone::Dim => SUB,
+            Tone::Normal => TEXT,
+        }
+    }
+
+    /// Label and value on one line, a full-width bar under it, then the reset
+    /// note and the pace badge.
+    fn meter_row(ui: &mut egui::Ui, row: &tokengauge_core::PanelRow) {
+        let fill = tone_color(row.tone);
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [110.0, 18.0],
+                egui::Label::new(RichText::new(&row.label).color(SUB)),
+            );
+            ui.add(
+                ProgressBar::new((row.fraction.unwrap_or(0.0) as f32).clamp(0.0, 1.0))
+                    .desired_width(220.0)
+                    .corner_radius(6)
+                    .fill(fill)
+                    .text(RichText::new(&row.value).small().strong().color(DARK)),
+            );
+        });
+        if !row.footnote.is_empty() || !row.badge.is_empty() {
+            ui.horizontal(|ui| {
+                ui.add_space(110.0);
+                if !row.footnote.is_empty() {
+                    ui.label(RichText::new(&row.footnote).small().color(SUB));
+                }
+                if !row.badge.is_empty() {
+                    ui.label(
+                        RichText::new(format!("\u{b7} {}", row.badge))
+                            .small()
+                            .color(tone_color(row.badge_tone)),
+                    );
+                }
+            });
+        }
+    }
+
+    /// One line per row with the share bar filling the row behind the text.
+    fn bar_row(ui: &mut egui::Ui, row: &tokengauge_core::PanelRow) {
+        let fraction = (row.fraction.unwrap_or(0.0) as f32).clamp(0.0, 1.0);
+        let value = if row.suffix.is_empty() {
+            row.value.clone()
+        } else {
+            format!("{}  \u{b7}  {}", row.value, row.suffix)
+        };
+        let height = 20.0;
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), height),
+            egui::Sense::hover(),
+        );
+        let painter = ui.painter();
+        painter.rect_filled(rect, 4.0, CARD);
+        if fraction > 0.0 {
+            let mut filled = rect;
+            filled.set_width(rect.width() * fraction);
+            painter.rect_filled(filled, 4.0, BORDER);
+        }
+        let color = if row.emphasized { TEXT } else { SUB };
+        painter.text(
+            rect.left_center() + egui::vec2(8.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            &row.label,
+            egui::FontId::proportional(12.0),
+            color,
+        );
+        painter.text(
+            rect.right_center() - egui::vec2(8.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            &value,
+            egui::FontId::monospace(12.0),
+            color,
+        );
+        if !row.tooltip.is_empty() {
+            response.on_hover_text(&row.tooltip);
+        }
+    }
+
+    /// Label, tinted badge, dim suffix and value on one line, no bar.
+    fn key_row(ui: &mut egui::Ui, row: &tokengauge_core::PanelRow) {
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [110.0, 18.0],
+                egui::Label::new(RichText::new(&row.label).color(SUB)),
+            );
+            ui.label(RichText::new(&row.value).monospace());
+            if !row.badge.is_empty() {
+                ui.label(
+                    RichText::new(&row.badge)
+                        .small()
+                        .color(tone_color(row.badge_tone)),
+                );
+            }
+            if !row.suffix.is_empty() {
+                ui.label(
+                    RichText::new(format!("\u{b7} {}", row.suffix))
+                        .small()
+                        .color(SUB),
+                );
+            }
+        });
+    }
+
     fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) {
         egui::Frame::group(ui.style())
             .fill(CARD)
@@ -338,37 +599,6 @@ mod win {
             .corner_radius(10)
             .inner_margin(egui::Margin::same(14))
             .show(ui, add);
-    }
-
-    fn usage_row(ui: &mut egui::Ui, label: &str, used: Option<u8>, reset: &str) {
-        ui.horizontal(|ui| {
-            ui.add_sized(
-                [62.0, 18.0],
-                egui::Label::new(RichText::new(label).color(SUB)),
-            );
-            match used {
-                Some(p) => {
-                    ui.add(
-                        ProgressBar::new((p as f32 / 100.0).clamp(0.0, 1.0))
-                            .desired_width(190.0)
-                            .corner_radius(6)
-                            .fill(usage_color(p))
-                            .text(RichText::new(format!("{p}%")).small().strong().color(DARK)),
-                    );
-                }
-                None => {
-                    ui.add_sized(
-                        [190.0, 18.0],
-                        egui::Label::new(RichText::new("no data").weak()),
-                    );
-                }
-            }
-            if !reset.is_empty() && reset != "—" {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(format!("resets {reset}")).small().color(SUB));
-                });
-            }
-        });
     }
 
     fn usage_color(p: u8) -> Color32 {
@@ -504,7 +734,7 @@ mod win {
 
     fn tray_event_loop(
         ctx: egui::Context,
-        refresh_tx: mpsc::Sender<()>,
+        action_tx: mpsc::Sender<Action>,
         quit: Arc<AtomicBool>,
         show_id: MenuId,
         refresh_id: MenuId,
@@ -518,7 +748,7 @@ mod win {
                 if ev.id == show_id {
                     show_window(&ctx);
                 } else if ev.id == refresh_id {
-                    let _ = refresh_tx.send(());
+                    let _ = action_tx.send(Action::Refresh);
                 } else if ev.id == update_id {
                     spawn_update();
                 } else if ev.id == quit_id {
@@ -545,7 +775,7 @@ mod win {
     fn fetch_loop(
         ctx: egui::Context,
         shared: Arc<Mutex<Snapshot>>,
-        refresh_rx: mpsc::Receiver<()>,
+        action_rx: mpsc::Receiver<Action>,
         cfg_path: std::path::PathBuf,
     ) {
         loop {
@@ -577,6 +807,13 @@ mod win {
                     let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
                     s.rows = rows;
                     s.errors = errors;
+                    s.enabled = config
+                        .providers
+                        .enabled_providers()
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect();
+                    s.primary = config.waybar.primary.clone().unwrap_or_default();
                 }
                 // Surface a bad config instead of silently showing stale data -
                 // there's no console to see the failure otherwise.
@@ -591,7 +828,26 @@ mod win {
             }
             ctx.request_repaint();
 
-            let _ = refresh_rx.recv_timeout(Duration::from_secs(refresh_secs));
+            // A settings change rewrites the config and falls straight through
+            // to the next fetch, so the pane never shows a toggle the config
+            // does not yet carry.
+            match action_rx.recv_timeout(Duration::from_secs(refresh_secs)) {
+                Ok(Action::SetProvider(name, enable)) => {
+                    if let Err(e) = config_set_oauth_provider(&cfg_path, &name, enable) {
+                        let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
+                        s.errors = vec![format!("config: {e}")];
+                    }
+                }
+                // "highest" is the absence of a pin, not a provider name.
+                Ok(Action::SetPrimary(name)) => {
+                    let pin = (name != "highest").then_some(name.as_str());
+                    if let Err(e) = config_set_primary(&cfg_path, pin) {
+                        let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
+                        s.errors = vec![format!("config: {e}")];
+                    }
+                }
+                Ok(Action::Refresh) | Err(_) => {}
+            }
         }
     }
 }

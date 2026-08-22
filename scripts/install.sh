@@ -109,29 +109,10 @@ tar -xzf "$TMP_DIR/$asset" -C "$TMP_DIR"
 
 install -m 0755 "$TMP_DIR/tokengauge-waybar" "$INSTALL_DIR/tokengauge-waybar"
 install -m 0755 "$TMP_DIR/tokengauge-tui" "$INSTALL_DIR/tokengauge-tui"
-# Release tarballs don't ship tokengauge-popover: it links GTK4, which the
-# release workflow deliberately keeps out of the Linux build. Say so rather than
-# skipping in silence - an upgrade would otherwise leave an old popover sitting
-# next to freshly-updated binaries with no hint anything was left behind.
-if [[ -f "$TMP_DIR/tokengauge-popover" ]]; then
-  install -m 0755 "$TMP_DIR/tokengauge-popover" "$INSTALL_DIR/tokengauge-popover"
-elif [[ -f "$INSTALL_DIR/tokengauge-popover" && -x "$INSTALL_DIR/tokengauge-popover" ]]; then
-  warn "tokengauge-popover is not in the $latest tarball (it needs GTK4 at build time)."
-  warn "  Kept the installed one, which is now older than the other binaries."
-  warn "  Update it from a checkout: cargo build --release -p tokengauge-popover"
-  warn "  then: install -m 0755 target/release/tokengauge-popover '$INSTALL_DIR'"
-else
-  info "tokengauge-popover is not in the $latest tarball (it needs GTK4 at build time)."
-  info "  For the GTK popover, build it from a checkout:"
-  info "    cargo build --release -p tokengauge-popover"
-  info "    install -m 0755 target/release/tokengauge-popover '$INSTALL_DIR'"
-  info "  The Waybar module and TUI work without it."
-fi
-
-# Provider brand SVG logos for the popover tab strip. Fetched from the repo
-# (not bundled in the binary tarball) and recoloured so the monochrome
-# (currentColor) marks are visible on the popover's dark background. Best
-# effort - the popover falls back to glyph icons when a logo is missing.
+# Provider brand SVG logos for the desktop frontends' tab strips. Fetched from
+# the repo (not bundled in the binary tarball) and recoloured so the monochrome
+# (currentColor) marks are visible on a dark background. Best effort - a
+# frontend falls back to glyph icons when a logo is missing.
 ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/tokengauge/icons"
 ICON_BASE="https://raw.githubusercontent.com/$REPO/$latest/assets/providers"
 ICON_FG="#cdd6f4"
@@ -267,7 +248,7 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
   '
 
   # on-click goes through `tokengauge-waybar --click`, which dispatches
-  # based on [waybar].click_action in the user's config (tui vs popover).
+  # based on [waybar].click_action in the user's config.
   module_filter='
     ."custom/tokengauge" = {
       "exec": "tokengauge-waybar",

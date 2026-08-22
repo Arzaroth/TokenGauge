@@ -10,8 +10,8 @@
 
     This script installs only the TUI. The system-tray GUI (tokengauge-tray) is
     a separate binary - build it with `cargo build --release -p tokengauge-tray`
-    (see the README's "Tray GUI" section). The Waybar module, GTK4 popover, and
-    KDE Plasma applet are Linux-only. Usage limits are fetched natively over
+    (see the README's "Tray GUI" section). The Waybar module, KDE Plasma applet,
+    GNOME extension and Quickshell widget are Linux-only. Usage limits are fetched natively over
     HTTP; sign in to the `codex` and/or `claude` CLIs so TokenGauge can read
     their OAuth credentials. ccusage (needs Node.js/Bun on PATH) then adds
     cost/token detail.

@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Extra rate windows - Claude's model-scoped weeklies (`Fable only`, `Sonnet only`) and `Daily Routines` - now carry a burn projection, the same `ends ~26%` / `empty in 2h 15m` badge the session and weekly gauges already showed. It renders on every frontend that draws those rows.
+- **One panel, one definition.** `tokengauge-core` now resolves the whole panel - section order, labels, number formatting, sort order, colour tiers, tooltips - in `panel_spec()`, and every frontend renders that list instead of deciding its own. Rust frontends call it directly; the QML and JS ones read it off a new `panel` field on each row of `tokengauge-waybar --json`. A frontend implements three primitives (meter, bar row, key/value row) and loops, so a section added to the core appears everywhere at once. `CLAUDE.md` records the rule and a test fails the build when a frontend stops handling a section kind.
+- Tokens by day and tokens by model, one bar per line, on every panel. Only the Omarchy widget had the per-model breakdown; the Plasma applet and GNOME extension drew a squashed 7-day column chart instead of per-day bars, and the waybar tooltip and Windows tray had neither.
+- The waybar tooltip is now the waybar panel: it draws the same LIMITS / COST / TOKENS BY DAY / TOKENS BY MODEL sections as every other frontend, with its own text bars.
+- The Windows tray window reaches parity: provider tabs, all limit meters (tertiary and extra windows included, with pace badges), the cost figures, tokens by day, tokens by model, and a settings pane for the provider toggles and the bar pin. It drew Session and Weekly and nothing else.
+
+### Changed
+
+- Cost figures read the same on every panel: `Today`, `Session`, `7-day`, `This month`, `Burn rate`, with the `↑161% vs prior avg` trend tinted by how far above the prior daily average today sits. The four panels previously disagreed on which rows existed and what they were called.
+- A window the provider does not report is dropped rather than drawn as a permanently empty meter. The waybar tooltip was the last frontend still drawing them to hold its line count steady; now that it shares the panel spec, it follows the same rule.
+
+### Removed
+
+- **Breaking:** the bundled GTK4 popover (`tokengauge-popover`) is gone. The waybar tooltip now carries the full panel, so a second window that opened on click showed nothing the hover did not. A config still set to `click_action = "popover"` keeps loading and opens the TUI; the `popover_command`, `popover_margin_top` and `popover_margin_side` keys are ignored and can be deleted. Nothing else changes for `click_action = "tui"`, which was the default.
+
 ## [0.19.0] - 2026-08-22
 
 ### Added

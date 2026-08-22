@@ -48,23 +48,22 @@ PlasmoidItem {
     toolTipTextFormat: Text.RichText
     toolTipSubText: tooltipSub(selRow)
 
-    // Per-window limits (session / weekly / tertiary / extras) with tier colour,
-    // like the Waybar tooltip minus the ASCII bars.
+    // The hover summary: every limit the panel draws, with its tier colour, and
+    // today's spend. Read off the same core section list the applet renders, so
+    // the two can never disagree about which windows exist.
     function tooltipSub(r) {
         if (!r)
             return lastError !== "" ? lastError : i18n("No provider data yet.")
-        var wl = r.window_labels || ["Session", "Weekly", "Tertiary"]
+        var sections = Array.isArray(r.panel) ? r.panel : []
         var lines = []
-        function add(name, v) {
-            if (v === null || v === undefined) return
-            lines.push(name + ":&nbsp;<font color=\"" + root.tierColor(v) + "\"><b>" + v + "%</b></font>")
+        for (var i = 0; i < sections.length; i++) {
+            if (sections[i].id !== "limits") continue
+            var rows = sections[i].rows
+            for (var j = 0; j < rows.length; j++)
+                lines.push(root.escapeHtml(rows[j].label) + ":&nbsp;<font color=\""
+                           + root.toneColor(rows[j].tone) + "\"><b>"
+                           + root.escapeHtml(rows[j].value) + "</b></font>")
         }
-        add(wl[0], r.session_used)
-        add(wl[1], r.weekly_used)
-        add(wl[2], r.tertiary_used)
-        var ex = r.extra_windows || []
-        for (var i = 0; i < ex.length; i++)
-            add(ex[i].title, ex[i].used)
         if (r.cost)
             lines.push(i18n("Today") + ":&nbsp;<b>" + root.fmtUsd(r.cost.today_usd) + "</b>")
         return lines.join("<br>")
@@ -146,6 +145,29 @@ PlasmoidItem {
 
     // ---- helpers -------------------------------------------------------------
     // Tier colour for a usage percent, mirroring core color_for_percent.
+    // The tooltip is Text.RichText and the labels come from a provider API
+    // response, so `&`, `<` and `>` in a window title would corrupt the markup -
+    // and Qt's rich text subset accepts tags such as <img src=...>. The waybar
+    // surface runs the same data through pango_escape.
+    function escapeHtml(value) {
+        return String(value === null || value === undefined ? "" : value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+    }
+
+    // A tone name from the core, mapped onto the snapshot theme. The compact
+    // representation still resolves a bare percentage, so both live here.
+    function toneColor(tone) {
+        var t = root.snapshot.theme || {}
+        switch (String(tone)) {
+            case "good": return t.green || "#a6e3a1"
+            case "warn": return t.yellow || "#f9e2af"
+            case "critical": return t.red || "#f38ba8"
+            default: return t.dim || "#6c7086"
+        }
+    }
+
     function tierColor(pct) {
         var t = root.snapshot.theme || {}
         if (pct === null || pct === undefined)

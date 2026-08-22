@@ -12,9 +12,9 @@ use clap::Parser;
 use serde::Serialize;
 use tokengauge_core::update;
 use tokengauge_core::{
-    CostInfo, ExtraWindowRow, FetchResult, ProviderFetchError, ProviderPayload, ProviderRow, Theme,
-    TokenGaugeConfig, UsagePace, WaybarState, WaybarWindow, config_set_oauth_provider,
-    config_set_primary, ensure_cache_dir, fetch_all_providers, format_tokens,
+    CostInfo, FetchResult, PanelRow, ProviderFetchError, ProviderPayload, ProviderRow, Section,
+    SectionKind, Theme, TokenGaugeConfig, Tone, UsagePace, WaybarState, WaybarWindow,
+    config_set_oauth_provider, config_set_primary, ensure_cache_dir, fetch_all_providers,
     format_updated_relative, load_config, notify_state_path, payload_to_rows_with_costs,
     provider_icon, provider_icon_svg_path, provider_label, read_cache_full, read_notify_state,
     read_waybar_state, refresh_in_progress, refresh_sentinel_deadline_ms, refresh_sentinel_path,
@@ -73,10 +73,8 @@ struct Args {
     /// pick up streaming exec output - use the standard polling config instead.
     #[arg(long, hide = true)]
     client_tail: bool,
-    /// Handle a waybar on-click event. Dispatches based on `[waybar]
-    /// click_action` in the config: "tui" launches the terminal TUI,
-    /// "popover" runs `popover_command` (defaults to the bundled
-    /// `tokengauge-popover --toggle`).
+    /// Handle a waybar on-click event by launching the terminal TUI. Override
+    /// the launcher with `[waybar] tui_command`.
     #[arg(long)]
     click: bool,
     /// Emit the full snapshot as one JSON object (rows, errors, enabled,
@@ -382,6 +380,22 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
                 };
                 map.insert("session_pace".into(), pace_badge(r.session_pace));
                 map.insert("weekly_pace".into(), pace_badge(r.weekly_pace));
+                // The panel layout, resolved once in the core. Every frontend
+                // that draws a panel walks this list rather than deciding its
+                // own section order, labels and number formatting.
+                map.insert(
+                    "panel".into(),
+                    serde_json::to_value(tokengauge_core::panel_spec(r)).unwrap_or_default(),
+                );
+                // Extra windows get the same badge-string treatment, so a
+                // frontend renders every gauge's projection the same way.
+                if let Some(serde_json::Value::Array(extras)) = map.get_mut("extra_windows") {
+                    for (value, extra) in extras.iter_mut().zip(r.extra_windows.iter()) {
+                        if let serde_json::Value::Object(entry) = value {
+                            entry.insert("pace".into(), pace_badge(extra.pace));
+                        }
+                    }
+                }
                 // Frontends that keep their own provider selection cannot use
                 // `--open`, which resolves the provider from the config rather
                 // than from the caller. Carrying the URLs on the row lets them
@@ -1788,7 +1802,7 @@ fn handle_client(
         }
         SocketCommand::Refresh => {
             // Raise the sentinel and start the fetch before acking: a client
-            // that kicks a refresh and then polls for the ⟳ state (the popover
+            // that kicks a refresh and then polls for the ⟳ state (a panel
             // on open) must never observe the gap between its ack and the fetch
             // thread starting. The fetch itself runs in the background so the
             // client doesn't block on the network.
@@ -1946,17 +1960,13 @@ fn handle_click(config: &TokenGaugeConfig) {
 /// on the user's `[waybar].click_action` plus the matching override field.
 /// Empty return = nothing to spawn.
 fn resolve_click_command(config: &TokenGaugeConfig) -> String {
-    use tokengauge_core::ClickAction;
-    match config.waybar.click_action {
-        ClickAction::Popover => config.waybar.popover_command.trim().to_string(),
-        ClickAction::Tui => {
-            let explicit = config.waybar.tui_command.trim();
-            if !explicit.is_empty() {
-                return explicit.to_string();
-            }
-            default_tui_launcher()
-        }
+    // The GTK popover is gone, so both actions land on the TUI. A config still
+    // set to "popover" resolves here rather than doing nothing on click.
+    let explicit = config.waybar.tui_command.trim();
+    if !explicit.is_empty() {
+        return explicit.to_string();
     }
+    default_tui_launcher()
 }
 
 fn default_tui_launcher() -> String {
@@ -2117,53 +2127,108 @@ fn icon_markup(label: &str) -> String {
     )
 }
 
-fn format_provider_line(
-    label: &str,
-    used: Option<u8>,
-    reset: &str,
-    pace: Option<&UsagePace>,
-) -> String {
-    let (dim, _separator, green, yellow, red, _neutral) = theme_palette();
-    match used {
-        Some(pct) => {
-            let bar = tooltip_bar(pct);
-            let color = theme().color_for_percent(pct);
-            let pct_cell = format!("{pct:>3}%");
-            let reset_part = if reset == "—" {
-                "not started".to_string()
-            } else {
-                format!("resets {}", pango_escape(reset))
-            };
-            let pace_part = match pace {
-                Some(pace) => {
-                    let pace_color = if pace.stage.is_ahead() {
-                        if pace.delta_percent.abs() > 6.0 {
-                            red
-                        } else {
-                            yellow
-                        }
-                    } else if pace.stage.is_behind() {
-                        green
-                    } else {
-                        dim
-                    };
-                    format!(
-                        "  <span foreground=\"{pace_color}\">· {}</span>",
-                        pango_escape(&pace.badge())
-                    )
-                }
-                None => String::new(),
-            };
-            format!(
-                "  {label:<16}  [<span foreground=\"{color}\">{bar}</span>]  <span foreground=\"{color}\">{pct_cell}</span>   {reset_part}{pace_part}"
-            )
-        }
-        None => {
-            format!(
-                "  {label:<16}  [<span foreground=\"{dim}\">──────────</span>]          no data"
-            )
-        }
+/// The `· ends ~26%` / `· empty in 2h 15m` trailer, coloured by how far the
+/// window is off an even burn. Shared so every tooltip gauge - the session and
+/// weekly ones and the extra windows - renders its projection identically.
+/// Map a core [`Tone`] onto the tooltip palette.
+fn tone_color(tone: Tone) -> &'static str {
+    let (dim, _separator, green, yellow, red, neutral) = theme_palette();
+    match tone {
+        Tone::Good => green,
+        Tone::Warn => yellow,
+        Tone::Critical => red,
+        Tone::Dim => dim,
+        Tone::Normal => neutral,
     }
+}
+
+/// The tinted `· ends ~26%` / `· ↑161% vs prior avg` trailer.
+fn format_badge(row: &PanelRow) -> String {
+    if row.badge.is_empty() {
+        return String::new();
+    }
+    let color = tone_color(row.badge_tone);
+    format!(
+        "  <span foreground=\"{color}\">· {}</span>",
+        pango_escape(&row.badge)
+    )
+}
+
+/// A ten-cell bar from a 0.0-1.0 fill, for the sections carrying a fraction
+/// rather than a percentage.
+fn fraction_bar(fraction: f64) -> String {
+    tooltip_bar((fraction.clamp(0.0, 1.0) * 100.0).round() as u8)
+}
+
+/// Render one core panel section as tooltip lines: a blank spacer, a dim
+/// heading, then one line per row shaped by the section kind.
+fn format_panel_section(section: &Section) -> Vec<String> {
+    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
+    // Each column is padded to the widest entry in its own section, so the
+    // token counts line up under each other and so do the amounts.
+    let value_width = section
+        .rows
+        .iter()
+        .map(|r| r.value.chars().count())
+        .max()
+        .unwrap_or(0);
+    let suffix_width = section
+        .rows
+        .iter()
+        .map(|r| r.suffix.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let lines = section.rows.iter().map(|row| {
+        let label = format!("{:<16}", pango_escape(&row.label));
+        let value = format!("{:>value_width$}", pango_escape(&row.value));
+        match section.kind {
+            SectionKind::Meters => {
+                let color = tone_color(row.tone);
+                let bar = fraction_bar(row.fraction.unwrap_or(0.0));
+                let trailing = pango_escape(&row.footnote);
+                let badge = format_badge(row);
+                format!(
+                    "  {label}  [<span foreground=\"{color}\">{bar}</span>]  <span foreground=\"{color}\">{value}</span>   {trailing}{badge}"
+                )
+            }
+            SectionKind::Bars => {
+                let bar = fraction_bar(row.fraction.unwrap_or(0.0));
+                let (open, close) = if row.emphasized {
+                    ("<b>", "</b>")
+                } else {
+                    ("", "")
+                };
+                let suffix = if row.suffix.is_empty() {
+                    String::new()
+                } else {
+                    format!("  ·  {:>suffix_width$}", pango_escape(&row.suffix))
+                };
+                format!(
+                    "  {open}{label}{close}  <span foreground=\"{dim}\">[{bar}]</span>  {value}{suffix}"
+                )
+            }
+            SectionKind::Rows => {
+                let suffix = if row.suffix.is_empty() {
+                    String::new()
+                } else {
+                    format!("  ·  {}", pango_escape(&row.suffix))
+                };
+                let badge = format_badge(row);
+                format!(
+                    "  {label}  <span foreground=\"{dim}\">{value}</span>{badge}<span foreground=\"{dim}\">{suffix}</span>"
+                )
+            }
+        }
+    });
+
+    std::iter::once(String::new())
+        .chain(std::iter::once(format!(
+            "  <span foreground=\"{dim}\">{}</span>",
+            pango_escape(section.title)
+        )))
+        .chain(lines)
+        .collect()
 }
 
 fn format_credits_line(credits: &str) -> Option<String> {
@@ -2175,97 +2240,6 @@ fn format_credits_line(credits: &str) -> Option<String> {
         "  Credits  <span foreground=\"{dim}\">${}</span>",
         pango_escape(credits)
     ))
-}
-
-fn format_extra_window(extra: &ExtraWindowRow) -> String {
-    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
-    let title = pango_escape(&extra.title);
-    let title_padded = format!("{title:<14}");
-    match extra.used {
-        Some(pct) => {
-            let bar = tooltip_bar(pct);
-            let color = theme().color_for_percent(pct);
-            let pct_cell = format!("{pct:>3}%");
-            let reset_part = if extra.reset == "—" {
-                "not started".to_string()
-            } else {
-                format!("resets {}", pango_escape(&extra.reset))
-            };
-            format!(
-                "  {title_padded}  [<span foreground=\"{color}\">{bar}</span>]  <span foreground=\"{color}\">{pct_cell}</span>   {reset_part}"
-            )
-        }
-        None => format!(
-            "  {title_padded}  <span foreground=\"{dim}\">[──────────]</span>          no data"
-        ),
-    }
-}
-
-fn format_cost_lines(cost: &CostInfo) -> Vec<String> {
-    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
-    let today_usd = format!("${:.2}", cost.today_usd);
-    let monthly_usd = format!("${:.2}", cost.monthly_usd);
-    let session_usd = format!("${:.2}", cost.session_usd);
-    let weekly_usd = format!("${:.2}", cost.weekly_usd);
-    let usd_width = today_usd
-        .chars()
-        .count()
-        .max(monthly_usd.chars().count())
-        .max(session_usd.chars().count())
-        .max(weekly_usd.chars().count());
-    let today_tokens = format_tokens(cost.today_tokens);
-    let monthly_tokens = format_tokens(cost.monthly_tokens);
-    let tokens_width = today_tokens
-        .chars()
-        .count()
-        .max(monthly_tokens.chars().count());
-    let rate_line = cost.burn_rate.as_ref().map(|br| {
-        let rate_str = format!("${:.2}", br.cost_per_hour);
-        format!("  Rate      <span foreground=\"{dim}\">{rate_str:>usd_width$}/hr</span>")
-    });
-    let today_trend = cost
-        .today_vs_avg_percent()
-        .map(|pct| {
-            let arrow = if pct >= 0.0 { "↑" } else { "↓" };
-            let color = if pct >= 25.0 {
-                "#f38ba8"
-            } else if pct >= -10.0 {
-                "#f9e2af"
-            } else {
-                "#a6e3a1"
-            };
-            format!(
-                "  <span foreground=\"{color}\">{arrow}{:.0}%</span> <span foreground=\"{dim}\">vs prior avg</span>",
-                pct.abs()
-            )
-        })
-        .unwrap_or_default();
-
-    let session_line = (cost.session_usd > 0.0).then(|| {
-        format!("  Session   <span foreground=\"{dim}\">{session_usd:>usd_width$}</span>")
-    });
-    let weekly_line = (cost.weekly_usd > 0.0)
-        .then(|| format!("  Weekly    <span foreground=\"{dim}\">{weekly_usd:>usd_width$}</span>"));
-    let blank = (session_line.is_some() || weekly_line.is_some()).then(String::new);
-
-    let today_line = format!(
-        "  Today     <span foreground=\"{dim}\">{today_usd:>usd_width$}</span>{today_trend}<span foreground=\"{dim}\">  ·  {today_tokens:>tokens_width$} tokens</span>"
-    );
-    let month_line = format!(
-        "  Month     <span foreground=\"{dim}\">{monthly_usd:>usd_width$}  ·  {monthly_tokens:>tokens_width$} tokens</span>"
-    );
-
-    [
-        rate_line,
-        session_line,
-        weekly_line,
-        blank,
-        Some(today_line),
-        Some(month_line),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
 }
 
 fn format_header(row: &ProviderRow) -> String {
@@ -2294,54 +2268,18 @@ fn format_provider_card(row: &ProviderRow) -> String {
             )
         });
 
-    let (session_label, weekly_label, tertiary_label) = window_labels(&row.provider);
-    let window_lines = [
-        Some(format_provider_line(
-            session_label,
-            row.session_used,
-            &row.session_reset,
-            row.session_pace.as_ref(),
-        )),
-        Some(format_provider_line(
-            weekly_label,
-            row.weekly_used,
-            &row.weekly_reset,
-            row.weekly_pace.as_ref(),
-        )),
-        (row.tertiary_used.is_some() || row.tertiary_reset != "—").then(|| {
-            format_provider_line(tertiary_label, row.tertiary_used, &row.tertiary_reset, None)
-        }),
-    ];
-
-    let extras_section: Vec<String> = if row.extra_windows.is_empty() {
-        Vec::new()
-    } else {
-        std::iter::once(String::new())
-            .chain(std::iter::once(format!(
-                "  <span foreground=\"{dim}\">Extra usage</span>"
-            )))
-            .chain(row.extra_windows.iter().map(format_extra_window))
-            .collect()
-    };
-
-    let cost_section: Vec<String> = match &row.cost {
-        Some(cost) => std::iter::once(String::new())
-            .chain(std::iter::once(format!(
-                "  <span foreground=\"{dim}\">Cost</span>"
-            )))
-            .chain(format_cost_lines(cost))
-            .collect(),
-        None => Vec::new(),
-    };
-
-    let credits_line = format_credits_line(&row.credits);
+    // The tooltip is waybar's panel, so it draws the same sections in the same
+    // order as every other panel. The header, the credits and the input hints
+    // below are the only waybar-specific chrome left here.
+    let sections: Vec<String> = tokengauge_core::panel_spec(row)
+        .iter()
+        .flat_map(format_panel_section)
+        .collect();
 
     let lines: Vec<String> = std::iter::once(format_header(row))
         .chain(updated_line)
-        .chain(window_lines.into_iter().flatten())
-        .chain(extras_section)
-        .chain(cost_section)
-        .chain(credits_line)
+        .chain(sections)
+        .chain(format_credits_line(&row.credits))
         .collect();
 
     format!("<tt>{}</tt>", lines.join("\n"))
@@ -2404,13 +2342,10 @@ fn format_tooltip_from_cards(cards: &[&str], refreshing: bool, left_verb: &str) 
     format!("{body}{status_line}{hint}")
 }
 
-/// Short verb shown in the tooltip's left-click hint, matching the user's
-/// configured click_action.
-fn left_click_label(config: &TokenGaugeConfig) -> String {
-    match config.waybar.click_action {
-        tokengauge_core::ClickAction::Tui => "open TUI".to_string(),
-        tokengauge_core::ClickAction::Popover => "open panel".to_string(),
-    }
+/// Short verb shown in the tooltip's left-click hint. Both click actions land
+/// on the TUI now that the popover is gone, so there is nothing to branch on.
+fn left_click_label(_config: &TokenGaugeConfig) -> String {
+    "open TUI".to_string()
 }
 
 #[cfg(test)]
@@ -2562,23 +2497,25 @@ mod tests {
         assert!(card.contains("Weekly"));
         assert!(card.contains("━━━━━━────"));
         assert!(card.contains("━─────────"));
-        assert!(card.contains("<span foreground=\"#f9e2af\"> 67%</span>"));
-        assert!(card.contains("<span foreground=\"#a6e3a1\"> 19%</span>"));
-        assert!(card.contains("resets in 2h 34m"));
-        assert!(card.contains("resets in 4d 11h"));
+        assert!(card.contains("<span foreground=\"#f9e2af\">67%</span>"));
+        assert!(card.contains("<span foreground=\"#a6e3a1\">19%</span>"));
+        assert!(card.contains("Resets in 2h 34m"));
+        assert!(card.contains("Resets in 4d 11h"));
+        assert!(card.contains("LIMITS"));
     }
 
     #[test]
     fn format_provider_card_missing_session() {
+        // A window the provider does not report is dropped rather than drawn as
+        // a permanently empty meter - the same rule every other panel follows.
         let mut row = sample_row("Codex");
         row.session_used = None;
         row.session_reset = "—".to_string();
         let card = format_provider_card(&row);
         assert!(card.contains("Codex</b>"));
-        assert!(card.contains("──────────"));
-        assert!(card.contains("no data"));
+        assert!(!card.contains("Session"));
         assert!(card.contains("━─────────"));
-        assert!(card.contains("resets in 4d 11h"));
+        assert!(card.contains("Resets in 4d 11h"));
     }
 
     #[test]
@@ -2587,7 +2524,7 @@ mod tests {
         row.weekly_reset = "—".to_string();
         let card = format_provider_card(&row);
         assert!(card.contains("not started"));
-        assert!(!card.contains("resets —"));
+        assert!(!card.contains("Resets —"));
     }
 
     #[test]
@@ -2603,7 +2540,7 @@ mod tests {
         let mut row = sample_row("Claude");
         row.session_reset = "a & b".to_string();
         let card = format_provider_card(&row);
-        assert!(card.contains("resets a &amp; b"));
+        assert!(card.contains("Resets a &amp; b"));
     }
 
     #[test]
@@ -2911,11 +2848,12 @@ mod tests {
     // ------------------------------------------------------------------------
 
     #[test]
-    fn resolve_click_command_popover_uses_popover_command() {
+    fn resolve_click_command_popover_falls_back_to_tui() {
+        // A config left on the removed popover action still opens something.
         let mut cfg = test_config(PathBuf::from("/tmp/x"));
         cfg.waybar.click_action = tokengauge_core::ClickAction::Popover;
-        cfg.waybar.popover_command = "  my-popover --toggle  ".into();
-        assert_eq!(resolve_click_command(&cfg), "my-popover --toggle");
+        cfg.waybar.tui_command = "  my-term -e tokengauge-tui  ".into();
+        assert_eq!(resolve_click_command(&cfg), "my-term -e tokengauge-tui");
     }
 
     #[test]

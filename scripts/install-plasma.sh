@@ -26,11 +26,11 @@ command -v cargo >/dev/null 2>&1 || { fail "cargo not found - install Rust to bu
 
 info "Building release binaries..."
 cargo build --release --manifest-path "$REPO_DIR/Cargo.toml" \
-  -p tokengauge-waybar -p tokengauge-tui -p tokengauge-popover
+  -p tokengauge-waybar -p tokengauge-tui
 
 info "Installing binaries to $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
-for bin in tokengauge-waybar tokengauge-tui tokengauge-popover; do
+for bin in tokengauge-waybar tokengauge-tui; do
   install -m 0755 "$REPO_DIR/target/release/$bin" "$INSTALL_DIR/$bin"
 done
 

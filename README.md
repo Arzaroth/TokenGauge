@@ -10,18 +10,18 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 
 ## Features
 
-- **Waybar module**: bar + percentage per provider with brand-colored icons, pango-markup tooltip mirroring the TUI card layout
+- **Waybar module**: bar + percentage per provider with brand-colored icons, and a pango-markup tooltip that *is* the waybar panel - every section below, drawn with text bars
 - **TUI dashboard** (ratatui): per-provider sidebar, Session / Weekly / Sonnet-only / Tertiary windows, Extra usage rates, cost breakdown
-- **Native GTK4 popover**: bundled `tokengauge-popover` (gtk4-layer-shell) gives a click-to-open GUI panel with provider tabs, real provider brand logos (SVG, falling back to glyph icons when a logo is missing), color-tiered usage bars, monospace-aligned cost rows, and a collapsible 7-day chart. Pick `tui` or `popover` per `[waybar].click_action`.
-- **KDE Plasma 6 applet**: native panel widget (QML plasmoid) mirroring the popover - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, a 7-day chart, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
+- **One panel, five surfaces**: the waybar tooltip, the KDE Plasma applet, the GNOME extension, the Quickshell widget and the Windows tray window all render the same sections in the same order - LIMITS, COST, TOKENS BY DAY, TOKENS BY MODEL - from a single layout resolved in `tokengauge-core`. See [CLAUDE.md](CLAUDE.md) for the parity rule.
+- **KDE Plasma 6 applet**: native panel widget (QML plasmoid) - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
 - **Cost tracking via ccusage**: today, month, 7-day rolling, per-model split, current burn rate $/hr, 7-day chart, today's spend vs the average of the prior days
 - **Multi-provider**: Claude, Codex, Kimi, Grok, and GLM (z.ai)
-- **GNOME Shell extension**: panel indicator for GNOME 45+ mirroring the Plasma applet - brand icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, a 7-day chart, and pin-to-bar, plus an Adwaita preferences window for the provider toggles. Shares the same config, cache, and daemon as the Waybar module.
-- **Pace tracking**: each usage window projects where it lands at reset from the current burn rate (`ends ~16%`, or `empty in 2h 15m` when it runs out first) - shown next to each reset in the Waybar tooltip, TUI, popover, and Plasma applet (hidden until 3% of the window has elapsed)
+- **GNOME Shell extension**: panel indicator for GNOME 45+ mirroring the Plasma applet - brand icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and pin-to-bar, plus an Adwaita preferences window for the provider toggles. Shares the same config, cache, and daemon as the Waybar module.
+- **Pace tracking**: every usage window - including Claude's model-scoped weeklies like `Fable only` - projects where it lands at reset from the current burn rate (`ends ~16%`, or `empty in 2h 15m` when it runs out first), shown next to each reset on every frontend (hidden until 3% of the window has elapsed)
 - **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary
 - **Threshold notifications**: `notify-send` alerts at 50/80/95% (configurable) - one-shot per threshold, resets on window roll-over
 - **Daemon mode**: optional long-lived process for near-instant waybar polls, background notifications, and SIGHUP config reload
-- **Self-update**: `tokengauge-waybar --update` pulls the arch-matching build from GitHub releases; the daemon checks periodically and notifies, and the popover / Plasma widget expose an **Update** button
+- **Self-update**: `tokengauge-waybar --update` pulls the arch-matching build from GitHub releases; the daemon checks periodically and notifies, and the desktop frontends expose an **Update** button
 - **`--doctor`**: diagnostic checklist for credentials, ccusage, notifications, providers, waybar wiring, click action launcher
 - **CSS tier classes**: waybar text class flips to `tokengauge-warn` / `tokengauge-crit` past usage thresholds for theme-driven coloring
 
@@ -72,10 +72,8 @@ curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/in
 | Open provider status page | back button (mouse 8) |
 | Rotate selected provider | scroll up / down |
 
-Left-click goes through `tokengauge-waybar --click`, which reads
-`[waybar].click_action` (`"tui"` or `"popover"`) and spawns the matching
-command. Pick the popover path to render a native GTK4 window
-(`tokengauge-popover`) instead of opening the terminal TUI.
+Left-click goes through `tokengauge-waybar --click`, which launches the
+terminal TUI. The waybar panel itself is the tooltip - hover the module.
 
 ### TUI keys
 
@@ -107,11 +105,8 @@ Edit `~/.config/tokengauge/config.toml`:
 | `waybar.placement` | `left` or `right` in the waybar | `right` |
 | `waybar.primary` | Provider key shown in the bar text (unset = stack all) | unset |
 | `waybar.scroll_throttle_ms` | Debounce window for scroll-rotate | `250` |
-| `waybar.click_action` | Left-click target: `tui` or `popover` | `tui` |
+| `waybar.click_action` | Left-click target. Only `tui` remains; `popover` still parses and resolves to the TUI | `tui` |
 | `waybar.tui_command` | Override TUI launcher (empty = auto-detect) | unset |
-| `waybar.popover_command` | Shell command run when `click_action = "popover"` | `tokengauge-popover --toggle` |
-| `waybar.popover_margin_top` | Bundled popover's top-edge offset (px) | `4` |
-| `waybar.popover_margin_side` | Bundled popover's side-edge offset (px) | `8` |
 | `notifications.enabled` | Send desktop notifications | `true` |
 | `notifications.thresholds` | Percent thresholds to fire on | `[50, 80, 95]` |
 | `update.check` | Daemon checks GitHub releases and notifies when a newer version exists | `true` |
@@ -164,37 +159,25 @@ Waybar config is unchanged - same `exec: tokengauge-waybar` with `interval: 60`.
 
 The daemon also reloads its config on `SIGHUP` (`pkill -HUP tokengauge-waybar`) so theme / refresh_secs / providers / click action changes take effect without a restart.
 
-## Click action: TUI vs popover
+## Click action
 
-Left-click goes through `tokengauge-waybar --click`, which reads
-`[waybar].click_action` and runs the matching command:
-
-- `click_action = "tui"` (default): launches `tokengauge-tui` in a terminal.
-  Auto-detects `omarchy-launch-or-focus-tui` when present, otherwise picks
-  the first of `$TERMINAL`, `ghostty`, `alacritty`, `kitty`, `wezterm`,
-  `foot`, `xterm` on `$PATH`. Override with `[waybar].tui_command`.
-
-- `click_action = "popover"`: opens the bundled GTK4 popover
-  (`tokengauge-popover --toggle`). The popover anchors under the waybar
-  using `gtk4-layer-shell`, shows provider tabs with
-  brand-coloured icons + tier-tinted session bars, monospace-aligned
-  cost rows, and a collapsible 7-day chart. A second click on the waybar
-  module toggles it closed. Tune `popover_margin_top` /
-  `popover_margin_side` if it doesn't sit where you want. The **⚙ Settings**
-  button flips the body to an inline pane: toggle the OAuth providers
-  (Codex / Claude) and pick which provider is pinned to the bar (or
-  `Highest`). Changes are written to `config.toml` live (comments
-  preserved) and the daemon is signalled to reload - no restart needed.
+Left-click goes through `tokengauge-waybar --click`, which launches
+`tokengauge-tui` in a terminal. It auto-detects
+`omarchy-launch-or-focus-tui` when present, otherwise picks the first of
+`$TERMINAL`, `ghostty`, `alacritty`, `kitty`, `wezterm`, `foot`, `xterm`
+on `$PATH`. Override with `[waybar].tui_command`.
 
 `tokengauge-waybar --doctor` reports the resolved click target and warns
-when its leading binary isn't on `$PATH`. `popover_command` accepts any
-shell command, so you can point it at another window toolkit if you'd
-rather not use the bundled GTK4 popover.
+when its leading binary isn't on `$PATH`.
+
+The bundled GTK4 popover was removed in 0.20.0: the waybar tooltip now
+carries the full panel, so a second window showed nothing new. A config
+still set to `click_action = "popover"` keeps loading and opens the TUI.
 
 ## KDE Plasma widget
 
 On KDE Plasma 6, TokenGauge ships a native panel applet (a QML plasmoid) that
-mirrors the GTK popover - it is an additive fourth frontend, so your Waybar
+draws the same panel as every other frontend - it is additive, so your Waybar
 module keeps working exactly as before. From a local checkout:
 
 ```bash
@@ -215,10 +198,9 @@ open dashboard/status, provider toggles, pin) through the same
 `tokengauge-waybar` binary, so the daemon stays the single source of truth and
 threshold notifications keep firing.
 
-Panel behaviour matches Waybar configured with `click_action = "popover"` (the
-default is `"tui"`): left-click opens the popup, right-click refreshes,
-middle-click opens the dashboard, back-button opens the status page, scroll
-rotates the shown provider. Point the applet at a non-default binary or change
+Mouse behaviour matches the Waybar module: left-click opens the popup,
+right-click refreshes, middle-click opens the dashboard, back-button opens the
+status page, scroll rotates the shown provider. Point the applet at a non-default binary or change
 its poll interval in the widget's own settings.
 
 ## GNOME Shell extension
@@ -283,8 +265,8 @@ tokengauge-tui.exe --check-update
 
 When the daemon is running it checks GitHub every `update.check_interval_secs`
 (default 6h) and fires a one-shot `notify-send` when a newer version is
-available - set `update.check = false` to opt out. The popover and KDE Plasma
-widget surface an **Update** button when a newer release is cached; clicking it
+available - set `update.check = false` to opt out. The desktop frontends
+surface an **Update** button when a newer release is cached; clicking it
 runs `--update`. After a Linux update the daemon is restarted automatically to
 load the new binary (falls back to printing the `systemctl --user restart
 tokengauge-daemon.service` command when not managed by systemd). On Windows the
@@ -381,9 +363,9 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 
 ## Windows 10
 
-The Waybar module, the GTK4 popover, the KDE Plasma applet, and the GNOME
-Shell extension are Linux-only (they depend on Waybar / `gtk4-layer-shell` /
-Plasma / GNOME Shell). On Windows two surfaces
+The Waybar module, the KDE Plasma applet, the GNOME Shell extension and the
+Quickshell/Omarchy widget are Linux-only (they depend on Waybar / Plasma /
+GNOME Shell / Quickshell). On Windows two surfaces
 are supported, both building and running natively on Windows 10: the
 **TUI dashboard** (`tokengauge-tui.exe`) and a **system-tray GUI**
 (`tokengauge-tray.exe`, see [Tray GUI](#tray-gui-tokengauge-tray) below).

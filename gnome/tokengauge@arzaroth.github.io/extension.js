@@ -10,7 +10,6 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const METER_WIDTH = 288;
-const CHART_HEIGHT = 44;
 
 const FALLBACK_THEME = {
     red: '#f38ba8',
@@ -361,27 +360,11 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
         this._content.add_child(this._providerCard(row));
 
-        const windowLabels = row.window_labels || [_('Session'), _('Weekly'), _('Tertiary')];
-        this._content.add_child(this._meter(windowLabels[0], row.session_used, row.session_reset, row.session_pace));
-        if (row.weekly_used !== null && row.weekly_used !== undefined)
-            this._content.add_child(this._meter(windowLabels[1], row.weekly_used, row.weekly_reset, row.weekly_pace));
-        if (row.tertiary_used !== null && row.tertiary_used !== undefined)
-            this._content.add_child(this._meter(windowLabels[2], row.tertiary_used, row.tertiary_reset, null));
-        // Skip the windows the provider exposes a slot for but reports nothing
-        // in; they are a permanently empty meter here. The waybar tooltip keeps
-        // them so its shape does not shift.
-        for (const extra of row.extra_windows || []) {
-            if (extra.placeholder === true)
-                continue;
-            this._content.add_child(this._meter(extra.title, extra.used, extra.reset, null));
-        }
-
-        if (row.cost) {
-            this._content.add_child(this._costSection(row.cost));
-            const history = row.cost.weekly_cost_history || [];
-            if (history.length > 0)
-                this._content.add_child(this._chart(history));
-        }
+        // The core hands over an ordered list of sections, each naming its own
+        // kind; one builder per kind draws it. A new section in the core
+        // appears here with no edit to this file.
+        for (const section of row.panel || [])
+            this._content.add_child(this._section(section));
 
         this._content.add_child(this._pinSection());
 
@@ -479,14 +462,41 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return card;
     }
 
-    _meter(name, value, reset, pace) {
+    /// A tone name from the core, mapped onto the snapshot theme.
+    _toneColor(tone) {
+        const t = this._theme();
+        switch (tone) {
+        case 'good': return t.green;
+        case 'warn': return t.yellow;
+        case 'critical': return t.red;
+        case 'dim': return t.dim;
+        default: return t.neutral;
+        }
+    }
+
+    _section(section) {
+        const box_ = box(true, {style_class: 'tokengauge-section', x_expand: true});
+        box_.add_child(label(section.title, 'tokengauge-section-title'));
+        for (const row of section.rows) {
+            switch (section.kind) {
+            case 'meters': box_.add_child(this._meter(row)); break;
+            case 'bars': box_.add_child(this._barRow(row)); break;
+            case 'rows': box_.add_child(this._keyRow(row)); break;
+            }
+        }
+        return box_;
+    }
+
+    // Label and value on one line, a full-width bar under it, then the reset
+    // note and the pace badge.
+    _meter(row) {
         const meter = box(true, {style_class: 'tokengauge-meter', x_expand: true});
 
         const top = box(false, {x_expand: true});
-        top.add_child(label(name, 'tokengauge-meter-label'));
+        top.add_child(label(row.label, 'tokengauge-meter-label'));
         top.add_child(spacer());
-        const pct = value === null || value === undefined ? '—' : `${value}%`;
-        top.add_child(label(pct, 'tokengauge-meter-value', `color: ${this._tierColor(value)};`));
+        top.add_child(label(row.value, 'tokengauge-meter-value',
+            `color: ${this._toneColor(row.tone)};`));
         meter.add_child(top);
 
         const track = new St.Widget({
@@ -494,67 +504,72 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             style: `width: ${METER_WIDTH}px;`,
             layout_manager: new Clutter.BinLayout(),
         });
-        const clamped = Math.max(0, Math.min(100, value || 0));
-        const fill = new St.Widget({
+        const clamped = Math.max(0, Math.min(1, Number(row.fraction) || 0));
+        track.add_child(new St.Widget({
             style_class: 'tokengauge-meter-fill',
-            style: `width: ${Math.round(METER_WIDTH * clamped / 100)}px; background-color: ${this._tierColor(value)};`,
+            style: `width: ${Math.round(METER_WIDTH * clamped)}px; background-color: ${this._toneColor(row.tone)};`,
             x_align: Clutter.ActorAlign.START,
-        });
-        track.add_child(fill);
+        }));
         meter.add_child(track);
 
-        const trailing = [reset, pace].filter(t => t && t !== '—').join('  ·  ');
-        if (trailing)
-            meter.add_child(label(trailing, 'tokengauge-dim'));
+        if (row.footnote || row.badge) {
+            const trailing = box(false, {x_expand: true});
+            if (row.footnote)
+                trailing.add_child(label(row.footnote, 'tokengauge-dim'));
+            if (row.badge) {
+                trailing.add_child(label(`  ·  ${row.badge}`, 'tokengauge-dim',
+                    `color: ${this._toneColor(row.badge_tone)};`));
+            }
+            trailing.add_child(spacer());
+            meter.add_child(trailing);
+        }
         return meter;
     }
 
-    _costRow(name, amount) {
-        const row = box(false, {x_expand: true});
-        row.add_child(label(name, 'tokengauge-cost-label'));
-        row.add_child(spacer());
-        row.add_child(label(amount, 'tokengauge-cost-value'));
-        return row;
+    // One line per row with the share bar filling the row behind the text, so a
+    // seven-day list and a model breakdown both stay on one screen.
+    _barRow(row) {
+        const clamped = Math.max(0, Math.min(1, Number(row.fraction) || 0));
+        const wrap = new St.Widget({
+            style_class: 'tokengauge-bar-row',
+            layout_manager: new Clutter.BinLayout(),
+            x_expand: true,
+        });
+        const fill = new St.Widget({
+            style_class: 'tokengauge-bar-fill',
+            x_align: Clutter.ActorAlign.START,
+        });
+        // The menu stretches past METER_WIDTH, so a fill sized against that
+        // constant reads short on a wide popup - a 100% row would not reach the
+        // end. Track the width the row is actually given.
+        wrap.connect('notify::width', () => {
+            fill.width = Math.round(wrap.width * clamped);
+        });
+        wrap.add_child(fill);
+
+        const line = box(false, {x_expand: true, style_class: 'tokengauge-bar-text'});
+        const weight = row.emphasized ? 'font-weight: bold;' : '';
+        line.add_child(label(row.label, 'tokengauge-cost-label', weight));
+        line.add_child(spacer());
+        const value = row.suffix ? `${row.value}  ·  ${row.suffix}` : row.value;
+        line.add_child(label(value, 'tokengauge-cost-value', weight));
+        wrap.add_child(line);
+        return wrap;
     }
 
-    _costSection(cost) {
-        const section = box(true, {style_class: 'tokengauge-section', x_expand: true});
-        section.add_child(label(_('Cost'), 'tokengauge-section-title'));
-        section.add_child(this._costRow(_('Today'), fmtUsd(cost.today_usd)));
-        section.add_child(this._costRow(_('Session'), fmtUsd(cost.session_usd)));
-        section.add_child(this._costRow(_('7-day'), fmtUsd(cost.weekly_usd)));
-        section.add_child(this._costRow(_('Month'), fmtUsd(cost.monthly_usd)));
-        if (cost.burn_rate) {
-            section.add_child(this._costRow(_('Burn rate'),
-                `${fmtUsd(cost.burn_rate.cost_per_hour)}/hr`));
+    // Label, tinted badge, dim suffix and value on one line, no bar.
+    _keyRow(row) {
+        const line = box(false, {x_expand: true});
+        line.add_child(label(row.label, 'tokengauge-cost-label'));
+        line.add_child(spacer());
+        if (row.badge) {
+            line.add_child(label(row.badge, 'tokengauge-dim',
+                `color: ${this._toneColor(row.badge_tone)};`));
         }
-        return section;
-    }
-
-    _chart(history) {
-        const section = box(true, {style_class: 'tokengauge-section', x_expand: true});
-        section.add_child(label(_('Last 7 days'), 'tokengauge-section-title'));
-
-        const max = history.reduce((m, v) => (v > m ? v : m), 0) || 1;
-        const bars = box(false, {style_class: 'tokengauge-chart', x_expand: true});
-        for (const usd of history) {
-            const column = new St.Widget({
-                style_class: 'tokengauge-chart-column',
-                layout_manager: new Clutter.BinLayout(),
-                x_expand: true,
-                height: CHART_HEIGHT,
-            });
-            const bar = new St.Widget({
-                style_class: 'tokengauge-chart-bar',
-                style: `height: ${Math.max(2, Math.round(CHART_HEIGHT * usd / max))}px;`,
-                y_align: Clutter.ActorAlign.END,
-                x_expand: true,
-            });
-            column.add_child(bar);
-            bars.add_child(column);
-        }
-        section.add_child(bars);
-        return section;
+        if (row.suffix)
+            line.add_child(label(`  ·  ${row.suffix}  `, 'tokengauge-dim'));
+        line.add_child(label(row.value, 'tokengauge-cost-value'));
+        return line;
     }
 
     _pinSection() {

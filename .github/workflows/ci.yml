@@ -63,9 +63,10 @@ jobs:
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-ci-${{ hashFiles('**/Cargo.lock') }}
 
-      # Only the cross-platform crates build on Windows; the waybar crate is
-      # Linux-only. Formatting and clippy are OS-independent and run in the
-      # Linux `build` job.
+      # Windows builds the cross-platform crates plus tokengauge-tray, whose
+      # GUI deps are cfg(windows)-gated and so cannot be type-checked in the
+      # Linux job. The waybar crate is Linux-only. Formatting and clippy are
+      # OS-independent and run in the Linux `build` job.
       - name: Build
         run: cargo build -p tokengauge-core -p tokengauge-tui -p tokengauge-tray
 

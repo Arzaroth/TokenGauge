@@ -13,7 +13,10 @@
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("tokengauge-tray is Windows-only; use the Waybar / GTK / KDE surfaces on Linux.");
+    eprintln!(
+        "tokengauge-tray is Windows-only; on Linux use the Waybar module, the KDE \
+         applet, the GNOME extension or the Quickshell widget."
+    );
 }
 
 #[cfg(windows)]
@@ -99,8 +102,9 @@ mod win {
         rows: Vec<Row>,
         errors: Vec<String>,
         fetching: bool,
-        /// Every toggleable provider, not just the enabled ones - the settings
-        /// pane needs the full list to draw a switch for each.
+        /// The providers currently enabled in the config. The settings pane
+        /// draws a switch for every entry in `PROVIDERS` and tests membership
+        /// here; the bar-pin chips list only these.
         enabled: Vec<String>,
         primary: String,
     }
@@ -445,6 +449,17 @@ mod win {
                 for provider in PROVIDERS {
                     let mut on = snap.enabled.iter().any(|p| p == provider);
                     if ui.checkbox(&mut on, cap(provider)).changed() {
+                        // The fetch thread only rewrites `enabled` once a whole
+                        // fetch has finished. Without this the switch snaps back
+                        // for the length of that fetch, and a second click
+                        // computes `on` from the stale value.
+                        {
+                            let mut s = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+                            s.enabled.retain(|p| p != provider);
+                            if on {
+                                s.enabled.push((*provider).to_string());
+                            }
+                        }
                         let _ = self
                             .action_tx
                             .send(Action::SetProvider((*provider).to_string(), on));
@@ -474,6 +489,14 @@ mod win {
                         .fill(if active { BLUE } else { CARD })
                         .corner_radius(6);
                         if ui.add(chip).clicked() {
+                            {
+                                let mut s = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+                                s.primary = if choice == "highest" {
+                                    String::new()
+                                } else {
+                                    choice.to_string()
+                                };
+                            }
                             let _ = self.action_tx.send(Action::SetPrimary(choice.to_string()));
                         }
                     }
@@ -831,22 +854,31 @@ mod win {
             // A settings change rewrites the config and falls straight through
             // to the next fetch, so the pane never shows a toggle the config
             // does not yet carry.
-            match action_rx.recv_timeout(Duration::from_secs(refresh_secs)) {
-                Ok(Action::SetProvider(name, enable)) => {
-                    if let Err(e) = config_set_oauth_provider(&cfg_path, &name, enable) {
-                        let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
-                        s.errors = vec![format!("config: {e}")];
+            // Every iteration of this loop costs a full fetch of every
+            // provider, staggered by `stagger_ms` to stay clear of 429s. Taking
+            // one action per iteration would make a user flipping three
+            // switches pay for three fetch cycles, so drain whatever else is
+            // already queued before falling through to the fetch.
+            let queued: Vec<Action> = action_rx
+                .recv_timeout(Duration::from_secs(refresh_secs))
+                .into_iter()
+                .chain(action_rx.try_iter())
+                .collect();
+            for action in queued {
+                let result = match action {
+                    Action::SetProvider(name, enable) => {
+                        config_set_oauth_provider(&cfg_path, &name, enable)
                     }
-                }
-                // "highest" is the absence of a pin, not a provider name.
-                Ok(Action::SetPrimary(name)) => {
-                    let pin = (name != "highest").then_some(name.as_str());
-                    if let Err(e) = config_set_primary(&cfg_path, pin) {
-                        let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
-                        s.errors = vec![format!("config: {e}")];
+                    // "highest" is the absence of a pin, not a provider name.
+                    Action::SetPrimary(name) => {
+                        config_set_primary(&cfg_path, (name != "highest").then_some(name.as_str()))
                     }
+                    Action::Refresh => Ok(()),
+                };
+                if let Err(e) = result {
+                    let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
+                    s.errors = vec![format!("config: {e}")];
                 }
-                Ok(Action::Refresh) | Err(_) => {}
             }
         }
     }

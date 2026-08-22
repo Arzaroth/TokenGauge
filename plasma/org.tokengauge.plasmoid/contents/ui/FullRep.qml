@@ -22,18 +22,6 @@ Item {
 
     // ---- reusable pieces -----------------------------------------------------
 
-    // A tone name from the core, mapped onto the snapshot theme.
-    function toneColor(tone) {
-        var t = root.snapshot.theme || {}
-        switch (String(tone)) {
-            case "good": return t.green || "#a6e3a1"
-            case "warn": return t.yellow || "#f9e2af"
-            case "critical": return t.red || "#f38ba8"
-            case "dim": return t.dim || "#6c7086"
-            default: return Kirigami.Theme.textColor
-        }
-    }
-
     function joinValue(row) {
         var suffix = String(row.suffix || "")
         return suffix === "" ? String(row.value || "") : row.value + "  ·  " + suffix
@@ -55,7 +43,7 @@ Item {
             }
             PlasmaComponents.Label {
                 text: modelData.value
-                color: full.toneColor(modelData.tone)
+                color: root.toneColor(modelData.tone)
                 font.bold: true
             }
         }
@@ -71,7 +59,7 @@ Item {
                 radius: parent.radius
                 visible: modelData.fraction !== null && modelData.fraction !== undefined
                 width: parent.width * Math.max(0, Math.min(1, Number(modelData.fraction) || 0))
-                color: full.toneColor(modelData.tone)
+                color: root.toneColor(modelData.tone)
             }
         }
         RowLayout {
@@ -87,7 +75,7 @@ Item {
             PlasmaComponents.Label {
                 text: modelData.badge
                 visible: text !== ""
-                color: full.toneColor(modelData.badge_tone)
+                color: root.toneColor(modelData.badge_tone)
                 font: Kirigami.Theme.smallFont
             }
             Item { Layout.fillWidth: true }
@@ -147,7 +135,7 @@ Item {
         PlasmaComponents.Label {
             text: modelData.badge
             visible: text !== ""
-            color: full.toneColor(modelData.badge_tone)
+            color: root.toneColor(modelData.badge_tone)
             font: Kirigami.Theme.smallFont
         }
         PlasmaComponents.Label {
@@ -315,15 +303,15 @@ Item {
                         }
                         Repeater {
                             model: modelData.kind === "meters" ? modelData.rows : []
-                            Meter { required property var modelData }
+                            Meter {}
                         }
                         Repeater {
                             model: modelData.kind === "bars" ? modelData.rows : []
-                            BarRow { required property var modelData }
+                            BarRow {}
                         }
                         Repeater {
                             model: modelData.kind === "rows" ? modelData.rows : []
-                            KeyRow { required property var modelData }
+                            KeyRow {}
                         }
                     }
                 }

@@ -535,11 +535,17 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             layout_manager: new Clutter.BinLayout(),
             x_expand: true,
         });
-        wrap.add_child(new St.Widget({
+        const fill = new St.Widget({
             style_class: 'tokengauge-bar-fill',
-            style: `width: ${Math.round(METER_WIDTH * clamped)}px;`,
             x_align: Clutter.ActorAlign.START,
-        }));
+        });
+        // The menu stretches past METER_WIDTH, so a fill sized against that
+        // constant reads short on a wide popup - a 100% row would not reach the
+        // end. Track the width the row is actually given.
+        wrap.connect('notify::width', () => {
+            fill.width = Math.round(wrap.width * clamped);
+        });
+        wrap.add_child(fill);
 
         const line = box(false, {x_expand: true, style_class: 'tokengauge-bar-text'});
         const weight = row.emphasized ? 'font-weight: bold;' : '';

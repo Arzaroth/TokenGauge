@@ -73,8 +73,8 @@ struct Args {
     /// pick up streaming exec output - use the standard polling config instead.
     #[arg(long, hide = true)]
     client_tail: bool,
-    /// Handle a waybar on-click event. Dispatches based on `[waybar]
-    /// click_action` in the config: "tui" launches the terminal TUI,
+    /// Handle a waybar on-click event by launching the terminal TUI. Override
+    /// the launcher with `[waybar] tui_command`.
     #[arg(long)]
     click: bool,
     /// Emit the full snapshot as one JSON object (rows, errors, enabled,
@@ -2186,11 +2186,7 @@ fn format_panel_section(section: &Section) -> Vec<String> {
             SectionKind::Meters => {
                 let color = tone_color(row.tone);
                 let bar = fraction_bar(row.fraction.unwrap_or(0.0));
-                let trailing = if row.footnote.is_empty() {
-                    "not started".to_string()
-                } else {
-                    pango_escape(&row.footnote)
-                };
+                let trailing = pango_escape(&row.footnote);
                 let badge = format_badge(row);
                 format!(
                     "  {label}  [<span foreground=\"{color}\">{bar}</span>]  <span foreground=\"{color}\">{value}</span>   {trailing}{badge}"

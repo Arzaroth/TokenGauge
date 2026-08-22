@@ -205,8 +205,11 @@ fn limit_rows(row: &ProviderRow) -> Vec<PanelRow> {
         let mut r = PanelRow::new(label, format!("{used}%"));
         r.fraction = Some(f64::from(used) / 100.0);
         r.tone = Tone::for_percent(used);
+        // A window with a percentage but no reset time has started counting
+        // and has nowhere to reset to yet. Say so here rather than in one
+        // frontend, or the other four render the line blank.
         r.footnote = if reset == "—" || reset.is_empty() {
-            String::new()
+            "not started".to_string()
         } else {
             format!("Resets {reset}")
         };
@@ -583,6 +586,10 @@ mod tests {
         assert_eq!(limits[0].tone, Tone::Good);
         assert_eq!(limits[0].footnote, "Resets in 15m");
         assert_eq!(limits[0].badge, "");
+        // A window with no reset time reads the same on every surface.
+        let mut no_reset = row();
+        no_reset.session_reset = "—".into();
+        assert_eq!(panel_spec(&no_reset)[0].rows[0].footnote, "not started");
     }
 
     #[test]

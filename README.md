@@ -363,9 +363,9 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 
 ## Windows 10
 
-The Waybar module, the KDE Plasma applet, and the GNOME
-Shell extension are Linux-only (they depend on Waybar / `gtk4-layer-shell` /
-Plasma / GNOME Shell). On Windows two surfaces
+The Waybar module, the KDE Plasma applet, the GNOME Shell extension and the
+Quickshell/Omarchy widget are Linux-only (they depend on Waybar / Plasma /
+GNOME Shell / Quickshell). On Windows two surfaces
 are supported, both building and running natively on Windows 10: the
 **TUI dashboard** (`tokengauge-tui.exe`) and a **system-tray GUI**
 (`tokengauge-tray.exe`, see [Tray GUI](#tray-gui-tokengauge-tray) below).

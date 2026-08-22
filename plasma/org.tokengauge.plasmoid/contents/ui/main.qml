@@ -60,8 +60,9 @@ PlasmoidItem {
             if (sections[i].id !== "limits") continue
             var rows = sections[i].rows
             for (var j = 0; j < rows.length; j++)
-                lines.push(rows[j].label + ":&nbsp;<font color=\"" + root.toneColor(rows[j].tone)
-                           + "\"><b>" + rows[j].value + "</b></font>")
+                lines.push(root.escapeHtml(rows[j].label) + ":&nbsp;<font color=\""
+                           + root.toneColor(rows[j].tone) + "\"><b>"
+                           + root.escapeHtml(rows[j].value) + "</b></font>")
         }
         if (r.cost)
             lines.push(i18n("Today") + ":&nbsp;<b>" + root.fmtUsd(r.cost.today_usd) + "</b>")
@@ -144,6 +145,17 @@ PlasmoidItem {
 
     // ---- helpers -------------------------------------------------------------
     // Tier colour for a usage percent, mirroring core color_for_percent.
+    // The tooltip is Text.RichText and the labels come from a provider API
+    // response, so `&`, `<` and `>` in a window title would corrupt the markup -
+    // and Qt's rich text subset accepts tags such as <img src=...>. The waybar
+    // surface runs the same data through pango_escape.
+    function escapeHtml(value) {
+        return String(value === null || value === undefined ? "" : value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+    }
+
     // A tone name from the core, mapped onto the snapshot theme. The compact
     // representation still resolves a bare percentage, so both live here.
     function toneColor(tone) {

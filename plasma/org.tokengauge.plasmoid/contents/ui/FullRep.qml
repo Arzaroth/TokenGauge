@@ -20,32 +20,42 @@ Item {
         : null
     readonly property var oauthProviders: root.snapshot.providers || ["codex", "claude"]
 
-    function chartMax(hist) {
-        var m = 0
-        for (var i = 0; i < (hist || []).length; i++)
-            if (hist[i] > m) m = hist[i]
-        return m > 0 ? m : 1
+    // ---- reusable pieces -----------------------------------------------------
+
+    // A tone name from the core, mapped onto the snapshot theme.
+    function toneColor(tone) {
+        var t = root.snapshot.theme || {}
+        switch (String(tone)) {
+            case "good": return t.green || "#a6e3a1"
+            case "warn": return t.yellow || "#f9e2af"
+            case "critical": return t.red || "#f38ba8"
+            case "dim": return t.dim || "#6c7086"
+            default: return Kirigami.Theme.textColor
+        }
     }
 
-    // ---- reusable pieces -----------------------------------------------------
+    function joinValue(row) {
+        var suffix = String(row.suffix || "")
+        return suffix === "" ? String(row.value || "") : row.value + "  ·  " + suffix
+    }
+
+    // Label and value on one line, a full-width bar under it, then the reset
+    // note and the pace badge. The limit gauges.
     component Meter: ColumnLayout {
-        property string label: ""
-        property var value: null
-        property string reset: ""
-        property string pace: ""
+        required property var modelData
         spacing: 2
         Layout.fillWidth: true
 
         RowLayout {
             Layout.fillWidth: true
             PlasmaComponents.Label {
-                text: label
+                text: modelData.label
                 Layout.fillWidth: true
                 elide: Text.ElideRight
             }
             PlasmaComponents.Label {
-                text: value === null || value === undefined ? "—" : value + "%"
-                color: root.tierColor(value)
+                text: modelData.value
+                color: full.toneColor(modelData.tone)
                 font.bold: true
             }
         }
@@ -59,29 +69,94 @@ Item {
             Rectangle {
                 height: parent.height
                 radius: parent.radius
-                visible: value !== null && value !== undefined
-                width: parent.width * Math.max(0, Math.min(100, value || 0)) / 100
-                color: root.tierColor(value)
+                visible: modelData.fraction !== null && modelData.fraction !== undefined
+                width: parent.width * Math.max(0, Math.min(1, Number(modelData.fraction) || 0))
+                color: full.toneColor(modelData.tone)
             }
         }
-        PlasmaComponents.Label {
-            visible: reset !== "" || pace !== ""
-            text: {
-                if (pace === "")
-                    return reset
-                return reset === "" ? pace : reset + "  ·  " + pace
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Kirigami.Units.smallSpacing
+            visible: String(modelData.footnote || "") !== "" || String(modelData.badge || "") !== ""
+            PlasmaComponents.Label {
+                text: modelData.footnote
+                visible: text !== ""
+                opacity: 0.7
+                font: Kirigami.Theme.smallFont
             }
-            opacity: 0.7
-            font: Kirigami.Theme.smallFont
+            PlasmaComponents.Label {
+                text: modelData.badge
+                visible: text !== ""
+                color: full.toneColor(modelData.badge_tone)
+                font: Kirigami.Theme.smallFont
+            }
+            Item { Layout.fillWidth: true }
         }
     }
 
-    component CostRow: RowLayout {
-        property string label: ""
-        property string amount: ""
+    // One line per row with the share bar filling the row behind the text, so a
+    // seven-day list and a model breakdown both stay on one screen.
+    component BarRow: Item {
+        required property var modelData
         Layout.fillWidth: true
-        PlasmaComponents.Label { text: label; opacity: 0.85; Layout.fillWidth: true }
-        PlasmaComponents.Label { text: amount; font.family: "monospace" }
+        implicitHeight: barLabel.implicitHeight + Kirigami.Units.smallSpacing * 2
+
+        Rectangle {
+            anchors.fill: parent
+            radius: 3
+            color: Kirigami.Theme.alternateBackgroundColor
+        }
+        Rectangle {
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: parent.width * Math.max(0, Math.min(1, Number(modelData.fraction) || 0))
+            radius: 3
+            opacity: 0.35
+            color: Kirigami.Theme.highlightColor
+        }
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: Kirigami.Units.smallSpacing
+            anchors.rightMargin: Kirigami.Units.smallSpacing
+            PlasmaComponents.Label {
+                id: barLabel
+                text: modelData.label
+                font.bold: modelData.emphasized === true
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+            }
+            PlasmaComponents.Label {
+                text: full.joinValue(modelData)
+                font.family: "monospace"
+                font.bold: modelData.emphasized === true
+            }
+        }
+        PlasmaComponents.ToolTip.text: modelData.tooltip || ""
+        PlasmaComponents.ToolTip.visible: String(modelData.tooltip || "") !== "" && barHover.hovered
+        PlasmaComponents.ToolTip.delay: 300
+        HoverHandler { id: barHover }
+    }
+
+    // Label, value, tinted badge and dim suffix on one line, no bar. The cost
+    // figures.
+    component KeyRow: RowLayout {
+        required property var modelData
+        Layout.fillWidth: true
+        PlasmaComponents.Label { text: modelData.label; opacity: 0.85; Layout.fillWidth: true }
+        PlasmaComponents.Label {
+            text: modelData.badge
+            visible: text !== ""
+            color: full.toneColor(modelData.badge_tone)
+            font: Kirigami.Theme.smallFont
+        }
+        PlasmaComponents.Label {
+            text: String(modelData.suffix || "") === "" ? "" : "·  " + modelData.suffix
+            visible: text !== ""
+            opacity: 0.6
+            font: Kirigami.Theme.smallFont
+        }
+        PlasmaComponents.Label { text: modelData.value; font.family: "monospace" }
     }
 
     QQC2.ButtonGroup { id: tabGroup }
@@ -220,95 +295,35 @@ Item {
                     }
                 }
 
-                Meter {
-                    visible: !full.settingsOpen && full.row !== null
-                    label: full.row && full.row.window_labels ? full.row.window_labels[0] : i18n("Session")
-                    value: full.row ? full.row.session_used : null
-                    reset: full.row ? full.row.session_reset : ""
-                    pace: full.row && full.row.session_pace ? full.row.session_pace : ""
-                }
-                Meter {
-                    visible: !full.settingsOpen && full.row && full.row.weekly_used !== null && full.row.weekly_used !== undefined
-                    label: full.row && full.row.window_labels ? full.row.window_labels[1] : i18n("Weekly")
-                    value: full.row ? full.row.weekly_used : null
-                    reset: full.row ? full.row.weekly_reset : ""
-                    pace: full.row && full.row.weekly_pace ? full.row.weekly_pace : ""
-                }
-                Meter {
-                    visible: !full.settingsOpen && full.row && full.row.tertiary_used !== null && full.row.tertiary_used !== undefined
-                    label: full.row && full.row.window_labels ? full.row.window_labels[2] : i18n("Tertiary")
-                    value: full.row ? full.row.tertiary_used : null
-                    reset: full.row ? full.row.tertiary_reset : ""
-                }
+                // The core hands over an ordered list of sections, each
+                // naming its own kind; one delegate per kind draws it. A new
+                // section in the core appears here with no edit to this file.
                 Repeater {
-                    // Drop the windows the provider exposes a slot for but
-                    // reports nothing in; they are a permanently empty meter
-                    // here. The waybar tooltip keeps them for its shape.
-                    model: !full.settingsOpen && full.row && full.row.extra_windows
-                           ? full.row.extra_windows.filter(function(w) { return w.placeholder !== true })
-                           : []
-                    Meter {
+                    model: !full.settingsOpen && full.row && Array.isArray(full.row.panel)
+                           ? full.row.panel : []
+
+                    ColumnLayout {
                         required property var modelData
-                        label: modelData.title
-                        value: modelData.used
-                        reset: modelData.reset
-                    }
-                }
+                        Layout.fillWidth: true
+                        spacing: modelData.kind === "meters" ? Kirigami.Units.smallSpacing : 1
 
-                Kirigami.Separator {
-                    Layout.fillWidth: true
-                    visible: !full.settingsOpen && full.row && full.row.cost
-                }
-                PlasmaComponents.Label {
-                    visible: !full.settingsOpen && full.row && full.row.cost
-                    text: i18n("Cost")
-                    font.bold: true
-                    opacity: 0.85
-                }
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 1
-                    visible: !full.settingsOpen && full.row && full.row.cost
-                    property var cost: full.row && full.row.cost ? full.row.cost : ({})
-                    CostRow { label: i18n("Today"); amount: root.fmtUsd(parent.cost.today_usd) }
-                    CostRow { label: i18n("Session"); amount: root.fmtUsd(parent.cost.session_usd) }
-                    CostRow { label: i18n("7-day"); amount: root.fmtUsd(parent.cost.weekly_usd) }
-                    CostRow { label: i18n("Month"); amount: root.fmtUsd(parent.cost.monthly_usd) }
-                    CostRow {
-                        visible: parent.cost.burn_rate
-                        label: i18n("Burn rate")
-                        amount: parent.cost.burn_rate ? root.fmtUsd(parent.cost.burn_rate.cost_per_hour) + "/hr" : "—"
-                    }
-                }
-
-                PlasmaComponents.Label {
-                    visible: !full.settingsOpen && full.row && full.row.cost && (full.row.cost.weekly_cost_history || []).length > 0
-                    text: i18n("Last 7 days")
-                    font.bold: true
-                    opacity: 0.85
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: Kirigami.Units.gridUnit * 3
-                    spacing: 2
-                    visible: !full.settingsOpen && full.row && full.row.cost && (full.row.cost.weekly_cost_history || []).length > 0
-                    Repeater {
-                        model: full.row && full.row.cost ? full.row.cost.weekly_cost_history : []
-                        Item {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Rectangle {
-                                anchors.bottom: parent.bottom
-                                width: parent.width
-                                radius: 2
-                                color: Kirigami.Theme.highlightColor
-                                height: Math.max(2, parent.height * modelData / full.chartMax(full.row.cost.weekly_cost_history))
-                                PlasmaComponents.ToolTip.text: root.fmtUsd(modelData)
-                                PlasmaComponents.ToolTip.visible: barHover.hovered
-                                PlasmaComponents.ToolTip.delay: 300
-                                HoverHandler { id: barHover }
-                            }
+                        Kirigami.Separator { Layout.fillWidth: true }
+                        PlasmaComponents.Label {
+                            text: modelData.title
+                            font.bold: true
+                            opacity: 0.85
+                        }
+                        Repeater {
+                            model: modelData.kind === "meters" ? modelData.rows : []
+                            Meter { required property var modelData }
+                        }
+                        Repeater {
+                            model: modelData.kind === "bars" ? modelData.rows : []
+                            BarRow { required property var modelData }
+                        }
+                        Repeater {
+                            model: modelData.kind === "rows" ? modelData.rows : []
+                            KeyRow { required property var modelData }
                         }
                     }
                 }

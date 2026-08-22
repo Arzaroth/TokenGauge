@@ -42,7 +42,7 @@ jobs:
         run: cargo install cross
 
       - name: Build
-        # Only the two shipped binaries; tokengauge-popover pulls GTK4/glib
+        # Only the two shipped Linux binaries
         # system libs the cross image doesn't have, and it isn't packaged here.
         run: cross build --release --target x86_64-unknown-linux-gnu -p tokengauge-waybar -p tokengauge-tui
 
@@ -99,7 +99,7 @@ jobs:
         run: cargo install cross
 
       - name: Build
-        # Only the two shipped binaries; tokengauge-popover pulls GTK4/glib
+        # Only the two shipped Linux binaries
         # system libs the cross image doesn't have, and it isn't packaged here.
         run: cross build --release --target aarch64-unknown-linux-gnu -p tokengauge-waybar -p tokengauge-tui
 
@@ -154,7 +154,7 @@ jobs:
           key: ${{ runner.os }}-cargo-windows-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build
-        # The TUI and the tray GUI run on Windows; waybar and popover are Linux-only.
+        # The TUI and the tray GUI run on Windows; waybar is Linux-only.
         run: cargo build --release --target x86_64-pc-windows-msvc -p tokengauge-tui -p tokengauge-tray
 
       - name: Package

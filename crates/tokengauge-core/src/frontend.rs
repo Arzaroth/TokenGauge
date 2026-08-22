@@ -100,7 +100,12 @@ pub fn find(id: &str) -> Option<&'static Frontend> {
 }
 
 fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    // Windows spells it differently, and the core crate builds there even
+    // though none of these desktops exist on it - without the fallback
+    // `dest_dir` is None for every frontend and the registry looks broken.
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 fn data_home() -> Option<PathBuf> {
@@ -165,6 +170,16 @@ impl Frontend {
     /// `source_root` is the directory holding [`ARCHIVE_ROOT`], or a repository
     /// checkout root, so the same call serves both `--update` and a dev install.
     pub fn install_from(&self, source_root: &Path) -> Result<PathBuf> {
+        let dest = self.dest_dir().ok_or_else(|| {
+            anyhow::anyhow!("cannot resolve an install directory for {}", self.id)
+        })?;
+        self.install_into(source_root, &dest)
+    }
+
+    /// The body of [`install_from`] with the destination supplied, so a test can
+    /// exercise the real staging and replacement without mutating the process
+    /// environment to move `$XDG_DATA_HOME`.
+    pub fn install_into(&self, source_root: &Path, dest: &Path) -> Result<PathBuf> {
         let src = self.payload_in(source_root).ok_or_else(|| {
             anyhow::anyhow!(
                 "{} payload not found under {}",
@@ -172,26 +187,41 @@ impl Frontend {
                 source_root.display()
             )
         })?;
-        let dest = self.dest_dir().ok_or_else(|| {
-            anyhow::anyhow!("cannot resolve an install directory for {}", self.id)
-        })?;
 
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("cannot create {}", parent.display()))?;
         }
 
+        // Staged beside the destination so the final move is a rename on the
+        // same filesystem, and hidden so a half-written copy is not picked up by
+        // the scanners that walk these directories - Omarchy's plugin catalog
+        // skips dotted entries, and neither plasmashell nor GNOME Shell lists
+        // them. The name is built from the whole directory name: every artifact
+        // id contains dots, so `with_extension` would have truncated
+        // `org.tokengauge.plasmoid` to `org.tokengauge.tg-new` and could shadow
+        // an unrelated directory.
+        let name = dest
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| anyhow::anyhow!("cannot name a staging dir for {}", dest.display()))?;
+        let staged = dest.with_file_name(format!(".{name}.tg-new"));
+        let _ = std::fs::remove_dir_all(&staged);
+
         // Replace rather than merge: a file dropped upstream has to disappear
         // here too, or a stale QML file keeps being loaded alongside the new one.
-        let staged = dest.with_extension("tg-new");
-        let _ = std::fs::remove_dir_all(&staged);
-        copy_dir(&src, &staged)
-            .with_context(|| format!("cannot stage {} into {}", self.label, staged.display()))?;
+        if let Err(e) = copy_dir(&src, &staged) {
+            let _ = std::fs::remove_dir_all(&staged);
+            return Err(e)
+                .with_context(|| format!("cannot stage {} into {}", self.label, staged.display()));
+        }
 
-        let _ = std::fs::remove_dir_all(&dest);
-        std::fs::rename(&staged, &dest)
-            .with_context(|| format!("cannot move {} into place", self.label))?;
-        Ok(dest)
+        let _ = std::fs::remove_dir_all(dest);
+        if let Err(e) = std::fs::rename(&staged, dest) {
+            let _ = std::fs::remove_dir_all(&staged);
+            return Err(e).with_context(|| format!("cannot move {} into place", self.label));
+        }
+        Ok(dest.to_path_buf())
     }
 
     /// Locate this frontend's payload under an archive root or a checkout.
@@ -353,27 +383,69 @@ mod tests {
 
     #[test]
     fn install_replaces_rather_than_merges() {
+        let plasma = find("plasma").unwrap();
         let tmp = std::env::temp_dir().join(format!("tg-install-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        let src = tmp.join("src");
-        let dest = tmp.join("dest");
-        std::fs::create_dir_all(&src).unwrap();
+
+        // A real archive layout, so payload_in, the staging path, and the
+        // replacement all run exactly as they do under `--update`.
+        let archive = tmp.join("archive");
+        let payload = archive.join(ARCHIVE_ROOT).join(plasma.payload);
+        std::fs::create_dir_all(&payload).unwrap();
+        std::fs::write(payload.join("kept.qml"), "new").unwrap();
+        std::fs::write(
+            payload.join("metadata.json"),
+            r#"{"KPlugin":{"Version":"9.9.9"}}"#,
+        )
+        .unwrap();
+
+        let dest = tmp.join("plasmoids").join(plasma.artifact);
         std::fs::create_dir_all(&dest).unwrap();
         std::fs::write(dest.join("gone.qml"), "old").unwrap();
-        std::fs::write(src.join("kept.qml"), "new").unwrap();
 
-        // copy_dir is what install_from stages with; exercise it directly so the
-        // test does not have to own a real XDG destination.
-        let staged = tmp.join("staged");
-        copy_dir(&src, &staged).unwrap();
-        std::fs::remove_dir_all(&dest).unwrap();
-        std::fs::rename(&staged, &dest).unwrap();
-
+        let installed = plasma.install_into(&archive, &dest).unwrap();
+        assert_eq!(installed, dest);
         assert!(dest.join("kept.qml").exists());
         assert!(
             !dest.join("gone.qml").exists(),
             "a file dropped upstream must not survive the install"
         );
+        assert_eq!(plasma.version_in(&dest).as_deref(), Some("9.9.9"));
+
+        // The staging directory is a dotted sibling built from the whole
+        // artifact name, and nothing is left behind once the move lands.
+        let staged = dest.with_file_name(format!(".{}.tg-new", plasma.artifact));
+        assert!(
+            !staged.exists(),
+            "staging dir survived a successful install"
+        );
+        assert!(
+            !dest.with_extension("tg-new").exists(),
+            "staging must not truncate the dotted artifact name"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_failed_install_leaves_nothing_staged() {
+        let plasma = find("plasma").unwrap();
+        let tmp = std::env::temp_dir().join(format!("tg-install-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let dest = tmp.join("plasmoids").join(plasma.artifact);
+        std::fs::create_dir_all(&dest).unwrap();
+
+        // No payload in the source, so the install fails before staging; the
+        // scanners that walk this directory must not find a partial copy.
+        let err = plasma.install_into(&tmp.join("empty"), &dest);
+        assert!(err.is_err());
+        assert!(
+            !dest
+                .with_file_name(format!(".{}.tg-new", plasma.artifact))
+                .exists(),
+            "a failed install must not leave a staged directory behind"
+        );
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

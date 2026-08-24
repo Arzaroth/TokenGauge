@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Frontends now **watch** for new data instead of only polling for it. A fetch by the daemon, the TUI or another frontend reaches the Omarchy widget, the Plasma applet and the GNOME extension at once rather than up to a full refresh interval later. Each surface watches a few-byte revision file the binary rewrites after every snapshot, so nothing but `--json` ever reads the snapshot itself. The periodic poll stays as the fallback that ages the cache out when no daemon is running.
+- `--wait-change` blocks until the snapshot is rewritten (or `--wait-timeout` seconds pass) and exits 0. It is how the Plasma applet watches, since QML in a plasmoid has no file watcher; it is also usable from a script.
+- The snapshot records which machine wrote it - `machineId`, `hostname`, a write timestamp and the provider set it was fetched with - so snapshots collected from several machines can be told apart and reconciled later. Nothing merges them yet.
+
+### Changed
+
+- **The snapshot moved out of the temp directory** to `$XDG_STATE_HOME/tokengauge/` (`%LOCALAPPDATA%\TokenGauge\` on Windows), and the state files beside it - selected provider, notify state, refresh sentinel, daemon socket - follow. It holds the only record of past days' tokens and costs, which a reboot wiping `/tmp` threw away. Existing files are moved on first run, and a config still naming the old temp path is read as never having chosen one, so upgrades keep their history without an edit. A `cache_file` pointing anywhere else is left alone.
+- Snapshots are written atomically, so a reader watching the file never sees half of one.
+
+### Fixed
+
+- **Enabling a provider now shows it immediately.** The cache was only ever validated by age, so a provider switched on stayed invisible until the cache expired - up to `refresh_secs`, ten minutes by default, and forever on a machine with no daemon running to notice the config change. The snapshot now records the provider set it was fetched with, and any reader that finds a provider missing from it refetches. `--set-provider` fetches before it returns, so the `--json` a settings pane chains behind it already carries the new provider's row and the chip that selects it. Switching a provider *off* still costs nothing: the snapshot is a superset, so it is re-rendered rather than refetched.
+- Toggling a provider no longer fetches twice. The daemon's reload asks whether the snapshot answers for the new config instead of comparing the before/after provider sets, so it re-renders after `--set-provider` has already fetched.
+
 ## [0.20.0] - 2026-08-23
 
 ### Added

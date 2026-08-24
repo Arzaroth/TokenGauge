@@ -1,11 +1,11 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -14,12 +14,13 @@ use tokengauge_core::update;
 use tokengauge_core::{
     CostInfo, FetchResult, PanelRow, ProviderFetchError, ProviderPayload, ProviderRow, Section,
     SectionKind, Theme, TokenGaugeConfig, Tone, UsagePace, WaybarState, WaybarWindow,
-    config_set_oauth_provider, config_set_primary, ensure_cache_dir, fetch_all_providers,
-    format_updated_relative, load_config, notify_state_path, payload_to_rows_with_costs,
-    provider_icon, provider_icon_svg_path, provider_label, read_cache_full, read_notify_state,
-    read_waybar_state, refresh_in_progress, refresh_sentinel_deadline_ms, refresh_sentinel_path,
-    retain_enabled, signal_daemon_reload, theme, thresholds_to_fire, waybar_state_path,
-    window_labels, write_cache_full, write_default_config, write_notify_state, write_waybar_state,
+    cache_is_stale, config_set_oauth_provider, config_set_primary, ensure_cache_dir,
+    fetch_all_providers, format_updated_relative, load_config, notify_state_path,
+    payload_to_rows_with_costs, provider_icon, provider_icon_svg_path, provider_label,
+    read_cache_full, read_notify_state, read_waybar_state, refresh_in_progress,
+    refresh_sentinel_deadline_ms, refresh_sentinel_path, retain_enabled, signal_daemon_reload,
+    theme, thresholds_to_fire, waybar_state_path, window_labels, write_cache_full,
+    write_default_config, write_notify_state, write_waybar_state,
 };
 
 fn theme_palette() -> (
@@ -82,6 +83,15 @@ struct Args {
     /// Plasma applet. Does not affect the default waybar output line.
     #[arg(long)]
     json: bool,
+    /// Block until the snapshot on disk changes, then exit 0. Lets a frontend
+    /// whose toolkit cannot watch a file long-poll (`--wait-change && --json`)
+    /// instead of re-reading on a timer.
+    #[arg(long)]
+    wait_change: bool,
+    /// Give up waiting after this many seconds and exit 0 anyway, so a caller
+    /// that long-polls still re-reads on a slow schedule when nothing writes.
+    #[arg(long, value_name = "SECS", default_value_t = 300)]
+    wait_timeout: u64,
     /// Enable/disable an OAuth provider in the config, then reload the daemon.
     /// Format: `--set-provider claude=true`.
     #[arg(long, value_name = "NAME=BOOL")]
@@ -170,6 +180,7 @@ fn main() -> Result<()> {
     let config = load_config(Some(config_path.clone()))?;
     tokengauge_core::install_theme(config.theme.resolve());
     ensure_cache_dir(&config.cache_file)?;
+    tokengauge_core::ensure_revision(&config.cache_file);
 
     if args.internal_refresh_worker {
         worker_do_refresh(&config);
@@ -186,6 +197,11 @@ fn main() -> Result<()> {
 
     if args.click {
         handle_click(&config);
+        return Ok(());
+    }
+
+    if args.wait_change {
+        wait_for_change(&config, args.wait_timeout);
         return Ok(());
     }
 
@@ -443,13 +459,25 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
             "neutral": t.neutral,
         },
         "update": update_status,
+        // Frontends watch this file and re-read the snapshot when it changes,
+        // so a fetch by the daemon or by another frontend lands immediately
+        // instead of on the next poll. It holds no provider data.
+        "revision_file": tokengauge_core::revision_path(&config.cache_file),
     });
     println!("{}", serde_json::to_string(&out)?);
     Ok(())
 }
 
-/// `--set-provider NAME=BOOL`: toggle an OAuth provider in the config, then
-/// signal the daemon to reload. Backs the plasmoid settings pane.
+/// `--set-provider NAME=BOOL`: toggle an OAuth provider in the config, fetch
+/// the new set if the cache cannot answer for it, then signal the daemon to
+/// reload. Backs every settings pane.
+///
+/// The fetch belongs here, not in the daemon: frontends run
+/// `--set-provider && --json` in one subprocess, and a `--json` that read the
+/// cache before anything refetched would answer with no row for the provider
+/// just switched on - the toggle would look like it failed until some later
+/// poll. Fetching first also leaves the daemon a cache that already covers the
+/// new set, so its reload re-renders instead of fetching the same thing again.
 fn handle_set_provider(config_path: &Path, spec: &str) -> Result<()> {
     let (name, val) = spec
         .split_once('=')
@@ -459,8 +487,52 @@ fn handle_set_provider(config_path: &Path, spec: &str) -> Result<()> {
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid bool '{val}' (want true/false)"))?;
     config_set_oauth_provider(config_path, name.trim(), enabled)?;
+    let updated = load_config(Some(config_path.to_path_buf()))?;
+    if cache_is_stale(&updated) {
+        refresh_inline(&updated);
+    }
     signal_daemon_reload();
     Ok(())
+}
+
+/// Fetch in this process and wait for it, with the sentinel raised so every
+/// bar renders the refreshing state meanwhile. Unlike `--refresh` this does not
+/// fork: the caller is a frontend that chains `--json` behind it and needs the
+/// snapshot to be current by the time this returns.
+fn refresh_inline(config: &TokenGaugeConfig) {
+    let sentinel = refresh_sentinel_path(&config.cache_file);
+    let _ = std::fs::write(&sentinel, refresh_sentinel_deadline_ms(config).to_string());
+    signal_waybar();
+    let FetchResult {
+        payloads,
+        errors,
+        costs,
+    } = fetch_all_providers(config);
+    let _ = write_cache_full(
+        &config.cache_file,
+        &payloads,
+        &errors,
+        &costs,
+        &config.providers,
+    );
+    let _ = std::fs::remove_file(&sentinel);
+    check_and_notify(config, &payloads, &costs);
+    signal_waybar();
+}
+
+/// Block until the snapshot is rewritten, or the timeout runs out. Polls the
+/// revision file rather than the snapshot: it is a few bytes, and it is written
+/// last, so a change to it means the snapshot beside it is already complete.
+fn wait_for_change(config: &TokenGaugeConfig, timeout_secs: u64) {
+    const POLL: Duration = Duration::from_secs(1);
+    let initial = tokengauge_core::read_revision(&config.cache_file);
+    let deadline = timeout_secs.clamp(5, 3600);
+    for _ in 0..deadline {
+        thread::sleep(POLL);
+        if tokengauge_core::read_revision(&config.cache_file) != initial {
+            return;
+        }
+    }
 }
 
 /// `--set-primary NAME|highest`: pin the bar to a provider (or clear the pin),
@@ -905,7 +977,13 @@ fn worker_do_refresh(config: &TokenGaugeConfig) {
         errors,
         costs,
     } = fetch_all_providers(config);
-    let _ = write_cache_full(&config.cache_file, &payloads, &errors, &costs);
+    let _ = write_cache_full(
+        &config.cache_file,
+        &payloads,
+        &errors,
+        &costs,
+        &config.providers,
+    );
     let _ = std::fs::remove_file(&sentinel);
     check_and_notify(config, &payloads, &costs);
     signal_waybar();
@@ -1558,12 +1636,10 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
                         Ok(new_cfg) => {
                             tokengauge_core::install_theme(new_cfg.theme.resolve());
                             let refresh_secs = new_cfg.refresh_secs.max(10);
-                            let prior = {
+                            {
                                 let mut guard = cfg.lock().expect("daemon config mutex poisoned");
-                                let prior = enabled_set(&guard.providers);
                                 *guard = new_cfg.clone();
-                                prior
-                            };
+                            }
                             dlog(
                                 "reload",
                                 &format!(
@@ -1572,12 +1648,16 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
                                 ),
                             );
                             warn_unknown_config_keys(&new_cfg);
-                            // A changed provider set invalidates the cache rather
-                            // than merely ageing it: re-rendering would keep
-                            // serving a provider the user just disabled (and show
-                            // nothing for one just enabled) until the next tick.
-                            if enabled_set(&new_cfg.providers) != prior {
-                                dlog("reload", "provider set changed, refetching");
+                            // Ask the cache, not the before/after config: a
+                            // provider switched *off* leaves it a superset, which
+                            // still answers and re-renders for free, and
+                            // `--set-provider` has usually already fetched the
+                            // one switched *on* before signalling us.
+                            if cache_is_stale(&new_cfg) {
+                                dlog(
+                                    "reload",
+                                    "cache cannot answer for the new config, refetching",
+                                );
                                 do_refresh_cycle(&state, &new_cfg);
                                 continue;
                             }
@@ -1702,7 +1782,13 @@ fn do_fetch_and_broadcast(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeCo
     if costs.is_empty() && !prior_costs.is_empty() {
         costs = prior_costs;
     }
-    if let Err(e) = write_cache_full(&config.cache_file, &payloads, &errors, &costs) {
+    if let Err(e) = write_cache_full(
+        &config.cache_file,
+        &payloads,
+        &errors,
+        &costs,
+        &config.providers,
+    ) {
         dlog("cache", &format!("write failed: {e}"));
     }
     check_and_notify(config, &payloads, &costs);
@@ -1758,15 +1844,6 @@ fn do_refresh_cycle(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) 
     }
     let _ = std::fs::remove_file(refresh_sentinel_path(&config.cache_file));
     signal_waybar();
-}
-
-/// Names of the providers currently enabled, for change detection on reload.
-fn enabled_set(providers: &tokengauge_core::ProvidersConfig) -> BTreeSet<String> {
-    providers
-        .enabled_providers()
-        .into_iter()
-        .map(|p| p.to_lowercase())
-        .collect()
 }
 
 fn handle_client(
@@ -2054,18 +2131,7 @@ type RefreshSnapshot = (
 );
 
 fn maybe_refresh(config: &TokenGaugeConfig) -> Result<RefreshSnapshot> {
-    let now = SystemTime::now();
-    let stale = match std::fs::metadata(&config.cache_file) {
-        Ok(metadata) => metadata
-            .modified()
-            .ok()
-            .and_then(|modified| now.duration_since(modified).ok())
-            .map(|age| age >= Duration::from_secs(config.refresh_secs))
-            .unwrap_or(true),
-        Err(_) => true,
-    };
-
-    if stale {
+    if cache_is_stale(config) {
         let prior_costs = read_cache_full(&config.cache_file)
             .map(|c| c.costs())
             .unwrap_or_default();
@@ -2077,7 +2143,13 @@ fn maybe_refresh(config: &TokenGaugeConfig) -> Result<RefreshSnapshot> {
         if costs.is_empty() && !prior_costs.is_empty() {
             costs = prior_costs;
         }
-        write_cache_full(&config.cache_file, &payloads, &errors, &costs)?;
+        write_cache_full(
+            &config.cache_file,
+            &payloads,
+            &errors,
+            &costs,
+            &config.providers,
+        )?;
         check_and_notify(config, &payloads, &costs);
         Ok((payloads, errors, costs))
     } else {

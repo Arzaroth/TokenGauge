@@ -619,6 +619,32 @@ pub struct FetchResult {
     pub costs: HashMap<String, CostInfo>,
 }
 
+/// Bumped when the on-disk snapshot grows a field a reader has to know about.
+pub const CACHE_SCHEMA_VERSION: u32 = 1;
+
+/// Which machine wrote a snapshot. Recorded next to the payloads so snapshots
+/// collected from several machines can be told apart and reconciled later;
+/// nothing merges them yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceIdentity {
+    pub machine_id: String,
+    pub hostname: String,
+}
+
+/// Provenance of one snapshot write.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheMeta {
+    pub schema_version: u32,
+    pub device: DeviceIdentity,
+    /// Unix milliseconds of the write. A merge across machines needs it to
+    /// decide which snapshot of the same day is the later one.
+    pub updated_at_ms: i64,
+    /// Providers enabled at fetch time. See `CachedData::covers`.
+    pub providers: Vec<String>,
+}
+
 /// Cached data format - stores both payloads and errors.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -629,6 +655,9 @@ pub enum CachedData {
         errors: Vec<ProviderFetchError>,
         #[serde(default)]
         costs: HashMap<String, CostInfo>,
+        /// Absent in snapshots written before 0.21.
+        #[serde(default)]
+        meta: Option<CacheMeta>,
     },
     /// Legacy format - just an array of payloads (for backwards compatibility)
     Legacy(Vec<ProviderPayload>),
@@ -656,6 +685,29 @@ impl CachedData {
         }
     }
 
+    pub fn meta(&self) -> Option<&CacheMeta> {
+        match self {
+            CachedData::Full { meta, .. } => meta.as_ref(),
+            CachedData::Legacy(_) => None,
+        }
+    }
+
+    /// True when the snapshot was fetched with every currently-enabled
+    /// provider in the set. A snapshot written before a provider was switched
+    /// on holds no row for it and never will, so serving it leaves the panel
+    /// without the provider the user just enabled - which is why enabling one
+    /// has to invalidate the cache, not merely age it.
+    pub fn covers(&self, providers: &ProvidersConfig) -> bool {
+        let Some(meta) = self.meta() else {
+            return false;
+        };
+        providers.enabled_providers().iter().all(|wanted| {
+            meta.providers
+                .iter()
+                .any(|have| have.eq_ignore_ascii_case(wanted))
+        })
+    }
+
     pub fn into_parts(
         self,
     ) -> (
@@ -668,6 +720,7 @@ impl CachedData {
                 payloads,
                 errors,
                 costs,
+                ..
             } => (payloads, errors, costs),
             CachedData::Legacy(payloads) => (payloads, Vec::new(), HashMap::new()),
         }
@@ -818,6 +871,13 @@ pub fn load_config(path: Option<PathBuf>) -> Result<TokenGaugeConfig> {
     if config.cache_file.as_os_str().is_empty() {
         config.cache_file = default_cache_file();
     }
+    // Every config written before 0.21 carries the old temp-dir path
+    // explicitly, so treating it as an opt-out would strand those users in
+    // /tmp forever. Read it as "never chose one" and move them.
+    if config.cache_file == legacy_cache_file() {
+        config.cache_file = default_cache_file();
+    }
+    migrate_legacy_state(&config.cache_file);
     if config.refresh_secs == 0 {
         config.refresh_secs = 600;
     }
@@ -825,11 +885,80 @@ pub fn load_config(path: Option<PathBuf>) -> Result<TokenGaugeConfig> {
     Ok(config)
 }
 
-/// Default cache file location. Uses the platform temp dir so it resolves to
-/// `%TEMP%` on Windows and `/tmp` on Unix (preserving the previous behaviour on
-/// Linux, since `std::env::temp_dir()` is `/tmp` there).
+/// Per-user directory for the snapshot and the small state files derived from
+/// its parent (selection, update status, notify state, refresh sentinel, daemon
+/// socket).
+///
+/// `XDG_STATE_HOME` rather than a cache directory: the snapshot is the only
+/// record of past days' tokens and costs, so it has to survive a reboot even
+/// when it is far too old to display without a refetch.
+pub fn state_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(dir) = dirs::data_local_dir() {
+            return dir.join("TokenGauge");
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Ok(dir) = std::env::var("XDG_STATE_HOME")
+            && !dir.is_empty()
+        {
+            return PathBuf::from(dir).join("tokengauge");
+        }
+        if let Some(home) = dirs::home_dir() {
+            return home.join(".local").join("state").join("tokengauge");
+        }
+    }
+    std::env::temp_dir().join("tokengauge")
+}
+
+/// Default snapshot location.
 pub fn default_cache_file() -> PathBuf {
+    state_dir().join("tokengauge-usage.json")
+}
+
+/// Where releases before 0.21 kept the snapshot: the platform temp dir, which
+/// a reboot wipes on most distributions.
+pub fn legacy_cache_file() -> PathBuf {
     std::env::temp_dir().join("tokengauge-usage.json")
+}
+
+/// Files that live beside the snapshot and are worth carrying over from the
+/// temp directory. The sentinel, the socket and the update check are
+/// regenerated on demand, so they stay behind.
+const MIGRATED_STATE_FILES: [&str; 3] = [
+    "tokengauge-usage.json",
+    "tokengauge-waybar-state.json",
+    "tokengauge-notify-state.json",
+];
+
+/// Move a pre-0.21 snapshot out of the temp directory, so an upgrade keeps its
+/// history and its selected provider instead of cold-starting. Best effort:
+/// anything that fails just means one refetch.
+pub fn migrate_legacy_state(cache_file: &Path) {
+    let legacy_dir = std::env::temp_dir();
+    let Some(dir) = cache_file.parent() else {
+        return;
+    };
+    if dir == legacy_dir {
+        return;
+    }
+    for name in MIGRATED_STATE_FILES {
+        let from = legacy_dir.join(name);
+        let to = dir.join(name);
+        if to.exists() || !from.exists() {
+            continue;
+        }
+        if fs::create_dir_all(dir).is_err() {
+            return;
+        }
+        // Across filesystems (a tmpfs /tmp is the common case) rename fails
+        // with EXDEV, so fall back to copying.
+        if fs::rename(&from, &to).is_err() && fs::copy(&from, &to).is_ok() {
+            let _ = fs::remove_file(&from);
+        }
+    }
 }
 
 pub fn default_config_path() -> PathBuf {
@@ -1310,24 +1439,185 @@ pub fn read_cache(path: &Path) -> Result<Vec<ProviderPayload>> {
 }
 
 /// Write cache with payloads, errors and optional costs.
+///
+/// `providers` is the set the fetch ran with, not the set that answered: a
+/// provider that errored still counts as covered, or a failing provider would
+/// put every reader into a refetch loop.
 pub fn write_cache_full(
     path: &Path,
     payloads: &[ProviderPayload],
     errors: &[ProviderFetchError],
     costs: &HashMap<String, CostInfo>,
+    providers: &ProvidersConfig,
 ) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).ok();
-    }
     let data = CachedData::Full {
         payloads: payloads.to_vec(),
         errors: errors.to_vec(),
         costs: costs.clone(),
+        meta: Some(CacheMeta {
+            schema_version: CACHE_SCHEMA_VERSION,
+            device: device_identity(path),
+            updated_at_ms: now_ms() as i64,
+            providers: providers
+                .enabled_providers()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        }),
     };
     let contents = serde_json::to_string(&data)?;
-    fs::write(path, contents)
+    write_atomic(path, contents.as_bytes())
         .with_context(|| format!("failed to write cache {}", path.display()))?;
+    bump_revision(path);
     Ok(())
+}
+
+/// True when the on-disk snapshot cannot answer for this config: it is
+/// missing, it has aged past `refresh_secs`, or it predates a provider that is
+/// enabled now. Every reader routes its fetch-or-serve decision through here so
+/// none of them can disagree about what stale means.
+pub fn cache_is_stale(config: &TokenGaugeConfig) -> bool {
+    let expired = fs::metadata(&config.cache_file)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| std::time::SystemTime::now().duration_since(modified).ok())
+        .map(|age| age >= Duration::from_secs(config.refresh_secs))
+        .unwrap_or(true);
+    if expired {
+        return true;
+    }
+    match read_cache_full(&config.cache_file) {
+        Ok(cached) => !cached.covers(&config.providers),
+        Err(_) => true,
+    }
+}
+
+/// Replace a file in one step, so a reader watching it never sees a half
+/// written snapshot.
+fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    fs::write(&tmp, contents)?;
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// A few bytes that change on every snapshot write, and carry no provider data.
+/// Frontends watch this instead of the snapshot: it is cheap to load, and it is
+/// written after the snapshot lands, so a watcher that reacts to it always
+/// reads complete data.
+pub fn revision_path(cache_file: &Path) -> PathBuf {
+    let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
+    parent.join("tokengauge-revision")
+}
+
+/// Create the revision file if it is not there yet, so a frontend can put a
+/// watch on it before anything has been fetched. A watch that has to wait for
+/// the file to appear is one that never fires.
+pub fn ensure_revision(cache_file: &Path) {
+    let path = revision_path(cache_file);
+    if !path.exists() {
+        bump_revision(cache_file);
+    }
+}
+
+pub fn read_revision(cache_file: &Path) -> String {
+    fs::read_to_string(revision_path(cache_file))
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn bump_revision(cache_file: &Path) {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Two writes inside the same millisecond have to differ, or a reader that
+    // compares contents rather than watching for events misses the second one.
+    let token = format!("{}-{}-{}", now_ms(), std::process::id(), seq);
+    let _ = write_atomic(&revision_path(cache_file), token.as_bytes());
+}
+
+/// The machine this snapshot was written on. Resolved once per process.
+pub fn device_identity(cache_file: &Path) -> DeviceIdentity {
+    static IDENTITY: std::sync::OnceLock<DeviceIdentity> = std::sync::OnceLock::new();
+    IDENTITY
+        .get_or_init(|| DeviceIdentity {
+            machine_id: machine_id(cache_file),
+            hostname: hostname(),
+        })
+        .clone()
+}
+
+fn machine_id(cache_file: &Path) -> String {
+    for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
+        if let Ok(contents) = fs::read_to_string(path) {
+            let id = contents.trim();
+            if !id.is_empty() {
+                return id.to_string();
+            }
+        }
+    }
+    // Windows, macOS, or a container without systemd: keep one beside the
+    // snapshot instead, so it is at least stable for this user on this machine.
+    let path = cache_file
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("tokengauge-device-id");
+    if let Ok(contents) = fs::read_to_string(&path) {
+        let id = contents.trim();
+        if !id.is_empty() {
+            return id.to_string();
+        }
+    }
+    let generated = generated_machine_id();
+    let _ = write_atomic(&path, generated.as_bytes());
+    generated
+}
+
+fn generated_machine_id() -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut id = String::with_capacity(32);
+    for salt in 0..2u64 {
+        let mut hasher = DefaultHasher::new();
+        salt.hash(&mut hasher);
+        nanos.hash(&mut hasher);
+        std::process::id().hash(&mut hasher);
+        hostname().hash(&mut hasher);
+        id.push_str(&format!("{:016x}", hasher.finish()));
+    }
+    id
+}
+
+fn hostname() -> String {
+    // The kernel first: a shell's exported HOSTNAME can outlive a rename.
+    for path in ["/proc/sys/kernel/hostname", "/etc/hostname"] {
+        if let Ok(contents) = fs::read_to_string(path) {
+            let name = contents.trim();
+            if !name.is_empty() {
+                return name.to_string();
+            }
+        }
+    }
+    for key in ["COMPUTERNAME", "HOSTNAME"] {
+        if let Ok(name) = std::env::var(key) {
+            let name = name.trim().to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    "unknown".to_string()
 }
 
 /// Drop cached payloads and errors for providers that are no longer enabled.
@@ -1414,8 +1704,12 @@ pub fn refresh_in_progress(sentinel: &Path) -> bool {
 }
 
 /// Write cache with only payloads (legacy, for backwards compatibility).
-pub fn write_cache(path: &Path, payloads: &[ProviderPayload]) -> Result<()> {
-    write_cache_full(path, payloads, &[], &HashMap::new())
+pub fn write_cache(
+    path: &Path,
+    payloads: &[ProviderPayload],
+    providers: &ProvidersConfig,
+) -> Result<()> {
+    write_cache_full(path, payloads, &[], &HashMap::new(), providers)
 }
 
 // ============================================================================
@@ -2361,8 +2655,10 @@ pub fn write_default_config(path: &Path) -> Result<()> {
 # Refresh interval in seconds
 refresh_secs = 600
 
-# Cache file location
-cache_file = "/tmp/tokengauge-usage.json"
+# Snapshot location. Defaults to $XDG_STATE_HOME/tokengauge/tokengauge-usage.json
+# (%LOCALAPPDATA%\TokenGauge on Windows); the state files beside it - selected
+# provider, daemon socket, refresh sentinel - follow its directory.
+# cache_file = ""
 
 # Delay in milliseconds between provider fetch starts. Spreads out codexbar
 # calls to avoid rate-limit (429) bursts when several providers are enabled.
@@ -2578,6 +2874,133 @@ mod tests {
         assert_eq!(payloads[0].provider, "Claude");
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].provider, "claude");
+    }
+
+    fn cache_test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tg-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create test dir");
+        dir
+    }
+
+    fn write_test_cache(path: &Path, providers: &ProvidersConfig) {
+        write_cache_full(path, &[], &[], &HashMap::new(), providers).expect("write cache");
+    }
+
+    #[test]
+    fn cache_written_before_a_provider_was_enabled_does_not_cover_it() {
+        let dir = cache_test_dir("cover");
+        let cache = dir.join("tokengauge-usage.json");
+
+        let claude_only = ProvidersConfig {
+            codex: Some(false),
+            claude: Some(true),
+            ..Default::default()
+        };
+        write_test_cache(&cache, &claude_only);
+        let cached = read_cache_full(&cache).expect("read cache");
+
+        // Same set, and the subset left after switching one off: both answer.
+        assert!(cached.covers(&claude_only));
+        assert!(cached.covers(&ProvidersConfig {
+            codex: Some(false),
+            claude: Some(false),
+            ..Default::default()
+        }));
+        // A provider switched on since the fetch has no row here and never
+        // will, so the cache cannot answer for it.
+        assert!(!cached.covers(&ProvidersConfig {
+            codex: Some(true),
+            claude: Some(true),
+            ..Default::default()
+        }));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cache_without_meta_never_covers() {
+        // Every snapshot written before 0.21, and the legacy array format.
+        let unknown = CachedData::Full {
+            payloads: Vec::new(),
+            errors: Vec::new(),
+            costs: HashMap::new(),
+            meta: None,
+        };
+        assert!(!unknown.covers(&ProvidersConfig::default()));
+        assert!(!CachedData::Legacy(Vec::new()).covers(&ProvidersConfig::default()));
+    }
+
+    #[test]
+    fn cache_records_the_writing_device_and_provider_set() {
+        let dir = cache_test_dir("meta");
+        let cache = dir.join("tokengauge-usage.json");
+
+        write_test_cache(
+            &cache,
+            &ProvidersConfig {
+                claude: Some(true),
+                codex: Some(false),
+                ..Default::default()
+            },
+        );
+        let cached = read_cache_full(&cache).expect("read cache");
+        let meta = cached.meta().expect("meta");
+
+        assert_eq!(meta.schema_version, CACHE_SCHEMA_VERSION);
+        assert_eq!(meta.providers, vec!["claude".to_string()]);
+        assert!(!meta.device.machine_id.is_empty());
+        assert!(!meta.device.hostname.is_empty());
+        assert!(meta.updated_at_ms > 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_cache_write_changes_the_revision() {
+        let dir = cache_test_dir("revision");
+        let cache = dir.join("tokengauge-usage.json");
+        let providers = ProvidersConfig::default();
+
+        assert_eq!(read_revision(&cache), "");
+        write_test_cache(&cache, &providers);
+        let first = read_revision(&cache);
+        assert!(!first.is_empty());
+
+        // Back to back, so the millisecond is likely to be the same one: a
+        // frontend comparing contents still has to see a change.
+        write_test_cache(&cache, &providers);
+        assert_ne!(read_revision(&cache), first);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_state_moves_out_of_the_temp_dir_once() {
+        let dir = cache_test_dir("migrate");
+        let cache = dir.join("tokengauge-usage.json");
+        let legacy = std::env::temp_dir().join("tokengauge-usage.json");
+        let had_legacy = legacy.exists();
+        if !had_legacy {
+            fs::write(&legacy, "{\"payloads\":[],\"errors\":[]}").expect("seed legacy cache");
+        }
+
+        migrate_legacy_state(&cache);
+        assert!(cache.exists());
+        if !had_legacy {
+            assert!(!legacy.exists(), "the temp copy is moved, not duplicated");
+        }
+
+        // A second run must not clobber a snapshot that has since been written.
+        fs::write(&cache, "current").expect("write current cache");
+        fs::write(&legacy, "older").expect("reseed legacy cache");
+        migrate_legacy_state(&cache);
+        assert_eq!(fs::read_to_string(&cache).expect("read cache"), "current");
+
+        if !had_legacy {
+            let _ = fs::remove_file(&legacy);
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3017,6 +3440,7 @@ mod tests {
             payloads: vec![payload.clone()],
             errors: vec![error.clone()],
             costs: HashMap::new(),
+            meta: None,
         };
 
         assert_eq!(cached.payloads().len(), 1);

@@ -937,7 +937,10 @@ const MIGRATED_STATE_FILES: [&str; 3] = [
 /// history and its selected provider instead of cold-starting. Best effort:
 /// anything that fails just means one refetch.
 pub fn migrate_legacy_state(cache_file: &Path) {
-    let legacy_dir = std::env::temp_dir();
+    migrate_state_from(&std::env::temp_dir(), cache_file);
+}
+
+fn migrate_state_from(legacy_dir: &Path, cache_file: &Path) {
     let Some(dir) = cache_file.parent() else {
         return;
     };
@@ -1495,10 +1498,16 @@ pub fn cache_is_stale(config: &TokenGaugeConfig) -> bool {
 /// Replace a file in one step, so a reader watching it never sees a half
 /// written snapshot.
 fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).ok();
     }
-    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    // Per call, not per process: the daemon can write the same path from its
+    // fetch loop and its signal thread at once, and a shared temporary would
+    // have them overwrite each other's half-written file.
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_extension(format!("tmp{}-{seq}", std::process::id()));
     fs::write(&tmp, contents)?;
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
@@ -1539,7 +1548,16 @@ fn bump_revision(cache_file: &Path) {
     // Two writes inside the same millisecond have to differ, or a reader that
     // compares contents rather than watching for events misses the second one.
     let token = format!("{}-{}-{}", now_ms(), std::process::id(), seq);
-    let _ = write_atomic(&revision_path(cache_file), token.as_bytes());
+    let path = revision_path(cache_file);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    // Rewritten in place rather than replaced, unlike the snapshot: a watcher
+    // bound to the inode (Qt's file watcher is) stops firing when the file it
+    // watches is renamed away. A torn read here costs nothing - a reader either
+    // sees the old token or a different one, and either way "different" is the
+    // only thing it asks.
+    let _ = fs::write(&path, token.as_bytes());
 }
 
 /// The machine this snapshot was written on. Resolved once per process.
@@ -2977,30 +2995,35 @@ mod tests {
 
     #[test]
     fn legacy_state_moves_out_of_the_temp_dir_once() {
-        let dir = cache_test_dir("migrate");
+        // Against a temp directory of the test's own: the real one may hold a
+        // snapshot an older daemon is still writing, and moving that out from
+        // under it is not something a test run gets to do.
+        let root = cache_test_dir("migrate");
+        let legacy_dir = root.join("tmp");
+        let dir = root.join("state");
+        fs::create_dir_all(&legacy_dir).expect("create legacy dir");
         let cache = dir.join("tokengauge-usage.json");
-        let legacy = std::env::temp_dir().join("tokengauge-usage.json");
-        let had_legacy = legacy.exists();
-        if !had_legacy {
-            fs::write(&legacy, "{\"payloads\":[],\"errors\":[]}").expect("seed legacy cache");
-        }
+        let legacy = legacy_dir.join("tokengauge-usage.json");
+        fs::write(&legacy, "snapshot").expect("seed legacy cache");
+        fs::write(
+            legacy_dir.join("tokengauge-waybar-state.json"),
+            "{\"selected\":\"claude\"}",
+        )
+        .expect("seed legacy selection");
 
-        migrate_legacy_state(&cache);
-        assert!(cache.exists());
-        if !had_legacy {
-            assert!(!legacy.exists(), "the temp copy is moved, not duplicated");
-        }
+        migrate_state_from(&legacy_dir, &cache);
+        assert_eq!(fs::read_to_string(&cache).expect("read cache"), "snapshot");
+        assert!(!legacy.exists(), "the temp copy is moved, not duplicated");
+        // The selected provider comes along; the sentinel and the socket do not.
+        assert!(dir.join("tokengauge-waybar-state.json").exists());
 
-        // A second run must not clobber a snapshot that has since been written.
+        // A second run must not clobber a snapshot written since.
         fs::write(&cache, "current").expect("write current cache");
         fs::write(&legacy, "older").expect("reseed legacy cache");
-        migrate_legacy_state(&cache);
+        migrate_state_from(&legacy_dir, &cache);
         assert_eq!(fs::read_to_string(&cache).expect("read cache"), "current");
 
-        if !had_legacy {
-            let _ = fs::remove_file(&legacy);
-        }
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -67,6 +67,9 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         this._requestId = 0;
         this._timeoutId = 0;
         this._menuDirty = true;
+        this._revisionFile = '';
+        this._revisionMonitor = null;
+        this._revisionSettleId = 0;
 
         const panelBox = box(false, {style_class: 'panel-status-menu-box tokengauge-panel'});
         this._panelIcon = new St.Icon({style_class: 'system-status-icon'});
@@ -194,8 +197,52 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             } catch (e) {
                 this._lastError = `parse error: ${e}`;
             }
+            this._watchRevision();
             this._render();
         });
+    }
+
+    // Watch the few bytes the binary rewrites after every fetch, so a fetch by
+    // the daemon or another frontend lands here at once instead of on the next
+    // poll. The snapshot itself still only ever comes from `--json`.
+    _watchRevision() {
+        const path = this._snapshot?.revision_file || '';
+        if (path === '' || path === this._revisionFile)
+            return;
+        this._stopWatchingRevision();
+        this._revisionFile = path;
+        try {
+            this._revisionMonitor = Gio.File.new_for_path(path).monitor_file(
+                Gio.FileMonitorFlags.NONE, null);
+            // One in-place rewrite raises more than one event; coalesce them
+            // into a single re-read.
+            this._revisionMonitor.connect('changed', () => {
+                if (this._revisionSettleId)
+                    GLib.Source.remove(this._revisionSettleId);
+                this._revisionSettleId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
+                    this._revisionSettleId = 0;
+                    if (!this._updating)
+                        this._reload();
+                    return GLib.SOURCE_REMOVE;
+                });
+            });
+        } catch (e) {
+            // No watcher: the poll timer still carries the panel.
+            this._revisionMonitor = null;
+            this._revisionFile = '';
+        }
+    }
+
+    _stopWatchingRevision() {
+        if (this._revisionSettleId) {
+            GLib.Source.remove(this._revisionSettleId);
+            this._revisionSettleId = 0;
+        }
+        if (this._revisionMonitor) {
+            this._revisionMonitor.cancel();
+            this._revisionMonitor = null;
+        }
+        this._revisionFile = '';
     }
 
     _reload() {
@@ -608,6 +655,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             this._settings.disconnect(this._settingsChangedId);
             this._settingsChangedId = 0;
         }
+        this._stopWatchingRevision();
         this._cancel();
         super.destroy();
     }

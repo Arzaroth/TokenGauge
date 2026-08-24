@@ -83,6 +83,21 @@ PlasmoidItem {
                 root.updating = false
                 root.updateSource = ""
             }
+            // Re-arm the long poll from a timer rather than from inside its own
+            // newData handler, which is still mid-disconnect. A wait that fails
+            // instead of waiting - no binary on PATH, say - would respawn every
+            // 200ms forever, so failures back off.
+            if (source === root.watchSource) {
+                root.watchSource = ""
+                if (data["exit code"] === 0) {
+                    root.watchFailures = 0
+                    rearmWatch.interval = 200
+                } else {
+                    root.watchFailures = Math.min(root.watchFailures + 1, 6)
+                    rearmWatch.interval = 1000 * Math.pow(2, root.watchFailures - 1)
+                }
+                rearmWatch.restart()
+            }
             if (data["exit code"] === 0) {
                 try {
                     var parsed = JSON.parse(data.stdout)
@@ -119,6 +134,29 @@ PlasmoidItem {
         exec.connectSource(cmd(root.waybarBin + " " + flag + " && " + root.waybarBin + " --json"))
     }
 
+    // Long-poll for the next change instead of only re-reading on a timer, so a
+    // fetch by the daemon or another frontend shows up here at once. QML in a
+    // plasmoid has no file watcher, so the wait happens in the binary: it parks
+    // on the revision file and exits when the snapshot is rewritten, or after
+    // the timeout, and the chained --json brings back the new state either way.
+    property string watchSource: ""
+    property int watchFailures: 0
+
+    function watch() {
+        if (root.watchSource !== "")
+            return
+        root.watchSource = cmd(root.waybarBin + " --wait-change --wait-timeout 300 && "
+                               + root.waybarBin + " --json")
+        exec.connectSource(root.watchSource)
+    }
+
+    Timer {
+        id: rearmWatch
+        interval: 200
+        repeat: false
+        onTriggered: root.watch()
+    }
+
     // Download + install the latest release, then refresh so the banner clears.
     // --update's human-readable stdout is discarded so only the --json payload
     // reaches onNewData's JSON.parse.
@@ -135,12 +173,22 @@ PlasmoidItem {
         return "'" + String(s).replace(/'/g, "'\\''") + "'"
     }
 
+    // Fallback beside the long poll: nothing writes the snapshot unless someone
+    // asks for it, so with no daemon running this timer is what ages the cache
+    // out and triggers the next fetch.
     Timer {
         interval: root.refreshSecs * 1000
         running: true
         repeat: true
         triggeredOnStart: true
         onTriggered: root.reload()
+    }
+
+    Component.onCompleted: watch()
+
+    Component.onDestruction: {
+        if (root.watchSource !== "")
+            exec.disconnectSource(root.watchSource)
     }
 
     // ---- helpers -------------------------------------------------------------

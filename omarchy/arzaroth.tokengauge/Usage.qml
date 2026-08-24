@@ -31,6 +31,31 @@ Item {
 
   readonly property var updateStatus: snapshot ? snapshot.update : null
 
+  // A few bytes the binary rewrites after every fetch. Watching it turns the
+  // panel from polling into push: a fetch by the daemon, the TUI or another
+  // frontend lands here at once instead of on the next timer tick. The
+  // snapshot still only ever comes from `--json`.
+  readonly property string revisionFile: snapshot ? String(snapshot.revision_file || "") : ""
+
+  FileView {
+    path: root.revisionFile
+    watchChanges: root.revisionFile !== ""
+    printErrors: false
+    // One in-place rewrite raises more than one change; coalesce them into a
+    // single re-read.
+    onFileChanged: revisionSettle.restart()
+  }
+
+  Timer {
+    id: revisionSettle
+    interval: 250
+    repeat: false
+    // reload() refuses while a run is in flight, and the change that woke us is
+    // not repeated; wait out the run rather than dropping the update until the
+    // next poll.
+    onTriggered: if (!root.reload()) restart()
+  }
+
   // The widget's own version, read from the manifest sitting next to this file.
   // The plugin directory and the binary are installed separately, so the two
   // can drift; reporting only the binary's version hides exactly that.
@@ -100,7 +125,7 @@ Item {
   }
 
   function reload() {
-    run(shellQuote(binary) + " --json")
+    return run(shellQuote(binary) + " --json")
   }
 
   // Run an action flag, then re-read the snapshot in the same subprocess so
@@ -114,33 +139,15 @@ Item {
   }
 
   // Both of these rewrite ~/.config/tokengauge/config.toml and reload the
-  // daemon. The follow-up --json in the same subprocess sees the new config
-  // but renders from the cache, and a provider enabled for the first time has
-  // nothing cached yet - so its row, and the chip that switches to it, only
-  // appear once the daemon has actually fetched it. Re-read for a while
-  // afterwards rather than leaving the panel looking like the toggle failed.
+  // daemon. `--set-provider` fetches a newly enabled provider before it
+  // returns, so the --json chained behind it already carries the new row and
+  // the chip that switches to it.
   function setProvider(name, enable) {
     action("--set-provider " + shellQuote(name + "=" + (enable ? "true" : "false")))
-    settle.restart()
   }
 
   function setPrimary(name) {
     action("--set-primary " + shellQuote(name))
-    settle.restart()
-  }
-
-  Timer {
-    id: settle
-    interval: 4000
-    repeat: true
-    triggeredOnStart: false
-    property int remaining: 0
-    onRunningChanged: if (running) remaining = 4
-    onTriggered: {
-      root.reload()
-      remaining--
-      if (remaining <= 0) stop()
-    }
   }
 
   function applyUpdate() {

@@ -94,7 +94,7 @@ Edit `~/.config/tokengauge/config.toml`:
 | Field | Description | Default |
 |-------|-------------|---------|
 | `refresh_secs` | Cache refresh interval (seconds) | `600` |
-| `cache_file` | Cache file location | OS temp dir + `tokengauge-usage.json` (`/tmp/…` on Linux, `%TEMP%\…` on Windows) |
+| `cache_file` | Snapshot location. The daemon socket, the selected provider and the refresh sentinel live beside it | `$XDG_STATE_HOME/tokengauge/tokengauge-usage.json` (`%LOCALAPPDATA%\TokenGauge\…` on Windows) |
 | `timeout_secs` | Per-provider fetch timeout | `20` |
 | `stagger_ms` | Delay (ms) between provider fetch starts, to avoid 429 bursts (0 = all at once) | `0` |
 | `ccusage_enabled` | Fetch cost data via `ccusage` | `true` |
@@ -325,7 +325,6 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
    mkdir -p ~/.config/tokengauge
    cat > ~/.config/tokengauge/config.toml <<'EOF'
    refresh_secs = 600
-   cache_file = "/tmp/tokengauge-usage.json"
 
    [providers]
    codex = true
@@ -409,8 +408,8 @@ Or run a local checkout with `powershell -ExecutionPolicy Bypass -File scripts\i
    ```
 
 On first run a default config is created at
-`%APPDATA%\tokengauge\config.toml` and the usage cache is written to
-`%TEMP%\tokengauge-usage.json`. A minimal config:
+`%APPDATA%\tokengauge\config.toml` and the usage snapshot is written to
+`%LOCALAPPDATA%\TokenGauge\tokengauge-usage.json`. A minimal config:
 
 ```toml
 refresh_secs = 600

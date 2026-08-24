@@ -817,6 +817,7 @@ mod win {
                         &result.payloads,
                         &result.errors,
                         &result.costs,
+                        &config.providers,
                     );
                     let errors = result
                         .errors

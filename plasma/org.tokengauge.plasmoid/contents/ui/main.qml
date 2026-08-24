@@ -84,9 +84,18 @@ PlasmoidItem {
                 root.updateSource = ""
             }
             // Re-arm the long poll from a timer rather than from inside its own
-            // newData handler, which is still mid-disconnect.
+            // newData handler, which is still mid-disconnect. A wait that fails
+            // instead of waiting - no binary on PATH, say - would respawn every
+            // 200ms forever, so failures back off.
             if (source === root.watchSource) {
                 root.watchSource = ""
+                if (data["exit code"] === 0) {
+                    root.watchFailures = 0
+                    rearmWatch.interval = 200
+                } else {
+                    root.watchFailures = Math.min(root.watchFailures + 1, 6)
+                    rearmWatch.interval = 1000 * Math.pow(2, root.watchFailures - 1)
+                }
                 rearmWatch.restart()
             }
             if (data["exit code"] === 0) {
@@ -131,6 +140,7 @@ PlasmoidItem {
     // on the revision file and exits when the snapshot is rewritten, or after
     // the timeout, and the chained --json brings back the new state either way.
     property string watchSource: ""
+    property int watchFailures: 0
 
     function watch() {
         if (root.watchSource !== "")

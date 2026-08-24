@@ -41,8 +41,8 @@ Item {
     path: root.revisionFile
     watchChanges: root.revisionFile !== ""
     printErrors: false
-    // The file is replaced rather than rewritten, so one snapshot can raise
-    // more than one change; coalesce them into a single re-read.
+    // One in-place rewrite raises more than one change; coalesce them into a
+    // single re-read.
     onFileChanged: revisionSettle.restart()
   }
 

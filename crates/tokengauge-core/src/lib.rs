@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Days, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 // Path-and-copy only, so every crate gets it without the network stack that
 // `self-update` pulls in.
@@ -1542,7 +1543,10 @@ pub fn read_revision(cache_file: &Path) -> String {
         .to_string()
 }
 
-fn bump_revision(cache_file: &Path) {
+/// Public because a config change that leaves the snapshot valid still changes
+/// what every frontend renders, and a frontend that only watches has no other
+/// way to hear about it.
+pub fn bump_revision(cache_file: &Path) {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // Two writes inside the same millisecond have to differ, or a reader that
@@ -1571,12 +1575,37 @@ pub fn device_identity(cache_file: &Path) -> DeviceIdentity {
         .clone()
 }
 
+/// Domain separator for the device id. Bumping it re-keys every machine, which
+/// a future snapshot merge would read as a fleet of new devices.
+const DEVICE_ID_DOMAIN: &str = "tokengauge.device-id.v1";
+
+/// `/etc/machine-id` is confidential - systemd's own documentation says an
+/// application wanting a stable host identifier must derive one rather than
+/// hand the id out, and this snapshot is written to be synced. The digest is
+/// stable for a machine and the id it came from cannot be read back out of it.
+/// Same shape as `sd_id128_get_machine_app_specific`.
+fn derive_device_id(raw: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(DEVICE_ID_DOMAIN.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(raw.as_bytes());
+    hex16(&hasher.finalize())
+}
+
+fn hex16(digest: &[u8]) -> String {
+    use std::fmt::Write;
+    digest.iter().take(16).fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
+}
+
 fn machine_id(cache_file: &Path) -> String {
     for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
         if let Ok(contents) = fs::read_to_string(path) {
             let id = contents.trim();
             if !id.is_empty() {
-                return id.to_string();
+                return derive_device_id(id);
             }
         }
     }
@@ -1597,24 +1626,19 @@ fn machine_id(cache_file: &Path) -> String {
     generated
 }
 
+/// Only reached where there is no system id to derive from. Generated once and
+/// kept, so it needs to be unique rather than unguessable.
 fn generated_machine_id() -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let mut id = String::with_capacity(32);
-    for salt in 0..2u64 {
-        let mut hasher = DefaultHasher::new();
-        salt.hash(&mut hasher);
-        nanos.hash(&mut hasher);
-        std::process::id().hash(&mut hasher);
-        hostname().hash(&mut hasher);
-        id.push_str(&format!("{:016x}", hasher.finish()));
-    }
-    id
+    let mut hasher = Sha256::new();
+    hasher.update(DEVICE_ID_DOMAIN.as_bytes());
+    hasher.update(nanos.to_le_bytes());
+    hasher.update(std::process::id().to_le_bytes());
+    hasher.update(hostname().as_bytes());
+    hex16(&hasher.finalize())
 }
 
 fn hostname() -> String {
@@ -2947,6 +2971,23 @@ mod tests {
         };
         assert!(!unknown.covers(&ProvidersConfig::default()));
         assert!(!CachedData::Legacy(Vec::new()).covers(&ProvidersConfig::default()));
+    }
+
+    #[test]
+    fn device_id_is_derived_not_the_system_one() {
+        let raw = "0123456789abcdef0123456789abcdef";
+        let derived = derive_device_id(raw);
+
+        // Stable for a machine, and the system id cannot be read back out of it.
+        assert_eq!(derived, derive_device_id(raw));
+        assert_ne!(derived, raw);
+        assert!(!derived.contains(raw));
+        assert_eq!(derived.len(), 32);
+        assert!(derived.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(
+            derived,
+            derive_device_id("0123456789abcdef0123456789abcdee")
+        );
     }
 
     #[test]

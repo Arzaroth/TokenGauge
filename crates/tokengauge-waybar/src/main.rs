@@ -214,7 +214,7 @@ fn main() -> Result<()> {
     }
 
     if let Some(name) = &args.set_primary {
-        return handle_set_primary(&config_path, name);
+        return handle_set_primary(&config, &config_path, name);
     }
 
     if args.check_update {
@@ -490,6 +490,11 @@ fn handle_set_provider(config_path: &Path, spec: &str) -> Result<()> {
     let updated = load_config(Some(config_path.to_path_buf()))?;
     if cache_is_stale(&updated) {
         refresh_inline(&updated);
+    } else {
+        // Switching one off leaves the snapshot a valid superset, so nothing
+        // rewrites it - and a frontend that only watches would keep drawing the
+        // provider until its fallback poll. Tell them the config moved.
+        tokengauge_core::bump_revision(&updated.cache_file);
     }
     signal_daemon_reload();
     Ok(())
@@ -537,12 +542,14 @@ fn wait_for_change(config: &TokenGaugeConfig, timeout_secs: u64) {
 
 /// `--set-primary NAME|highest`: pin the bar to a provider (or clear the pin),
 /// then signal the daemon to reload.
-fn handle_set_primary(config_path: &Path, name: &str) -> Result<()> {
+fn handle_set_primary(config: &TokenGaugeConfig, config_path: &Path, name: &str) -> Result<()> {
     let primary = match name.trim().to_lowercase().as_str() {
         "highest" | "none" | "" => None,
         other => Some(other.to_string()),
     };
     config_set_primary(config_path, primary.as_deref())?;
+    // Nothing refetches for a pin, but every frontend renders it.
+    tokengauge_core::bump_revision(&config.cache_file);
     signal_daemon_reload();
     Ok(())
 }

@@ -180,15 +180,28 @@ fn window_start(today: NaiveDate) -> NaiveDate {
 /// Read every transcript in the window and rate it.
 pub fn fetch_native(cache_file: &Path, timeout: Duration, today: NaiveDate) -> NativeCostReport {
     let since = window_start(today);
-    let mut claude_seen = HashMap::new();
-    let mut codex_seen = HashSet::new();
-    let mut events = claude_code::read_events(since, &mut claude_seen);
-    events.extend(codex_cli::read_events(since, &mut codex_seen));
+    let events = read_events_from(&claude_code::roots(), &codex_cli::roots(), since);
     if events.is_empty() {
         return NativeCostReport::default();
     }
     let prices = pricing::load(cache_file, timeout, true);
     build_report(&events, &prices, today)
+}
+
+/// Read both transcript shapes from explicit roots, oldest window bound first.
+///
+/// Split out from [`fetch_native`] so a test can point at a fixture tree
+/// without touching process-global environment variables.
+pub fn read_events_from(
+    claude_roots: &[PathBuf],
+    codex_roots: &[PathBuf],
+    since: NaiveDate,
+) -> Vec<UsageEvent> {
+    let mut claude_seen = HashMap::new();
+    let mut codex_seen = HashSet::new();
+    let mut events = claude_code::read_events(claude_roots, since, &mut claude_seen);
+    events.extend(codex_cli::read_events(codex_roots, since, &mut codex_seen));
+    events
 }
 
 #[derive(Default)]
@@ -630,10 +643,7 @@ mod tests {
     #[ignore = "reads the developer's own transcripts and shells out to ccusage"]
     fn agrees_with_ccusage_on_real_transcripts() {
         let since = day(2026, 1, 1);
-        let mut claude_seen = HashMap::new();
-        let mut codex_seen = HashSet::new();
-        let mut events = claude_code::read_events(since, &mut claude_seen);
-        events.extend(codex_cli::read_events(since, &mut codex_seen));
+        let events = read_events_from(&claude_code::roots(), &codex_cli::roots(), since);
         assert!(!events.is_empty(), "no transcripts to check against");
 
         let mut ours: HashMap<&str, u64> = HashMap::new();

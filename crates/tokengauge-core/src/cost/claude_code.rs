@@ -103,10 +103,14 @@ fn is_billable_model(model: &str) -> bool {
 /// The second is why a duplicate upgrades the event instead of being dropped:
 /// keeping the first record of a group loses whatever the message went on to
 /// say. On this machine that was 46% of one model's daily output.
-pub fn read_events(since: NaiveDate, seen: &mut HashMap<u64, usize>) -> Vec<UsageEvent> {
+pub fn read_events(
+    roots: &[PathBuf],
+    since: NaiveDate,
+    seen: &mut HashMap<u64, usize>,
+) -> Vec<UsageEvent> {
     let mut events = Vec::new();
-    for root in roots() {
-        for file in jsonl_files(&root, since) {
+    for root in roots {
+        for file in jsonl_files(root, since) {
             read_file(&file, since, seen, &mut events);
         }
     }

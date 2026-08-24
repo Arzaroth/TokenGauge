@@ -214,8 +214,8 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         try {
             this._revisionMonitor = Gio.File.new_for_path(path).monitor_file(
                 Gio.FileMonitorFlags.NONE, null);
-            // The file is replaced rather than rewritten, so one snapshot can
-            // raise more than one event; coalesce them into a single re-read.
+            // One in-place rewrite raises more than one event; coalesce them
+            // into a single re-read.
             this._revisionMonitor.connect('changed', () => {
                 if (this._revisionSettleId)
                     GLib.Source.remove(this._revisionSettleId);

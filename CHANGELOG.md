@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Codex signs in with a personal access token.** A `personal_access_token` in `auth.json` - what `codex login` writes for managed and workspace accounts - was read as "not logged in". It now authenticates the usage call, with the account it belongs to resolved from OpenAI's whoami endpoint so a workspace member sees their own numbers, and the plan name it reports fills the header when the usage response omits one. OAuth still wins when both are present; nothing changes for an ordinary `codex` login.
+- Codex team, EDU and enterprise workspaces show the administrator-defined pool. Those accounts report no rate windows at all and put the monthly cap under `spend_control`, which nothing read, so the provider rendered with no gauge.
+
+### Changed
+
+- **A Codex 30-day window is labelled Monthly**, on every panel. Free plans report a single 30-day window, and it landed in the slot the panels label "Session": a month of headroom read as a day's, resetting four weeks out. It now gets its own row and leaves the session gauge empty rather than lying about it.
+- Kimi's extra rate windows are named for how long they run - `5-hour limit`, `1-minute limit` - instead of `300-minute window`. A rolling limit that merely repeats the weekly quota (same percentage, same reset) is dropped, so the shorter window behind it takes the slot it was hiding in.
+
+### Fixed
+
+- **A GLM credit plan reads its real usage.** The credit-based Coding Plans (lite, standard, pro) meter in `CREDIT_LIMIT` entries where the token plans meter in `TOKENS_LIMIT`, and only the token shape was understood: the credit windows were mistaken for the 30-day time limit, so those plans showed 0% used no matter how much had been spent.
+
 ## [0.21.1] - 2026-08-24
 
 ### Fixed

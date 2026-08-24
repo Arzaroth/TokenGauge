@@ -140,7 +140,6 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
   cat <<TOML > "$CONFIG_FILE"
 # TokenGauge configuration
 refresh_secs = 600
-cache_file = "/tmp/tokengauge-usage.json"
 
 [providers]
 codex = true

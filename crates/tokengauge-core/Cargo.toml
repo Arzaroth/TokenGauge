@@ -12,6 +12,8 @@ serde_json = { workspace = true }
 toml = "0.8"
 toml_edit = "0.22"
 dirs = "5.0"
+# Device id derivation. Already in the tree via rustls, so no new crate.
+sha2 = "0.10"
 # ponytail: blocking+json+rustls are already compiled via self_update, so this
 # adds zero new crates. Not feature-gated - tray needs it and popover already
 # links GTK4, so the weight is noise; gate later only if popover build bites.

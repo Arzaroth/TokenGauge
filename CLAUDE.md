@@ -18,7 +18,7 @@ Shipping a feature on one frontend and leaving the rest "for later" is the
 failure mode to avoid: the desktop frontends install separately from the binary,
 so a gap there is invisible from the crate that grew the feature.
 
-Data belongs in `tokengauge-core`; `tokengauge-waybar --json` is the single
+Data belongs in `tokengauge-core`; `tokengauge --json` is the single
 snapshot every non-Rust frontend renders from. A frontend never reads a
 credential, a cache file, or a provider endpoint itself.
 
@@ -131,6 +131,29 @@ picks: `auto` (default) reads natively and asks ccusage only about enabled
 providers the readers found nothing for - a Kimi or Grok plan driven from its
 own CLI writes into neither tree.
 
+## The binary is `tokengauge`, the crate is not
+
+`crates/tokengauge-waybar` still builds the shared backend every frontend shells
+out to, but its `[[bin]]` is named `tokengauge` - the crate grew out of a Waybar
+module and the name outlived the scope. Clap is told the name explicitly, or
+`--version` reports the package instead.
+
+`tokengauge-waybar` survives as a **symlink** beside it, and release archives
+carry a real copy under that name as well. Both are deliberate: the updater
+performing an upgrade is the *old* binary, and it only knows to look for the old
+name. Drop the duplicate copy once 0.22.x updaters are gone, and only then.
+
+Frontend settings still default to `tokengauge-waybar` for the same reason -
+after an upgrade driven by a 0.22.x updater, that is the only name on disk.
+Flip those defaults in the release *after* the duplicate copy goes away, never
+in the same one.
+
+Two things that are not the binary and must not be renamed with it:
+`tokengauge-waybar-state.json` (the waybar scroll selection, a state file users
+already have) and the `[waybar]` config section, which really is Waybar-specific.
+`signal_daemon_reload()` matches `tokengauge(-waybar)? --daemon`, because a
+daemon started before the rename is the same process to reload.
+
 ## Conventions
 
 - `CHANGELOG.md` is the source of truth for GitHub release notes. Update
@@ -146,7 +169,7 @@ own CLI writes into neither tree.
   three `#[cfg(windows)]` / `#[cfg(not(windows))]` attributes in `main.rs` for
   `#[cfg(all())]` / `#[cfg(any())]`, run `cargo clippy -p tokengauge-tray`, then
   revert both. eframe and tray-icon do build on Linux.
-- A running `tokengauge-waybar --daemon` (the installed binary in
+- A running `tokengauge --daemon` (the installed binary in
   `~/.local/bin`) serves the bar and tooltip over
   `<cache_file parent>/tokengauge.sock`, so a freshly built binary invoked with
   no flags proxies to the **old** daemon. To exercise new tooltip code, point

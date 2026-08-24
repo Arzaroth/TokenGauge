@@ -24,7 +24,7 @@
     },
     "schema": [
       { "key": "refreshIntervalSec", "type": "integer", "label": "Refresh interval (seconds)", "min": 30, "max": 3600, "step": 30, "defaultValue": 600 },
-      { "key": "binary", "type": "string", "label": "tokengauge-waybar binary", "defaultValue": "tokengauge-waybar", "description": "Command used to read the usage snapshot. Override only for a non-standard install path." }
+      { "key": "binary", "type": "string", "label": "TokenGauge binary", "defaultValue": "tokengauge-waybar", "description": "Command used to read the usage snapshot. Override only for a non-standard install path." }
     ]
   }
 }

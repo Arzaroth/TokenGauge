@@ -12,7 +12,7 @@ Kirigami.FormLayout {
 
     QQC2.TextField {
         id: binaryField
-        Kirigami.FormData.label: i18n("tokengauge-waybar binary:")
+        Kirigami.FormData.label: i18n("TokenGauge binary:")
         placeholderText: "tokengauge-waybar"
     }
 

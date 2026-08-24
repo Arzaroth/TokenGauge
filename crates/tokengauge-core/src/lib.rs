@@ -542,7 +542,7 @@ impl Default for NotificationsConfig {
 pub struct UpdateConfig {
     /// Have the daemon periodically check GitHub releases and notify (via
     /// `notify-send`) when a newer version is available. Applying is never
-    /// automatic - the user triggers `tokengauge-waybar --update`.
+    /// automatic - the user triggers `tokengauge --update`.
     pub check: bool,
     /// Seconds between daemon update checks. Default 6h.
     pub check_interval_secs: u64,
@@ -3104,18 +3104,21 @@ fn ensure_table<'a>(doc: &'a mut toml_edit::DocumentMut, key: &str) -> &'a mut t
     doc[key].as_table_mut().expect("just ensured table")
 }
 
-/// Ask a running TokenGauge daemon (`tokengauge-waybar --daemon`) to reload its
-/// config from disk without a restart. No-op when no daemon is running.
+/// Ask a running TokenGauge daemon (`tokengauge --daemon`) to reload its config
+/// from disk without a restart. No-op when no daemon is running.
 ///
-/// Matches the full command line: the 17-char binary name exceeds procps'
-/// 15-char comm cap, so a bare `pkill tokengauge-waybar` matches nothing. The
-/// `--daemon` fragment also keeps us from signalling the short-lived one-shot
-/// invocation that triggered the edit (it has no SIGHUP handler).
+/// Matches the full command line: the old 17-char binary name exceeded procps'
+/// 15-char comm cap, so a bare `pkill` on it matched nothing. The `--daemon`
+/// fragment also keeps us from signalling the short-lived one-shot invocation
+/// that triggered the edit (it has no SIGHUP handler).
+///
+/// Both names are matched: a daemon started before the rename, or from a
+/// systemd unit still naming the old path, is the same process to reload.
 pub fn signal_daemon_reload() {
     let _ = Command::new("pkill")
         .arg("-HUP")
         .arg("-f")
-        .arg("tokengauge-waybar --daemon")
+        .arg(r"tokengauge(-waybar)? --daemon")
         .status();
 }
 

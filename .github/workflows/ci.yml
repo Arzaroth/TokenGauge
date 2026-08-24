@@ -34,7 +34,9 @@ jobs:
         run: cargo build --workspace
 
       - name: Test
-        run: cargo test --workspace
+        # --all-features so the self-update module's tests (the binary-name
+        # compat alias among them) actually run; clippy below already uses it.
+        run: cargo test --workspace --all-features
 
       - name: Format check
         run: cargo fmt --all -- --check

@@ -43,7 +43,14 @@ fn theme_palette() -> (
 }
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Waybar module for TokenGauge")]
+// The package is still named for the Waybar module it grew out of, and clap
+// takes its name from that unless told otherwise - so `--version` and every
+// usage line would print the old binary name.
+#[command(
+    name = "tokengauge",
+    version,
+    about = "TokenGauge: usage, limits and costs for AI coding assistants"
+)]
 struct Args {
     #[arg(long, env = "TOKENGAUGE_CONFIG")]
     config: Option<PathBuf>,
@@ -765,11 +772,11 @@ fn report_frontend_skew(binary: &str) {
         match f.installed_version() {
             Some(v) if v == binary => {}
             Some(v) => println!(
-                "{} is still v{v} - update it: tokengauge-waybar --install-frontend {}",
+                "{} is still v{v} - update it: tokengauge --install-frontend {}",
                 f.label, f.id
             ),
             None => println!(
-                "{} has no readable version - reinstall it: tokengauge-waybar --install-frontend {}",
+                "{} has no readable version - reinstall it: tokengauge --install-frontend {}",
                 f.label, f.id
             ),
         }
@@ -850,7 +857,7 @@ fn notify_update_available(config: &TokenGaugeConfig, status: &tokengauge_core::
     }
     let title = "TokenGauge: update available";
     let body = format!(
-        "v{latest} is available (you have v{}). Run tokengauge-waybar --update.",
+        "v{latest} is available (you have v{}). Run tokengauge --update.",
         status.current
     );
     let _ = Command::new("notify-send")
@@ -1059,7 +1066,7 @@ fn handle_doctor(config_path: &Path) -> i32 {
         record(DoctorCheck {
             label: format!("config exists: {}", config_path.display()),
             ok: false,
-            detail: "run any tokengauge-waybar invocation to write defaults".into(),
+            detail: "run any tokengauge invocation to write defaults".into(),
         });
         None
     };
@@ -1341,7 +1348,7 @@ fn handle_doctor(config_path: &Path) -> i32 {
             label: "no bar wired up".into(),
             ok: false,
             detail: format!(
-                "no {} and no desktop frontend installed - run scripts/install.sh, or tokengauge-waybar --install-frontend <plasma|gnome|omarchy>",
+                "no {} and no desktop frontend installed - run scripts/install.sh, or tokengauge --install-frontend <plasma|gnome|omarchy>",
                 waybar_cfg.display()
             ),
         });
@@ -1395,7 +1402,7 @@ fn handle_doctor(config_path: &Path) -> i32 {
             label: "update available".into(),
             ok: true,
             detail: format!(
-                "{} available - run: tokengauge-waybar --update",
+                "{} available - run: tokengauge --update",
                 status.latest.as_deref().unwrap_or("newer release")
             ),
         }),
@@ -1410,7 +1417,7 @@ fn handle_doctor(config_path: &Path) -> i32 {
         None => record(DoctorCheck {
             label: "no update check yet".into(),
             ok: true,
-            detail: "run: tokengauge-waybar --check-update".into(),
+            detail: "run: tokengauge --check-update".into(),
         }),
     }
 
@@ -1423,8 +1430,7 @@ fn handle_doctor(config_path: &Path) -> i32 {
             record(DoctorCheck {
                 label: "none installed".into(),
                 ok: true,
-                detail: "install one: tokengauge-waybar --install-frontend <plasma|gnome|omarchy>"
-                    .into(),
+                detail: "install one: tokengauge --install-frontend <plasma|gnome|omarchy>".into(),
             });
         }
         for f in present {
@@ -1440,12 +1446,12 @@ fn handle_doctor(config_path: &Path) -> i32 {
                 Some(v) => record(DoctorCheck {
                     label: format!("{} is v{v}, binary is v{binary}", f.label),
                     ok: false,
-                    detail: format!("tokengauge-waybar --install-frontend {}", f.id),
+                    detail: format!("tokengauge --install-frontend {}", f.id),
                 }),
                 None => record(DoctorCheck {
                     label: format!("{} version unreadable", f.label),
                     ok: false,
-                    detail: format!("tokengauge-waybar --install-frontend {}", f.id),
+                    detail: format!("tokengauge --install-frontend {}", f.id),
                 }),
             }
         }

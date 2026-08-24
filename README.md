@@ -21,7 +21,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary
 - **Threshold notifications**: `notify-send` alerts at 50/80/95% (configurable) - one-shot per threshold, resets on window roll-over
 - **Daemon mode**: optional long-lived process for near-instant waybar polls, background notifications, and SIGHUP config reload
-- **Self-update**: `tokengauge-waybar --update` pulls the arch-matching build from GitHub releases; the daemon checks periodically and notifies, and the desktop frontends expose an **Update** button
+- **Self-update**: `tokengauge --update` pulls the arch-matching build from GitHub releases; the daemon checks periodically and notifies, and the desktop frontends expose an **Update** button
 - **`--doctor`**: diagnostic checklist for credentials, cost source (including a native-vs-ccusage cross-check), notifications, providers, waybar wiring, click action launcher
 - **CSS tier classes**: waybar text class flips to `tokengauge-warn` / `tokengauge-crit` past usage thresholds for theme-driven coloring
 
@@ -72,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/in
 | Open provider status page | back button (mouse 8) |
 | Rotate selected provider | scroll up / down |
 
-Left-click goes through `tokengauge-waybar --click`, which launches the
+Left-click goes through `tokengauge --click`, which launches the
 terminal TUI. The waybar panel itself is the tooltip - hover the module.
 
 ### TUI keys
@@ -152,23 +152,23 @@ systemctl --user enable --now tokengauge-daemon
 
 When the daemon is running:
 
-- The 60-second waybar polls become near-instant: the bare `tokengauge-waybar` binary fetches the daemon's in-memory state via a Unix socket instead of fetching usage and spawning ccusage on every tick.
+- The 60-second waybar polls become near-instant: the bare `tokengauge` binary fetches the daemon's in-memory state via a Unix socket instead of fetching usage and spawning ccusage on every tick.
 - Right-click refresh, scroll rotate, and middle/back click for dashboard/status all route through the daemon so the next waybar snapshot reflects the new state immediately.
 - Threshold notifications fire from the daemon even if you never interact with waybar.
 
-Waybar config is unchanged - same `exec: tokengauge-waybar` with `interval: 60`. The binary auto-detects the socket and uses it; without the daemon it falls back to direct fetch.
+Waybar config is unchanged - same `exec: tokengauge` with `interval: 60`. The binary auto-detects the socket and uses it; without the daemon it falls back to direct fetch.
 
-The daemon also reloads its config on `SIGHUP` (`pkill -HUP tokengauge-waybar`) so theme / refresh_secs / providers / click action changes take effect without a restart.
+The daemon also reloads its config on `SIGHUP` (`pkill -HUP tokengauge`) so theme / refresh_secs / providers / click action changes take effect without a restart.
 
 ## Click action
 
-Left-click goes through `tokengauge-waybar --click`, which launches
+Left-click goes through `tokengauge --click`, which launches
 `tokengauge-tui` in a terminal. It auto-detects
 `omarchy-launch-or-focus-tui` when present, otherwise picks the first of
 `$TERMINAL`, `ghostty`, `alacritty`, `kitty`, `wezterm`, `foot`, `xterm`
 on `$PATH`. Override with `[waybar].tui_command`.
 
-`tokengauge-waybar --doctor` reports the resolved click target and warns
+`tokengauge --doctor` reports the resolved click target and warns
 when its leading binary isn't on `$PATH`.
 
 The bundled GTK4 popover was removed in 0.20.0: the waybar tooltip now
@@ -193,10 +193,10 @@ Widgets** -> search **TokenGauge**. If it doesn't show up yet, restart Plasma
 
 The applet reads the same `~/.config/tokengauge/config.toml`, cache, and (when
 running) daemon as the Waybar module. Under the hood it polls
-`tokengauge-waybar --json` - a machine-readable snapshot of every provider's
+`tokengauge --json` - a machine-readable snapshot of every provider's
 usage, cost, and 7-day history - and drives all its actions (refresh, rotate,
 open dashboard/status, provider toggles, pin) through the same
-`tokengauge-waybar` binary, so the daemon stays the single source of truth and
+`tokengauge` binary, so the daemon stays the single source of truth and
 threshold notifications keep firing.
 
 Mouse behaviour matches the Waybar module: left-click opens the popup,
@@ -228,13 +228,13 @@ available). Binary path, refresh interval, panel percent, and the OAuth
 provider toggles live in the extension's preferences
 (`gnome-extensions prefs tokengauge@arzaroth.github.io`).
 
-Like the Plasma applet it polls `tokengauge-waybar --json` and routes every
+Like the Plasma applet it polls `tokengauge --json` and routes every
 action back through the same binary, so the shared config, cache, daemon, and
 threshold notifications are untouched.
 
 ## Diagnostics
 
-Run `tokengauge-waybar --doctor` to print a grouped checklist:
+Run `tokengauge --doctor` to print a grouped checklist:
 
 ```
 Config        config loads
@@ -254,8 +254,8 @@ platform (`linux-x86_64` / `linux-aarch64` / `windows-x86_64`):
 
 ```bash
 # Linux
-tokengauge-waybar --update        # download the latest release and swap the binaries
-tokengauge-waybar --check-update  # just report the latest version (prints JSON)
+tokengauge --update        # download the latest release and swap the binaries
+tokengauge --check-update  # just report the latest version (prints JSON)
 ```
 
 ```powershell
@@ -290,20 +290,20 @@ add this to `~/.config/waybar/config.jsonc`:
 
 ```jsonc
 "custom/tokengauge": {
-  "exec": "tokengauge-waybar",
+  "exec": "tokengauge",
   "return-type": "json",
   "interval": 60,
   "signal": 8,
-  "on-click": "tokengauge-waybar --click",
-  "on-click-right": "tokengauge-waybar --refresh",
-  "on-click-middle": "tokengauge-waybar --open=dashboard",
-  "on-click-backward": "tokengauge-waybar --open=status",
-  "on-scroll-up": "tokengauge-waybar --rotate=next",
-  "on-scroll-down": "tokengauge-waybar --rotate=prev"
+  "on-click": "tokengauge --click",
+  "on-click-right": "tokengauge --refresh",
+  "on-click-middle": "tokengauge --open=dashboard",
+  "on-click-backward": "tokengauge --open=status",
+  "on-scroll-up": "tokengauge --rotate=next",
+  "on-scroll-down": "tokengauge --rotate=prev"
 }
 ```
 
-`tokengauge-waybar --click` resolves the launcher itself: it prefers
+`tokengauge --click` resolves the launcher itself: it prefers
 `omarchy-launch-or-focus-tui` when present, otherwise auto-picks a terminal
 from `$TERMINAL` / ghostty / alacritty / kitty / wezterm / foot / xterm. To
 override, set `[waybar].tui_command` in `config.toml`.
@@ -317,7 +317,7 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 2. Extract and install:
    ```bash
    tar -xzf tokengauge-<version>-linux-<arch>.tar.gz
-   install -m 0755 tokengauge-waybar ~/.local/bin/
+   install -m 0755 tokengauge ~/.local/bin/
    install -m 0755 tokengauge-tui ~/.local/bin/
    ```
 

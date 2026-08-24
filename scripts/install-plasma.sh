@@ -30,9 +30,13 @@ cargo build --release --manifest-path "$REPO_DIR/Cargo.toml" \
 
 info "Installing binaries to $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
-for bin in tokengauge-waybar tokengauge-tui; do
+for bin in tokengauge tokengauge-tui; do
   install -m 0755 "$REPO_DIR/target/release/$bin" "$INSTALL_DIR/$bin"
 done
+# The binary was tokengauge-waybar before 0.23.0, and the frontend settings
+# still default to that name. Keep it resolving.
+rm -f "$INSTALL_DIR/tokengauge-waybar"
+ln -s tokengauge "$INSTALL_DIR/tokengauge-waybar"
 
 info "Installing provider logos to $ICON_DIR"
 mkdir -p "$ICON_DIR"

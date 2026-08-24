@@ -36,9 +36,13 @@ cargo build --release --manifest-path "$REPO_DIR/Cargo.toml" \
 
 info "Installing binaries to $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
-for bin in tokengauge-waybar tokengauge-tui; do
+for bin in tokengauge tokengauge-tui; do
   install -m 0755 "$REPO_DIR/target/release/$bin" "$INSTALL_DIR/$bin"
 done
+# The binary was tokengauge-waybar before 0.23.0, and the frontend settings
+# still default to that name. Keep it resolving.
+rm -f "$INSTALL_DIR/tokengauge-waybar"
+ln -s tokengauge "$INSTALL_DIR/tokengauge-waybar"
 
 info "Installing provider logos to $ICON_DIR"
 mkdir -p "$ICON_DIR"
@@ -58,7 +62,7 @@ glib-compile-schemas "$EXT_DIR/schemas"
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
-  *) warn "Note: $INSTALL_DIR is not on your PATH. The extension only prepends ~/.local/bin, ~/bin and /usr/local/bin, so set its waybar-binary preference to $INSTALL_DIR/tokengauge-waybar." ;;
+  *) warn "Note: $INSTALL_DIR is not on your PATH. The extension only prepends ~/.local/bin, ~/bin and /usr/local/bin, so set its binary preference to $INSTALL_DIR/tokengauge." ;;
 esac
 
 if command -v gnome-extensions >/dev/null 2>&1; then

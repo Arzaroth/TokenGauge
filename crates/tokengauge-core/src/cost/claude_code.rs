@@ -92,8 +92,10 @@ fn is_billable_model(model: &str) -> bool {
 
 /// Read every usage event dated `since` or later.
 ///
-/// `seen` maps a dedup key to the event it produced, and carries across files
-/// and runs. Two different things make one message appear more than once:
+/// `seen` maps a dedup key to the index of the event it produced, so it is only
+/// meaningful alongside the `events` vector it was built with: pass the same
+/// pair for the whole read, and start both fresh for the next one. Two
+/// different things make one message appear more than once:
 ///
 /// - a resumed or branched session copies earlier turns into a new file
 ///   verbatim, so without dedup a long project re-counts its own history;
@@ -143,12 +145,16 @@ pub(super) fn read_file(
         };
         match seen.get(&key) {
             // The completed record of a streamed message supersedes the
-            // partial ones: same request, strictly more of it.
-            Some(&index) if event.tokens.total() > events[index].tokens.total() => {
+            // partial ones: same request, strictly more of it. The bounds check
+            // keeps a mismatched `seen`/`events` pair from panicking or
+            // overwriting an unrelated event.
+            Some(&index)
+                if index < events.len() && event.tokens.total() > events[index].tokens.total() =>
+            {
                 events[index] = event;
             }
-            Some(_) => {}
-            None => {
+            Some(&index) if index < events.len() => {}
+            _ => {
                 seen.insert(key, events.len());
                 events.push(event);
             }

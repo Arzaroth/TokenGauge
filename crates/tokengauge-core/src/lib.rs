@@ -2304,25 +2304,53 @@ pub struct CostDiagnostics {
 impl CostDiagnostics {
     /// Largest month-to-date token disagreement between the two sources, as a
     /// fraction. `None` when there is nothing to compare.
+    ///
+    /// A provider that one side reports and the other does not is full drift,
+    /// not a skip - a Claude reader that breaks after a format change reports
+    /// no `claude` key at all, and comparing only the keys it did produce would
+    /// call that agreement. Restricted to the trees the readers actually parse:
+    /// Kimi or Grok driven from its own CLI is legitimately ccusage-only, and
+    /// the `auto` fallback exists precisely to cover it.
     pub fn worst_token_drift(&self) -> Option<(String, f64)> {
         let ccusage = self.ccusage.as_ref()?;
         let mut worst: Option<(String, f64)> = None;
-        for (provider, (native_tokens, _)) in &self.native {
-            let Some((their_tokens, _)) = ccusage.get(provider) else {
-                continue;
-            };
-            let denominator = (*their_tokens).max(*native_tokens) as f64;
-            if denominator == 0.0 {
-                continue;
-            }
-            let drift = (*native_tokens as f64 - *their_tokens as f64).abs() / denominator;
+        let mut consider = |provider: &String, drift: f64| {
             if worst.as_ref().is_none_or(|(_, w)| drift > *w) {
                 worst = Some((provider.clone(), drift));
+            }
+        };
+
+        let providers: std::collections::BTreeSet<&String> =
+            self.native.keys().chain(ccusage.keys()).collect();
+        for provider in providers {
+            let mine = self.native.get(provider).map(|(t, _)| *t);
+            let theirs = ccusage.get(provider).map(|(t, _)| *t);
+            match (mine, theirs) {
+                (Some(mine), Some(theirs)) => {
+                    let denominator = theirs.max(mine) as f64;
+                    if denominator > 0.0 {
+                        consider(provider, (mine as f64 - theirs as f64).abs() / denominator);
+                    }
+                }
+                // Present on one side only. Meaningful for the trees we parse,
+                // expected for anything the fallback covers.
+                (mine, theirs)
+                    if NATIVELY_READ.contains(&provider.as_str())
+                        && (mine.unwrap_or(0) > 0 || theirs.unwrap_or(0) > 0) =>
+                {
+                    consider(provider, 1.0);
+                }
+                _ => {}
             }
         }
         worst
     }
 }
+
+/// The providers the native readers can produce on their own, being the
+/// transcript trees they parse. Everything else reaches a cost row through the
+/// `auto` fallback, so its absence from a native read says nothing.
+const NATIVELY_READ: &[&str] = &["claude", "codex"];
 
 /// Run the native readers, and ccusage alongside them when asked, so the two
 /// can be compared. This is what keeps the dependency earning its keep: a
@@ -2755,11 +2783,12 @@ fn ccusage_command(runner: &[String]) -> Command {
     }
 }
 
-fn run_ccusage_blocks(args: &[&str], timeout: Duration) -> Result<CcusageBlocksResponse> {
+fn run_ccusage_blocks(args: &[&str], deadline: Instant) -> Result<CcusageBlocksResponse> {
     let runner = resolve_ccusage_runner().ok_or_else(|| anyhow!("no ccusage runner on PATH"))?;
     let mut command = ccusage_command(&runner);
     command.args(args).arg("--json");
-    let output = run_with_timeout(command, timeout).context("ccusage blocks failed")?;
+    let output =
+        run_with_timeout(command, budget_left(deadline)).context("ccusage blocks failed")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!("ccusage blocks exit non-zero: {}", stderr.trim()));
@@ -2772,9 +2801,9 @@ struct ActiveBlockInfo {
     session_usd: f64,
 }
 
-fn fetch_active_blocks(timeout: Duration) -> HashMap<String, ActiveBlockInfo> {
-    let resp = match run_ccusage_blocks(&["blocks", "--active", "--offline"], timeout)
-        .or_else(|_| run_ccusage_blocks(&["blocks", "--active"], timeout))
+fn fetch_active_blocks(deadline: Instant) -> HashMap<String, ActiveBlockInfo> {
+    let resp = match run_ccusage_blocks(&["blocks", "--active", "--offline"], deadline)
+        .or_else(|_| run_ccusage_blocks(&["blocks", "--active"], deadline))
     {
         Ok(r) => r,
         Err(_) => return HashMap::new(),
@@ -2816,19 +2845,36 @@ fn fetch_active_blocks(timeout: Duration) -> HashMap<String, ActiveBlockInfo> {
 /// Grok row exist at all. A ccusage too old for either flag rejects it and
 /// exits non-zero, so the bare form is retried before the caller gives up and
 /// shows no cost at all.
-fn run_ccusage_daily(since: &str, timeout: Duration) -> Result<CcusageDailyResponse> {
+fn run_ccusage_daily(since: &str, deadline: Instant) -> Result<CcusageDailyResponse> {
     run_ccusage(
         &["daily", "--since", since, "--offline", "--by-agent"],
-        timeout,
+        deadline,
     )
-    .or_else(|_| run_ccusage(&["daily", "--since", since], timeout))
+    .or_else(|_| run_ccusage(&["daily", "--since", since], deadline))
 }
 
-fn run_ccusage(args: &[&str], timeout: Duration) -> Result<CcusageDailyResponse> {
+/// What is left of the cost fetch's budget.
+///
+/// Every ccusage call is a retry away from a second one, and both the daily and
+/// the blocks call can retry, so handing each attempt the full timeout lets a
+/// slow or too-old ccusage run four of them back to back. That outlives
+/// `refresh_budget_ms`, which sizes the refresh sentinel from a single timeout -
+/// and once the sentinel expires a second refresh starts on top of the first.
+/// One deadline for the whole fetch keeps it inside the budget.
+///
+/// The floor gives a late attempt a chance to be useful rather than failing on
+/// a zero timeout it was always going to miss.
+fn budget_left(deadline: Instant) -> Duration {
+    deadline
+        .saturating_duration_since(Instant::now())
+        .max(Duration::from_millis(500))
+}
+
+fn run_ccusage(args: &[&str], deadline: Instant) -> Result<CcusageDailyResponse> {
     let runner = resolve_ccusage_runner().ok_or_else(|| anyhow!("no ccusage runner on PATH"))?;
     let mut command = ccusage_command(&runner);
     command.args(args).arg("--json");
-    let output = run_with_timeout(command, timeout).context("ccusage failed")?;
+    let output = run_with_timeout(command, budget_left(deadline)).context("ccusage failed")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2841,6 +2887,8 @@ fn run_ccusage(args: &[&str], timeout: Duration) -> Result<CcusageDailyResponse>
 /// Fetch ccusage cost info. Returns a map from provider key to CostInfo.
 /// Returns empty map on any failure (ccusage missing, no logs, parse error).
 pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
+    // One deadline for every call this makes, retries included.
+    let deadline = Instant::now() + timeout;
     let today_date = Local::now().date_naive();
     let month_start_date = today_date
         .format("%Y-%m-01")
@@ -2859,7 +2907,7 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
 
     // One call, sliced three ways below. Three calls each re-read every
     // transcript on disk to answer a narrower question than the one before it.
-    let daily = match run_ccusage_daily(&since.format("%Y%m%d").to_string(), timeout) {
+    let daily = match run_ccusage_daily(&since.format("%Y%m%d").to_string(), deadline) {
         Ok(r) => r,
         Err(_) => return HashMap::new(),
     };
@@ -2869,7 +2917,7 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
     let mut today_agg = aggregate_ccusage(&daily, &today, &today);
     let mut monthly_agg = aggregate_ccusage(&daily, &month_start, &today);
     let mut weekly_history = last_n_days_by_provider(&daily, today_date, WEEKLY_HISTORY_DAYS);
-    let mut active_blocks = fetch_active_blocks(timeout);
+    let mut active_blocks = fetch_active_blocks(deadline);
 
     let mut result = HashMap::new();
     let providers: std::collections::HashSet<String> = today_agg
@@ -2954,8 +3002,9 @@ stagger_ms = 0
 # Master switch for cost figures. false = no cost rows at all.
 ccusage_enabled = true
 # Where cost figures come from:
-#   "auto"    - read the transcripts natively, fall back to ccusage only when
-#               no transcripts are found at all (default)
+#   "auto"    - read the transcripts natively, and ask ccusage only about
+#               enabled providers the readers found nothing for, such as a
+#               Kimi or Grok plan driven from its own CLI (default)
 #   "native"  - native readers only, no subprocess and no Node/Bun needed
 #   "ccusage" - the ccusage subprocess only
 # cost_source = "auto"
@@ -4376,6 +4425,75 @@ mod tests {
         let stale = aggregate_ccusage(&f, "2026-08-01", "2026-08-19");
         assert_eq!(stale.get("claude").expect("claude").total_usd, 1.5);
         assert!(!stale.contains_key("codex"));
+    }
+
+    #[test]
+    fn cost_source_parses_every_spelling() {
+        for (text, expected) in [
+            ("auto", CostSource::Auto),
+            ("native", CostSource::Native),
+            ("ccusage", CostSource::Ccusage),
+        ] {
+            let cfg: TokenGaugeConfig =
+                toml::from_str(&format!("cost_source = \"{text}\"\n")).expect("parses");
+            assert_eq!(cfg.cost_source, expected, "{text}");
+        }
+        // Absent means auto, which is what an existing config has.
+        let cfg: TokenGaugeConfig = toml::from_str("refresh_secs = 600\n").expect("parses");
+        assert_eq!(cfg.cost_source, CostSource::Auto);
+        assert!(toml::from_str::<TokenGaugeConfig>("cost_source = \"nope\"\n").is_err());
+    }
+
+    fn diagnostics(native: &[(&str, u64)], ccusage: &[(&str, u64)]) -> CostDiagnostics {
+        CostDiagnostics {
+            native: native
+                .iter()
+                .map(|(p, t)| (p.to_string(), (*t, 0.0)))
+                .collect(),
+            ccusage: Some(
+                ccusage
+                    .iter()
+                    .map(|(p, t)| (p.to_string(), (*t, 0.0)))
+                    .collect(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn drift_is_measured_where_both_sources_report() {
+        let d = diagnostics(
+            &[("claude", 100), ("codex", 50)],
+            &[("claude", 100), ("codex", 55)],
+        );
+        let (provider, drift) = d.worst_token_drift().expect("drift");
+        assert_eq!(provider, "codex");
+        assert!((drift - 5.0 / 55.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_reader_that_stopped_producing_anything_is_full_drift() {
+        // The failure the check exists for: a format change and the Claude
+        // reader returns nothing. Comparing only the keys it produced would
+        // call that agreement, because there is no `claude` key left to compare.
+        let d = diagnostics(&[("codex", 50)], &[("claude", 1_000_000), ("codex", 50)]);
+        let (provider, drift) = d.worst_token_drift().expect("drift");
+        assert_eq!(provider, "claude");
+        assert_eq!(drift, 1.0);
+    }
+
+    #[test]
+    fn a_provider_only_ccusage_can_see_is_not_drift() {
+        // Kimi driven from its own CLI writes into neither tree we parse; the
+        // `auto` fallback is what covers it, so its absence is not a fault.
+        let d = diagnostics(&[("claude", 100)], &[("claude", 100), ("kimi", 900)]);
+        let (provider, drift) = d.worst_token_drift().expect("claude is comparable");
+        assert_eq!(provider, "claude");
+        assert_eq!(drift, 0.0, "kimi being ccusage-only must not read as drift");
+
+        // And with nothing comparable at all, there is no verdict to give.
+        let empty = diagnostics(&[], &[("kimi", 900)]);
+        assert!(empty.worst_token_drift().is_none());
     }
 
     #[test]

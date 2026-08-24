@@ -366,10 +366,23 @@ fn session_window(payload: &ProviderPayload) -> Option<(DateTime<Utc>, DateTime<
 /// that. Anchoring here is what makes the two agree.
 pub fn anchor_burn_rates(report: &mut NativeCostReport, payloads: &[ProviderPayload]) {
     let now = Utc::now();
+    let retention = ChronoDuration::days(WEEKLY_HISTORY_DAYS as i64);
     for payload in payloads {
+        // A payload restored from cache carries the window it had when it was
+        // written, which may have reset since. Measuring session spend against
+        // an expired window invents a figure.
+        if payload.stale {
+            continue;
+        }
         let Some((start, end)) = session_window(payload) else {
             continue;
         };
+        // `recent` only keeps a week, so a longer window - Codex's lone
+        // unknown-duration one, or a GLM quota measured in months - would be
+        // measured from a fraction of itself and read as a lull.
+        if end - start > retention {
+            continue;
+        }
         let key = payload.provider.to_lowercase();
         let Some(cost) = report.costs.get_mut(&key) else {
             continue;
@@ -614,6 +627,44 @@ mod tests {
         assert!((118..=121).contains(&burn.remaining_minutes));
         assert!(burn.cost_per_hour > 0.0);
         assert!(burn.projected_cost > claude.session_usd);
+    }
+
+    #[test]
+    fn a_window_longer_than_the_retained_history_gets_no_burn_rate() {
+        let now = Utc::now();
+        let prices = pricing::PriceTable::vendored();
+        let today = now.with_timezone(&Local).date_naive();
+        let mut report = build_report(
+            &[event("claude", "claude-opus-5", today, 100)],
+            &prices,
+            today,
+        );
+        // 30 days: only the last seven are retained, so any figure would be
+        // measured from a fraction of the window.
+        let resets_at = (now + ChronoDuration::hours(1)).to_rfc3339();
+        anchor_burn_rates(
+            &mut report,
+            &[payload_with_window("claude", &resets_at, 30 * 24 * 60)],
+        );
+        assert!(report.costs["claude"].burn_rate.is_none());
+        assert_eq!(report.costs["claude"].session_usd, 0.0);
+    }
+
+    #[test]
+    fn a_stale_payload_gets_no_burn_rate() {
+        let now = Utc::now();
+        let prices = pricing::PriceTable::vendored();
+        let today = now.with_timezone(&Local).date_naive();
+        let mut report = build_report(
+            &[event("claude", "claude-opus-5", today, 100)],
+            &prices,
+            today,
+        );
+        let resets_at = (now + ChronoDuration::hours(2)).to_rfc3339();
+        let mut payload = payload_with_window("claude", &resets_at, 300);
+        payload.stale = true;
+        anchor_burn_rates(&mut report, &[payload]);
+        assert!(report.costs["claude"].burn_rate.is_none());
     }
 
     #[test]

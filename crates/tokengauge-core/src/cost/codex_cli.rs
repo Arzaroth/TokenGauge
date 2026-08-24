@@ -92,8 +92,14 @@ impl Cumulative {
 
 pub fn roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Ok(home) = std::env::var("CODEX_HOME") {
-        roots.push(Path::new(&home).join("sessions"));
+    // An empty or blank CODEX_HOME is unset, not a relative path. Taking it
+    // literally pushes a bogus `sessions` root, which `retain` then drops -
+    // leaving no roots, skipping the ~/.codex fallback, and reporting zero
+    // Codex spend. `codex_home()` in codex.rs already reads it this way.
+    if let Ok(home) = std::env::var("CODEX_HOME")
+        && !home.trim().is_empty()
+    {
+        roots.push(Path::new(home.trim()).join("sessions"));
     }
     if roots.is_empty()
         && let Some(home) = dirs::home_dir()
@@ -128,6 +134,10 @@ pub(super) fn read_file(
         return;
     };
 
+    // `events` is the accumulator shared by every file in the read, so the
+    // fix-up at the end must touch only what this call appended. Rescanning the
+    // whole vector once per file is quadratic in the number of transcripts.
+    let appended_from = events.len();
     let mut session_id = String::new();
     let mut model: Option<String> = None;
     let mut previous = Cumulative::default();
@@ -214,7 +224,7 @@ pub(super) fn read_file(
         events.remove(index);
     }
     // The provider is settled by the model, which may have arrived late.
-    for event in events.iter_mut() {
+    for event in events[appended_from..].iter_mut() {
         if let Some(provider) = model_to_provider(&event.model) {
             event.provider = provider;
         }

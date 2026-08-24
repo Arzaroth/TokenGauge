@@ -1132,11 +1132,23 @@ fn handle_doctor(config_path: &Path) -> i32 {
                 d.roots.len()
             ),
         });
+        // Only `native` actually requires a transcript tree. A ccusage-only
+        // install has none by design, and `auto` covers the same case through
+        // the fallback, so failing the check there would fail a healthy machine.
+        let native_required = cfg.cost_source == tokengauge_core::CostSource::Native;
         record(DoctorCheck {
-            label: "transcripts found".into(),
-            ok: !d.roots.is_empty(),
+            label: if d.roots.is_empty() {
+                "no transcript roots".into()
+            } else {
+                "transcripts found".into()
+            },
+            ok: !d.roots.is_empty() || !native_required,
             detail: if d.roots.is_empty() {
-                "no ~/.claude/projects or ~/.codex/sessions - cost falls back to ccusage".into()
+                if native_required {
+                    "cost_source = \"native\" needs ~/.claude/projects or ~/.codex/sessions".into()
+                } else {
+                    "none yet - cost figures come from ccusage until a CLI writes one".into()
+                }
             } else {
                 d.roots
                     .iter()

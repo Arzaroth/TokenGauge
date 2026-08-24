@@ -104,10 +104,14 @@ pub fn roots() -> Vec<PathBuf> {
     roots
 }
 
-pub fn read_events(since: NaiveDate, seen: &mut HashSet<u64>) -> Vec<UsageEvent> {
+pub fn read_events(
+    roots: &[PathBuf],
+    since: NaiveDate,
+    seen: &mut HashSet<u64>,
+) -> Vec<UsageEvent> {
     let mut events = Vec::new();
-    for root in roots() {
-        for file in jsonl_files(&root, since) {
+    for root in roots {
+        for file in jsonl_files(root, since) {
             read_file(&file, since, seen, &mut events);
         }
     }

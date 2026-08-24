@@ -100,9 +100,20 @@ the same unit, a `UsageEvent`, so **a new CLI is one more reader and nothing
 else**; `build_report` does the rest.
 
 The token counts must match ccusage exactly - they come from the same files.
-`cost::tests::agrees_with_ccusage_on_real_transcripts` (`#[ignore]`d, needs a
-populated home directory) asserts that, and `--doctor` runs the same diff at
-runtime. If they drift, a transcript format changed and a reader missed it.
+Three things assert it, at widening cost: `tests/cost_fixture.rs` diffs the
+readers against a checked-in ccusage golden (no Node, no network, runs in CI),
+`cost::tests::agrees_with_ccusage_on_real_transcripts` (`#[ignore]`d) does it
+against the developer's own home directory, and `--doctor` does it at runtime on
+a user's machine. If they drift, a transcript format changed and a reader missed
+it.
+
+Regenerate the fixture with `scripts/make-cost-fixture.py`. Two rules it learned
+the hard way: **emit compact JSON** (ccusage prefilters lines with a string match
+against compact separators, so pretty-printed input reads as an empty file), and
+**compare token counts, never days or money** (days depend on the reader's
+timezone, money on whichever price table each side fetched). The generator
+refuses to write a fixture that has stopped covering the traps - verified by
+reverting the dedup fix and watching it fail.
 
 Three traps are load-bearing, each with a test named after it:
 

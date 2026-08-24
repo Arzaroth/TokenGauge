@@ -1,0 +1,4 @@
+{"timestamp":"2026-04-14T08:14:35.705Z","type":"session_meta","payload":{"id":"019d8b0e-5ab9-7633-b9d3-5f3c544226c5","timestamp":"2026-04-14T08:14:27.006Z","cwd":"/redacted","originator":"codex-tui","cli_version":"0.120.0","source":"cli","model_provider":"openai"}}
+{"timestamp":"2026-04-14T08:14:35.710Z","type":"turn_context","payload":{"model":"gpt-5.4","cwd":"/redacted"}}
+{"timestamp":"2026-04-14T08:14:35.831Z","type":"event_msg","payload":{"type":"token_count","info":null}}
+{"timestamp":"2026-04-14T08:14:37.777Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":13459,"cached_input_tokens":9600,"output_tokens":62,"reasoning_output_tokens":40,"total_tokens":13521},"last_token_usage":{"input_tokens":13459,"cached_input_tokens":9600,"output_tokens":62,"reasoning_output_tokens":40,"total_tokens":13521},"model_context_window":258400}}}

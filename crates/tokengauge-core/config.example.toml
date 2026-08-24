@@ -29,8 +29,10 @@ preset = "catppuccin"
 # red = "#f38ba8"
 # neutral = "#cdd6f4"
 
-# Cache file location
-cache_file = "/tmp/tokengauge-usage.json"
+# Snapshot location. Defaults to $XDG_STATE_HOME/tokengauge/tokengauge-usage.json
+# (%LOCALAPPDATA%\TokenGauge on Windows); the state files beside it - selected
+# provider, daemon socket, refresh sentinel - follow its directory.
+# cache_file = ""
 
 [waybar]
 # Which window to show in waybar: "daily" or "weekly"

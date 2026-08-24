@@ -133,7 +133,7 @@ $configFile = Join-Path $configDir 'config.toml'
 if (-not (Test-Path $configFile)) {
     New-Item -ItemType Directory -Force -Path $configDir | Out-Null
     # Single-quoted here-string: no variable/backtick interpretation.
-    # cache_file is intentionally omitted so it defaults to %TEMP%.
+    # cache_file is intentionally omitted so it defaults to %LOCALAPPDATA%\TokenGauge.
     $config = @'
 # TokenGauge configuration (Windows)
 # Usage limits are fetched natively over HTTP; sign in to the codex and/or

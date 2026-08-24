@@ -1,12 +1,10 @@
-use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use tokengauge_core::{
-    FetchResult, ProviderFetchError, ProviderRow, fetch_all_providers, load_config,
+    FetchResult, ProviderFetchError, ProviderRow, cache_is_stale, fetch_all_providers, load_config,
     payload_to_rows_with_costs, read_cache_full, retain_enabled, write_cache_full,
     write_default_config,
 };
@@ -36,13 +34,7 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
     }
     let config = load_config(Some(config_path))?;
     let cached = read_cache_full(&config.cache_file).ok();
-
-    let stale = fs::metadata(&config.cache_file)
-        .ok()
-        .and_then(|meta| meta.modified().ok())
-        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        .map(|age| age >= Duration::from_secs(config.refresh_secs))
-        .unwrap_or(true);
+    let stale = cache_is_stale(&config);
 
     let (mut payloads, mut errors, costs) = match cached {
         Some(c) if !force && !stale => c.into_parts(),
@@ -52,7 +44,14 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
                 errors,
                 costs,
             } = fetch_all_providers(&config);
-            write_cache_full(&config.cache_file, &payloads, &errors, &costs).ok();
+            write_cache_full(
+                &config.cache_file,
+                &payloads,
+                &errors,
+                &costs,
+                &config.providers,
+            )
+            .ok();
             (payloads, errors, costs)
         }
     };

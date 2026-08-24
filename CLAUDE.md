@@ -62,6 +62,34 @@ A window the provider does not report (`used: None`) and a `placeholder: true`
 extra window are both omitted. Every panel used to disagree about this; now none
 of them decide it.
 
+## Snapshot, staleness, and how a change reaches a frontend
+
+The snapshot lives at `$XDG_STATE_HOME/tokengauge/tokengauge-usage.json`
+(`cache_file`), and every other state file is derived from its **parent**: the
+daemon socket, the refresh sentinel, the selected provider, the notify state,
+and `tokengauge-revision`. It is state, not cache: it holds the only record of
+past days' tokens and costs.
+
+`cache_is_stale()` in core is the single fetch-or-serve decision. A snapshot is
+stale when it is missing, older than `refresh_secs`, **or** was written before a
+provider that is enabled now was switched on - `CacheMeta.providers` records the
+set each fetch ran with. Age alone was the old rule, and it is why enabling a
+provider used to do nothing for ten minutes. `retain_enabled()` still handles the
+other direction, filtering a provider switched off out of a snapshot that is
+otherwise fine.
+
+Every write goes through `write_cache_full`, which writes atomically and then
+rewrites `tokengauge-revision`. Frontends watch that file (Quickshell `FileView`,
+GNOME `Gio.FileMonitor`, and `--wait-change` for the Plasma applet, whose toolkit
+has no watcher) and re-run `--json` when it moves. Their poll timers stay: with
+no daemon running, a poll is what ages the snapshot out and triggers the next
+fetch.
+
+`--set-provider` fetches before it returns, because frontends run
+`--set-provider && --json` in one subprocess and the `--json` has to see the new
+provider. The daemon's SIGHUP reload then finds a snapshot that already covers
+the new set and re-renders instead of fetching again.
+
 ## Conventions
 
 - `CHANGELOG.md` is the source of truth for GitHub release notes. Update

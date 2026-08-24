@@ -7,9 +7,15 @@ refresh_secs = 600
 # Timeout in seconds for each provider request
 timeout_secs = 20
 
-# Enable ccusage cost fetching (requires `npx ccusage` to be available)
+# Master switch for cost figures. false = no cost rows at all.
 ccusage_enabled = true
-# Timeout in seconds for each ccusage call (cold starts can be slow)
+# Where cost figures come from:
+#   "auto"    - read the transcripts natively, fall back to ccusage only when
+#               no transcripts are found at all (default)
+#   "native"  - native readers only, no subprocess and no Node/Bun needed
+#   "ccusage" - the ccusage subprocess only
+# cost_source = "auto"
+# Timeout in seconds for each ccusage call, and for the price-table refresh.
 ccusage_timeout_secs = 15
 
 [notifications]

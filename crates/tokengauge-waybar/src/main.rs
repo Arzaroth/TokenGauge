@@ -1110,19 +1110,106 @@ fn handle_doctor(config_path: &Path) -> i32 {
         }
     }
 
+    // Where cost figures come from, and whether the two sources agree.
+    if cfg.ccusage_enabled {
+        section("Cost source");
+        let compare = cfg.cost_source != tokengauge_core::CostSource::Ccusage
+            && tokengauge_core::ccusage_runner_description().is_some();
+        let d = tokengauge_core::diagnose_costs(
+            cfg.cost_source,
+            &cfg.cache_file,
+            std::time::Duration::from_secs(cfg.ccusage_timeout_secs.max(1)),
+            compare,
+        );
+
+        record(DoctorCheck {
+            label: format!("cost source: {:?}", d.source).to_lowercase(),
+            ok: true,
+            detail: format!(
+                "{} events read in {}ms from {} transcript root(s)",
+                d.events,
+                d.elapsed.as_millis(),
+                d.roots.len()
+            ),
+        });
+        record(DoctorCheck {
+            label: "transcripts found".into(),
+            ok: !d.roots.is_empty(),
+            detail: if d.roots.is_empty() {
+                "no ~/.claude/projects or ~/.codex/sessions - cost falls back to ccusage".into()
+            } else {
+                d.roots
+                    .iter()
+                    .map(|r| r.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        });
+        record(DoctorCheck {
+            label: format!("price table: {} models", d.prices),
+            ok: d.prices > 0,
+            detail: "from LiteLLM, cached beside the snapshot".into(),
+        });
+        // An unpriced model must read as a gap, never as $0 spent.
+        record(DoctorCheck {
+            label: if d.unpriced.is_empty() {
+                "every model in use is priced".into()
+            } else {
+                format!("{} model(s) have tokens but no price", d.unpriced.len())
+            },
+            ok: d.unpriced.is_empty(),
+            detail: if d.unpriced.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "{} - spend is undercounted until the price table catches up",
+                    d.unpriced.join(", ")
+                )
+            },
+        });
+        if compare {
+            match d.worst_token_drift() {
+                // Token counts come from the same transcripts and must agree;
+                // anything else means one of the two parsers has drifted.
+                Some((provider, drift)) => record(DoctorCheck {
+                    label: "native and ccusage agree on token counts".into(),
+                    ok: drift < 0.01,
+                    detail: format!(
+                        "worst gap {:.2}% ({provider}, month to date)",
+                        drift * 100.0
+                    ),
+                }),
+                None => record(DoctorCheck {
+                    label: "native vs ccusage".into(),
+                    ok: true,
+                    detail: "nothing in common to compare this month".into(),
+                }),
+            }
+        }
+    }
+
     // External dependencies
     section("Dependencies");
     if cfg.ccusage_enabled {
+        // Only a hard requirement when it is the chosen source. Otherwise it is
+        // the fallback for a CLI we do not parse, and the second opinion the
+        // cost check above diffs against.
+        let required = cfg.cost_source == tokengauge_core::CostSource::Ccusage;
         match tokengauge_core::ccusage_runner_description() {
             Some(cmd) => record(DoctorCheck {
                 label: "ccusage runner available".into(),
                 ok: true,
                 detail: cmd,
             }),
-            None => record(DoctorCheck {
+            None if required => record(DoctorCheck {
                 label: "ccusage runner".into(),
                 ok: false,
-                detail: "install ccusage (npm i -g ccusage / bun i -g ccusage / npx fallback) or set ccusage_enabled = false".into(),
+                detail: "cost_source = \"ccusage\" needs it: npm i -g ccusage / bun i -g ccusage, or switch cost_source to \"native\"".into(),
+            }),
+            None => record(DoctorCheck {
+                label: "ccusage runner absent (optional)".into(),
+                ok: true,
+                detail: "costs are read natively; install ccusage only to cross-check them".into(),
             }),
         }
     } else {
@@ -2723,6 +2810,7 @@ mod tests {
             stagger_ms: 0,
             ccusage_enabled: false,
             ccusage_timeout_secs: 15,
+            cost_source: tokengauge_core::CostSource::Native,
             cache_file,
             providers: Default::default(),
             waybar: Default::default(),

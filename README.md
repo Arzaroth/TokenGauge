@@ -2,7 +2,7 @@
 
 [![GitHub release](https://img.shields.io/github/v/release/Arzaroth/TokenGauge)](https://github.com/Arzaroth/TokenGauge/releases)
 
-Monitor token usage, costs, and limits for AI coding assistants from your Waybar, KDE Plasma panel, GNOME Shell panel, and TUI. Usage limits are fetched natively over HTTP for Claude, Codex, Kimi, Grok, and GLM (z.ai), and [ccusage](https://github.com/ryoppippi/ccusage) provides the cost breakdown. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
+Monitor token usage, costs, and limits for AI coding assistants from your Waybar, KDE Plasma panel, GNOME Shell panel, and TUI. Usage limits are fetched natively over HTTP for Claude, Codex, Kimi, Grok, and GLM (z.ai), and costs are read natively too - straight from the transcripts the CLIs write, rated against [LiteLLM](https://github.com/BerriAI/litellm)'s price table. [ccusage](https://github.com/ryoppippi/ccusage) is optional, kept as a fallback and a cross-check. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
 
 | Waybar | TUI | KDE Plasma |
 |--------|-----|------------|
@@ -14,7 +14,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **TUI dashboard** (ratatui): per-provider sidebar, Session / Weekly / Sonnet-only / Tertiary windows, Extra usage rates, cost breakdown
 - **One panel, five surfaces**: the waybar tooltip, the KDE Plasma applet, the GNOME extension, the Quickshell widget and the Windows tray window all render the same sections in the same order - LIMITS, COST, TOKENS BY DAY, TOKENS BY MODEL - from a single layout resolved in `tokengauge-core`. See [CLAUDE.md](CLAUDE.md) for the parity rule.
 - **KDE Plasma 6 applet**: native panel widget (QML plasmoid) - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
-- **Cost tracking via ccusage**: today, month, 7-day rolling, per-model split, current burn rate $/hr, 7-day chart, today's spend vs the average of the prior days
+- **Native cost tracking**: today, month, 7-day rolling, per-model split, burn rate $/hr anchored to the provider's real session window, 7-day chart, today's spend vs the average of the prior days
 - **Multi-provider**: Claude, Codex, Kimi, Grok, and GLM (z.ai)
 - **GNOME Shell extension**: panel indicator for GNOME 45+ mirroring the Plasma applet - brand icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and pin-to-bar, plus an Adwaita preferences window for the provider toggles. Shares the same config, cache, and daemon as the Waybar module.
 - **Pace tracking**: every usage window - including Claude's model-scoped weeklies like `Fable only` - projects where it lands at reset from the current burn rate (`ends ~16%`, or `empty in 2h 15m` when it runs out first), shown next to each reset on every frontend (hidden until 3% of the window has elapsed)
@@ -22,7 +22,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **Threshold notifications**: `notify-send` alerts at 50/80/95% (configurable) - one-shot per threshold, resets on window roll-over
 - **Daemon mode**: optional long-lived process for near-instant waybar polls, background notifications, and SIGHUP config reload
 - **Self-update**: `tokengauge-waybar --update` pulls the arch-matching build from GitHub releases; the daemon checks periodically and notifies, and the desktop frontends expose an **Update** button
-- **`--doctor`**: diagnostic checklist for credentials, ccusage, notifications, providers, waybar wiring, click action launcher
+- **`--doctor`**: diagnostic checklist for credentials, cost source (including a native-vs-ccusage cross-check), notifications, providers, waybar wiring, click action launcher
 - **CSS tier classes**: waybar text class flips to `tokengauge-warn` / `tokengauge-crit` past usage thresholds for theme-driven coloring
 
 ## Supported Providers
@@ -97,8 +97,9 @@ Edit `~/.config/tokengauge/config.toml`:
 | `cache_file` | Snapshot location. The daemon socket, the selected provider and the refresh sentinel live beside it | `$XDG_STATE_HOME/tokengauge/tokengauge-usage.json` (`%LOCALAPPDATA%\TokenGauge\…` on Windows) |
 | `timeout_secs` | Per-provider fetch timeout | `20` |
 | `stagger_ms` | Delay (ms) between provider fetch starts, to avoid 429 bursts (0 = all at once) | `0` |
-| `ccusage_enabled` | Fetch cost data via `ccusage` | `true` |
-| `ccusage_timeout_secs` | Per-call ccusage timeout (cold starts are slow) | `15` |
+| `ccusage_enabled` | Master switch for cost figures | `true` |
+| `cost_source` | `auto` (native, ccusage fallback), `native`, or `ccusage` | `auto` |
+| `ccusage_timeout_secs` | Per-call ccusage timeout, and price-refresh timeout | `15` |
 | `providers.codex` | Enable Codex (OAuth) | `true` |
 | `providers.claude` | Enable Claude (OAuth) | `true` |
 | `waybar.window` | Show `daily` or `weekly` usage in the bar | `daily` |
@@ -238,7 +239,7 @@ Run `tokengauge-waybar --doctor` to print a grouped checklist:
 ```
 Config        config loads
 Credentials   Claude / Codex sign-in present
-Dependencies  ccusage runner, notify-send, xdg-open on PATH
+Dependencies  notify-send, xdg-open on PATH (ccusage optional)
 Filesystem    cache directory writable
 Providers     enabled list + per-provider live fetch result
 Waybar        module wired in ~/.config/waybar/config.jsonc
@@ -354,7 +355,7 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
    - **Grok**: run `grok login`.
    - **GLM**: set `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`; add `Z_AI_API_HOST=open.bigmodel.cn` for the China BigModel region, or `Z_AI_QUOTA_URL` to override the full quota endpoint).
 
-   Optionally install [ccusage](https://github.com/ryoppippi/ccusage) globally (`npm i -g ccusage` or `bun i -g ccusage`) for faster cost fetches.
+   Cost detail needs no extra tooling: TokenGauge reads the transcripts the CLIs already write. [ccusage](https://github.com/ryoppippi/ccusage) is optional, and only used as a fallback or a cross-check.
 
 6. (Optional) Set up the daemon - see **Daemon mode** above.
 
@@ -370,8 +371,11 @@ are supported, both building and running natively on Windows 10: the
 (`tokengauge-tray.exe`, see [Tray GUI](#tray-gui-tokengauge-tray) below).
 Usage limits for every supported provider (Codex, Claude, Kimi, Grok, GLM) are
 fetched natively over HTTP; sign in to the providers you enable so TokenGauge can
-read their credentials. `ccusage` then layers on **cost/token** detail per
-provider (it does not create provider rows on its own).
+read their credentials. **Cost/token** detail is read natively too, from the
+transcripts the CLIs write under `%USERPROFILE%\.claude` and `%USERPROFILE%\.codex`.
+`ccusage` is optional: it covers a CLI TokenGauge does not parse yet, and
+`--doctor` cross-checks against it. Neither source creates provider rows on its
+own.
 
 ### Prerequisites
 
@@ -379,10 +383,10 @@ provider (it does not create provider rows on its own).
   credentials and fetch usage natively: `codex` / `claude` (OAuth CLIs), `kimi`
   or `KIMI_CODE_API_KEY`, `grok login`, and `Z_AI_API_KEY` (legacy
   `ZAI_API_TOKEN`) for GLM.
-- *(Optional)* **[Node.js](https://nodejs.org/)** (or [Bun](https://bun.sh/)) -
-  lets `ccusage` add **cost/token** detail to those rows. TokenGauge auto-detects
-  `ccusage`, then `bunx ccusage`, then `npx --yes ccusage` on your `PATH`
-  (`npm i -g ccusage` is fastest).
+- *(Optional)* **[Node.js](https://nodejs.org/)** (or [Bun](https://bun.sh/)).
+  No longer needed for cost detail - TokenGauge reads the transcripts itself.
+  Install `ccusage` only if you want the fallback for a CLI TokenGauge does not
+  parse yet, or the `--doctor` cross-check. `npm i -g ccusage` is fastest.
 
 ### Install
 

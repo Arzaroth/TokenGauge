@@ -23,6 +23,7 @@ use crate::{
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const REFRESH_URL: &str = "https://auth.openai.com/oauth/token";
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+const WHOAMI_URL: &str = "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami";
 const REFRESH_AFTER: ChronoDuration = ChronoDuration::days(8);
 
 // ---------------------------------------------------------------------------
@@ -33,8 +34,23 @@ const REFRESH_AFTER: ChronoDuration = ChronoDuration::days(8);
 struct AuthFile {
     #[serde(rename = "OPENAI_API_KEY")]
     api_key: Option<String>,
+    /// A personal access token, written by `codex login --with-pat` and by the
+    /// managed-workspace flows. It never rotates, so none of the refresh
+    /// machinery below applies to it.
+    #[serde(default, alias = "personalAccessToken")]
+    personal_access_token: Option<String>,
     tokens: Option<Tokens>,
     last_refresh: Option<String>,
+}
+
+/// What the fetch ended up authenticating with. `source` reaches the snapshot,
+/// so a frontend can say which of the three shapes answered.
+struct Credential {
+    tokens: Tokens,
+    source: &'static str,
+    /// A PAT's plan, from whoami. `wham/usage`'s own `plan_type` wins when it
+    /// reports one.
+    plan_hint: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -220,24 +236,91 @@ fn api_key_tokens(key: String) -> Tokens {
     }
 }
 
+#[derive(Deserialize, Default)]
+struct Whoami {
+    #[serde(default, alias = "chatgptAccountId")]
+    chatgpt_account_id: Option<String>,
+    #[serde(default, alias = "chatgptPlanType")]
+    chatgpt_plan_type: Option<String>,
+}
+
+fn trimmed(v: Option<String>) -> Option<String> {
+    v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// Resolve which account a personal access token speaks for. Best-effort:
+/// `wham/usage` answers without the account header as well, and it is the call
+/// whose 401 tells the user their token is no good.
+fn whoami(client: &reqwest::blocking::Client, token: &str) -> Option<Whoami> {
+    let resp = client
+        .get(WHOAMI_URL)
+        .header("authorization", format!("Bearer {token}"))
+        .header("accept", "application/json")
+        .send()
+        .ok()?;
+    resp.status().is_success().then(|| resp.json().ok())?
+}
+
+/// `auth.json` with no OAuth tokens: a personal access token, else the API key.
+/// A PAT is preferred because it is what `wham/usage` accepts; `OPENAI_API_KEY`
+/// is a platform key that usually cannot read subscription usage at all, and is
+/// only kept as the last resort it always was.
+fn non_oauth_credential(auth: AuthFile, timeout: Duration) -> Result<Credential> {
+    pat_or_api_key(auth, |token| {
+        http_client(timeout)
+            .ok()
+            .and_then(|client| whoami(&client, token))
+            .unwrap_or_default()
+    })
+}
+
+/// The credential rules on their own, with identity resolution injected so they
+/// are testable without a network call.
+fn pat_or_api_key(auth: AuthFile, resolve: impl FnOnce(&str) -> Whoami) -> Result<Credential> {
+    if let Some(pat) = trimmed(auth.personal_access_token) {
+        let who = resolve(&pat);
+        return Ok(Credential {
+            tokens: Tokens {
+                access_token: pat,
+                refresh_token: None,
+                id_token: None,
+                account_id: trimmed(who.chatgpt_account_id),
+            },
+            source: "pat",
+            plan_hint: trimmed(who.chatgpt_plan_type),
+        });
+    }
+    trimmed(auth.api_key)
+        .map(|key| Credential {
+            tokens: api_key_tokens(key),
+            source: "api-key",
+            plan_hint: None,
+        })
+        .ok_or_else(|| anyhow!("Codex not logged in - run `codex`"))
+}
+
+fn oauth(tokens: Tokens) -> Credential {
+    Credential {
+        tokens,
+        source: "oauth",
+        plan_hint: None,
+    }
+}
+
 /// Read the current token, refreshing (behind a cross-process lock) when the
 /// 8-day age threshold is crossed.
-fn ensure_access_token(timeout: Duration) -> Result<Tokens> {
+fn ensure_access_token(timeout: Duration) -> Result<Credential> {
     let home = codex_home();
     let path = home.join("auth.json");
-    let auth = read_auth(&path)?;
+    let mut auth = read_auth(&path)?;
 
     // Prefer OAuth tokens: they carry account_id and the auth shape wham/usage
-    // expects. Only fall back to OPENAI_API_KEY when there are no tokens.
-    let Some(tokens) = auth.tokens else {
-        return auth
-            .api_key
-            .filter(|k| !k.is_empty())
-            .map(api_key_tokens)
-            .ok_or_else(|| anyhow!("Codex not logged in - run `codex`"));
+    // expects. Only fall back to a PAT or OPENAI_API_KEY when there are none.
+    let Some(tokens) = auth.tokens.take() else {
+        return non_oauth_credential(auth, timeout);
     };
     if !needs_refresh(auth.last_refresh.as_deref(), Utc::now()) {
-        return Ok(tokens);
+        return Ok(oauth(tokens));
     }
 
     // ponytail: try_lock, not lock. The 8d refresh rule leaves ~2d of JWT
@@ -252,7 +335,7 @@ fn ensure_access_token(timeout: Duration) -> Result<Tokens> {
     match lock.try_lock() {
         Ok(()) => {}
         // Contention only: someone else is refreshing; ours is still valid.
-        Err(std::fs::TryLockError::WouldBlock) => return Ok(tokens),
+        Err(std::fs::TryLockError::WouldBlock) => return Ok(oauth(tokens)),
         // A real lock I/O error must surface, not silently serve the old token.
         Err(std::fs::TryLockError::Error(e)) => {
             return Err(anyhow::Error::from(e).context("failed to lock auth.json"));
@@ -263,26 +346,22 @@ fn ensure_access_token(timeout: Duration) -> Result<Tokens> {
     // JSON so the write-back merge base is fixed *before* the network refresh.
     let raw =
         std::fs::read_to_string(&path).map_err(|_| anyhow!("Codex not logged in - run `codex`"))?;
-    let fresh: AuthFile = serde_json::from_str(&raw).context("auth.json was invalid")?;
-    let Some(fresh_tokens) = fresh.tokens else {
-        return fresh
-            .api_key
-            .filter(|k| !k.is_empty())
-            .map(api_key_tokens)
-            .ok_or_else(|| anyhow!("Codex not logged in - run `codex`"));
+    let mut fresh: AuthFile = serde_json::from_str(&raw).context("auth.json was invalid")?;
+    let Some(fresh_tokens) = fresh.tokens.take() else {
+        return non_oauth_credential(fresh, timeout);
     };
     if !needs_refresh(fresh.last_refresh.as_deref(), Utc::now()) {
-        return Ok(fresh_tokens); // the winner already refreshed
+        return Ok(oauth(fresh_tokens)); // the winner already refreshed
     }
     let Some(refresh_token) = fresh_tokens.refresh_token.clone().filter(|t| !t.is_empty()) else {
-        return Ok(fresh_tokens); // nothing to refresh with
+        return Ok(oauth(fresh_tokens)); // nothing to refresh with
     };
     let root: Value = serde_json::from_str(&raw).context("auth.json was invalid")?;
 
     let client = http_client(timeout)?;
     let new = refresh(&client, &fresh_tokens, &refresh_token)?;
     write_auth(&path, root, &new, Utc::now())?;
-    Ok(new)
+    Ok(oauth(new))
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +375,16 @@ struct UsageResponse {
     #[serde(default)]
     additional_rate_limits: Value,
     credits: Option<CreditsWire>,
+    individual_limit: Option<IndividualLimit>,
+    /// Team, enterprise and EDU workspaces report the administrator-defined
+    /// monthly credit pool here instead of at the root.
+    #[serde(default, alias = "spendControl")]
+    spend_control: Option<SpendControl>,
+}
+
+#[derive(Deserialize)]
+struct SpendControl {
+    #[serde(default, alias = "individualLimit")]
     individual_limit: Option<IndividualLimit>,
 }
 
@@ -384,15 +473,43 @@ fn epoch_to_rfc3339(secs: i64) -> Option<String> {
 enum Role {
     Session,
     Weekly,
+    Monthly,
     Unknown,
 }
+
+/// Classify a window by its duration. Anything from four weeks up is monthly:
+/// a 30-day window in the primary slot is not the 5-hour session gauge, and
+/// labelling it "Session" made a month of headroom read as an exhausted day.
+const MONTHLY_MIN_MINUTES: i64 = 40320;
 
 fn role(w: &Win) -> Role {
     match w.limit_window_seconds / 60 {
         300 => Role::Session,
         10080 => Role::Weekly,
+        m if m >= MONTHLY_MIN_MINUTES => Role::Monthly,
         _ => Role::Unknown,
     }
+}
+
+/// Pull monthly windows out of the two rate-limit slots. They keep their own
+/// labelled row instead of taking the Session or Weekly one.
+fn split_monthly(
+    primary: Option<Win>,
+    secondary: Option<Win>,
+) -> (Vec<Win>, Option<Win>, Option<Win>) {
+    let mut monthly = Vec::new();
+    let mut keep = |w: Option<Win>| -> Option<Win> {
+        match w {
+            Some(w) if role(&w) == Role::Monthly => {
+                monthly.push(w);
+                None
+            }
+            other => other,
+        }
+    };
+    let primary = keep(primary);
+    let secondary = keep(secondary);
+    (monthly, primary, secondary)
 }
 
 /// Assign windows to (primary, secondary) slots by their duration. A weekly
@@ -541,16 +658,23 @@ fn extra_windows(adds: &Value) -> Vec<ExtraRateWindow> {
     out
 }
 
-fn to_payload(resp: UsageResponse, now: DateTime<Utc>) -> Result<ProviderPayload> {
+fn to_payload(
+    resp: UsageResponse,
+    now: DateTime<Utc>,
+    source: &str,
+    plan_hint: Option<String>,
+) -> Result<ProviderPayload> {
     let p_raw = resp.rate_limit.as_ref().and_then(|r| r.primary_window);
     let s_raw = resp.rate_limit.as_ref().and_then(|r| r.secondary_window);
+    let (monthly, p_raw, s_raw) = split_monthly(p_raw, s_raw);
     let (np, ns) = normalize(p_raw, s_raw);
     let mut primary = np.map(win_to_usage);
     let secondary = ns.map(win_to_usage);
 
     // Synthesize a primary window from individual_limit when there is no
     // rate-limit primary (enterprise/credit plans). The top-level limit is
-    // preferred, but fall back to the nested one when it yields no usable window.
+    // preferred, then the nested one, then the workspace-wide pool a team, EDU
+    // or enterprise account reports under spend_control.
     if primary.is_none() {
         primary = resp
             .individual_limit
@@ -560,6 +684,12 @@ fn to_payload(resp: UsageResponse, now: DateTime<Utc>) -> Result<ProviderPayload
                 resp.rate_limit
                     .as_ref()
                     .and_then(|r| r.individual_limit.as_ref())
+                    .and_then(individual_to_window)
+            })
+            .or_else(|| {
+                resp.spend_control
+                    .as_ref()
+                    .and_then(|s| s.individual_limit.as_ref())
                     .and_then(individual_to_window)
             });
     }
@@ -571,7 +701,24 @@ fn to_payload(resp: UsageResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         .and_then(as_f64)
         .map(|b| Credits { remaining: Some(b) });
 
-    let extra_rate_windows = extra_windows(&resp.additional_rate_limits);
+    let mut extra_rate_windows = Vec::new();
+    for w in monthly {
+        push_unique(
+            &mut extra_rate_windows,
+            "codex-monthly".to_string(),
+            "Monthly".to_string(),
+            w,
+        );
+    }
+    for extra in extra_windows(&resp.additional_rate_limits) {
+        if extra_rate_windows
+            .iter()
+            .any(|e: &ExtraRateWindow| e.id == extra.id)
+        {
+            continue;
+        }
+        extra_rate_windows.push(extra);
+    }
 
     if primary.is_none()
         && secondary.is_none()
@@ -584,13 +731,13 @@ fn to_payload(resp: UsageResponse, now: DateTime<Utc>) -> Result<ProviderPayload
     Ok(ProviderPayload {
         provider: "codex".to_string(),
         version: None,
-        source: Some("oauth".to_string()),
+        source: Some(source.to_string()),
         usage: Some(UsageSnapshot {
             primary,
             secondary,
             tertiary: None,
             updated_at: Some(now.to_rfc3339()),
-            login_method: resp.plan_type,
+            login_method: resp.plan_type.or(plan_hint),
             extra_rate_windows,
         }),
         credits,
@@ -605,7 +752,8 @@ fn to_payload(resp: UsageResponse, now: DateTime<Utc>) -> Result<ProviderPayload
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
-    let tokens = ensure_access_token(timeout)?;
+    let cred = ensure_access_token(timeout)?;
+    let tokens = &cred.tokens;
 
     let client = http_client(timeout)?;
     let mut req = client
@@ -627,7 +775,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     }
 
     let body: UsageResponse = resp.json().context("Codex usage JSON was invalid")?;
-    Ok(vec![to_payload(body, now)?])
+    Ok(vec![to_payload(body, now, cred.source, cred.plan_hint)?])
 }
 
 #[cfg(test)]
@@ -646,10 +794,10 @@ mod tests {
     fn normalize_truth_table() {
         let session = win(1, 300 * 60);
         let weekly = win(2, 10080 * 60);
-        let monthly = win(3, 43200 * 60); // unknown role
+        let unknown = win(3, 60 * 60); // a duration with no semantic slot
 
-        // Live sample: a lone monthly (unknown) window stays primary.
-        assert_eq!(normalize(Some(monthly), None), (Some(monthly), None));
+        // A lone window of unknown duration stays primary.
+        assert_eq!(normalize(Some(unknown), None), (Some(unknown), None));
         // (weekly, session) swaps.
         assert_eq!(
             normalize(Some(weekly), Some(session)),
@@ -657,8 +805,8 @@ mod tests {
         );
         // (weekly, unknown) swaps.
         assert_eq!(
-            normalize(Some(weekly), Some(monthly)),
-            (Some(monthly), Some(weekly))
+            normalize(Some(weekly), Some(unknown)),
+            (Some(unknown), Some(weekly))
         );
         // Lone weekly moves to secondary.
         assert_eq!(normalize(Some(weekly), None), (None, Some(weekly)));
@@ -738,7 +886,10 @@ mod tests {
                 "secondary_window":{"used_percent":50,"reset_at":1,"limit_window_seconds":604800}}}"#,
         )
         .expect("malformed window must not fail the whole response");
-        let usage = to_payload(body, Utc::now()).unwrap().usage.unwrap();
+        let usage = to_payload(body, Utc::now(), "oauth", None)
+            .unwrap()
+            .usage
+            .unwrap();
         // The lone valid window is weekly-shaped, so it lands in secondary.
         assert!(usage.primary.is_none());
         assert_eq!(usage.secondary.as_ref().unwrap().used_percent, Some(50));
@@ -746,19 +897,126 @@ mod tests {
 
     #[test]
     fn maps_live_codex_sample() {
-        // primary is a 43200-minute (monthly) window -> unknown role, stays primary.
+        // Live free-plan sample: the only window is 43200 minutes long. Held in
+        // the primary slot it read as "Session 6%" resetting a month out; it now
+        // gets its own Monthly row and leaves the session gauge empty.
         let body: UsageResponse = serde_json::from_str(
             r#"{"plan_type":"free","rate_limit":{
                 "primary_window":{"used_percent":6,"reset_at":1786646643,"limit_window_seconds":2592000},
                 "secondary_window":null}}"#,
         )
         .unwrap();
-        let payload = to_payload(body, Utc::now()).unwrap();
+        let payload = to_payload(body, Utc::now(), "oauth", None).unwrap();
         let usage = payload.usage.unwrap();
-        assert_eq!(usage.primary.as_ref().unwrap().used_percent, Some(6));
-        assert_eq!(usage.primary.as_ref().unwrap().window_minutes, Some(43200));
+        assert!(usage.primary.is_none());
         assert!(usage.secondary.is_none());
+        let monthly = &usage.extra_rate_windows[0];
+        assert_eq!(monthly.id.as_deref(), Some("codex-monthly"));
+        assert_eq!(monthly.title.as_deref(), Some("Monthly"));
+        let window = monthly.window.as_ref().unwrap();
+        assert_eq!(window.used_percent, Some(6));
+        assert_eq!(window.window_minutes, Some(43200));
         assert_eq!(usage.login_method.as_deref(), Some("free"));
+    }
+
+    #[test]
+    fn monthly_window_does_not_take_the_weekly_slot() {
+        // Session plus a 30-day window: the session gauge keeps its slot, the
+        // monthly one is labelled rather than shown as "Weekly".
+        let body: UsageResponse = serde_json::from_str(
+            r#"{"plan_type":"plus","rate_limit":{
+                "primary_window":{"used_percent":12,"reset_at":1786646643,"limit_window_seconds":18000},
+                "secondary_window":{"used_percent":40,"reset_at":1786646643,"limit_window_seconds":2592000}}}"#,
+        )
+        .unwrap();
+        let usage = to_payload(body, Utc::now(), "oauth", None)
+            .unwrap()
+            .usage
+            .unwrap();
+        assert_eq!(usage.primary.unwrap().used_percent, Some(12));
+        assert!(usage.secondary.is_none());
+        assert_eq!(
+            usage.extra_rate_windows[0].title.as_deref(),
+            Some("Monthly")
+        );
+        assert_eq!(
+            usage.extra_rate_windows[0]
+                .window
+                .as_ref()
+                .unwrap()
+                .used_percent,
+            Some(40)
+        );
+    }
+
+    #[test]
+    fn spend_control_limit_is_the_last_primary_fallback() {
+        // Team / EDU workspaces report the administrator-defined pool under
+        // spend_control; without it those accounts had no gauge at all.
+        let body: UsageResponse = serde_json::from_str(
+            r#"{"plan_type":"business","rate_limit":{"primary_window":null,"secondary_window":null},
+                "spend_control":{"individual_limit":{"limit":"100","used":"25","resets_at":1786646643}}}"#,
+        )
+        .unwrap();
+        let usage = to_payload(body, Utc::now(), "oauth", None)
+            .unwrap()
+            .usage
+            .unwrap();
+        assert_eq!(usage.primary.unwrap().used_percent, Some(25));
+    }
+
+    #[test]
+    fn root_individual_limit_still_wins_over_spend_control() {
+        let body: UsageResponse = serde_json::from_str(
+            r#"{"individual_limit":{"limit":"100","used":"10"},
+                "spend_control":{"individual_limit":{"limit":"100","used":"90"}}}"#,
+        )
+        .unwrap();
+        let usage = to_payload(body, Utc::now(), "oauth", None)
+            .unwrap()
+            .usage
+            .unwrap();
+        assert_eq!(usage.primary.unwrap().used_percent, Some(10));
+    }
+
+    #[test]
+    fn pat_identity_comes_from_whoami() {
+        let auth: AuthFile = serde_json::from_str(
+            r#"{"personal_access_token":" pat-abc ","OPENAI_API_KEY":"sk-unused"}"#,
+        )
+        .unwrap();
+        let cred = pat_or_api_key(auth, |token| {
+            assert_eq!(token, "pat-abc"); // trimmed before it reaches the wire
+            Whoami {
+                chatgpt_account_id: Some("acct_1".into()),
+                chatgpt_plan_type: Some("pro".into()),
+            }
+        })
+        .unwrap();
+        assert_eq!(cred.tokens.access_token, "pat-abc");
+        assert_eq!(cred.tokens.account_id.as_deref(), Some("acct_1"));
+        assert_eq!(cred.source, "pat");
+        assert_eq!(cred.plan_hint.as_deref(), Some("pro"));
+    }
+
+    #[test]
+    fn pat_survives_an_unanswered_whoami() {
+        let auth: AuthFile = serde_json::from_str(r#"{"personalAccessToken":"pat-abc"}"#).unwrap();
+        let cred = pat_or_api_key(auth, |_| Whoami::default()).unwrap();
+        assert_eq!(cred.tokens.access_token, "pat-abc");
+        assert!(cred.tokens.account_id.is_none());
+        assert_eq!(cred.source, "pat");
+    }
+
+    #[test]
+    fn api_key_is_the_last_resort() {
+        let auth: AuthFile = serde_json::from_str(r#"{"OPENAI_API_KEY":"sk-1"}"#).unwrap();
+        let cred = pat_or_api_key(auth, |_| unreachable!("no PAT to resolve")).unwrap();
+        assert_eq!(cred.tokens.access_token, "sk-1");
+        assert_eq!(cred.source, "api-key");
+
+        let empty: AuthFile = serde_json::from_str(r#"{"OPENAI_API_KEY":"  "}"#).unwrap();
+        assert!(pat_or_api_key(empty, |_| Whoami::default()).is_err());
     }
 
     #[test]
@@ -771,7 +1029,7 @@ mod tests {
                     "remaining_percent":92.239,"resets_at":1782864000}}}"#,
         )
         .unwrap();
-        let payload = to_payload(body, Utc::now()).unwrap();
+        let payload = to_payload(body, Utc::now(), "oauth", None).unwrap();
         let primary = payload.usage.unwrap().primary.unwrap();
         // 100 - 92.239 = 7.761 -> rounds to 8.
         assert_eq!(primary.used_percent, Some(8));
@@ -789,7 +1047,7 @@ mod tests {
                     "individual_limit":{"limit":100000,"remaining_percent":40.0}}}"#,
         )
         .unwrap();
-        let primary = to_payload(body, Utc::now())
+        let primary = to_payload(body, Utc::now(), "oauth", None)
             .unwrap()
             .usage
             .unwrap()
@@ -807,7 +1065,7 @@ mod tests {
                 "individual_limit":{"limit":1000,"used":250,"remaining_percent":200}}}"#,
         )
         .unwrap();
-        let primary = to_payload(body, Utc::now())
+        let primary = to_payload(body, Utc::now(), "oauth", None)
             .unwrap()
             .usage
             .unwrap()
@@ -826,7 +1084,7 @@ mod tests {
                 "individual_limit":{"limit":100000}}}"#,
         )
         .unwrap();
-        assert!(to_payload(body, Utc::now()).is_err());
+        assert!(to_payload(body, Utc::now(), "oauth", None).is_err());
     }
 
     #[test]
@@ -857,7 +1115,7 @@ mod tests {
     fn no_windows_no_credits_errors() {
         let body: UsageResponse =
             serde_json::from_str(r#"{"plan_type":"free","rate_limit":{}}"#).unwrap();
-        assert!(to_payload(body, Utc::now()).is_err());
+        assert!(to_payload(body, Utc::now(), "oauth", None).is_err());
     }
 
     #[test]

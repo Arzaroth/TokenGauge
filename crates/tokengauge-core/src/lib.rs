@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -129,12 +129,14 @@ pub fn provider_label(name: &str) -> &str {
 
 mod claude;
 mod codex;
+pub mod cost;
 mod glm;
 mod grok;
 mod kimi;
 pub mod pace;
 pub mod panel;
 
+pub use cost::{CostSource, NativeCostReport};
 pub use pace::{PaceStage, UsagePace};
 pub use panel::{PanelRow, Section, SectionKind, Tone, panel_spec};
 
@@ -432,10 +434,15 @@ pub struct TokenGaugeConfig {
     /// out fetches to avoid rate-limit (429) bursts. 0 disables staggering (all
     /// providers fetched at once).
     pub stagger_ms: u64,
-    /// Enable ccusage cost fetching (requires `npx ccusage`)
+    /// Master switch for cost figures. Off means no cost rows at all, whatever
+    /// `cost_source` says. Named for the days when ccusage was the only way to
+    /// get them.
     pub ccusage_enabled: bool,
-    /// Timeout in seconds for each ccusage call
+    /// Timeout in seconds for each ccusage call, and for the price-table fetch.
     pub ccusage_timeout_secs: u64,
+    /// Which mechanism produces cost figures: the native transcript readers,
+    /// the ccusage subprocess, or native with ccusage as the fallback.
+    pub cost_source: CostSource,
     pub providers: ProvidersConfig,
     pub waybar: WaybarConfig,
     pub notifications: NotificationsConfig,
@@ -567,6 +574,7 @@ impl Default for TokenGaugeConfig {
                 glm: None,
                 unknown: HashMap::new(),
             },
+            cost_source: CostSource::default(),
             waybar: WaybarConfig::default(),
             notifications: NotificationsConfig::default(),
             theme: ThemeConfig::default(),
@@ -1073,12 +1081,20 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
     }
 
     let ccusage_enabled = config.ccusage_enabled;
+    let cost_source = config.cost_source;
+    let cost_cache_file = config.cache_file.clone();
     let ccusage_timeout = Duration::from_secs(config.ccusage_timeout_secs.max(1));
+    let cost_providers: Vec<&'static str> = enabled.clone();
     let ccusage_handle = thread::spawn(move || {
         if ccusage_enabled {
-            fetch_ccusage_costs(ccusage_timeout)
+            fetch_costs(
+                cost_source,
+                &cost_providers,
+                &cost_cache_file,
+                ccusage_timeout,
+            )
         } else {
-            HashMap::new()
+            NativeCostReport::default()
         }
     });
 
@@ -1145,11 +1161,14 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
         apply_stale_fallback(&mut payloads, &mut errors, previous.payloads());
     }
 
-    let costs = ccusage_handle.join().unwrap_or_default();
+    let mut report = ccusage_handle.join().unwrap_or_default();
+    // Only now are the provider windows known, and the session figures are
+    // measured against the real one rather than an inferred block.
+    cost::anchor_burn_rates(&mut report, &payloads);
     FetchResult {
         payloads,
         errors,
-        costs,
+        costs: report.costs,
     }
 }
 
@@ -2207,6 +2226,167 @@ pub fn thresholds_to_fire(
 }
 
 // ============================================================================
+// Cost Fetching
+// ============================================================================
+
+/// Produce cost figures through whichever mechanism `source` selects.
+///
+/// `Auto` prefers the native readers and falls back to ccusage only when they
+/// found no transcripts at all, which is what a machine driving a CLI
+/// TokenGauge cannot parse yet looks like. A machine that simply has not used
+/// its assistants this month reads as zero spend, not as a missing source, so
+/// the fallback keys on events read rather than on dollars.
+pub fn fetch_costs(
+    source: CostSource,
+    enabled: &[&str],
+    cache_file: &Path,
+    timeout: Duration,
+) -> NativeCostReport {
+    let today = Local::now().date_naive();
+    match source {
+        CostSource::Ccusage => NativeCostReport {
+            costs: fetch_ccusage_costs(timeout),
+            ..Default::default()
+        },
+        CostSource::Native => cost::fetch_native(cache_file, timeout, today),
+        CostSource::Auto => {
+            let mut report = cost::fetch_native(cache_file, timeout, today);
+            let missing = missing_providers(&report, enabled);
+            if missing.is_empty() {
+                return report;
+            }
+            // ccusage reads 22 agent formats; TokenGauge parses two trees. A
+            // Kimi or Grok plan driven from its own CLI leaves nothing in
+            // either, and dropping the cost row it had yesterday would be a
+            // regression dressed up as an optimisation. Only the providers the
+            // native read came up empty on are taken from ccusage, so the
+            // common Claude/Codex machine never spawns it at all.
+            for (provider, cost) in fetch_ccusage_costs(timeout) {
+                if missing.contains(&provider) {
+                    report.costs.insert(provider, cost);
+                }
+            }
+            report
+        }
+    }
+}
+
+/// Enabled providers the native readers produced nothing for.
+///
+/// Keyed on events rather than on dollars: a provider that is enabled and
+/// simply unused this month has a real answer, and it is zero.
+fn missing_providers(report: &NativeCostReport, enabled: &[&str]) -> HashSet<String> {
+    enabled
+        .iter()
+        .map(|p| p.to_lowercase())
+        .filter(|p| !report.costs.contains_key(p))
+        .collect()
+}
+
+/// What `--doctor` needs to say about where cost figures come from, and
+/// whether the native readers agree with ccusage.
+#[derive(Debug, Default)]
+pub struct CostDiagnostics {
+    pub source: CostSource,
+    pub events: usize,
+    pub elapsed: Duration,
+    pub roots: Vec<PathBuf>,
+    pub prices: usize,
+    pub unpriced: Vec<String>,
+    /// Month-to-date tokens and spend per provider, from each source. The
+    /// token counts are the parser check: they come from the transcripts and
+    /// must agree. Cost can differ legitimately if the two rate against
+    /// different price data.
+    pub native: HashMap<String, (u64, f64)>,
+    pub ccusage: Option<HashMap<String, (u64, f64)>>,
+}
+
+impl CostDiagnostics {
+    /// Largest month-to-date token disagreement between the two sources, as a
+    /// fraction. `None` when there is nothing to compare.
+    ///
+    /// A provider that one side reports and the other does not is full drift,
+    /// not a skip - a Claude reader that breaks after a format change reports
+    /// no `claude` key at all, and comparing only the keys it did produce would
+    /// call that agreement. Restricted to the trees the readers actually parse:
+    /// Kimi or Grok driven from its own CLI is legitimately ccusage-only, and
+    /// the `auto` fallback exists precisely to cover it.
+    pub fn worst_token_drift(&self) -> Option<(String, f64)> {
+        let ccusage = self.ccusage.as_ref()?;
+        let mut worst: Option<(String, f64)> = None;
+        let mut consider = |provider: &String, drift: f64| {
+            if worst.as_ref().is_none_or(|(_, w)| drift > *w) {
+                worst = Some((provider.clone(), drift));
+            }
+        };
+
+        let providers: std::collections::BTreeSet<&String> =
+            self.native.keys().chain(ccusage.keys()).collect();
+        for provider in providers {
+            let mine = self.native.get(provider).map(|(t, _)| *t);
+            let theirs = ccusage.get(provider).map(|(t, _)| *t);
+            match (mine, theirs) {
+                (Some(mine), Some(theirs)) => {
+                    let denominator = theirs.max(mine) as f64;
+                    if denominator > 0.0 {
+                        consider(provider, (mine as f64 - theirs as f64).abs() / denominator);
+                    }
+                }
+                // Present on one side only. Meaningful for the trees we parse,
+                // expected for anything the fallback covers.
+                (mine, theirs)
+                    if NATIVELY_READ.contains(&provider.as_str())
+                        && (mine.unwrap_or(0) > 0 || theirs.unwrap_or(0) > 0) =>
+                {
+                    consider(provider, 1.0);
+                }
+                _ => {}
+            }
+        }
+        worst
+    }
+}
+
+/// The providers the native readers can produce on their own, being the
+/// transcript trees they parse. Everything else reaches a cost row through the
+/// `auto` fallback, so its absence from a native read says nothing.
+const NATIVELY_READ: &[&str] = &["claude", "codex"];
+
+/// Run the native readers, and ccusage alongside them when asked, so the two
+/// can be compared. This is what keeps the dependency earning its keep: a
+/// transcript format change shows up here as drift rather than as a number
+/// that quietly stopped growing.
+pub fn diagnose_costs(
+    source: CostSource,
+    cache_file: &Path,
+    timeout: Duration,
+    compare: bool,
+) -> CostDiagnostics {
+    let today = Local::now().date_naive();
+    let started = Instant::now();
+    let report = cost::fetch_native(cache_file, timeout, today);
+    let elapsed = started.elapsed();
+
+    let month_totals = |costs: &HashMap<String, CostInfo>| -> HashMap<String, (u64, f64)> {
+        costs
+            .iter()
+            .map(|(provider, c)| (provider.clone(), (c.monthly_tokens, c.monthly_usd)))
+            .collect()
+    };
+
+    CostDiagnostics {
+        source,
+        events: report.events,
+        elapsed,
+        roots: cost::transcript_roots(),
+        prices: cost::pricing::load(cache_file, timeout, false).len(),
+        native: month_totals(&report.costs),
+        ccusage: compare.then(|| month_totals(&fetch_ccusage_costs(timeout))),
+        unpriced: report.unpriced,
+    }
+}
+
+// ============================================================================
 // ccusage Integration
 // ============================================================================
 
@@ -2224,13 +2404,35 @@ pub fn model_to_provider(model: &str) -> Option<&'static str> {
         || lower.starts_with("openai")
     {
         Some("codex")
+    } else if lower.starts_with("kimi") || lower.starts_with("moonshot") {
+        Some("kimi")
+    } else if lower.starts_with("grok") {
+        Some("grok")
+    } else if lower.starts_with("glm") {
+        Some("glm")
     } else {
         None
     }
 }
 
+/// Map a ccusage agent name (the `--by-agent` split) to a provider key.
+///
+/// Only consulted when the model name is not conclusive, because the agent is
+/// the coarser signal: a GLM or Kimi model driven through Claude Code is
+/// reported under the `claude` agent, and it is the model that says whose
+/// money it was.
+fn agent_to_provider(agent: &str) -> Option<&'static str> {
+    match agent.to_lowercase().as_str() {
+        "claude" => Some("claude"),
+        "codex" => Some("codex"),
+        "kimi" => Some("kimi"),
+        "grok" => Some("grok"),
+        _ => None,
+    }
+}
+
 /// Length of the rolling cost history, in days.
-const WEEKLY_HISTORY_DAYS: usize = 7;
+pub(crate) const WEEKLY_HISTORY_DAYS: usize = 7;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct CcusageDailyResponse {
@@ -2242,9 +2444,21 @@ struct CcusageDailyResponse {
 #[serde(rename_all = "camelCase")]
 struct CcusageDay {
     #[serde(default)]
+    agents: Vec<CcusageAgent>,
+    #[serde(default)]
     model_breakdowns: Vec<CcusageModelBreakdown>,
     #[serde(default)]
     period: String,
+}
+
+/// One agent's slice of a day, from `--by-agent`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CcusageAgent {
+    #[serde(default)]
+    agent: String,
+    #[serde(default)]
+    model_breakdowns: Vec<CcusageModelBreakdown>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2261,6 +2475,32 @@ struct CcusageModelBreakdown {
     cache_creation_tokens: u64,
     #[serde(default)]
     cache_read_tokens: u64,
+}
+
+/// Every breakdown in a day, paired with the provider it belongs to.
+///
+/// `agents` and `model_breakdowns` carry the same spend - the flat list is the
+/// per-agent one merged - so exactly one of them is read, never both. ccusage
+/// builds too old for `--by-agent` only emit the flat list, and there a model
+/// name that maps nowhere (a Kimi or Grok run) is simply dropped, as before.
+fn day_breakdowns(day: &CcusageDay) -> Vec<(&'static str, &CcusageModelBreakdown)> {
+    if day.agents.is_empty() {
+        return day
+            .model_breakdowns
+            .iter()
+            .filter_map(|b| Some((model_to_provider(&b.model_name)?, b)))
+            .collect();
+    }
+    day.agents
+        .iter()
+        .flat_map(|a| {
+            a.model_breakdowns.iter().filter_map(|b| {
+                let provider =
+                    model_to_provider(&b.model_name).or_else(|| agent_to_provider(&a.agent))?;
+                Some((provider, b))
+            })
+        })
+        .collect()
 }
 
 fn ccusage_total_tokens(b: &CcusageModelBreakdown) -> u64 {
@@ -2346,16 +2586,14 @@ fn last_n_days_by_provider(
         if day.period.is_empty() {
             continue;
         }
-        for b in &day.model_breakdowns {
-            if let Some(provider) = model_to_provider(&b.model_name) {
-                let entry = per_day
-                    .entry(provider.to_string())
-                    .or_default()
-                    .entry(day.period.clone())
-                    .or_insert((0.0, 0));
-                entry.0 += b.cost;
-                entry.1 += ccusage_total_tokens(b);
-            }
+        for (provider, b) in day_breakdowns(day) {
+            let entry = per_day
+                .entry(provider.to_string())
+                .or_default()
+                .entry(day.period.clone())
+                .or_insert((0.0, 0));
+            entry.0 += b.cost;
+            entry.1 += ccusage_total_tokens(b);
         }
     }
     let periods = recent_periods(today, n);
@@ -2378,23 +2616,31 @@ fn last_n_days_by_provider(
         .collect()
 }
 
-fn aggregate_ccusage(response: &CcusageDailyResponse) -> HashMap<String, AggregatedProvider> {
+/// Aggregate the days whose `period` falls within `since..=until` (inclusive,
+/// `YYYY-MM-DD`, compared lexicographically - which is a date comparison in
+/// that format). One ccusage call now covers today, the month and the rolling
+/// week, and each figure slices the window it needs out of the same response.
+fn aggregate_ccusage(
+    response: &CcusageDailyResponse,
+    since: &str,
+    until: &str,
+) -> HashMap<String, AggregatedProvider> {
     let mut totals: HashMap<String, AggregatedProvider> = HashMap::new();
     for day in &response.daily {
-        for b in &day.model_breakdowns {
-            if let Some(provider) = model_to_provider(&b.model_name) {
-                let entry =
-                    totals
-                        .entry(provider.to_string())
-                        .or_insert_with(|| AggregatedProvider {
-                            total_usd: 0.0,
-                            total_tokens: 0,
-                            models: HashMap::new(),
-                        });
-                entry.total_usd += b.cost;
-                entry.total_tokens += ccusage_total_tokens(b);
-                entry.models.entry(b.model_name.clone()).or_default().add(b);
-            }
+        if day.period.as_str() < since || day.period.as_str() > until {
+            continue;
+        }
+        for (provider, b) in day_breakdowns(day) {
+            let entry = totals
+                .entry(provider.to_string())
+                .or_insert_with(|| AggregatedProvider {
+                    total_usd: 0.0,
+                    total_tokens: 0,
+                    models: HashMap::new(),
+                });
+            entry.total_usd += b.cost;
+            entry.total_tokens += ccusage_total_tokens(b);
+            entry.models.entry(b.model_name.clone()).or_default().add(b);
         }
     }
     totals
@@ -2537,11 +2783,12 @@ fn ccusage_command(runner: &[String]) -> Command {
     }
 }
 
-fn run_ccusage_blocks(timeout: Duration) -> Result<CcusageBlocksResponse> {
+fn run_ccusage_blocks(args: &[&str], deadline: Instant) -> Result<CcusageBlocksResponse> {
     let runner = resolve_ccusage_runner().ok_or_else(|| anyhow!("no ccusage runner on PATH"))?;
     let mut command = ccusage_command(&runner);
-    command.arg("blocks").arg("--active").arg("--json");
-    let output = run_with_timeout(command, timeout).context("ccusage blocks failed")?;
+    command.args(args).arg("--json");
+    let output =
+        run_with_timeout(command, budget_left(deadline)?).context("ccusage blocks failed")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!("ccusage blocks exit non-zero: {}", stderr.trim()));
@@ -2554,8 +2801,10 @@ struct ActiveBlockInfo {
     session_usd: f64,
 }
 
-fn fetch_active_blocks(timeout: Duration) -> HashMap<String, ActiveBlockInfo> {
-    let resp = match run_ccusage_blocks(timeout) {
+fn fetch_active_blocks(deadline: Instant) -> HashMap<String, ActiveBlockInfo> {
+    let resp = match run_ccusage_blocks(&["blocks", "--active", "--offline"], deadline)
+        .or_else(|_| run_ccusage_blocks(&["blocks", "--active"], deadline))
+    {
         Ok(r) => r,
         Err(_) => return HashMap::new(),
     };
@@ -2587,11 +2836,52 @@ fn fetch_active_blocks(timeout: Duration) -> HashMap<String, ActiveBlockInfo> {
     by_provider
 }
 
-fn run_ccusage(args: &[&str], timeout: Duration) -> Result<CcusageDailyResponse> {
+/// Run `ccusage daily` once for everything, with the two flags that make it
+/// cheap and precise.
+///
+/// `--offline` skips the LiteLLM pricing fetch each invocation otherwise pays
+/// for - measurably ~700ms, for figures identical to the cent. `--by-agent`
+/// splits the merged breakdown back out per CLI, which is what lets a Kimi or
+/// Grok row exist at all. A ccusage too old for either flag rejects it and
+/// exits non-zero, so the bare form is retried before the caller gives up and
+/// shows no cost at all.
+fn run_ccusage_daily(since: &str, deadline: Instant) -> Result<CcusageDailyResponse> {
+    run_ccusage(
+        &["daily", "--since", since, "--offline", "--by-agent"],
+        deadline,
+    )
+    .or_else(|_| run_ccusage(&["daily", "--since", since], deadline))
+}
+
+/// What is left of the cost fetch's budget.
+///
+/// Every ccusage call is a retry away from a second one, and both the daily and
+/// the blocks call can retry, so handing each attempt the full timeout lets a
+/// slow or too-old ccusage run four of them back to back. That outlives
+/// `refresh_budget_ms`, which sizes the refresh sentinel from a single timeout -
+/// and once the sentinel expires a second refresh starts on top of the first.
+/// One deadline for the whole fetch keeps it inside the budget.
+///
+/// Past the deadline this fails instead of clamping to a token slice: another
+/// ccusage process started there would overrun the budget it was meant to
+/// respect, and a sliver of a timeout only buys a subprocess spawn it cannot
+/// finish inside.
+fn budget_left(deadline: Instant) -> Result<Duration> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left < MIN_CCUSAGE_SLICE {
+        return Err(anyhow!("cost fetch budget exhausted"));
+    }
+    Ok(left)
+}
+
+/// Less than this left on the clock is not worth spawning for.
+const MIN_CCUSAGE_SLICE: Duration = Duration::from_millis(500);
+
+fn run_ccusage(args: &[&str], deadline: Instant) -> Result<CcusageDailyResponse> {
     let runner = resolve_ccusage_runner().ok_or_else(|| anyhow!("no ccusage runner on PATH"))?;
     let mut command = ccusage_command(&runner);
     command.args(args).arg("--json");
-    let output = run_with_timeout(command, timeout).context("ccusage failed")?;
+    let output = run_with_timeout(command, budget_left(deadline)?).context("ccusage failed")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2601,44 +2891,50 @@ fn run_ccusage(args: &[&str], timeout: Duration) -> Result<CcusageDailyResponse>
     serde_json::from_slice(&output.stdout).context("ccusage output was not valid JSON")
 }
 
-/// Fetch ccusage cost info. Returns a map from provider key (claude/codex) to CostInfo.
+/// Fetch ccusage cost info. Returns a map from provider key to CostInfo.
 /// Returns empty map on any failure (ccusage missing, no logs, parse error).
 pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
-    let today = Local::now().format("%Y%m%d").to_string();
-    let month_start = Local::now().format("%Y%m01").to_string();
-
-    let daily = match run_ccusage(&["daily", "--since", &today], timeout) {
-        Ok(r) => r,
-        Err(_) => return HashMap::new(),
-    };
-    let monthly = match run_ccusage(&["daily", "--since", &month_start], timeout) {
-        Ok(r) => r,
-        Err(_) => return HashMap::new(),
-    };
-
-    let mut today_agg = aggregate_ccusage(&daily);
-    let mut monthly_agg = aggregate_ccusage(&monthly);
-    let mut active_blocks = fetch_active_blocks(timeout);
-
-    // The rolling 7-day window needs its own query: `monthly` starts at the
-    // 1st, so for the first six days of a month the window reaches back into
-    // the previous one and every day before the 1st would zero-fill - which
-    // reads as "spent nothing" rather than "not asked for", understating
-    // `weekly_usd` and inflating the today-vs-average baseline.
+    // One deadline for every call this makes, retries included.
+    let deadline = Instant::now() + timeout;
     let today_date = Local::now().date_naive();
-    let week_start = today_date
+    let month_start_date = today_date
+        .format("%Y-%m-01")
+        .to_string()
+        .parse::<NaiveDate>()
+        .unwrap_or(today_date);
+    // The rolling 7-day window reaches back past the 1st for the first six
+    // days of a month, so the query has to start at whichever of the two is
+    // earlier. Asking only from the 1st would zero-fill the days before it -
+    // which reads as "spent nothing" rather than "not asked for", understating
+    // `weekly_usd` and inflating the today-vs-average baseline.
+    let week_start_date = today_date
         .checked_sub_days(Days::new(WEEKLY_HISTORY_DAYS as u64 - 1))
-        .unwrap_or(today_date)
-        .format("%Y%m%d")
-        .to_string();
-    let weekly = run_ccusage(&["daily", "--since", &week_start], timeout).unwrap_or_default();
-    let mut weekly_history = last_n_days_by_provider(&weekly, today_date, WEEKLY_HISTORY_DAYS);
+        .unwrap_or(today_date);
+    let since = month_start_date.min(week_start_date);
+
+    // One call, sliced three ways below. Three calls each re-read every
+    // transcript on disk to answer a narrower question than the one before it.
+    let daily = match run_ccusage_daily(&since.format("%Y%m%d").to_string(), deadline) {
+        Ok(r) => r,
+        Err(_) => return HashMap::new(),
+    };
+
+    let today = today_date.format("%Y-%m-%d").to_string();
+    let month_start = month_start_date.format("%Y-%m-%d").to_string();
+    let mut today_agg = aggregate_ccusage(&daily, &today, &today);
+    let mut monthly_agg = aggregate_ccusage(&daily, &month_start, &today);
+    let mut weekly_history = last_n_days_by_provider(&daily, today_date, WEEKLY_HISTORY_DAYS);
+    let mut active_blocks = fetch_active_blocks(deadline);
 
     let mut result = HashMap::new();
+    // `weekly_history` reaches back past the 1st, so early in a month a
+    // provider can have spend in the rolling week and none in the month. Left
+    // out of this set it loses its row entirely, chart and all.
     let providers: std::collections::HashSet<String> = today_agg
         .keys()
         .chain(monthly_agg.keys())
         .chain(active_blocks.keys())
+        .chain(weekly_history.keys())
         .cloned()
         .collect();
     for provider in providers {
@@ -2714,9 +3010,16 @@ refresh_secs = 600
 # 0 = fetch all at once (fastest, default).
 stagger_ms = 0
 
-# Enable ccusage cost fetching (requires `npx ccusage` to be available)
+# Master switch for cost figures. false = no cost rows at all.
 ccusage_enabled = true
-# Timeout in seconds for each ccusage call (cold starts can be slow)
+# Where cost figures come from:
+#   "auto"    - read the transcripts natively, and ask ccusage only about
+#               enabled providers the readers found nothing for, such as a
+#               Kimi or Grok plan driven from its own CLI (default)
+#   "native"  - native readers only, no subprocess and no Node/Bun needed
+#   "ccusage" - the ccusage subprocess only
+# cost_source = "auto"
+# Timeout in seconds for each ccusage call, and for the price-table refresh.
 ccusage_timeout_secs = 15
 
 [notifications]
@@ -4046,6 +4349,238 @@ mod tests {
         );
     }
 
+    /// `--by-agent` output: the same day, split per CLI. A `glm-4.6` run and a
+    /// Kimi one both land under the `claude` agent because both are driven
+    /// through Claude Code.
+    fn by_agent_fixture() -> CcusageDailyResponse {
+        serde_json::from_str(
+            r#"{
+              "daily": [
+                {
+                  "period": "2026-08-20",
+                  "agents": [
+                    {
+                      "agent": "claude",
+                      "modelBreakdowns": [
+                        { "modelName": "claude-opus-5", "cost": 2.0,
+                          "inputTokens": 1, "outputTokens": 1,
+                          "cacheCreationTokens": 0, "cacheReadTokens": 0 },
+                        { "modelName": "glm-4.6", "cost": 0.5,
+                          "inputTokens": 2, "outputTokens": 2,
+                          "cacheCreationTokens": 0, "cacheReadTokens": 0 }
+                      ]
+                    },
+                    {
+                      "agent": "grok",
+                      "modelBreakdowns": [
+                        { "modelName": "some-unlabelled-model", "cost": 1.0,
+                          "inputTokens": 3, "outputTokens": 3,
+                          "cacheCreationTokens": 0, "cacheReadTokens": 0 }
+                      ]
+                    }
+                  ],
+                  "modelBreakdowns": [
+                    { "modelName": "claude-opus-5", "cost": 2.0,
+                      "inputTokens": 1, "outputTokens": 1,
+                      "cacheCreationTokens": 0, "cacheReadTokens": 0 },
+                    { "modelName": "glm-4.6", "cost": 0.5,
+                      "inputTokens": 2, "outputTokens": 2,
+                      "cacheCreationTokens": 0, "cacheReadTokens": 0 },
+                    { "modelName": "some-unlabelled-model", "cost": 1.0,
+                      "inputTokens": 3, "outputTokens": 3,
+                      "cacheCreationTokens": 0, "cacheReadTokens": 0 }
+                  ]
+                }
+              ]
+            }"#,
+        )
+        .expect("parse by-agent fixture")
+    }
+
+    #[test]
+    fn by_agent_splits_providers_sharing_one_agent() {
+        let agg = aggregate_ccusage(&by_agent_fixture(), "2026-08-20", "2026-08-20");
+
+        // The model wins over the agent: GLM through Claude Code is GLM spend,
+        // and before --by-agent it was dropped on the floor entirely.
+        assert_eq!(agg.get("claude").expect("claude").total_usd, 2.0);
+        assert_eq!(agg.get("glm").expect("glm").total_usd, 0.5);
+        // The agent is the fallback when the model name maps nowhere.
+        assert_eq!(agg.get("grok").expect("grok").total_usd, 1.0);
+    }
+
+    #[test]
+    fn by_agent_and_flat_breakdowns_are_not_double_counted() {
+        // ccusage emits both: `modelBreakdowns` is the per-agent data merged.
+        let agg = aggregate_ccusage(&by_agent_fixture(), "2026-08-20", "2026-08-20");
+        let total: f64 = agg.values().map(|a| a.total_usd).sum();
+        assert_eq!(total, 3.5);
+
+        let history = last_n_days_by_provider(&by_agent_fixture(), day(2026, 8, 20), 1);
+        assert_eq!(history.get("claude").expect("claude")[0].usd, 2.0);
+        assert_eq!(history.get("glm").expect("glm")[0].tokens, 4);
+    }
+
+    #[test]
+    fn aggregate_window_slices_one_response() {
+        // One ccusage call answers today, the month and the rolling week.
+        let f = ccusage_fixture();
+        let today = aggregate_ccusage(&f, "2026-08-20", "2026-08-20");
+        assert_eq!(today.get("claude").expect("claude").total_usd, 2.5);
+        assert_eq!(today.get("codex").expect("codex").total_usd, 9.0);
+
+        let month = aggregate_ccusage(&f, "2026-08-01", "2026-08-20");
+        assert_eq!(month.get("claude").expect("claude").total_usd, 4.0);
+
+        // A day past `until` (a clock that ran ahead) stays out.
+        let stale = aggregate_ccusage(&f, "2026-08-01", "2026-08-19");
+        assert_eq!(stale.get("claude").expect("claude").total_usd, 1.5);
+        assert!(!stale.contains_key("codex"));
+    }
+
+    #[test]
+    fn cost_source_parses_every_spelling() {
+        for (text, expected) in [
+            ("auto", CostSource::Auto),
+            ("native", CostSource::Native),
+            ("ccusage", CostSource::Ccusage),
+        ] {
+            let cfg: TokenGaugeConfig =
+                toml::from_str(&format!("cost_source = \"{text}\"\n")).expect("parses");
+            assert_eq!(cfg.cost_source, expected, "{text}");
+        }
+        // Absent means auto, which is what an existing config has.
+        let cfg: TokenGaugeConfig = toml::from_str("refresh_secs = 600\n").expect("parses");
+        assert_eq!(cfg.cost_source, CostSource::Auto);
+        assert!(toml::from_str::<TokenGaugeConfig>("cost_source = \"nope\"\n").is_err());
+    }
+
+    fn diagnostics(native: &[(&str, u64)], ccusage: &[(&str, u64)]) -> CostDiagnostics {
+        CostDiagnostics {
+            native: native
+                .iter()
+                .map(|(p, t)| (p.to_string(), (*t, 0.0)))
+                .collect(),
+            ccusage: Some(
+                ccusage
+                    .iter()
+                    .map(|(p, t)| (p.to_string(), (*t, 0.0)))
+                    .collect(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn drift_is_measured_where_both_sources_report() {
+        let d = diagnostics(
+            &[("claude", 100), ("codex", 50)],
+            &[("claude", 100), ("codex", 55)],
+        );
+        let (provider, drift) = d.worst_token_drift().expect("drift");
+        assert_eq!(provider, "codex");
+        assert!((drift - 5.0 / 55.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_reader_that_stopped_producing_anything_is_full_drift() {
+        // The failure the check exists for: a format change and the Claude
+        // reader returns nothing. Comparing only the keys it produced would
+        // call that agreement, because there is no `claude` key left to compare.
+        let d = diagnostics(&[("codex", 50)], &[("claude", 1_000_000), ("codex", 50)]);
+        let (provider, drift) = d.worst_token_drift().expect("drift");
+        assert_eq!(provider, "claude");
+        assert_eq!(drift, 1.0);
+    }
+
+    #[test]
+    fn a_provider_only_ccusage_can_see_is_not_drift() {
+        // Kimi driven from its own CLI writes into neither tree we parse; the
+        // `auto` fallback is what covers it, so its absence is not a fault.
+        let d = diagnostics(&[("claude", 100)], &[("claude", 100), ("kimi", 900)]);
+        let (provider, drift) = d.worst_token_drift().expect("claude is comparable");
+        assert_eq!(provider, "claude");
+        assert_eq!(drift, 0.0, "kimi being ccusage-only must not read as drift");
+
+        // And with nothing comparable at all, there is no verdict to give.
+        let empty = diagnostics(&[], &[("kimi", 900)]);
+        assert!(empty.worst_token_drift().is_none());
+    }
+
+    #[test]
+    fn auto_asks_ccusage_only_about_providers_the_readers_missed() {
+        let mut report = NativeCostReport {
+            events: 100,
+            ..Default::default()
+        };
+        report.costs.insert("claude".into(), zero_cost());
+        report.costs.insert("codex".into(), zero_cost());
+
+        // A Claude/Codex machine never spawns the subprocess.
+        assert!(missing_providers(&report, &["claude", "codex"]).is_empty());
+
+        // Kimi enabled with nothing in either transcript tree: its own CLI
+        // writes elsewhere, so ccusage still has to be asked about it.
+        let missing = missing_providers(&report, &["claude", "codex", "kimi"]);
+        assert_eq!(missing.len(), 1);
+        assert!(missing.contains("kimi"));
+    }
+
+    #[test]
+    fn a_provider_with_native_spend_is_never_taken_from_ccusage() {
+        let mut report = NativeCostReport {
+            events: 1,
+            ..Default::default()
+        };
+        report.costs.insert("glm".into(), zero_cost());
+        // GLM driven through Claude Code lands in the native read; asking
+        // ccusage as well would overwrite it with a coarser answer.
+        assert!(missing_providers(&report, &["GLM"]).is_empty());
+    }
+
+    fn zero_cost() -> CostInfo {
+        CostInfo {
+            today_usd: 0.0,
+            today_tokens: 0,
+            monthly_usd: 0.0,
+            monthly_tokens: 0,
+            today_models: Vec::new(),
+            monthly_models: Vec::new(),
+            burn_rate: None,
+            session_usd: 0.0,
+            weekly_usd: 0.0,
+            weekly_cost_history: Vec::new(),
+            weekly_history: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_provider_with_only_last_months_spend_keeps_its_week() {
+        // 2026-08-03: the rolling week reaches back to 2026-07-28, so spend on
+        // the 31st is in the week and not in the month. The provider still has
+        // a row, and it still has its chart.
+        let response: CcusageDailyResponse = serde_json::from_str(
+            r#"{"daily":[{"period":"2026-07-31","modelBreakdowns":[
+                 {"modelName":"gpt-5-codex","cost":3.0,"inputTokens":5,
+                  "outputTokens":5,"cacheCreationTokens":0,"cacheReadTokens":0}]}]}"#,
+        )
+        .expect("fixture parses");
+
+        let today = day(2026, 8, 3);
+        let history = last_n_days_by_provider(&response, today, WEEKLY_HISTORY_DAYS);
+        let month = aggregate_ccusage(&response, "2026-08-01", "2026-08-03");
+
+        assert!(month.is_empty(), "nothing was spent this month");
+        let codex = history.get("codex").expect("codex has a week");
+        assert_eq!(codex.iter().map(|d| d.usd).sum::<f64>(), 3.0);
+
+        // The set the result is built from has to include it, or the row and
+        // its history are dropped on the floor.
+        let providers: std::collections::HashSet<&String> =
+            month.keys().chain(history.keys()).collect();
+        assert!(providers.contains(&"codex".to_string()));
+    }
+
     #[test]
     fn recent_periods_spans_a_month_boundary() {
         assert_eq!(
@@ -4060,7 +4595,7 @@ mod tests {
 
     #[test]
     fn model_costs_carry_the_token_split() {
-        let mut agg = aggregate_ccusage(&ccusage_fixture());
+        let mut agg = aggregate_ccusage(&ccusage_fixture(), "2026-08-01", "2026-08-31");
         let (usd, tokens, models) = agg.remove("claude").expect("claude").into_model_costs();
 
         assert_eq!(usd, 4.0);

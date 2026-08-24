@@ -21,5 +21,10 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 self_update = { version = "0.44", default-features = false, features = ["reqwest", "rustls", "archive-tar", "compression-flate2", "archive-zip", "compression-zip-deflate"], optional = true }
 http = { version = "1", optional = true }
 
+[dev-dependencies]
+# The cost fixture test builds dates and reads the ccusage golden.
+chrono = { workspace = true }
+serde_json = { workspace = true }
+
 [features]
 self-update = ["dep:self_update", "dep:http"]

@@ -15,7 +15,7 @@
 //! The model is not in the usage payload either: it lives in `turn_context`,
 //! and it changes mid-session.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local, NaiveDate, Utc};
@@ -59,7 +59,7 @@ struct TokenInfo {
 /// `output_tokens` and `cached_input_tokens` a subset of `input_tokens`, so
 /// neither is added to anything.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
-struct Cumulative {
+pub(super) struct Cumulative {
     #[serde(default)]
     input_tokens: u64,
     #[serde(default)]
@@ -116,9 +116,16 @@ pub fn read_events(
     seen: &mut HashSet<u64>,
 ) -> Vec<UsageEvent> {
     let mut events = Vec::new();
+    // Running totals per session, not per file: a session continued into a
+    // second rollout picks its cumulative up where the first left off, and
+    // starting from zero there would bill its entire history again as one
+    // delta. `jsonl_files` sorts by path, and rollouts are named
+    // `YYYY/MM/DD/rollout-<ISO timestamp>-<id>`, so that order is chronological
+    // and the earlier file is always read first.
+    let mut totals: HashMap<String, Cumulative> = HashMap::new();
     for root in roots {
         for file in jsonl_files(root, since) {
-            read_file(&file, since, seen, &mut events);
+            read_file(&file, since, seen, &mut totals, &mut events);
         }
     }
     events
@@ -128,6 +135,7 @@ pub(super) fn read_file(
     path: &Path,
     since: NaiveDate,
     seen: &mut HashSet<u64>,
+    totals: &mut HashMap<String, Cumulative>,
     events: &mut Vec<UsageEvent>,
 ) {
     let Ok(contents) = std::fs::read_to_string(path) else {
@@ -138,9 +146,10 @@ pub(super) fn read_file(
     // fix-up at the end must touch only what this call appended. Rescanning the
     // whole vector once per file is quadratic in the number of transcripts.
     let appended_from = events.len();
-    let mut session_id = String::new();
+    // A rollout with no session_meta is its own bucket; there is nothing to
+    // continue it from.
+    let mut session_id = path.to_string_lossy().into_owned();
     let mut model: Option<String> = None;
-    let mut previous = Cumulative::default();
     // Index into `events` of rows emitted before any `turn_context` announced a
     // model. A session states its model on the first turn, so these are filled
     // in from the first one seen rather than dropped.
@@ -155,7 +164,7 @@ pub(super) fn read_file(
         };
 
         if record.kind == "session_meta" {
-            if let Some(id) = payload.id.as_deref() {
+            if let Some(id) = payload.id.as_deref().filter(|id| !id.is_empty()) {
                 session_id = id.to_string();
             }
             if model.is_none()
@@ -182,8 +191,9 @@ pub(super) fn read_file(
         };
 
         let cumulative = info.total_token_usage;
-        let tokens = cumulative.since(&previous);
-        previous = cumulative;
+        let previous = totals.entry(session_id.clone()).or_default();
+        let tokens = cumulative.since(previous);
+        *previous = cumulative;
         if tokens.total() == 0 {
             continue;
         }
@@ -252,8 +262,9 @@ mod tests {
         let path = dir.join("rollout.jsonl");
         std::fs::write(&path, lines).expect("write fixture");
         let mut seen = HashSet::new();
+        let mut totals = HashMap::new();
         let mut events = Vec::new();
-        read_file(&path, day(2026, 1, 1), &mut seen, &mut events);
+        read_file(&path, day(2026, 1, 1), &mut seen, &mut totals, &mut events);
         let _ = std::fs::remove_dir_all(&dir);
         events
     }
@@ -332,6 +343,79 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].model, "gpt-5.5");
         assert_eq!(events[0].provider, "codex");
+    }
+
+    #[test]
+    fn a_session_continued_in_a_second_file_bills_only_the_difference() {
+        // The cumulative keeps climbing across rollouts. Reading the second
+        // file with a fresh counter would bill the session's whole history
+        // again as one delta.
+        let meta = r#"{"timestamp":"2026-05-11T06:00:00.000Z","type":"session_meta","payload":{"id":"sess-1"}}"#;
+        let first = format!(
+            "{meta}\n{CONTEXT}\n{}\n",
+            token_count("2026-05-11T06:18:00.000Z", 1000, 0, 100)
+        );
+        let second = format!(
+            "{meta}\n{CONTEXT}\n{}\n",
+            token_count("2026-05-11T07:18:00.000Z", 2500, 0, 300)
+        );
+
+        let dir =
+            std::env::temp_dir().join(format!("tokengauge-codex-split-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let a = dir.join("rollout-a.jsonl");
+        let b = dir.join("rollout-b.jsonl");
+        std::fs::write(&a, first).expect("write a");
+        std::fs::write(&b, second).expect("write b");
+
+        let mut seen = HashSet::new();
+        let mut totals = HashMap::new();
+        let mut events = Vec::new();
+        read_file(&a, day(2026, 1, 1), &mut seen, &mut totals, &mut events);
+        read_file(&b, day(2026, 1, 1), &mut seen, &mut totals, &mut events);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].tokens.input, 1000);
+        assert_eq!(events[1].tokens.input, 1500);
+        assert_eq!(events[1].tokens.output, 200);
+    }
+
+    #[test]
+    fn separate_sessions_keep_separate_running_totals() {
+        // Two unrelated sessions must not subtract each other's totals.
+        let one = r#"{"timestamp":"2026-05-11T06:00:00.000Z","type":"session_meta","payload":{"id":"sess-1"}}"#;
+        let two = r#"{"timestamp":"2026-05-11T06:00:00.000Z","type":"session_meta","payload":{"id":"sess-2"}}"#;
+        let dir = std::env::temp_dir().join(format!("tokengauge-codex-two-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let a = dir.join("rollout-a.jsonl");
+        let b = dir.join("rollout-b.jsonl");
+        std::fs::write(
+            &a,
+            format!(
+                "{one}\n{CONTEXT}\n{}\n",
+                token_count("2026-05-11T06:18:00.000Z", 5000, 0, 500)
+            ),
+        )
+        .expect("write a");
+        std::fs::write(
+            &b,
+            format!(
+                "{two}\n{CONTEXT}\n{}\n",
+                token_count("2026-05-11T06:19:00.000Z", 100, 0, 10)
+            ),
+        )
+        .expect("write b");
+
+        let mut seen = HashSet::new();
+        let mut totals = HashMap::new();
+        let mut events = Vec::new();
+        read_file(&a, day(2026, 1, 1), &mut seen, &mut totals, &mut events);
+        read_file(&b, day(2026, 1, 1), &mut seen, &mut totals, &mut events);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].tokens.input, 100);
     }
 
     #[test]

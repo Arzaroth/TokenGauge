@@ -3,8 +3,12 @@
 
 The fixture is a fake home directory holding transcripts reduced to the fields
 that are actually billed. Message content, prompts, file paths, branch names and
-project names never reach it: `content` is emptied and `cwd` is redacted, so what
-is checked in says how many tokens were spent and nothing about on what.
+project names never reach it: `content` is emptied and `cwd` is redacted. Every
+identifier is replaced with a deterministic stand-in and every timestamp is
+shifted to a fixed epoch, so what is checked in says how many tokens were spent
+and nothing about on what, for whom, or when. Repeats are preserved - two
+records of one streamed message keep sharing an id - because that is exactly
+what the dedup path is there to exercise.
 
 The golden records **ccusage's** token verdict on that same tree, which is what
 lets CI check the readers without installing Node.
@@ -28,7 +32,50 @@ import os
 import subprocess
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
+
+class Anonymizer:
+    """Deterministic stand-ins for every identifier and timestamp.
+
+    Repeats matter: two records of the same streamed message must keep sharing
+    a requestId and message id, or the dedup they exist to exercise stops being
+    exercised. So each distinct value maps to one stand-in, and timestamps are
+    all shifted by the same delta - order and spacing survive, the calendar the
+    work happened on does not.
+    """
+
+    EPOCH = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def __init__(self):
+        self._ids = {}
+        self._shift = None
+
+    def ident(self, prefix, value):
+        if not value:
+            return value
+        key = (prefix, value)
+        if key not in self._ids:
+            self._ids[key] = f"{prefix}-{len(self._ids):05d}"
+        return self._ids[key]
+
+    def note_time(self, value):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if self._shift is None or parsed < self._shift:
+            self._shift = parsed
+
+    def time(self, value):
+        """Millisecond precision, which is what both CLIs write.
+
+        `datetime.isoformat` emits microseconds, and ccusage's Codex reader
+        rejects those outright ("Invalid Codex timestamp").
+        """
+        if not value:
+            return value
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        moved = self.EPOCH + (parsed - self._shift)
+        return f"{moved.strftime('%Y-%m-%dT%H:%M:%S')}.{moved.microsecond // 1000:03d}Z"
+
 
 REPO = Path(__file__).resolve().parent.parent
 FIXTURE = REPO / "crates/tokengauge-core/tests/fixtures/cost-home"
@@ -100,6 +147,27 @@ def reduce_claude_file(path):
     return rows, models, growing
 
 
+def anon_claude(anon, row):
+    message = row["message"]
+    return {
+        **row,
+        "timestamp": anon.time(row["timestamp"]),
+        "requestId": anon.ident("req", row.get("requestId", "")),
+        "uuid": anon.ident("uuid", row.get("uuid", "")),
+        "sessionId": anon.ident("sess", row.get("sessionId", "")),
+        "message": {**message, "id": anon.ident("msg", message.get("id", ""))},
+    }
+
+
+def anon_codex(anon, row):
+    payload = dict(row["payload"])
+    if "id" in payload:
+        payload["id"] = anon.ident("sess", payload.get("id") or "")
+    if payload.get("timestamp"):
+        payload["timestamp"] = anon.time(payload["timestamp"])
+    return {**row, "timestamp": anon.time(row["timestamp"]), "payload": payload}
+
+
 def build_claude(dest):
     """Cover every model cheaply, then spend what is left of the budget.
 
@@ -159,6 +227,11 @@ def build_claude(dest):
     if synthetic and chosen:
         chosen[0][1].extend(synthetic[:5])
 
+    anon = Anonymizer()
+    for _, rows in chosen:
+        for row in rows:
+            anon.note_time(row["timestamp"])
+
     for index, (path, rows) in enumerate(chosen):
         # Subagent transcripts keep their nesting; the reader walks recursively
         # and a flat fixture would stop proving that.
@@ -166,9 +239,10 @@ def build_claude(dest):
         out = dest / "projects" / f"demo-project-{index}"
         if nested:
             out = out / "session" / "subagents"
-        out = out / f"{path.stem}.jsonl"
+        # Real session UUIDs and agent hashes do not travel either.
+        out = out / (f"agent-{index:03d}.jsonl" if nested else f"session-{index:03d}.jsonl")
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text("".join(compact(r) + "\n" for r in rows))
+        out.write_text("".join(compact(anon_claude(anon, r)) + "\n" for r in rows))
 
     count = sum(len(r) for _, r in chosen)
     print(f"claude: {count} records in {len(chosen)} file(s), "
@@ -231,19 +305,40 @@ def build_codex(dest):
         if entry not in picked:
             picked.append(entry)
 
-    written, switches, seen_models, total_bytes = 0, 0, set(), 0
+    selected = []
+    total_bytes = 0
     for size, path, rows, models in picked:
-        if total_bytes + size > CODEX_BUDGET_BYTES and written:
+        if total_bytes + size > CODEX_BUDGET_BYTES and selected:
             continue
         total_bytes += size
-        target = dest / "sessions" / "2026" / "05" / "11" / path.name
+        selected.append((rows, models))
+
+    anon = Anonymizer()
+    for rows, _ in selected:
+        for row in rows:
+            anon.note_time(row["timestamp"])
+
+    written, switches, seen_models = 0, 0, set()
+    for index, (rows, models) in enumerate(selected):
+        # Rollout filenames carry a real timestamp and session UUID; the fixture
+        # keeps the directory shape and nothing else.
+        target = dest / "sessions" / "2026" / "01" / "01" / f"rollout-{index:04d}.jsonl"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("".join(compact(r) + "\n" for r in rows))
+        target.write_text("".join(compact(anon_codex(anon, r)) + "\n" for r in rows))
         written += len(rows)
         switches += max(0, len(models) - 1)
         seen_models |= models
     print(f"codex:  {written} records, {switches} mid-session model switch(es)")
     print(f"        models: {', '.join(sorted(m for m in seen_models if m))}")
+    # A session that switches model mid-flight is the Codex attribution trap.
+    # Fail if one was available and went unpicked; only warn when the source
+    # data holds none, since no selection can conjure one.
+    available = any(len({m for m in models if m}) > 1 for _, _, _, models in sized)
+    if available and not switches:
+        sys.exit("a mid-session model switch was available and was not selected")
+    if not available:
+        print("        note: no session in the source data switches model "
+              "mid-flight, so that path is covered by unit tests only")
 
 
 def ccusage_totals(agent, env_key, root):

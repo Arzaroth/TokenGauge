@@ -2788,7 +2788,7 @@ fn run_ccusage_blocks(args: &[&str], deadline: Instant) -> Result<CcusageBlocksR
     let mut command = ccusage_command(&runner);
     command.args(args).arg("--json");
     let output =
-        run_with_timeout(command, budget_left(deadline)).context("ccusage blocks failed")?;
+        run_with_timeout(command, budget_left(deadline)?).context("ccusage blocks failed")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!("ccusage blocks exit non-zero: {}", stderr.trim()));
@@ -2862,19 +2862,26 @@ fn run_ccusage_daily(since: &str, deadline: Instant) -> Result<CcusageDailyRespo
 /// and once the sentinel expires a second refresh starts on top of the first.
 /// One deadline for the whole fetch keeps it inside the budget.
 ///
-/// The floor gives a late attempt a chance to be useful rather than failing on
-/// a zero timeout it was always going to miss.
-fn budget_left(deadline: Instant) -> Duration {
-    deadline
-        .saturating_duration_since(Instant::now())
-        .max(Duration::from_millis(500))
+/// Past the deadline this fails instead of clamping to a token slice: another
+/// ccusage process started there would overrun the budget it was meant to
+/// respect, and a sliver of a timeout only buys a subprocess spawn it cannot
+/// finish inside.
+fn budget_left(deadline: Instant) -> Result<Duration> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left < MIN_CCUSAGE_SLICE {
+        return Err(anyhow!("cost fetch budget exhausted"));
+    }
+    Ok(left)
 }
+
+/// Less than this left on the clock is not worth spawning for.
+const MIN_CCUSAGE_SLICE: Duration = Duration::from_millis(500);
 
 fn run_ccusage(args: &[&str], deadline: Instant) -> Result<CcusageDailyResponse> {
     let runner = resolve_ccusage_runner().ok_or_else(|| anyhow!("no ccusage runner on PATH"))?;
     let mut command = ccusage_command(&runner);
     command.args(args).arg("--json");
-    let output = run_with_timeout(command, budget_left(deadline)).context("ccusage failed")?;
+    let output = run_with_timeout(command, budget_left(deadline)?).context("ccusage failed")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2920,10 +2927,14 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
     let mut active_blocks = fetch_active_blocks(deadline);
 
     let mut result = HashMap::new();
+    // `weekly_history` reaches back past the 1st, so early in a month a
+    // provider can have spend in the rolling week and none in the month. Left
+    // out of this set it loses its row entirely, chart and all.
     let providers: std::collections::HashSet<String> = today_agg
         .keys()
         .chain(monthly_agg.keys())
         .chain(active_blocks.keys())
+        .chain(weekly_history.keys())
         .cloned()
         .collect();
     for provider in providers {
@@ -4541,6 +4552,33 @@ mod tests {
             weekly_cost_history: Vec::new(),
             weekly_history: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_provider_with_only_last_months_spend_keeps_its_week() {
+        // 2026-08-03: the rolling week reaches back to 2026-07-28, so spend on
+        // the 31st is in the week and not in the month. The provider still has
+        // a row, and it still has its chart.
+        let response: CcusageDailyResponse = serde_json::from_str(
+            r#"{"daily":[{"period":"2026-07-31","modelBreakdowns":[
+                 {"modelName":"gpt-5-codex","cost":3.0,"inputTokens":5,
+                  "outputTokens":5,"cacheCreationTokens":0,"cacheReadTokens":0}]}]}"#,
+        )
+        .expect("fixture parses");
+
+        let today = day(2026, 8, 3);
+        let history = last_n_days_by_provider(&response, today, WEEKLY_HISTORY_DAYS);
+        let month = aggregate_ccusage(&response, "2026-08-01", "2026-08-03");
+
+        assert!(month.is_empty(), "nothing was spent this month");
+        let codex = history.get("codex").expect("codex has a week");
+        assert_eq!(codex.iter().map(|d| d.usd).sum::<f64>(), 3.0);
+
+        // The set the result is built from has to include it, or the row and
+        // its history are dropped on the floor.
+        let providers: std::collections::HashSet<&String> =
+            month.keys().chain(history.keys()).collect();
+        assert!(providers.contains(&"codex".to_string()));
     }
 
     #[test]

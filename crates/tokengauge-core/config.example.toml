@@ -10,8 +10,9 @@ timeout_secs = 20
 # Master switch for cost figures. false = no cost rows at all.
 ccusage_enabled = true
 # Where cost figures come from:
-#   "auto"    - read the transcripts natively, fall back to ccusage only when
-#               no transcripts are found at all (default)
+#   "auto"    - read the transcripts natively, and ask ccusage only about
+#               enabled providers the readers found nothing for, such as a
+#               Kimi or Grok plan driven from its own CLI (default)
 #   "native"  - native readers only, no subprocess and no Node/Bun needed
 #   "ccusage" - the ccusage subprocess only
 # cost_source = "auto"

@@ -371,8 +371,11 @@ are supported, both building and running natively on Windows 10: the
 (`tokengauge-tray.exe`, see [Tray GUI](#tray-gui-tokengauge-tray) below).
 Usage limits for every supported provider (Codex, Claude, Kimi, Grok, GLM) are
 fetched natively over HTTP; sign in to the providers you enable so TokenGauge can
-read their credentials. `ccusage` then layers on **cost/token** detail per
-provider (it does not create provider rows on its own).
+read their credentials. **Cost/token** detail is read natively too, from the
+transcripts the CLIs write under `%USERPROFILE%\.claude` and `%USERPROFILE%\.codex`.
+`ccusage` is optional: it covers a CLI TokenGauge does not parse yet, and
+`--doctor` cross-checks against it. Neither source creates provider rows on its
+own.
 
 ### Prerequisites
 

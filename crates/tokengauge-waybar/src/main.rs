@@ -1210,8 +1210,16 @@ fn handle_doctor(config_path: &Path) -> i32 {
         }
     }
 
-    // Waybar wiring
-    section("Waybar");
+    // Bar wiring. Waybar is one surface of several now, so its module is only
+    // missing-and-wrong when nothing else is drawing the gauge; on a desktop
+    // running the Plasma applet, the GNOME extension or the Omarchy widget,
+    // having no waybar config is the normal state and not a fault.
+    section("Bar wiring");
+    let drawn_by: Vec<&str> = tokengauge_core::frontend::installed()
+        .iter()
+        .map(|f| f.label)
+        .collect();
+    let drawn_by_text = drawn_by.join(", ");
     let waybar_cfg = std::env::var_os("HOME")
         .map(|h| PathBuf::from(h).join(".config/waybar/config.jsonc"))
         .unwrap_or_else(|| PathBuf::from("~/.config/waybar/config.jsonc"));
@@ -1220,18 +1228,29 @@ fn handle_doctor(config_path: &Path) -> i32 {
         let wired = contents.contains("custom/tokengauge");
         record(DoctorCheck {
             label: format!("module wired in {}", waybar_cfg.display()),
-            ok: wired,
-            detail: if wired {
-                String::new()
-            } else {
-                "run scripts/install.sh to add the custom/tokengauge module".into()
+            ok: wired || !drawn_by.is_empty(),
+            detail: match (wired, drawn_by.is_empty()) {
+                (true, _) => String::new(),
+                (false, true) => {
+                    "run scripts/install.sh to add the custom/tokengauge module".into()
+                }
+                (false, false) => format!("not wired, and not needed: {drawn_by_text} draws it"),
             },
+        });
+    } else if drawn_by.is_empty() {
+        record(DoctorCheck {
+            label: "no bar wired up".into(),
+            ok: false,
+            detail: format!(
+                "no {} and no desktop frontend installed - run scripts/install.sh, or tokengauge-waybar --install-frontend <plasma|gnome|omarchy>",
+                waybar_cfg.display()
+            ),
         });
     } else {
         record(DoctorCheck {
-            label: "waybar config not found".into(),
-            ok: false,
-            detail: format!("expected at {}", waybar_cfg.display()),
+            label: format!("waybar not in use - {drawn_by_text} draws the gauge"),
+            ok: true,
+            detail: String::new(),
         });
     }
 

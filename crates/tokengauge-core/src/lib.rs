@@ -373,6 +373,11 @@ pub struct WaybarConfig {
     /// Shell command used when `click_action = "tui"`. Empty = auto-detect
     /// (omarchy-launch-or-focus-tui if available, else $TERMINAL -e tokengauge-tui).
     pub tui_command: String,
+    /// Keys serde would otherwise drop in silence. The popover options lived
+    /// here until 0.20.0 removed it, so a config carrying them still loads and
+    /// the doctor can say which lines are dead.
+    #[serde(flatten)]
+    pub unknown: HashMap<String, toml::Value>,
 }
 
 impl Default for WaybarConfig {
@@ -384,6 +389,7 @@ impl Default for WaybarConfig {
             scroll_throttle_ms: 250,
             click_action: ClickAction::default(),
             tui_command: String::new(),
+            unknown: HashMap::new(),
         }
     }
 }
@@ -452,6 +458,7 @@ impl TokenGaugeConfig {
                 .keys()
                 .map(|k| format!("providers.{k}")),
         );
+        keys.extend(self.waybar.unknown.keys().map(|k| format!("waybar.{k}")));
         keys.sort();
         keys
     }
@@ -3771,12 +3778,19 @@ mod tests {
     #[test]
     fn unknown_config_keys_flags_removed_providers_and_keys() {
         let config: TokenGaugeConfig = toml::from_str(
-            "codexbar_bin = \"codexbar\"\n[providers]\nclaude = true\n\n[providers.zai]\napi_key = \"x\"\n",
+            "codexbar_bin = \"codexbar\"\n[providers]\nclaude = true\n\n[providers.zai]\napi_key = \"x\"\n\n[waybar]\npopover_command = \"tokengauge-popover --toggle\"\n",
         )
         .expect("legacy config still parses");
+        // Including the options of the popover 0.20.0 removed: serde would drop
+        // a stale `[waybar]` key in silence, leaving the line in the file with
+        // nothing to say it does nothing.
         assert_eq!(
             config.unknown_config_keys(),
-            vec!["codexbar_bin".to_string(), "providers.zai".to_string()]
+            vec![
+                "codexbar_bin".to_string(),
+                "providers.zai".to_string(),
+                "waybar.popover_command".to_string()
+            ]
         );
         // Parsing does not fail - the daemon keeps running on an old config.
         assert!(config.providers.claude.unwrap_or(false));

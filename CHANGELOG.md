@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.1] - 2026-08-24
+
+### Fixed
+
+- `--doctor` no longer fails a machine for not running Waybar. The check dated from when Waybar was the only surface: it looked for `~/.config/waybar/config.jsonc`, counted its absence as a fault, and then reported the installed Plasma / GNOME / Omarchy frontend as healthy two sections further down. The section is now **Bar wiring** and reads the installed frontends first - it says which one draws the gauge, and only fails when nothing is wired up at all.
+- A stale key inside `[waybar]` is now reported instead of dropped in silence. Unknown keys were collected at the top level and under `[providers]` only, so the `popover_command` left behind by 0.20.0's removal of the popover sat in the file with nothing to say it did nothing.
+
 ## [0.21.0] - 2026-08-24
 
 ### Added

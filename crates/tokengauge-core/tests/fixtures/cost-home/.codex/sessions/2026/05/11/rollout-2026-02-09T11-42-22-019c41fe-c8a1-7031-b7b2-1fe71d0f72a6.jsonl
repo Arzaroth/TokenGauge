@@ -1,4 +1,0 @@
-{"timestamp":"2026-02-09T10:42:22.501Z","type":"session_meta","payload":{"id":"019c41fe-c8a1-7031-b7b2-1fe71d0f72a6","timestamp":"2026-02-09T10:42:22.497Z","cwd":"/redacted","originator":"codex_cli_rs","cli_version":"0.98.0","source":"cli","model_provider":"openai"}}
-{"timestamp":"2026-02-09T10:42:22.527Z","type":"turn_context","payload":{"model":"gpt-5.2-codex","cwd":"/redacted"}}
-{"timestamp":"2026-02-09T10:42:25.050Z","type":"event_msg","payload":{"type":"token_count","info":null}}
-{"timestamp":"2026-02-09T10:42:26.424Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":9494,"cached_input_tokens":8320,"output_tokens":61,"reasoning_output_tokens":0,"total_tokens":9555},"last_token_usage":{"input_tokens":9494,"cached_input_tokens":8320,"output_tokens":61,"reasoning_output_tokens":0,"total_tokens":9555},"model_context_window":258400}}}

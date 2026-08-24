@@ -12,7 +12,7 @@
 //! either, because bucketing them is the reader's job and depends on its
 //! timezone.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use chrono::NaiveDate;
@@ -62,12 +62,26 @@ fn readers_agree_with_ccusage_on_every_model() {
         .as_object()
         .expect("golden has providers");
 
+    // Key sets first, both ways. Checking only the golden's keys would let the
+    // readers invent a provider or a model and still pass.
+    let want_providers: BTreeSet<&str> = providers.keys().map(String::as_str).collect();
+    let got_providers: BTreeSet<&str> = ours.keys().map(String::as_str).collect();
+    assert_eq!(
+        got_providers, want_providers,
+        "provider set differs from ccusage's"
+    );
+
     for (provider, expected) in providers {
         let mine = ours
             .get(provider)
             .unwrap_or_else(|| panic!("read nothing for {provider}"));
+        let expected_models = expected["models"].as_object().expect("models map");
 
-        for (model, tokens) in expected["models"].as_object().expect("models map") {
+        let want: BTreeSet<&str> = expected_models.keys().map(String::as_str).collect();
+        let got: BTreeSet<&str> = mine.keys().map(String::as_str).collect();
+        assert_eq!(got, want, "{provider}: model set differs from ccusage's");
+
+        for (model, tokens) in expected_models {
             let want = tokens.as_u64().expect("token count");
             let got = mine.get(model).copied().unwrap_or(0);
             assert_eq!(

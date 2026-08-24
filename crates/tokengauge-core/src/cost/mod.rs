@@ -383,6 +383,12 @@ pub fn anchor_burn_rates(report: &mut NativeCostReport, payloads: &[ProviderPayl
         if end - start > retention {
             continue;
         }
+        // A window that has already reset is not the current session. Its spend
+        // belongs to a period that is over, and projecting from it would report
+        // a burn rate for time that is no longer being billed.
+        if end <= now {
+            continue;
+        }
         let key = payload.provider.to_lowercase();
         let Some(cost) = report.costs.get_mut(&key) else {
             continue;
@@ -645,6 +651,26 @@ mod tests {
         anchor_burn_rates(
             &mut report,
             &[payload_with_window("claude", &resets_at, 30 * 24 * 60)],
+        );
+        assert!(report.costs["claude"].burn_rate.is_none());
+        assert_eq!(report.costs["claude"].session_usd, 0.0);
+    }
+
+    #[test]
+    fn an_already_reset_window_gets_no_burn_rate() {
+        let now = Utc::now();
+        let prices = pricing::PriceTable::vendored();
+        let today = now.with_timezone(&Local).date_naive();
+        let mut report = build_report(
+            &[event("claude", "claude-opus-5", today, 100)],
+            &prices,
+            today,
+        );
+        // Reset an hour ago: that session is over.
+        let resets_at = (now - ChronoDuration::hours(1)).to_rfc3339();
+        anchor_burn_rates(
+            &mut report,
+            &[payload_with_window("claude", &resets_at, 300)],
         );
         assert!(report.costs["claude"].burn_rate.is_none());
         assert_eq!(report.costs["claude"].session_usd, 0.0);

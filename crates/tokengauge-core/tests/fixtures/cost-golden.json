@@ -1,0 +1,29 @@
+{
+  "_comment": "ccusage's token verdict on tests/fixtures/cost-home. Regenerate with scripts/make-cost-fixture.py. Token counts only: days depend on the reader's timezone and money on whichever price table each side has.",
+  "generated_by": "ccusage 20.0.20",
+  "providers": {
+    "claude": {
+      "models": {
+        "claude-fable-5": 901245,
+        "claude-haiku-4-5-20251001": 424542,
+        "claude-opus-4-8": 6133683,
+        "claude-opus-5": 89112,
+        "claude-sonnet-4-6": 1952878
+      },
+      "total_tokens": 9501460
+    },
+    "codex": {
+      "models": {
+        "gpt-5.2-codex": 9555,
+        "gpt-5.3-codex": 5857753,
+        "gpt-5.4": 13521,
+        "gpt-5.5": 57935727
+      },
+      "total_tokens": 63816556
+    }
+  },
+  "traps": {
+    "growing_streamed_groups": 175,
+    "synthetic_records": 5
+  }
+}

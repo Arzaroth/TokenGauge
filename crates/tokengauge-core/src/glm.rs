@@ -114,10 +114,16 @@ fn value_as_f64(v: &Value) -> Option<f64> {
     }
 }
 
-fn is_token_limit(l: &Limit) -> bool {
+/// A consumption quota, as opposed to the time-based limit. Credit-based Coding
+/// Plans (lite / standard / pro) spend `CREDIT_LIMIT` entries where token plans
+/// spend `TOKENS_LIMIT`; both are the same kind of gauge and share the slots.
+fn is_quota_limit(l: &Limit) -> bool {
     l.kind
         .as_deref()
-        .map(|k| k.to_uppercase().contains("TOKEN"))
+        .map(|k| {
+            let k = k.to_uppercase();
+            k.contains("TOKEN") || k.contains("CREDIT")
+        })
         .unwrap_or(false)
 }
 
@@ -215,34 +221,34 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         .or(resp.limits)
         .unwrap_or_default();
 
-    // Fixed semantic slots matching window_labels("glm"): weekly token quota
-    // primary, time-based limit 30-day secondary, 5-hour token quota tertiary.
-    // Token quotas are classified by window duration so each lands under the
-    // right label: a short rolling quota fills the 5-hour slot and is never
-    // promoted into "Weekly". A token whose duration metadata is missing falls
-    // back to the weekly slot. Only limits that map to a usable window count.
+    // Fixed semantic slots matching window_labels("glm"): weekly quota primary,
+    // time-based limit 30-day secondary, 5-hour quota tertiary. Quotas are
+    // classified by window duration so each lands under the right label: a short
+    // rolling quota fills the 5-hour slot and is never promoted into "Weekly". A
+    // quota whose duration metadata is missing falls back to the weekly slot.
+    // Only limits that map to a usable window count.
     const SHORT_WINDOW_MAX_MINUTES: u32 = 1440; // under a day = the 5-hour rolling quota
-    let mut tokens: Vec<&Limit> = limits
+    let mut quotas: Vec<&Limit> = limits
         .iter()
-        .filter(|l| is_token_limit(l) && to_window(l).is_some())
+        .filter(|l| is_quota_limit(l) && to_window(l).is_some())
         .collect();
-    tokens.sort_by_key(|l| std::cmp::Reverse(window_minutes(l).unwrap_or(0)));
+    quotas.sort_by_key(|l| std::cmp::Reverse(window_minutes(l).unwrap_or(0)));
     let time_limit = limits
         .iter()
-        .find(|l| !is_token_limit(l) && to_window(l).is_some());
+        .find(|l| !is_quota_limit(l) && to_window(l).is_some());
 
-    let short_token = tokens
+    let short_quota = quotas
         .iter()
         .copied()
         .find(|l| window_minutes(l).is_some_and(|m| m < SHORT_WINDOW_MAX_MINUTES));
-    let weekly_token = tokens
+    let weekly_quota = quotas
         .iter()
         .copied()
         .find(|l| window_minutes(l).is_none_or(|m| m >= SHORT_WINDOW_MAX_MINUTES));
 
-    let primary = weekly_token.and_then(to_window);
+    let primary = weekly_quota.and_then(to_window);
     let secondary = time_limit.and_then(to_window);
-    let tertiary = short_token.and_then(to_window);
+    let tertiary = short_quota.and_then(to_window);
 
     if primary.is_none() && secondary.is_none() && tertiary.is_none() {
         return Err(anyhow!("z.ai returned no usage - check region/token"));
@@ -442,6 +448,24 @@ mod tests {
         assert!(usage.primary.is_none());
         assert_eq!(usage.secondary.unwrap().used_percent, Some(42));
         assert!(usage.tertiary.is_none());
+    }
+
+    #[test]
+    fn credit_plans_fill_the_quota_slots() {
+        // Credit-based Coding Plans report CREDIT_LIMIT where token plans report
+        // TOKENS_LIMIT. Treated as a time limit, the 5-hour credit window used to
+        // take the 30-day slot and the plan read 0% used forever.
+        let body = resp(
+            r#"{"code": 0, "data": {"limits": [
+                {"type": "CREDIT_LIMIT", "percentage": 65, "unit": 6, "number": 1},
+                {"type": "CREDIT_LIMIT", "percentage": 25, "unit": 3, "number": 5},
+                {"type": "TIME_LIMIT", "percentage": 10, "unit": 1, "number": 30}
+            ]}}"#,
+        );
+        let usage = to_payload(body, Utc::now()).unwrap().usage.unwrap();
+        assert_eq!(usage.primary.unwrap().used_percent, Some(65));
+        assert_eq!(usage.secondary.unwrap().used_percent, Some(10));
+        assert_eq!(usage.tertiary.unwrap().used_percent, Some(25));
     }
 
     #[test]

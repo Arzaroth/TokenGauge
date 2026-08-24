@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Costs are read natively, from the transcripts the CLIs already write.** `ccusage` is no longer required: TokenGauge parses `~/.claude/projects` and `~/.codex/sessions` itself and rates the tokens against LiteLLM's price table, cached beside the snapshot with a vendored copy compiled in so a cold or offline machine still shows a figure. Node and Bun stop being dependencies of the cost row. Checked against ccusage over eight months of real transcripts: 11,103,712,193 Claude tokens and 146,483,834 Codex tokens, identical on both sides, and the month-to-date money agrees to the cent.
+- **The burn rate is anchored to the provider's own session window.** ccusage has to infer a five-hour block by flooring the hour of the first activity, because from outside that is the best available. TokenGauge already knows when the window resets and how long it runs - the gauge directly above that row is drawn from it - so session spend, $/hr and the projection are measured against the real window. On a live session the inferred block was 40 minutes out and counted less than half the session's spend.
+- `cost_source` config key: `auto`, `native`, or `ccusage`. Defaults to `auto`, which reads natively and asks ccusage only about **enabled providers the native readers found nothing for** - ccusage reads 22 agent formats where TokenGauge parses two transcript trees, so a Kimi or Grok plan driven from its own CLI keeps its cost row. A Claude/Codex machine never spawns the subprocess.
+- **The ccusage cross-check now runs in CI**, with no Node and no network. `crates/tokengauge-core/tests/fixtures/cost-home` is a fake home directory of real transcripts reduced to the fields that are billed - prompts, output, file paths, branch and project names never reach it, identifiers are deterministic stand-ins and timestamps are shifted to a fixed epoch - and `cost-golden.json` records what ccusage read from that same tree. `scripts/make-cost-fixture.py` regenerates both, and refuses to write a fixture that has stopped covering the traps.
+- `--doctor` gained a **Cost source** section: how many events were read and how fast, which transcript roots were found, how many models the price table covers, any model with tokens and no price, and - when ccusage is installed - whether the two agree on token counts. An unpriced model is reported as a gap rather than shown as $0 spent.
+- **Cost and token detail for Kimi, Grok and GLM.** Those three providers have had native usage limits for releases now, and no cost row at all: spend was attributed by guessing at the model name, and a name that did not start with `claude` or `gpt` was dropped on the floor. TokenGauge now reads ccusage's per-agent split (`--by-agent`) and falls back to the agent when a model name says nothing. A GLM or Kimi model driven *through* Claude Code is attributed to GLM or Kimi rather than to Claude, because the model is the finer signal of whose money it was.
+- **Codex signs in with a personal access token.** A `personal_access_token` in `auth.json` - what `codex login` writes for managed and workspace accounts - was read as "not logged in". It now authenticates the usage call, with the account it belongs to resolved from OpenAI's whoami endpoint so a workspace member sees their own numbers, and the plan name it reports fills the header when the usage response omits one. OAuth still wins when both are present; nothing changes for an ordinary `codex` login.
+- Codex team, EDU and enterprise workspaces show the administrator-defined pool. Those accounts report no rate windows at all and put the monthly cap under `spend_control`, which nothing read, so the provider rendered with no gauge.
+
+### Changed
+
+- **A Codex 30-day window is labelled Monthly**, on every panel. Free plans report a single 30-day window, and it landed in the slot the panels label "Session": a month of headroom read as a day's, resetting four weeks out. It now gets its own row and leaves the session gauge empty rather than lying about it.
+- Kimi's extra rate windows are named for how long they run - `5-hour limit`, `1-minute limit` - instead of `300-minute window`. A rolling limit that merely repeats the weekly quota (same percentage, same reset) is dropped, so the shorter window behind it takes the slot it was hiding in.
+- **`ccusage_enabled` is now the master switch for cost figures**, not just for the ccusage subprocess. Off still means no cost rows at all; `cost_source` picks the mechanism. A missing ccusage runner is no longer a `--doctor` failure unless `cost_source = "ccusage"`.
+- **A cost refresh is ~7x faster** (measured 3.9-4.4s -> 0.6s for a full fetch). Two things paid for that. Each refresh ran `ccusage daily` three times - today, month-to-date, rolling week - and every one of those re-read every transcript on disk to answer a narrower question than the last; one call now covers the widest range and the three figures are sliced out of it. And every ccusage invocation re-fetched the LiteLLM pricing table over the network, about 700ms a call, so all of them now pass `--offline`, which produces figures identical to the cent from the pricing data ccusage already carries.
+- A ccusage too old for `--by-agent` or `--offline` exits non-zero rather than ignoring the flag, so each call retries in its bare form before giving up. An older install keeps working, with Claude and Codex costs as before.
+
+### Fixed
+
+- **A GLM credit plan reads its real usage.** The credit-based Coding Plans (lite, standard, pro) meter in `CREDIT_LIMIT` entries where the token plans meter in `TOKENS_LIMIT`, and only the token shape was understood: the credit windows were mistaken for the 30-day time limit, so those plans showed 0% used no matter how much had been spent.
+
 ## [0.21.1] - 2026-08-24
 
 ### Fixed

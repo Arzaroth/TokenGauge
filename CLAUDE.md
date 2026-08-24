@@ -67,8 +67,8 @@ of them decide it.
 The snapshot lives at `$XDG_STATE_HOME/tokengauge/tokengauge-usage.json`
 (`cache_file`), and every other state file is derived from its **parent**: the
 daemon socket, the refresh sentinel, the selected provider, the notify state,
-and `tokengauge-revision`. It is state, not cache: it holds the only record of
-past days' tokens and costs.
+`tokengauge-prices.json`, and `tokengauge-revision`. It is state, not cache: it
+holds the only record of past days' tokens and costs.
 
 `cache_is_stale()` in core is the single fetch-or-serve decision. A snapshot is
 stale when it is missing, older than `refresh_secs`, **or** was written before a
@@ -89,6 +89,47 @@ fetch.
 `--set-provider && --json` in one subprocess and the `--json` has to see the new
 provider. The daemon's SIGHUP reload then finds a snapshot that already covers
 the new set and re-renders instead of fetching again.
+
+## Costs are read, not shelled out for
+
+`crates/tokengauge-core/src/cost/` parses the transcripts the CLIs already
+write - `~/.claude/projects` and `~/.codex/sessions` - and rates them against
+LiteLLM's price table (`pricing.rs`: fetched, cached beside the snapshot, with
+`prices.json` vendored in for a cold or offline machine). Every reader produces
+the same unit, a `UsageEvent`, so **a new CLI is one more reader and nothing
+else**; `build_report` does the rest.
+
+The token counts must match ccusage exactly - they come from the same files.
+Three things assert it, at widening cost: `tests/cost_fixture.rs` diffs the
+readers against a checked-in ccusage golden (no Node, no network, runs in CI),
+`cost::tests::agrees_with_ccusage_on_real_transcripts` (`#[ignore]`d) does it
+against the developer's own home directory, and `--doctor` does it at runtime on
+a user's machine. If they drift, a transcript format changed and a reader missed
+it.
+
+Regenerate the fixture with `scripts/make-cost-fixture.py`. Two rules it learned
+the hard way: **emit compact JSON** (ccusage prefilters lines with a string match
+against compact separators, so pretty-printed input reads as an empty file), and
+**compare token counts, never days or money** (days depend on the reader's
+timezone, money on whichever price table each side fetched). The generator
+refuses to write a fixture that has stopped covering the traps - verified by
+reverting the dedup fix and watching it fail.
+
+Three traps are load-bearing, each with a test named after it:
+
+- A **streamed message is written repeatedly**, each record restating the same
+  `(message.id, requestId)` with more `output_tokens`. A duplicate upgrades the
+  event; keeping the first loses 46% of some models' daily output.
+- Codex `total_token_usage` is **cumulative for the session**. Its delta is the
+  billed unit - `last_token_usage` re-fires with the cumulative unchanged and
+  summing it roughly doubles the total.
+- Codex `cached_input_tokens` is **inside** `input_tokens`, where Anthropic
+  reports cache reads beside them.
+
+ccusage is now the fallback and the cross-check, not the source. `cost_source`
+picks: `auto` (default) reads natively and asks ccusage only about enabled
+providers the readers found nothing for - a Kimi or Grok plan driven from its
+own CLI writes into neither tree.
 
 ## Conventions
 

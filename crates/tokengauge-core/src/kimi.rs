@@ -240,6 +240,28 @@ fn to_window(detail: &Detail, window_minutes: Option<u32>) -> Option<UsageWindow
     })
 }
 
+/// Name a rolling limit by how long it runs, the way Kimi's own console does
+/// ("200 requests per 5 hours"), rather than by its raw minute count.
+fn window_title(minutes: Option<u32>) -> String {
+    let Some(minutes) = minutes else {
+        return "Rate limit".to_string();
+    };
+    let named = |n: u32, unit: &str| format!("{n}-{unit} limit");
+    match minutes {
+        m if m >= 1440 && m.is_multiple_of(1440) => named(m / 1440, "day"),
+        m if m.is_multiple_of(60) => named(m / 60, "hour"),
+        m => named(m, "minute"),
+    }
+}
+
+/// Two readings of the same quota. Kimi reports the coding week through more
+/// than one endpoint, and a row that repeats the primary gauge is noise.
+fn same_window(a: &UsageWindow, b: &UsageWindow) -> bool {
+    a.used_percent == b.used_percent
+        && a.resets_at == b.resets_at
+        && a.window_minutes == b.window_minutes
+}
+
 fn to_payload(
     resp: UsageResponse,
     source: &str,
@@ -264,12 +286,15 @@ fn to_payload(
                 .collect()
         })
         .unwrap_or_default();
+    if let Some(primary) = primary.as_ref() {
+        rate_windows.retain(|w| !same_window(w, primary));
+    }
     let secondary = (!rate_windows.is_empty()).then(|| rate_windows.remove(0));
     let extra_rate_windows: Vec<ExtraRateWindow> = rate_windows
         .into_iter()
         .map(|window| ExtraRateWindow {
             id: None,
-            title: window.window_minutes.map(|m| format!("{m}-minute window")),
+            title: Some(window_title(window.window_minutes)),
             window: Some(window),
             placeholder: false,
         })
@@ -436,6 +461,45 @@ mod tests {
         let extra = usage.extra_rate_windows[0].window.as_ref().unwrap();
         assert_eq!(extra.used_percent, Some(50)); // 30 / 60
         assert_eq!(extra.window_minutes, Some(1));
+        assert_eq!(
+            usage.extra_rate_windows[0].title.as_deref(),
+            Some("1-minute limit")
+        );
+    }
+
+    #[test]
+    fn a_rolling_limit_that_repeats_the_week_is_dropped() {
+        // Kimi reports the coding week through two endpoints. When both agree,
+        // the rolling copy only repeats the primary gauge.
+        let body = resp(
+            r#"{
+                "usage": {"limit": "2000", "used": "500", "resetTime": "2026-07-16T09:59:59Z"},
+                "limits": [
+                    {"window": {"duration": 7, "timeUnit": "TIME_UNIT_DAY"},
+                     "detail": {"limit": 400, "used": 100, "resetTime": "2026-07-16T09:59:59Z"}},
+                    {"window": {"duration": 5, "timeUnit": "TIME_UNIT_HOUR"},
+                     "detail": {"limit": 200, "used": 60}}
+                ]
+            }"#,
+        );
+        let usage = to_payload(body, "code-api", "API Key", Utc::now())
+            .unwrap()
+            .usage
+            .unwrap();
+        assert_eq!(usage.primary.unwrap().used_percent, Some(25));
+        // The 5-hour window takes the slot the duplicate would have held.
+        let secondary = usage.secondary.unwrap();
+        assert_eq!(secondary.used_percent, Some(30));
+        assert_eq!(secondary.window_minutes, Some(300));
+        assert!(usage.extra_rate_windows.is_empty());
+    }
+
+    #[test]
+    fn rolling_limits_are_named_by_duration() {
+        assert_eq!(window_title(Some(300)), "5-hour limit");
+        assert_eq!(window_title(Some(10080)), "7-day limit");
+        assert_eq!(window_title(Some(45)), "45-minute limit");
+        assert_eq!(window_title(None), "Rate limit");
     }
 
     #[test]

@@ -107,7 +107,11 @@ curl -fL "$url" -o "$TMP_DIR/$asset"
 
 tar -xzf "$TMP_DIR/$asset" -C "$TMP_DIR"
 
-install -m 0755 "$TMP_DIR/tokengauge-waybar" "$INSTALL_DIR/tokengauge-waybar"
+install -m 0755 "$TMP_DIR/tokengauge" "$INSTALL_DIR/tokengauge"
+# The binary was called tokengauge-waybar before 0.23.0. Keep the old name
+# working for an existing waybar config, systemd unit or frontend setting.
+rm -f "$INSTALL_DIR/tokengauge-waybar"
+ln -s tokengauge "$INSTALL_DIR/tokengauge-waybar"
 install -m 0755 "$TMP_DIR/tokengauge-tui" "$INSTALL_DIR/tokengauge-tui"
 # Provider brand SVG logos for the desktop frontends' tab strips. Fetched from
 # the repo (not bundled in the binary tarball) and recoloured so the monochrome
@@ -211,7 +215,7 @@ PartOf=graphical-session.target
 # fetches fail and rows show usage without cost enrichment (usage limits are
 # fetched natively and are unaffected).
 Environment=PATH=$INSTALL_DIR:/usr/local/bin:/usr/bin:/bin
-ExecStart=$INSTALL_DIR/tokengauge-waybar --daemon
+ExecStart=$INSTALL_DIR/tokengauge --daemon
 Restart=on-failure
 RestartSec=5
 
@@ -246,20 +250,20 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
     | ."modules-right" = (."modules-right" | strip)
   '
 
-  # on-click goes through `tokengauge-waybar --click`, which dispatches
+  # on-click goes through `tokengauge --click`, which dispatches
   # based on [waybar].click_action in the user's config.
   module_filter='
     ."custom/tokengauge" = {
-      "exec": "tokengauge-waybar",
+      "exec": "tokengauge",
       "return-type": "json",
       "interval": 60,
       "signal": 8,
-      "on-click": "tokengauge-waybar --click",
-      "on-click-right": "tokengauge-waybar --refresh",
-      "on-click-middle": "tokengauge-waybar --open=dashboard",
-      "on-click-backward": "tokengauge-waybar --open=status",
-      "on-scroll-up": "tokengauge-waybar --rotate=next",
-      "on-scroll-down": "tokengauge-waybar --rotate=prev"
+      "on-click": "tokengauge --click",
+      "on-click-right": "tokengauge --refresh",
+      "on-click-middle": "tokengauge --open=dashboard",
+      "on-click-backward": "tokengauge --open=status",
+      "on-scroll-up": "tokengauge --rotate=next",
+      "on-scroll-down": "tokengauge --rotate=prev"
     }
   '
 

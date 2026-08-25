@@ -58,7 +58,141 @@ fn install_frontends_from(
 #[cfg(target_os = "windows")]
 const BINARIES: &[&str] = &["tokengauge-tui.exe", "tokengauge-tray.exe"];
 #[cfg(not(target_os = "windows"))]
-const BINARIES: &[&str] = &["tokengauge-waybar", "tokengauge-tui"];
+const BINARIES: &[&str] = &["tokengauge", "tokengauge-tui"];
+
+/// The name the binary shipped under before 0.23.0, kept as a symlink beside
+/// the real one so an existing waybar config, systemd unit or frontend setting
+/// keeps working. Releases still carry a real copy under this name too, because
+/// the updater performing the upgrade is the *old* binary and it only knows to
+/// look for the old name.
+#[cfg(not(target_os = "windows"))]
+pub const LEGACY_BINARY: &str = "tokengauge-waybar";
+
+/// Point the old binary name at the new one, replacing whatever is there - on
+/// an upgrade from 0.22.x that is a real 13MB binary, and leaving it would let
+/// a stale copy answer for `tokengauge-waybar` forever.
+#[cfg(unix)]
+fn refresh_legacy_alias(install_dir: &Path) {
+    // Never trade a working binary for a link to nothing - or to a directory.
+    if !install_dir.join(BINARIES[0]).is_file() {
+        return;
+    }
+    let alias = install_dir.join(LEGACY_BINARY);
+    if std::fs::symlink_metadata(&alias)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+        && std::fs::read_link(&alias).is_ok_and(|t| t == Path::new(BINARIES[0]))
+    {
+        return;
+    }
+    let _ = std::fs::remove_file(&alias);
+    let _ = std::os::unix::fs::symlink(BINARIES[0], &alias);
+}
+
+#[cfg(all(test, unix))]
+mod alias_tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("tg-alias-{name}-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        dir
+    }
+
+    #[test]
+    fn the_alias_is_created_next_to_the_binary() {
+        let dir = scratch("fresh");
+        std::fs::write(dir.join("tokengauge"), b"binary").expect("write");
+        refresh_legacy_alias(&dir);
+
+        let alias = dir.join(LEGACY_BINARY);
+        assert_eq!(
+            std::fs::read_link(&alias).expect("symlink"),
+            Path::new("tokengauge")
+        );
+        assert_eq!(std::fs::read(&alias).expect("resolves"), b"binary");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_upgrade_from_the_old_name_replaces_the_stale_copy() {
+        // What 0.22.x leaves behind: a real 13MB binary under the old name.
+        // Left in place it would answer for `tokengauge-waybar` forever, and
+        // never be updated again once BINARIES stops naming it.
+        let dir = scratch("stale");
+        std::fs::write(dir.join("tokengauge"), b"new").expect("write");
+        std::fs::write(dir.join(LEGACY_BINARY), b"old real binary").expect("write");
+        refresh_legacy_alias(&dir);
+
+        let alias = dir.join(LEGACY_BINARY);
+        assert!(
+            std::fs::symlink_metadata(&alias)
+                .expect("meta")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&alias).expect("resolves"), b"new");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_primary_binary_leaves_the_old_one_alone() {
+        // The half-extracted archive case: replacing a working 0.22.x binary
+        // with a link to a file that is not there is worse than doing nothing.
+        let dir = scratch("dangling");
+        std::fs::write(dir.join(LEGACY_BINARY), b"old real binary").expect("write");
+        refresh_legacy_alias(&dir);
+
+        let alias = dir.join(LEGACY_BINARY);
+        assert!(
+            !std::fs::symlink_metadata(&alias)
+                .expect("meta")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read(&alias).expect("still there"),
+            b"old real binary"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_directory_named_like_the_binary_is_not_a_binary() {
+        let dir = scratch("dir-primary");
+        std::fs::create_dir(dir.join(BINARIES[0])).expect("mkdir");
+        std::fs::write(dir.join(LEGACY_BINARY), b"old real binary").expect("write");
+        refresh_legacy_alias(&dir);
+
+        let alias = dir.join(LEGACY_BINARY);
+        assert!(
+            !std::fs::symlink_metadata(&alias)
+                .expect("meta")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read(&alias).expect("still there"),
+            b"old real binary"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refreshing_an_existing_alias_is_a_no_op() {
+        let dir = scratch("idempotent");
+        std::fs::write(dir.join("tokengauge"), b"binary").expect("write");
+        refresh_legacy_alias(&dir);
+        refresh_legacy_alias(&dir);
+        assert_eq!(
+            std::fs::read_link(dir.join(LEGACY_BINARY)).expect("still a symlink"),
+            Path::new("tokengauge")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
 
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -259,6 +393,22 @@ pub fn apply_full(cache_file: &Path) -> Result<Applied> {
             .extract_into(&tmp)
             .context("extract failed")?;
 
+        // Without the primary binary there is nothing to update to, and on
+        // unix the alias below would point the old name at a file that does
+        // not exist - bricking an install that was working a moment ago, while
+        // reporting success because `tokengauge-tui` moved fine.
+        // `is_file`, not `exists`: `Move::to_dest` renames without checking
+        // what it is moving, so a directory of that name in the archive would
+        // pass, land on the installed binary's path, and become what the alias
+        // points at.
+        let primary = tmp.join(BINARIES[0]);
+        if !primary.is_file() {
+            return Err(anyhow!(
+                "release archive has no {} - refusing a partial update",
+                BINARIES[0]
+            ));
+        }
+
         let mut replaced = Vec::new();
         for bin in BINARIES {
             let src = tmp.join(bin);
@@ -282,6 +432,9 @@ pub fn apply_full(cache_file: &Path) -> Result<Applied> {
             }
             replaced.push(*bin);
         }
+
+        #[cfg(unix)]
+        refresh_legacy_alias(&install_dir);
 
         // An archive predating the frontend payloads carries none, and every
         // install would fail with the same "payload not found". Say nothing

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The binary is now `tokengauge`.** It was called `tokengauge-waybar` because that is what it started as; it has since become the shared backend the Plasma applet, the GNOME extension, the Omarchy widget and the tray all shell out to, and it owns the daemon, the snapshot, `--doctor`, `--update` and `--install-frontend`. `--version` and the usage text name it correctly too.
+- **`tokengauge-waybar` keeps working.** The installers put a symlink beside the real binary, `--update` refreshes that symlink, and release archives carry a real copy under the old name as well - the updater performing your upgrade is the *old* binary, and it only knows to look for the old name. An existing waybar config, systemd unit or frontend setting needs no edit.
+- Frontend binary settings are relabelled "TokenGauge binary" but still default to `tokengauge-waybar`, which is the only name guaranteed present after an upgrade driven by a 0.22.x updater. The defaults flip a release later, once the duplicate copy in the archive can go.
+- `cargo test` in CI now runs with `--all-features`, so the self-update module's tests run rather than being silently skipped.
+
 ## [0.22.0] - 2026-08-24
 
 ### Added

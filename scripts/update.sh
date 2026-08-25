@@ -75,7 +75,11 @@ curl -fL "$url" -o "$TMP_DIR/$asset"
 
 tar -xzf "$TMP_DIR/$asset" -C "$TMP_DIR"
 
-install -m 0755 "$TMP_DIR/tokengauge-waybar" "$INSTALL_DIR/tokengauge-waybar"
+install -m 0755 "$TMP_DIR/tokengauge" "$INSTALL_DIR/tokengauge"
+# The binary was called tokengauge-waybar before 0.23.0. Keep the old name
+# working for an existing waybar config, systemd unit or frontend setting.
+rm -f "$INSTALL_DIR/tokengauge-waybar"
+ln -s tokengauge "$INSTALL_DIR/tokengauge-waybar"
 install -m 0755 "$TMP_DIR/tokengauge-tui" "$INSTALL_DIR/tokengauge-tui"
 
 success "Updated tokengauge to $latest in $INSTALL_DIR"

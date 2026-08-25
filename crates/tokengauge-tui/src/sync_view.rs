@@ -18,6 +18,11 @@ use crate::theme;
 pub struct SyncView {
     config_path: PathBuf,
     config: TokenGaugeConfig,
+    /// Set when the config on disk would not load. The struct above is then a
+    /// default, whose `cache_file` points somewhere else entirely, so anything
+    /// touching the fleet key or the store has to refuse rather than act on the
+    /// wrong path.
+    config_error: Option<String>,
     status: Option<SyncStatus>,
     /// Shown only after the user asks for it: this is the secret they copy to
     /// the next machine.
@@ -104,7 +109,8 @@ impl SyncView {
     pub fn open(config_override: Option<PathBuf>) -> Self {
         let config_path = config_override.unwrap_or_else(tokengauge_core::default_config_path);
         let mut view = Self {
-            config: load_config(Some(config_path.clone())).unwrap_or_default(),
+            config: TokenGaugeConfig::default(),
+            config_error: None,
             config_path,
             status: None,
             revealed_key: None,
@@ -116,12 +122,35 @@ impl SyncView {
     }
 
     pub fn reload(&mut self) {
-        if let Ok(config) = load_config(Some(self.config_path.clone())) {
-            self.config = config;
+        match load_config(Some(self.config_path.clone())) {
+            Ok(config) => {
+                self.config = config;
+                self.config_error = None;
+            }
+            Err(e) => {
+                self.config_error = Some(format!("{e:#}"));
+                self.status = None;
+                return;
+            }
         }
         self.status = read_cache_full(&self.config.cache_file)
             .ok()
             .and_then(|cached| cached.sync().cloned());
+    }
+
+    /// True when the config did not load, having said so. Every action that
+    /// reads or writes the fleet key, the store or the transport goes through
+    /// here: acting on a default config would put the key in a different
+    /// machine's state directory and report a fleet that is not the user's.
+    fn config_is_broken(&mut self) -> bool {
+        let Some(error) = self.config_error.clone() else {
+            return false;
+        };
+        self.message = Some(Message {
+            text: format!("Fix the config first: {error}"),
+            failed: true,
+        });
+        true
     }
 
     fn report(&mut self, result: anyhow::Result<String>) {
@@ -180,7 +209,7 @@ impl SyncView {
             KeyCode::Char('3') if !self.is_dir() => self.prompt(Field::Region),
             KeyCode::Char('4') if !self.is_dir() => self.prompt(Field::Prefix),
             KeyCode::Char('n') => self.prompt(Field::Label),
-            KeyCode::Char('t') => {
+            KeyCode::Char('t') if !self.config_is_broken() => {
                 let result = tokengauge_core::sync::test_round_trip(&self.config)
                     .map(|steps| format!("Round trip ok: {}", steps.join(", ")));
                 self.report(result);
@@ -220,6 +249,9 @@ impl SyncView {
     }
 
     fn commit(&mut self, field: Field, value: &str) {
+        if matches!(field, Field::Join) && self.config_is_broken() {
+            return;
+        }
         let result = match field {
             Field::Join => tokengauge_core::sync::FleetKey::parse(value).and_then(|key| {
                 tokengauge_core::sync::store_key(&self.config.cache_file, &key, false)
@@ -243,6 +275,9 @@ impl SyncView {
     /// `--sync-force` makes the intent explicit - including after `c`, which
     /// used to clear the guard and let a second `g` replace the key silently.
     fn generate_key(&mut self) {
+        if self.config_is_broken() {
+            return;
+        }
         let key = tokengauge_core::sync::FleetKey::generate();
         match tokengauge_core::sync::store_key(&self.config.cache_file, &key, false) {
             Ok(_) => {
@@ -256,6 +291,9 @@ impl SyncView {
     }
 
     fn reveal_key(&mut self) {
+        if self.config_is_broken() {
+            return;
+        }
         match tokengauge_core::sync::load_key(&self.config.cache_file) {
             Ok(Some(key)) => {
                 self.revealed_key = Some(key.display());
@@ -290,6 +328,15 @@ impl SyncView {
     fn status_lines(&self) -> Vec<Line<'static>> {
         let dim = Style::default().fg(theme::dim());
         let mut lines = Vec::new();
+        if let Some(error) = self.config_error.as_ref() {
+            lines.push(Line::from(Span::styled(
+                format!("{} could not be read:", self.config_path.display()),
+                Style::default().fg(Color::Red),
+            )));
+            lines.push(Line::from(Span::styled(error.clone(), dim)));
+            lines.push(Line::from(""));
+            return lines;
+        }
         let field = |label: &str, value: String, style: Style| {
             Line::from(vec![
                 Span::styled(format!("{label:<12}"), dim),
@@ -496,12 +543,32 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).expect("scratch");
         let config = dir.join("config.toml");
+        // A TOML *literal* string. In a basic string a Windows path turns
+        // `\Users` into an escape, the config silently fails to parse, and the
+        // view falls back to defaults pointing at the real state directory.
         std::fs::write(
             &config,
-            format!("cache_file = \"{}/usage.json\"\n", dir.display()),
+            format!("cache_file = '{}'\n", dir.join("usage.json").display()),
         )
         .expect("config");
         config
+    }
+
+    /// Every test opens through here: a view whose config did not parse would
+    /// operate on the developer's own state directory, and the tests would
+    /// collide with each other through it.
+    fn open_scratch(name: &str) -> SyncView {
+        let path = scratch(name);
+        let view = SyncView::open(Some(path.clone()));
+        assert_eq!(view.config_error, None, "the scratch config must parse");
+        assert!(
+            view.config
+                .cache_file
+                .starts_with(path.parent().expect("scratch dir")),
+            "a test must never touch the real state directory: {:?}",
+            view.config.cache_file
+        );
+        view
     }
 
     fn screen(view: &SyncView) -> String {
@@ -528,7 +595,7 @@ mod tests {
 
     #[test]
     fn an_unconfigured_fleet_says_what_to_press() {
-        let view = SyncView::open(Some(scratch("empty")));
+        let view = open_scratch("empty");
         let screen = screen(&view);
 
         assert!(screen.contains("not set - press d"), "{screen}");
@@ -538,8 +605,8 @@ mod tests {
 
     #[test]
     fn setting_the_folder_writes_the_config() {
-        let config_path = scratch("folder");
-        let mut view = SyncView::open(Some(config_path.clone()));
+        let mut view = open_scratch("folder");
+        let config_path = view.config_path.clone();
 
         assert!(press(&mut view, 'd'));
         assert!(screen(&view).contains("Folder your sync tool handles"));
@@ -554,8 +621,42 @@ mod tests {
     }
 
     #[test]
+    fn a_config_that_will_not_parse_stops_the_screen_from_acting() {
+        // Exactly what CI hit on Windows: a path in a TOML *basic* string, so
+        // `\U` reads as an invalid escape. Falling back to a default config
+        // would put this fleet's key in the real state directory.
+        let dir = std::env::temp_dir().join(format!(
+            "tokengauge-syncview-{}-badtoml",
+            std::process::id()
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let config = dir.join("config.toml");
+        std::fs::write(&config, "cache_file = \"C:\\Users\\me\\usage.json\"\n").expect("config");
+
+        let mut view = SyncView::open(Some(config));
+        assert!(view.config_error.is_some(), "the config does not parse");
+        assert!(
+            screen(&view).contains("could not be read"),
+            "{}",
+            screen(&view)
+        );
+
+        press(&mut view, 'g');
+        assert!(view.revealed_key.is_none(), "no key may be written");
+        assert!(
+            screen(&view).contains("Fix the config first"),
+            "{}",
+            screen(&view)
+        );
+
+        press(&mut view, 't');
+        assert!(screen(&view).contains("Fix the config first"));
+    }
+
+    #[test]
     fn a_typed_q_lands_in_the_field_instead_of_quitting() {
-        let mut view = SyncView::open(Some(scratch("typed-q")));
+        let mut view = open_scratch("typed-q");
         press(&mut view, 'n');
         assert!(
             press(&mut view, 'q'),
@@ -572,8 +673,8 @@ mod tests {
 
     #[test]
     fn switching_to_a_bucket_asks_for_bucket_things() {
-        let config_path = scratch("s3");
-        let mut view = SyncView::open(Some(config_path.clone()));
+        let mut view = open_scratch("s3");
+        let config_path = view.config_path.clone();
         assert!(screen(&view).contains("shared folder"));
 
         press(&mut view, 'x');
@@ -598,7 +699,7 @@ mod tests {
 
     #[test]
     fn a_key_is_only_shown_when_asked_for() {
-        let mut view = SyncView::open(Some(scratch("key")));
+        let mut view = open_scratch("key");
         assert!(!screen(&view).contains("tgsync1"));
 
         press(&mut view, 'c');
@@ -612,7 +713,7 @@ mod tests {
 
     #[test]
     fn showing_the_key_does_not_open_the_door_to_replacing_it() {
-        let mut view = SyncView::open(Some(scratch("no-clobber")));
+        let mut view = open_scratch("no-clobber");
         press(&mut view, 'g');
         let first = view.revealed_key.clone().expect("a key was generated");
 

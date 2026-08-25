@@ -1,0 +1,445 @@
+//! One sync cycle: publish what changed, take what the peers published, merge.
+
+use anyhow::{Context, Result};
+use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
+use serde::{Deserialize, Serialize};
+
+use super::model::{Contribution, DeviceRecord, FleetStore, Hour, ObjectState, content_hash};
+use super::{SCHEMA_VERSION, crypto, store, transport};
+use crate::TokenGaugeConfig;
+use crate::cost::UsageEvent;
+
+/// What the fleet looked like on the last cycle. Serialised into the snapshot
+/// so `--json`, `--sync-status` and the panel all read one struct.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatus {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub transport: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key_id: String,
+    #[serde(default)]
+    pub published: bool,
+    #[serde(default)]
+    pub devices: Vec<DeviceStatus>,
+    #[serde(default)]
+    pub last_pull_ms: Option<i64>,
+    #[serde(default)]
+    pub last_publish_ms: Option<i64>,
+    #[serde(default)]
+    pub error: Option<String>,
+    /// Objects in the storage this machine could not use, each with the reason.
+    #[serde(default)]
+    pub skipped: Vec<SkippedObject>,
+    /// Devices that read the same transcripts for the same day, which is what a
+    /// synced `~/.claude/projects` looks like from here.
+    #[serde(default)]
+    pub overlaps: Vec<OverlapNote>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceStatus {
+    pub device_id: String,
+    pub label: String,
+    pub hostname: String,
+    pub updated_at_ms: i64,
+    pub is_local: bool,
+    /// Silent for longer than `peer_max_age_days`.
+    pub stale: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedObject {
+    pub name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlapNote {
+    pub date: String,
+    pub devices: Vec<String>,
+    pub kept: String,
+}
+
+/// What a cycle produced.
+pub struct SyncOutcome {
+    /// Peer events for `build_report`, alongside the caller's own.
+    pub events: Vec<UsageEvent>,
+    pub status: SyncStatus,
+    /// The merged store, so per-device totals can be taken against the same
+    /// price table the report was rated with.
+    pub store: FleetStore,
+}
+
+/// Run a cycle and return the peer events `build_report` should see alongside
+/// the caller's own.
+///
+/// Never fails: a transport that is down leaves the durable store in place and
+/// the failure in the status, because blanking the totals would be a lie in the
+/// other direction.
+pub fn refresh(
+    config: &TokenGaugeConfig,
+    local_events: &[UsageEvent],
+    since: NaiveDate,
+) -> SyncOutcome {
+    let mut status = SyncStatus {
+        enabled: config.sync.enabled,
+        ..Default::default()
+    };
+    if !config.sync.enabled {
+        return SyncOutcome {
+            events: Vec::new(),
+            status,
+            store: FleetStore::default(),
+        };
+    }
+
+    let now = Utc::now();
+    let from = window_hour(since);
+    let identity = crate::device_identity(&config.cache_file);
+    let device = DeviceRecord::new(&identity, &config.sync.label);
+
+    let mut store = store::load(&config.cache_file);
+    store.upsert_local(&device, from, local_events, now.timestamp_millis());
+
+    if let Err(e) = cycle(config, &device, &mut store, now, &mut status) {
+        status.error = Some(format!("{e:#}"));
+    }
+
+    store.prune(now);
+    if let Err(e) = store::save(&config.cache_file, &store) {
+        status.error.get_or_insert(format!("{e:#}"));
+    }
+
+    status.last_pull_ms = store.last_pull_ms;
+    status.last_publish_ms = store.last_publish_ms;
+    status.devices = device_statuses(&store, &device.id, config, now);
+    status.overlaps = store
+        .overlaps()
+        .into_iter()
+        .map(|overlap| OverlapNote {
+            date: overlap.date.to_string(),
+            devices: overlap
+                .devices
+                .iter()
+                .map(|id| label_for(&store, id))
+                .collect(),
+            kept: label_for(&store, &overlap.kept),
+        })
+        .collect();
+
+    SyncOutcome {
+        events: store.synthetic_events(&device.id, from),
+        status,
+        store,
+    }
+}
+
+/// What the panel should say about sync, or nothing when it is off.
+///
+/// Ordered worst-first: a transport that is down, then a transcript tree read
+/// twice, then objects that could not be used, then staleness, and only then
+/// the healthy states.
+pub fn note(status: &SyncStatus, refresh_secs: u64, now_ms: i64) -> Option<crate::panel::SyncNote> {
+    use crate::panel::{SyncNote, Tone, ago};
+
+    if !status.enabled {
+        return None;
+    }
+    let devices = status.devices.len();
+    let note = |tone, headline: &str, detail: String| {
+        Some(SyncNote {
+            devices,
+            tone,
+            headline: headline.to_string(),
+            detail,
+        })
+    };
+
+    if let Some(error) = &status.error {
+        return note(Tone::Critical, "error", error.clone());
+    }
+    if let Some(overlap) = status.overlaps.first() {
+        return note(
+            Tone::Critical,
+            "duplicate",
+            format!(
+                "{} read the same transcripts on {}; counted once. Turn that provider off in [sync.providers] on one of them.",
+                overlap.devices.join(" and "),
+                overlap.date
+            ),
+        );
+    }
+    if let Some(skipped) = status.skipped.first() {
+        return note(
+            Tone::Warn,
+            "skipped",
+            format!("{} unusable: {}", status.skipped.len(), skipped.reason),
+        );
+    }
+    match status.last_pull_ms {
+        None => note(Tone::Warn, "never", "no sync has completed yet".to_string()),
+        Some(last) => {
+            let age = now_ms - last;
+            if age > 86_400_000 {
+                note(
+                    Tone::Critical,
+                    "stale",
+                    format!("last synced {}; totals may be short", ago(last, now_ms)),
+                )
+            } else if age > 3 * (refresh_secs as i64) * 1000 {
+                note(
+                    Tone::Warn,
+                    "stale",
+                    format!("last synced {}", ago(last, now_ms)),
+                )
+            } else if devices < 2 {
+                note(
+                    Tone::Dim,
+                    "waiting",
+                    "no other device has published yet".to_string(),
+                )
+            } else {
+                note(Tone::Good, "ok", String::new())
+            }
+        }
+    }
+}
+
+/// This machine's device id, for attributing the local row.
+pub fn local_device_id(config: &TokenGaugeConfig) -> String {
+    crate::device_identity(&config.cache_file).machine_id
+}
+
+fn cycle(
+    config: &TokenGaugeConfig,
+    device: &DeviceRecord,
+    store: &mut FleetStore,
+    now: DateTime<Utc>,
+    status: &mut SyncStatus,
+) -> Result<()> {
+    let key = crypto::load_key(&config.cache_file)?.context(
+        "no fleet key on this machine; run `--sync-init` here, or `--sync-join <key>` to join an existing fleet",
+    )?;
+    status.key_id = key.id_hex();
+    let transport = transport::open(&config.sync)?;
+    status.transport = transport.describe();
+
+    let providers = config
+        .sync
+        .providers
+        .resolve(&config.providers.enabled_providers());
+    let own_name = key.object_name(&device.id);
+
+    if let Some(contribution) = store.contribution(&device.id, now, &providers) {
+        let hash = content_hash(&contribution);
+        if store.published_hash != Some(hash) {
+            let body =
+                serde_json::to_vec(&contribution).context("could not serialise a contribution")?;
+            transport.put(&own_name, &key.seal(&own_name, &body)?)?;
+            store.published_hash = Some(hash);
+            store.last_publish_ms = Some(now.timestamp_millis());
+            status.published = true;
+        }
+    }
+
+    for entry in transport.list()? {
+        if entry.name == own_name {
+            continue;
+        }
+        let known = store.objects.get(&entry.name).cloned();
+        let sealed = transport.get(&entry, known.as_ref().map(|o| o.version.as_str()))?;
+        let Some(sealed) = sealed else {
+            // Unchanged since we last looked. A standing rejection still gets
+            // reported, or it would go quiet after the first cycle.
+            if let Some(reason) = known.and_then(|o| o.reason) {
+                status.skipped.push(SkippedObject {
+                    name: entry.name,
+                    reason,
+                });
+            }
+            continue;
+        };
+
+        let outcome = key
+            .open(&entry.name, &sealed)
+            .map_err(|e| e.to_string())
+            .and_then(|plain| {
+                serde_json::from_slice::<Contribution>(&plain)
+                    .map_err(|e| format!("contribution did not parse: {e}"))
+            })
+            .and_then(|contribution| {
+                if contribution.schema_version > SCHEMA_VERSION {
+                    Err(format!(
+                        "written by a newer TokenGauge (schema {})",
+                        contribution.schema_version
+                    ))
+                } else {
+                    Ok(contribution)
+                }
+            });
+
+        let reason = match outcome {
+            Ok(contribution) => {
+                store.absorb(&contribution);
+                None
+            }
+            Err(reason) => {
+                status.skipped.push(SkippedObject {
+                    name: entry.name.clone(),
+                    reason: reason.clone(),
+                });
+                Some(reason)
+            }
+        };
+        store.objects.insert(
+            entry.name,
+            ObjectState {
+                version: entry.version,
+                reason,
+            },
+        );
+    }
+
+    store.last_pull_ms = Some(now.timestamp_millis());
+    Ok(())
+}
+
+fn device_statuses(
+    store: &FleetStore,
+    local_id: &str,
+    config: &TokenGaugeConfig,
+    now: DateTime<Utc>,
+) -> Vec<DeviceStatus> {
+    let cutoff = i64::from(config.sync.peer_max_age_days) * 86_400_000;
+    store
+        .devices
+        .iter()
+        .map(|(id, slice)| DeviceStatus {
+            device_id: id.clone(),
+            label: slice.device.display().to_string(),
+            hostname: slice.device.hostname.clone(),
+            updated_at_ms: slice.updated_at_ms,
+            is_local: id == local_id,
+            stale: id != local_id && now.timestamp_millis() - slice.updated_at_ms > cutoff,
+        })
+        .collect()
+}
+
+fn label_for(store: &FleetStore, id: &str) -> String {
+    store
+        .devices
+        .get(id)
+        .map(|slice| slice.device.display().to_string())
+        .unwrap_or_else(|| id.to_string())
+}
+
+/// The local midnight the transcript read started from, as a UTC hour.
+fn window_hour(since: NaiveDate) -> Hour {
+    let midnight = since.and_hms_opt(0, 0, 0).unwrap_or_default();
+    let at = Local
+        .from_local_datetime(&midnight)
+        .single()
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|| midnight.and_utc());
+    Hour::containing(at)
+}
+
+/// Write a probe object, read it back, and remove it.
+///
+/// Exercises what a cycle actually needs and nothing more: write access, read
+/// access, the key, and delete. The probe's name is deliberately not a valid
+/// object name, so a peer mid-test lists nothing new.
+pub fn test_round_trip(config: &TokenGaugeConfig) -> Result<Vec<String>> {
+    let mut steps = Vec::new();
+    let key = crypto::load_key(&config.cache_file)?
+        .context("no fleet key on this machine; run `--sync-init` or `--sync-join <key>` first")?;
+    steps.push(format!("fleet key {}", key.id_hex()));
+
+    let transport = transport::open(&config.sync)?;
+    steps.push(transport.describe());
+
+    let device = crate::device_identity(&config.cache_file);
+    let name = format!("probe-{}.tgsync", device.machine_id);
+    let body = b"tokengauge sync probe";
+    transport.put(&name, &key.seal(&name, body)?)?;
+    steps.push("wrote a probe".to_string());
+
+    let entry = transport::PeerEntry {
+        name: name.clone(),
+        version: String::new(),
+        size: 0,
+    };
+    let read = transport
+        .get(&entry, None)?
+        .context("the probe could not be read back")?;
+    let opened = key
+        .open(&name, &read)
+        .map_err(|e| anyhow::anyhow!("the probe did not open: {e}"))?;
+    anyhow::ensure!(opened == body, "the probe read back different bytes");
+    steps.push("read it back and opened it".to_string());
+
+    transport.delete(&name)?;
+    steps.push("removed it".to_string());
+    Ok(steps)
+}
+
+/// Drop a device from the fleet: delete its object and forget its buckets.
+///
+/// Matched on device id or label, because nobody remembers a machine id.
+pub fn forget(config: &TokenGaugeConfig, wanted: &str) -> Result<String> {
+    let mut store = store::load(&config.cache_file);
+    let local = crate::device_identity(&config.cache_file).machine_id;
+    let matched: Vec<String> = store
+        .devices
+        .iter()
+        .filter(|(id, slice)| {
+            id.eq_ignore_ascii_case(wanted)
+                || slice.device.display().eq_ignore_ascii_case(wanted)
+                || slice.device.hostname.eq_ignore_ascii_case(wanted)
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+
+    let [id] = matched.as_slice() else {
+        anyhow::bail!(
+            "{} device matches '{wanted}'; known devices: {}",
+            if matched.is_empty() {
+                "no"
+            } else {
+                "more than one"
+            },
+            store
+                .devices
+                .values()
+                .map(|slice| slice.device.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    };
+    anyhow::ensure!(
+        *id != local,
+        "that is this machine; turn sync off in the config instead"
+    );
+
+    let label = store
+        .devices
+        .get(id)
+        .map(|slice| slice.device.display().to_string())
+        .unwrap_or_else(|| id.clone());
+
+    if let Some(key) = crypto::load_key(&config.cache_file)?
+        && let Ok(transport) = transport::open(&config.sync)
+    {
+        let name = key.object_name(id);
+        transport.delete(&name)?;
+        store.objects.remove(&name);
+    }
+    store.devices.remove(id);
+    store::save(&config.cache_file, &store)?;
+    Ok(label)
+}

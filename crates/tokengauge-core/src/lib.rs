@@ -133,8 +133,10 @@ pub mod cost;
 mod glm;
 mod grok;
 mod kimi;
+pub mod launch;
 pub mod pace;
 pub mod panel;
+pub mod sync;
 
 pub use cost::{CostSource, NativeCostReport};
 pub use pace::{PaceStage, UsagePace};
@@ -423,6 +425,101 @@ pub enum ClickAction {
     Popover,
 }
 
+/// Which providers take part in fleet sync. The default is every enabled
+/// provider that *can*: a provider read through ccusage has a `CostInfo` and no
+/// usage events under it, so there is nothing to bucket. Turn one off when its
+/// transcript tree is itself synced between machines, or both machines will
+/// count it.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct SyncProvidersConfig {
+    pub claude: Option<bool>,
+    pub codex: Option<bool>,
+    #[serde(flatten)]
+    pub unknown: HashMap<String, toml::Value>,
+}
+
+impl SyncProvidersConfig {
+    pub fn resolve(&self, enabled: &[&str]) -> Vec<String> {
+        enabled
+            .iter()
+            .filter(|name| sync::syncable(name))
+            .filter(|name| match name.to_ascii_lowercase().as_str() {
+                "claude" => self.claude.unwrap_or(true),
+                "codex" => self.codex.unwrap_or(true),
+                _ => false,
+            })
+            .map(|name| name.to_lowercase())
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncTransportKind {
+    /// A folder the user already syncs: Syncthing, Dropbox, Nextcloud, a NAS.
+    #[default]
+    Dir,
+    /// Any S3-compatible bucket: S3, R2, B2, MinIO, Garage.
+    S3,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct SyncDirConfig {
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct SyncS3Config {
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
+    pub prefix: String,
+    /// Credentials belong in the environment; these exist for a machine where
+    /// that is awkward. They are never written into the snapshot or logged.
+    pub access_key_id: String,
+    pub secret_access_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct SyncConfig {
+    pub enabled: bool,
+    pub transport: SyncTransportKind,
+    /// This machine's name in the by-device rows. Empty falls back to the
+    /// hostname.
+    pub label: String,
+    /// Days of buckets a contribution carries. The local store keeps far more,
+    /// because it is the only record left once a CLI rotates a transcript away.
+    pub retention_days: u32,
+    /// A device silent this long drops out of the by-device section. Its past
+    /// days keep counting: they really did happen.
+    pub peer_max_age_days: u32,
+    pub providers: SyncProvidersConfig,
+    pub dir: SyncDirConfig,
+    pub s3: SyncS3Config,
+    #[serde(flatten)]
+    pub unknown: HashMap<String, toml::Value>,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            transport: SyncTransportKind::default(),
+            label: String::new(),
+            retention_days: sync::WIRE_RETENTION_DAYS as u32,
+            peer_max_age_days: 30,
+            providers: SyncProvidersConfig::default(),
+            dir: SyncDirConfig::default(),
+            s3: SyncS3Config::default(),
+            unknown: HashMap::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TokenGaugeConfig {
@@ -448,6 +545,7 @@ pub struct TokenGaugeConfig {
     pub notifications: NotificationsConfig,
     pub theme: ThemeConfig,
     pub update: UpdateConfig,
+    pub sync: SyncConfig,
     /// Unknown top-level keys (e.g. the removed `codexbar_bin`) left over from
     /// older configs. Captured so `--doctor` can warn instead of ignoring.
     #[serde(flatten)]
@@ -579,6 +677,7 @@ impl Default for TokenGaugeConfig {
             notifications: NotificationsConfig::default(),
             theme: ThemeConfig::default(),
             update: UpdateConfig::default(),
+            sync: SyncConfig::default(),
             unknown: HashMap::new(),
         }
     }
@@ -633,6 +732,7 @@ pub struct FetchResult {
     pub errors: Vec<ProviderFetchError>,
     #[serde(default)]
     pub costs: HashMap<String, CostInfo>,
+    pub sync: sync::SyncStatus,
 }
 
 /// Bumped when the on-disk snapshot grows a field a reader has to know about.
@@ -674,6 +774,10 @@ pub enum CachedData {
         /// Absent in snapshots written before 0.21.
         #[serde(default)]
         meta: Option<CacheMeta>,
+        /// Absent unless fleet sync is on. Boxed: a status carries several
+        /// vectors, and the legacy variant is a bare list.
+        #[serde(default)]
+        sync: Option<Box<sync::SyncStatus>>,
     },
     /// Legacy format - just an array of payloads (for backwards compatibility)
     Legacy(Vec<ProviderPayload>),
@@ -704,6 +808,13 @@ impl CachedData {
     pub fn meta(&self) -> Option<&CacheMeta> {
         match self {
             CachedData::Full { meta, .. } => meta.as_ref(),
+            CachedData::Legacy(_) => None,
+        }
+    }
+
+    pub fn sync(&self) -> Option<&sync::SyncStatus> {
+        match self {
+            CachedData::Full { sync, .. } => sync.as_deref(),
             CachedData::Legacy(_) => None,
         }
     }
@@ -770,6 +881,14 @@ pub struct CostInfo {
     /// count each day's cost was rated from.
     #[serde(default)]
     pub weekly_history: Vec<DayCost>,
+    /// Per-device share of the month, present only when this provider is
+    /// fleet-merged. Its presence is what tells a reader the figures above
+    /// cover more than this machine.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by_device: Vec<sync::DeviceCost>,
+    /// What the panel says about sync state. Error-first: see [`panel::SyncNote`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_note: Option<panel::SyncNote>,
 }
 
 impl CostInfo {
@@ -1077,22 +1196,16 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
             payloads: Vec::new(),
             errors: Vec::new(),
             costs: HashMap::new(),
+            sync: sync::SyncStatus::default(),
         };
     }
 
     let ccusage_enabled = config.ccusage_enabled;
-    let cost_source = config.cost_source;
-    let cost_cache_file = config.cache_file.clone();
-    let ccusage_timeout = Duration::from_secs(config.ccusage_timeout_secs.max(1));
+    let cost_config = config.clone();
     let cost_providers: Vec<&'static str> = enabled.clone();
     let ccusage_handle = thread::spawn(move || {
         if ccusage_enabled {
-            fetch_costs(
-                cost_source,
-                &cost_providers,
-                &cost_cache_file,
-                ccusage_timeout,
-            )
+            fetch_costs(&cost_config, &cost_providers)
         } else {
             NativeCostReport::default()
         }
@@ -1169,6 +1282,7 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
         payloads,
         errors,
         costs: report.costs,
+        sync: report.sync,
     }
 }
 
@@ -1479,11 +1593,13 @@ pub fn write_cache_full(
     errors: &[ProviderFetchError],
     costs: &HashMap<String, CostInfo>,
     providers: &ProvidersConfig,
+    sync: Option<&sync::SyncStatus>,
 ) -> Result<()> {
     let data = CachedData::Full {
         payloads: payloads.to_vec(),
         errors: errors.to_vec(),
         costs: costs.clone(),
+        sync: sync.cloned().map(Box::new),
         meta: Some(CacheMeta {
             schema_version: CACHE_SCHEMA_VERSION,
             device: device_identity(path),
@@ -1524,7 +1640,7 @@ pub fn cache_is_stale(config: &TokenGaugeConfig) -> bool {
 
 /// Replace a file in one step, so a reader watching it never sees a half
 /// written snapshot.
-fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     if let Some(parent) = path.parent() {
@@ -1777,7 +1893,7 @@ pub fn write_cache(
     payloads: &[ProviderPayload],
     providers: &ProvidersConfig,
 ) -> Result<()> {
-    write_cache_full(path, payloads, &[], &HashMap::new(), providers)
+    write_cache_full(path, payloads, &[], &HashMap::new(), providers, None)
 }
 
 // ============================================================================
@@ -2236,21 +2352,25 @@ pub fn thresholds_to_fire(
 /// TokenGauge cannot parse yet looks like. A machine that simply has not used
 /// its assistants this month reads as zero spend, not as a missing source, so
 /// the fallback keys on events read rather than on dollars.
-pub fn fetch_costs(
-    source: CostSource,
-    enabled: &[&str],
-    cache_file: &Path,
-    timeout: Duration,
-) -> NativeCostReport {
+pub fn fetch_costs(config: &TokenGaugeConfig, enabled: &[&str]) -> NativeCostReport {
     let today = Local::now().date_naive();
-    match source {
+    let timeout = Duration::from_secs(config.ccusage_timeout_secs.max(1));
+    match config.cost_source {
         CostSource::Ccusage => NativeCostReport {
             costs: fetch_ccusage_costs(timeout),
+            sync: sync::SyncStatus {
+                enabled: config.sync.enabled,
+                error: config.sync.enabled.then(|| {
+                    "cost_source = ccusage produces no usage events, so there is nothing to sync"
+                        .to_string()
+                }),
+                ..Default::default()
+            },
             ..Default::default()
         },
-        CostSource::Native => cost::fetch_native(cache_file, timeout, today),
+        CostSource::Native => native_costs(config, today, timeout),
         CostSource::Auto => {
-            let mut report = cost::fetch_native(cache_file, timeout, today);
+            let mut report = native_costs(config, today, timeout);
             let missing = missing_providers(&report, enabled);
             if missing.is_empty() {
                 return report;
@@ -2269,6 +2389,44 @@ pub fn fetch_costs(
             report
         }
     }
+}
+
+/// The native read, with the fleet folded in when sync is on.
+///
+/// Peer buckets arrive as synthetic events, so `build_report` sees one kind of
+/// input and needs to know nothing about any of this.
+fn native_costs(
+    config: &TokenGaugeConfig,
+    today: chrono::NaiveDate,
+    timeout: Duration,
+) -> NativeCostReport {
+    if !config.sync.enabled {
+        return cost::fetch_native(&config.cache_file, timeout, today);
+    }
+    let (mut events, since) = cost::read_window(today);
+    let outcome = sync::refresh(config, &events, since);
+    events.extend(outcome.events);
+
+    let prices = cost::pricing::load(&config.cache_file, timeout, true);
+    let mut report = cost::build_report(&events, &prices, today);
+
+    let month_start = today
+        .format("%Y-%m-01")
+        .to_string()
+        .parse::<chrono::NaiveDate>()
+        .unwrap_or(today);
+    let offset = *Local::now().offset();
+    let local_id = sync::local_device_id(config);
+    let note = sync::note(&outcome.status, config.refresh_secs, now_ms() as i64);
+    for (provider, cost) in report.costs.iter_mut() {
+        cost.by_device =
+            outcome
+                .store
+                .device_totals(provider, (month_start, today), offset, &prices, &local_id);
+        cost.sync_note = note.clone();
+    }
+    report.sync = outcome.status;
+    report
 }
 
 /// Enabled providers the native readers produced nothing for.
@@ -2350,7 +2508,9 @@ impl CostDiagnostics {
 /// The providers the native readers can produce on their own, being the
 /// transcript trees they parse. Everything else reaches a cost row through the
 /// `auto` fallback, so its absence from a native read says nothing.
-const NATIVELY_READ: &[&str] = &["claude", "codex"];
+/// Providers TokenGauge parses transcripts for. Only these produce usage
+/// events, so only these can take part in fleet sync.
+pub const NATIVELY_READ: &[&str] = &["claude", "codex"];
 
 /// Run the native readers, and ccusage alongside them when asked, so the two
 /// can be compared. This is what keeps the dependency earning its keep: a
@@ -2967,6 +3127,8 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
                 weekly_usd,
                 weekly_cost_history,
                 weekly_history: history,
+                by_device: Vec::new(),
+                sync_note: None,
             },
         );
     }
@@ -3137,6 +3299,93 @@ pub fn config_set_oauth_provider(path: &Path, name: &str, enabled: bool) -> Resu
     })
 }
 
+fn ensure_subtable<'a>(table: &'a mut toml_edit::Table, key: &str) -> &'a mut toml_edit::Table {
+    if table.get(key).and_then(|i| i.as_table()).is_none() {
+        let replacement = table
+            .get(key)
+            .and_then(|i| i.as_inline_table())
+            .cloned()
+            .map(|t| toml_edit::Item::Table(t.into_table()))
+            .unwrap_or_else(|| toml_edit::Item::Table(toml_edit::Table::new()));
+        table.insert(key, replacement);
+    }
+    table[key].as_table_mut().expect("just ensured table")
+}
+
+/// Turn fleet sync on or off.
+pub fn config_set_sync_enabled(path: &Path, enabled: bool) -> Result<()> {
+    edit_config_file(path, |doc| {
+        ensure_table(doc, "sync")["enabled"] = toml_edit::value(enabled);
+    })
+}
+
+pub fn config_set_sync_label(path: &Path, label: &str) -> Result<()> {
+    let label = label.to_string();
+    edit_config_file(path, |doc| {
+        ensure_table(doc, "sync")["label"] = toml_edit::value(label.as_str());
+    })
+}
+
+pub fn config_set_sync_transport(path: &Path, kind: &str) -> Result<()> {
+    let kind = match kind.to_ascii_lowercase().as_str() {
+        "dir" => "dir",
+        "s3" => "s3",
+        other => {
+            return Err(anyhow!(
+                "unknown sync transport '{other}' (expected dir or s3)"
+            ));
+        }
+    };
+    edit_config_file(path, |doc| {
+        ensure_table(doc, "sync")["transport"] = toml_edit::value(kind);
+    })
+}
+
+/// Point the folder transport at a directory the user's sync tool handles.
+pub fn config_set_sync_dir(path: &Path, dir: &str) -> Result<()> {
+    let dir = dir.trim().to_string();
+    edit_config_file(path, |doc| {
+        let sync = ensure_table(doc, "sync");
+        ensure_subtable(sync, "dir")["path"] = toml_edit::value(dir.as_str());
+    })
+}
+
+/// Set one `[sync.s3]` field.
+///
+/// Credentials are deliberately not settable here: they belong in the
+/// environment, not written into a config file by a setup screen.
+pub fn config_set_sync_s3(path: &Path, field: &str, value: &str) -> Result<()> {
+    const FIELDS: &[&str] = &["endpoint", "region", "bucket", "prefix"];
+    if !FIELDS.contains(&field) {
+        return Err(anyhow!(
+            "'{field}' is not a settable S3 field ({}); credentials come from AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY",
+            FIELDS.join(", ")
+        ));
+    }
+    let field = field.to_string();
+    let value = value.trim().to_string();
+    edit_config_file(path, |doc| {
+        let sync = ensure_table(doc, "sync");
+        ensure_subtable(sync, "s3")[&field] = toml_edit::value(value.as_str());
+    })
+}
+
+/// Take one provider in or out of sync. Only providers with a native reader can
+/// take part: a ccusage-sourced provider has no events to bucket.
+pub fn config_set_sync_provider(path: &Path, name: &str, enabled: bool) -> Result<()> {
+    if !sync::syncable(name) {
+        return Err(anyhow!(
+            "'{name}' has no transcript reader, so it cannot sync (it can be one of: {})",
+            NATIVELY_READ.join(", ")
+        ));
+    }
+    let name = name.to_lowercase();
+    edit_config_file(path, |doc| {
+        let sync = ensure_table(doc, "sync");
+        ensure_subtable(sync, "providers")[&name] = toml_edit::value(enabled);
+    })
+}
+
 /// Set (or clear, when `None`) the pinned `[waybar].primary` provider.
 pub fn config_set_primary(path: &Path, primary: Option<&str>) -> Result<()> {
     let primary = primary.map(|s| s.to_string());
@@ -3239,7 +3488,7 @@ mod tests {
     }
 
     fn write_test_cache(path: &Path, providers: &ProvidersConfig) {
-        write_cache_full(path, &[], &[], &HashMap::new(), providers).expect("write cache");
+        write_cache_full(path, &[], &[], &HashMap::new(), providers, None).expect("write cache");
     }
 
     #[test]
@@ -3277,6 +3526,7 @@ mod tests {
     fn cache_without_meta_never_covers() {
         // Every snapshot written before 0.21, and the legacy array format.
         let unknown = CachedData::Full {
+            sync: None,
             payloads: Vec::new(),
             errors: Vec::new(),
             costs: HashMap::new(),
@@ -3814,6 +4064,7 @@ mod tests {
             raw: "raw error".to_string(),
         };
         let cached = CachedData::Full {
+            sync: None,
             payloads: vec![payload.clone()],
             errors: vec![error.clone()],
             costs: HashMap::new(),
@@ -4239,6 +4490,8 @@ mod tests {
                 weekly_usd: 0.0,
                 weekly_cost_history: Vec::new(),
                 weekly_history: Vec::new(),
+                by_device: Vec::new(),
+                sync_note: None,
             },
         );
         assert!(lookup_cost("Claude", &costs).is_some());
@@ -4262,6 +4515,8 @@ mod tests {
             // Three prior days at $10 plus today's partial entry.
             weekly_cost_history: vec![10.0, 10.0, 10.0, 20.0],
             weekly_history: Vec::new(),
+            by_device: Vec::new(),
+            sync_note: None,
         };
         assert_eq!(cost.avg_daily_cost(), Some(10.0));
         assert_eq!(cost.today_vs_avg_percent(), Some(100.0));
@@ -4554,6 +4809,8 @@ mod tests {
             weekly_usd: 0.0,
             weekly_cost_history: Vec::new(),
             weekly_history: Vec::new(),
+            by_device: Vec::new(),
+            sync_note: None,
         }
     }
 

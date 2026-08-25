@@ -18,11 +18,12 @@
 
 use serde::Serialize;
 
+use crate::sync::DeviceCost;
 use crate::{CostInfo, ModelCost, ProviderRow, format_tokens};
 
 /// Colour tier for a row, resolved from the value rather than from a palette -
 /// each frontend maps these onto its own theme.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tone {
     Normal,
@@ -140,7 +141,29 @@ pub struct Section {
 
 /// Section ids in canonical order. A frontend that renders the panel renders
 /// these, in this order, skipping the ones the spec omits for lack of data.
-pub const SECTION_IDS: &[&str] = &["limits", "cost", "tokens_by_day", "tokens_by_model"];
+pub const SECTION_IDS: &[&str] = &[
+    "limits",
+    "cost",
+    "tokens_by_day",
+    "tokens_by_model",
+    "tokens_by_device",
+];
+
+/// What the panel has to say about fleet sync, resolved in the core so the
+/// wording is the same on every frontend.
+///
+/// Error-first by construction: configured-but-not-working is the dangerous
+/// state, because it under-reports silently instead of breaking, and a total
+/// that is quietly too low is worse than one that is visibly missing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncNote {
+    pub devices: usize,
+    pub tone: Tone,
+    /// One word for the badge.
+    pub headline: String,
+    pub detail: String,
+}
 
 /// Build the panel for one provider. Sections with nothing to show are omitted
 /// rather than emitted empty, so a frontend can render the list blindly.
@@ -187,9 +210,86 @@ pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
                 rows: models,
             });
         }
+
+        let devices = device_rows(cost);
+        if !devices.is_empty() {
+            out.push(Section {
+                id: "tokens_by_device",
+                title: "TOKENS BY DEVICE · THIS MONTH",
+                kind: SectionKind::Bars,
+                rows: devices,
+            });
+        }
     }
 
     out
+}
+
+// ---------------------------------------------------------------------------
+// Tokens by device
+// ---------------------------------------------------------------------------
+
+/// Present exactly when this provider is fleet-merged, which is what makes a
+/// mixed per-provider setup readable without inventing a marker for it.
+fn device_rows(cost: &CostInfo) -> Vec<PanelRow> {
+    let max = cost.by_device.first().map(|d| d.tokens).unwrap_or(0);
+    let now_ms = crate::now_ms() as i64;
+    cost.by_device
+        .iter()
+        .map(|device| {
+            let mut r = PanelRow::new(device.label.clone(), format_tokens(device.tokens));
+            r.suffix = money(device.usd);
+            r.fraction = Some(if max > 0 {
+                device.tokens as f64 / max as f64
+            } else {
+                0.0
+            });
+            r.emphasized = device.is_local;
+            if device.partial {
+                r.badge = "partial".to_string();
+                r.badge_tone = Tone::Dim;
+            } else if !device.is_local {
+                r.badge = ago(device.updated_at_ms, now_ms);
+                r.badge_tone = Tone::Dim;
+            }
+            r.tooltip = device_tooltip(device, now_ms);
+            r
+        })
+        .collect()
+}
+
+fn device_tooltip(device: &DeviceCost, now_ms: i64) -> String {
+    let mut lines = vec![device.label.clone()];
+    if device.is_local {
+        lines.push("This machine".to_string());
+    }
+    lines.push(format!(
+        "Last published  {}",
+        ago(device.updated_at_ms, now_ms)
+    ));
+    lines.push(format!("Tokens  {}", exact_tokens(device.tokens)));
+    if device.partial {
+        lines.push(
+            "Joined the fleet part-way through the month, so its share is only what it has covered"
+                .to_string(),
+        );
+    }
+    lines.join("\n")
+}
+
+/// Relative time for a device row, and for `--sync-status`.
+pub fn ago_public(then_ms: i64, now_ms: i64) -> String {
+    ago(then_ms, now_ms)
+}
+
+pub(crate) fn ago(then_ms: i64, now_ms: i64) -> String {
+    let seconds = ((now_ms - then_ms) / 1000).max(0);
+    match seconds {
+        0..=89 => "just now".to_string(),
+        90..=5399 => format!("{}m ago", seconds / 60),
+        5400..=172_799 => format!("{}h ago", seconds / 3600),
+        _ => format!("{}d ago", seconds / 86_400),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +385,25 @@ fn cost_rows(cost: &CostInfo) -> Vec<PanelRow> {
             "Burn rate",
             format!("{}/hr", money(burn.cost_per_hour)),
         ));
+    }
+
+    if let Some(note) = cost.sync_note.as_ref() {
+        let mut r = PanelRow::new(
+            "Sync",
+            match note.devices {
+                1 => "1 device".to_string(),
+                n => format!("{n} devices"),
+            },
+        );
+        r.badge = note.headline.clone();
+        r.badge_tone = note.tone;
+        r.suffix = note.detail.clone();
+        r.tooltip = if note.detail.is_empty() {
+            "Cost and token figures cover every machine in the fleet".to_string()
+        } else {
+            note.detail.clone()
+        };
+        out.push(r);
     }
 
     out
@@ -545,6 +664,32 @@ mod tests {
             }),
             session_usd: 172.92,
             weekly_usd: 1050.91,
+            by_device: vec![
+                DeviceCost {
+                    device_id: "aaaa".into(),
+                    label: "desktop".into(),
+                    tokens: 900_000_000,
+                    usd: 700.0,
+                    updated_at_ms: crate::now_ms() as i64,
+                    partial: false,
+                    is_local: true,
+                },
+                DeviceCost {
+                    device_id: "bbbb".into(),
+                    label: "laptop".into(),
+                    tokens: 500_000_000,
+                    usd: 350.91,
+                    updated_at_ms: crate::now_ms() as i64 - 7_200_000,
+                    partial: true,
+                    is_local: false,
+                },
+            ],
+            sync_note: Some(SyncNote {
+                devices: 2,
+                tone: Tone::Good,
+                headline: "ok".into(),
+                detail: String::new(),
+            }),
             weekly_cost_history: vec![1.0, 2.0],
             weekly_history: vec![
                 DayCost {
@@ -567,6 +712,58 @@ mod tests {
         r.cost = Some(cost());
         let ids: Vec<&str> = panel_spec(&r).iter().map(|s| s.id).collect();
         assert_eq!(ids, SECTION_IDS);
+    }
+
+    #[test]
+    fn the_device_section_reports_shares_and_flags_a_partial_machine() {
+        let mut r = row();
+        r.cost = Some(cost());
+        let spec = panel_spec(&r);
+        let devices = &spec
+            .iter()
+            .find(|s| s.id == "tokens_by_device")
+            .unwrap()
+            .rows;
+
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].label, "desktop");
+        assert!(devices[0].emphasized, "this machine is emphasized");
+        assert_eq!(devices[0].fraction, Some(1.0));
+        assert_eq!(devices[1].badge, "partial");
+        assert!(devices[1].tooltip.contains("part-way through the month"));
+
+        let sync = spec
+            .iter()
+            .find(|s| s.id == "cost")
+            .unwrap()
+            .rows
+            .iter()
+            .find(|r| r.label == "Sync")
+            .expect("the cost section carries the sync state");
+        assert_eq!(sync.value, "2 devices");
+        assert_eq!(sync.badge, "ok");
+    }
+
+    #[test]
+    fn a_provider_that_does_not_sync_looks_exactly_as_it_did() {
+        let mut r = row();
+        let mut cost = cost();
+        cost.by_device.clear();
+        cost.sync_note = None;
+        r.cost = Some(cost);
+        let spec = panel_spec(&r);
+
+        let ids: Vec<&str> = spec.iter().map(|s| s.id).collect();
+        assert_eq!(
+            ids,
+            vec!["limits", "cost", "tokens_by_day", "tokens_by_model"]
+        );
+        assert!(
+            !spec
+                .iter()
+                .flat_map(|s| s.rows.iter())
+                .any(|r| r.label == "Sync")
+        );
     }
 
     #[test]

@@ -29,6 +29,7 @@ pub struct AppState {
     pub active_tab: usize,
     pub initial_provider: Option<String>,
     pub show_help: bool,
+    pub sync: Option<crate::sync_view::SyncView>,
 }
 
 impl AppState {
@@ -47,6 +48,7 @@ impl AppState {
             active_tab: 0,
             initial_provider: None,
             show_help: false,
+            sync: None,
         }
     }
 
@@ -135,6 +137,12 @@ impl App {
         }
     }
 
+    pub fn open_sync(&mut self) {
+        self.state.sync = Some(crate::sync_view::SyncView::open(
+            self.config_override.clone(),
+        ));
+    }
+
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         while !self.should_quit {
             self.poll_refresh();
@@ -207,6 +215,16 @@ impl App {
         let Event::Key(key) = event::read()? else {
             return Ok(());
         };
+        // The sync screen owns every key while it is up, including `q`: it has
+        // a text field, and a typed `q` must not quit the process.
+        if self.state.sync.is_some() {
+            let keep = self.state.sync.as_mut().expect("just checked").on_key(key);
+            if !keep {
+                self.state.sync = None;
+            }
+            return Ok(());
+        }
+
         // If help popup is open, any key closes it (except quit).
         if self.state.show_help {
             if should_exit(key) {
@@ -240,6 +258,7 @@ impl App {
             }
             KeyCode::Char('u') => self.open_active_url(OpenWhich::Dashboard),
             KeyCode::Char('s') => self.open_active_url(OpenWhich::Status),
+            KeyCode::Char('S') => self.open_sync(),
             _ => {}
         }
         Ok(())

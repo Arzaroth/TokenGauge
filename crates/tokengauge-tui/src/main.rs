@@ -1,5 +1,6 @@
 mod app;
 mod refresh;
+mod sync_view;
 mod theme;
 mod ui;
 
@@ -24,6 +25,10 @@ struct Args {
     /// JSON. Does not install anything.
     #[arg(long)]
     check_update: bool,
+    /// Open straight on the sync screen. This is what `tokengauge --sync-setup`
+    /// runs, so every frontend's "set up sync" button is one spawn.
+    #[arg(long)]
+    sync: bool,
 }
 
 fn main() -> Result<()> {
@@ -39,6 +44,9 @@ fn main() -> Result<()> {
 
     let mut terminal = ratatui::init();
     let mut app = App::new(args.config);
+    if args.sync {
+        app.open_sync();
+    }
     let result = app.run(&mut terminal);
     ratatui::restore();
     result

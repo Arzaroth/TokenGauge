@@ -41,13 +41,24 @@ pub enum CostSource {
 /// Tokens billed at each rate. Every reader normalises onto this, which is why
 /// `input` here means *fresh* input: Codex reports cached tokens inside its
 /// input count and Anthropic reports them beside it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Field names are the sync wire format: a contribution is re-uploaded on every
+/// change, and these five keys repeat once per bucket.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenCounts {
+    #[serde(rename = "i", default, skip_serializing_if = "is_zero")]
     pub input: u64,
+    #[serde(rename = "o", default, skip_serializing_if = "is_zero")]
     pub output: u64,
+    #[serde(rename = "cw5", default, skip_serializing_if = "is_zero")]
     pub cache_write_5m: u64,
+    #[serde(rename = "cw1h", default, skip_serializing_if = "is_zero")]
     pub cache_write_1h: u64,
+    #[serde(rename = "cr", default, skip_serializing_if = "is_zero")]
     pub cache_read: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl TokenCounts {
@@ -59,7 +70,7 @@ impl TokenCounts {
         self.cache_write_5m + self.cache_write_1h
     }
 
-    fn add(&mut self, other: &TokenCounts) {
+    pub(crate) fn add(&mut self, other: &TokenCounts) {
         self.input += other.input;
         self.output += other.output;
         self.cache_write_5m += other.cache_write_5m;
@@ -79,6 +90,10 @@ pub struct UsageEvent {
     /// instant itself is what the session window is measured against.
     pub at: DateTime<Utc>,
     pub tokens: TokenCounts,
+    /// The reader's dedup key, kept so a day can be fingerprinted without
+    /// re-reading the transcripts. `None` where a record carried no identifier
+    /// to build one from.
+    pub key: Option<u64>,
 }
 
 /// A rated event, kept only long enough to measure the current session window.
@@ -92,7 +107,7 @@ pub struct RecentEvent {
 /// Stable 64-bit key for a pair of identifiers, used to drop transcript records
 /// a resumed session copied forward. Hashed rather than stored whole so the
 /// set stays small enough to persist between runs.
-pub(crate) fn dedup_key(a: &str, b: &str) -> u64 {
+pub fn dedup_key(a: &str, b: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     a.hash(&mut hasher);
     0xffu8.hash(&mut hasher);
@@ -155,6 +170,8 @@ pub struct NativeCostReport {
     /// `--doctor`: an unpriced model must read as a gap, never as $0 spent.
     pub unpriced: Vec<String>,
     pub events: usize,
+    /// What the last fleet-sync cycle did, when sync is on.
+    pub sync: crate::sync::SyncStatus,
 }
 
 impl NativeCostReport {
@@ -179,13 +196,35 @@ fn window_start(today: NaiveDate) -> NaiveDate {
 
 /// Read every transcript in the window and rate it.
 pub fn fetch_native(cache_file: &Path, timeout: Duration, today: NaiveDate) -> NativeCostReport {
+    let (events, _) = read_window(today);
+    rate(&events, cache_file, timeout, today)
+}
+
+/// Read every transcript in the window, returning the window with them.
+///
+/// The bound is part of the answer: it is the slice of history this read is
+/// authoritative for, and the fleet store replaces exactly that much of its own
+/// device's data and no more.
+pub fn read_window(today: NaiveDate) -> (Vec<UsageEvent>, NaiveDate) {
     let since = window_start(today);
-    let events = read_events_from(&claude_code::roots(), &codex_cli::roots(), since);
+    (
+        read_events_from(&claude_code::roots(), &codex_cli::roots(), since),
+        since,
+    )
+}
+
+/// Rate a set of events, wherever they were read.
+pub fn rate(
+    events: &[UsageEvent],
+    cache_file: &Path,
+    timeout: Duration,
+    today: NaiveDate,
+) -> NativeCostReport {
     if events.is_empty() {
         return NativeCostReport::default();
     }
     let prices = pricing::load(cache_file, timeout, true);
-    build_report(&events, &prices, today)
+    build_report(events, &prices, today)
 }
 
 /// Read both transcript shapes from explicit roots, oldest window bound first.
@@ -331,6 +370,8 @@ pub fn build_report(
                 weekly_usd: weekly_history.iter().map(|d| d.usd).sum(),
                 weekly_cost_history: weekly_history.iter().map(|d| d.usd).collect(),
                 weekly_history,
+                by_device: Vec::new(),
+                sync_note: None,
             },
         );
     }
@@ -345,6 +386,7 @@ pub fn build_report(
         recent,
         unpriced,
         events: events.len(),
+        sync: crate::sync::SyncStatus::default(),
     }
 }
 
@@ -481,6 +523,7 @@ mod tests {
                 output: out,
                 ..Default::default()
             },
+            key: None,
         }
     }
 

@@ -128,6 +128,16 @@ mod win {
         last_tip: String,
     }
 
+    /// The tray menu's ids, bundled so the event loop takes one of them rather
+    /// than one parameter per item.
+    struct MenuIds {
+        show: MenuId,
+        refresh: MenuId,
+        sync: MenuId,
+        update: MenuId,
+        quit: MenuId,
+    }
+
     impl TrayApp {
         pub fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, DynErr> {
             let ctx = cc.egui_ctx.clone();
@@ -182,10 +192,12 @@ mod win {
             let menu = Menu::new();
             let show_i = MenuItem::new("Show TokenGauge", true, None);
             let refresh_i = MenuItem::new("Refresh now", true, None);
+            let sync_i = MenuItem::new("Set up fleet sync", true, None);
             let update_i = MenuItem::new("Update TokenGauge", true, None);
             let quit_i = MenuItem::new("Quit", true, None);
             menu.append(&show_i)?;
             menu.append(&refresh_i)?;
+            menu.append(&sync_i)?;
             menu.append(&update_i)?;
             menu.append(&quit_i)?;
 
@@ -204,17 +216,14 @@ mod win {
                 let ctx = ctx.clone();
                 let action_tx = action_tx.clone();
                 let quit = quit.clone();
-                let (show_id, refresh_id, update_id, quit_id) = (
-                    show_i.id().clone(),
-                    refresh_i.id().clone(),
-                    update_i.id().clone(),
-                    quit_i.id().clone(),
-                );
-                thread::spawn(move || {
-                    tray_event_loop(
-                        ctx, action_tx, quit, show_id, refresh_id, update_id, quit_id,
-                    )
-                });
+                let ids = MenuIds {
+                    show: show_i.id().clone(),
+                    refresh: refresh_i.id().clone(),
+                    sync: sync_i.id().clone(),
+                    update: update_i.id().clone(),
+                    quit: quit_i.id().clone(),
+                };
+                thread::spawn(move || tray_event_loop(ctx, action_tx, quit, ids));
             }
 
             Ok(Self {
@@ -741,17 +750,32 @@ mod win {
         ctx.request_repaint();
     }
 
-    /// Spawn `tokengauge-tui --update` (which owns the self-update code) to
-    /// download the latest release and replace the installed binaries.
-    fn spawn_update() {
-        let tui = std::env::current_exe()
+    /// Open the TUI on its sync screen.
+    ///
+    /// The TUI is spawned directly rather than through `--sync-setup`, whose
+    /// terminal discovery is Unix-shaped; on Windows the console the TUI opens
+    /// in is the terminal.
+    fn spawn_sync_setup() {
+        let mut cmd = tui_command();
+        let _ = cmd.arg("--sync").spawn();
+    }
+
+    /// The installed TUI beside this binary, falling back to `PATH`.
+    fn tui_command() -> std::process::Command {
+        let beside = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.join("tokengauge-tui.exe")))
             .filter(|p| p.exists());
-        let mut cmd = match tui {
+        match beside {
             Some(p) => std::process::Command::new(p),
             None => std::process::Command::new("tokengauge-tui"),
-        };
+        }
+    }
+
+    /// Spawn `tokengauge-tui --update` (which owns the self-update code) to
+    /// download the latest release and replace the installed binaries.
+    fn spawn_update() {
+        let mut cmd = tui_command();
         let _ = cmd.arg("--update").spawn();
     }
 
@@ -759,22 +783,21 @@ mod win {
         ctx: egui::Context,
         action_tx: mpsc::Sender<Action>,
         quit: Arc<AtomicBool>,
-        show_id: MenuId,
-        refresh_id: MenuId,
-        update_id: MenuId,
-        quit_id: MenuId,
+        ids: MenuIds,
     ) {
         let menu_rx = MenuEvent::receiver();
         let tray_rx = TrayIconEvent::receiver();
         loop {
             while let Ok(ev) = menu_rx.try_recv() {
-                if ev.id == show_id {
+                if ev.id == ids.show {
                     show_window(&ctx);
-                } else if ev.id == refresh_id {
+                } else if ev.id == ids.refresh {
                     let _ = action_tx.send(Action::Refresh);
-                } else if ev.id == update_id {
+                } else if ev.id == ids.sync {
+                    spawn_sync_setup();
+                } else if ev.id == ids.update {
                     spawn_update();
-                } else if ev.id == quit_id {
+                } else if ev.id == ids.quit {
                     // Ask the app to close so Drop runs (removes the tray icon)
                     // instead of exiting the process abruptly.
                     quit.store(true, Ordering::SeqCst);
@@ -818,6 +841,7 @@ mod win {
                         &result.errors,
                         &result.costs,
                         &config.providers,
+                        Some(&result.sync),
                     );
                     let errors = result
                         .errors

@@ -251,12 +251,21 @@ pub fn load_key(cache_file: &Path) -> Result<Option<FleetKey>> {
 
 /// Written 0600 from the start rather than relaxed and tightened, so the secret
 /// is never briefly world-readable.
+///
+/// Replacing a key is destructive in a way that is not obvious: this machine
+/// stops being able to read its fleet's objects, and its own become unreadable
+/// to them. Writing the key already present is a no-op, so only an actual
+/// change needs `overwrite`.
 pub fn store_key(cache_file: &Path, key: &FleetKey, overwrite: bool) -> Result<PathBuf> {
     let path = key_path(cache_file);
-    if !overwrite && path.exists() {
+    if !overwrite && let Some(existing) = load_key(cache_file)? {
+        if existing.id() == key.id() {
+            return Ok(path);
+        }
         bail!(
-            "{} already holds a fleet key; joining a different fleet replaces it",
-            path.display()
+            "{} already holds fleet key {}; replacing it leaves this machine unable to read that fleet. Pass --sync-force if that is what you want",
+            path.display(),
+            existing.id_hex()
         );
     }
     if let Some(parent) = path.parent() {
@@ -283,6 +292,9 @@ fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     file.write_all(b"\n")
 }
 
+/// No permission is set on non-unix targets: the key inherits the directory's
+/// ACL, which on Windows means the user profile's. `docs/sync.md` states the
+/// limitation rather than implying the 0600 above applies everywhere.
 #[cfg(not(unix))]
 fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let mut body = contents.to_vec();
@@ -439,11 +451,33 @@ mod tests {
         let key = FleetKey::generate();
 
         let path = store_key(&cache_file, &key, false).expect("store");
+
+        // Writing the key already present changes nothing, so it is not an
+        // error; replacing it with a different one cuts this machine off from
+        // its fleet, so it is.
         assert!(
-            store_key(&cache_file, &key, false).is_err(),
-            "refuses to clobber"
+            store_key(&cache_file, &key, false).is_ok(),
+            "the same key is a no-op"
         );
-        assert!(store_key(&cache_file, &key, true).is_ok(), "unless told to");
+        let other = FleetKey::generate();
+        let refused = store_key(&cache_file, &other, false).expect_err("must refuse");
+        assert!(format!("{refused}").contains("--sync-force"), "{refused}");
+        assert_eq!(
+            load_key(&cache_file)
+                .expect("load")
+                .expect("present")
+                .id_hex(),
+            key.id_hex(),
+            "a refused replacement must leave the key alone"
+        );
+        assert!(
+            store_key(&cache_file, &other, true).is_ok(),
+            "unless told to"
+        );
+        assert!(
+            store_key(&cache_file, &key, true).is_ok(),
+            "back to the first"
+        );
 
         let loaded = load_key(&cache_file).expect("load").expect("present");
         assert_eq!(loaded.id_hex(), key.id_hex());

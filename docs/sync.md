@@ -124,7 +124,7 @@ Plaintext payload, before compression and encryption:
   "coversFromHour": "2026-07-21T00",
   "providers": ["claude", "codex"],
   "buckets": [
-    { "h": "2026-08-25T14", "p": "claude", "m": "claude-opus-5",
+    { "h": "2026-08-25T14", "p": "claude", "m": "claude-opus-5", "g": "hour",
       "i": 812, "o": 3122, "cw5": 15300, "cw1h": 0, "cr": 981233 }
   ],
   "days": [ { "d": "2026-08-25", "n": 812, "x": "5a1e9f3c00b47d21" } ]
@@ -135,7 +135,10 @@ Plaintext payload, before compression and encryption:
   covered* rather than *zero*, which is what lets the panel mark a month-to-date
   total as partial instead of quietly under-reporting it.
 - `days[].n` and `days[].x` are an event count and an XOR-fold of the existing
-  `cost::dedup_key` values for that day. They exist only to catch a shared
+  `cost::dedup_key` values for that day. That key is a SHA-256 truncation
+  rather than `DefaultHasher`, whose output Rust does not promise to keep
+  stable across releases: two machines on different toolchains would never
+  produce a matching fingerprint, and the check below would go quietly dead. They exist only to catch a shared
   transcript tree - see hazard 1.
 - `writtenAtMs` drives freshness display. It is never used to order a merge,
   because nothing needs ordering.
@@ -165,7 +168,9 @@ someone else's sync service.
   without a counter to persist.
 
 The fleet key is 32 random bytes at `<state_dir>/tokengauge-sync-key`, mode
-0600, printed as `tgsync1<base32>`. `--sync-init` generates it, `--sync-join
+0600 **on unix only** - elsewhere it inherits the directory's ACL, which on
+Windows means the user profile's, and no explicit restriction is applied.
+Printed as `tgsync1<base32>`. `--sync-init` generates it, `--sync-join
 tgsync1...` installs it on the next machine. No passphrase and no KDF: the key
 is copied between the user's own machines the way a Syncthing device id is.
 

@@ -32,10 +32,20 @@ struct Message {
     failed: bool,
 }
 
-#[derive(Debug)]
 struct Input {
     field: Field,
     buffer: String,
+}
+
+impl std::fmt::Debug for Input {
+    /// The buffer holds the pasted fleet key while `Field::Join` is active, so
+    /// redacting `revealed_key` alone would still leak the same secret.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Input")
+            .field("field", &self.field)
+            .field("buffer", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -105,7 +115,7 @@ impl SyncView {
         view
     }
 
-    fn reload(&mut self) {
+    pub fn reload(&mut self) {
         if let Ok(config) = load_config(Some(self.config_path.clone())) {
             self.config = config;
         }
@@ -212,7 +222,7 @@ impl SyncView {
     fn commit(&mut self, field: Field, value: &str) {
         let result = match field {
             Field::Join => tokengauge_core::sync::FleetKey::parse(value).and_then(|key| {
-                tokengauge_core::sync::store_key(&self.config.cache_file, &key, true)
+                tokengauge_core::sync::store_key(&self.config.cache_file, &key, false)
                     .map(|_| format!("Joined fleet {}.", key.id_hex()))
             }),
             Field::Folder => tokengauge_core::config_set_sync_dir(&self.config_path, value)
@@ -228,22 +238,21 @@ impl SyncView {
         self.report(result);
     }
 
+    /// Never replaces a key that is already here. Re-keying a fleet has to
+    /// happen on every machine at once, so it belongs on the CLI where
+    /// `--sync-force` makes the intent explicit - including after `c`, which
+    /// used to clear the guard and let a second `g` replace the key silently.
     fn generate_key(&mut self) {
-        let existing = tokengauge_core::sync::load_key(&self.config.cache_file)
-            .ok()
-            .flatten();
-        if existing.is_some() && self.revealed_key.is_none() {
-            self.message = Some(Message {
-                text: "This machine already has a key. Press c to show it, or j to join a different fleet.".into(),
-                failed: true,
-            });
-            return;
-        }
         let key = tokengauge_core::sync::FleetKey::generate();
-        let result = tokengauge_core::sync::store_key(&self.config.cache_file, &key, true)
-            .map(|_| "New fleet key. Copy it to every other machine.".to_string());
-        self.revealed_key = Some(key.display());
-        self.report(result);
+        match tokengauge_core::sync::store_key(&self.config.cache_file, &key, false) {
+            Ok(_) => {
+                self.revealed_key = Some(key.display());
+                self.report(Ok(
+                    "New fleet key. Copy it to every other machine.".to_string()
+                ));
+            }
+            Err(e) => self.report(Err(e)),
+        }
     }
 
     fn reveal_key(&mut self) {
@@ -589,8 +598,7 @@ mod tests {
 
     #[test]
     fn a_key_is_only_shown_when_asked_for() {
-        let config_path = scratch("key");
-        let mut view = SyncView::open(Some(config_path));
+        let mut view = SyncView::open(Some(scratch("key")));
         assert!(!screen(&view).contains("tgsync1"));
 
         press(&mut view, 'c');
@@ -600,18 +608,36 @@ mod tests {
         let shown = screen(&view);
         assert!(shown.contains("tgsync1"), "{shown}");
         assert!(shown.contains("--sync-join"), "{shown}");
+    }
 
-        // A second `g` must not silently replace a fleet's key.
-        let mut fresh = SyncView::open(Some(scratch("key")));
-        press(&mut fresh, 'g');
-        press(&mut fresh, 'r');
-        let mut again = SyncView::open(Some(scratch("key2")));
-        std::fs::copy(
-            tokengauge_core::sync::key_path(&fresh.config.cache_file),
-            tokengauge_core::sync::key_path(&again.config.cache_file),
-        )
-        .expect("copy key");
-        press(&mut again, 'g');
-        assert!(screen(&again).contains("already has a key"));
+    #[test]
+    fn showing_the_key_does_not_open_the_door_to_replacing_it() {
+        let mut view = SyncView::open(Some(scratch("no-clobber")));
+        press(&mut view, 'g');
+        let first = view.revealed_key.clone().expect("a key was generated");
+
+        // `c` used to clear the guard, so a following `g` replaced the fleet's
+        // key with no confirmation and no way back.
+        press(&mut view, 'c');
+        press(&mut view, 'g');
+
+        assert_eq!(view.revealed_key.as_ref(), Some(&first), "the key changed");
+        assert!(screen(&view).contains("--sync-force"), "{}", screen(&view));
+
+        // Joining a different fleet is the same destructive act.
+        press(&mut view, 'j');
+        for c in tokengauge_core::sync::FleetKey::generate()
+            .display()
+            .chars()
+        {
+            press(&mut view, c);
+        }
+        key(&mut view, KeyCode::Enter);
+        assert!(screen(&view).contains("--sync-force"));
+
+        let on_disk = tokengauge_core::sync::load_key(&view.config.cache_file)
+            .expect("read")
+            .expect("still there");
+        assert_eq!(on_disk.display(), first);
     }
 }

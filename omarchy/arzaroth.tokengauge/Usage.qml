@@ -152,9 +152,11 @@ Item {
 
   // `--sync-setup` returns as soon as it has spawned a terminal, so the
   // snapshot read chained behind it is not waiting on the user. `;` rather than
-  // `&&` so the panel still refreshes when no terminal was found.
+  // `&&` so the panel still refreshes when no terminal was found. Only stdout
+  // is discarded: stderr carries "no terminal found", which is the whole
+  // message the user needs when the button appears to do nothing.
   function openSyncSetup() {
-    run(shellQuote(binary) + " --sync-setup >/dev/null 2>&1; "
+    run(shellQuote(binary) + " --sync-setup >/dev/null; "
         + shellQuote(binary) + " --json")
   }
 

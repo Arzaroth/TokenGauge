@@ -9,12 +9,12 @@
 //! aggregation, so a new CLI means one more reader and nothing else.
 
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 use chrono::{DateTime, Days, Duration as ChronoDuration, Local, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
     BurnRate, CostInfo, DayCost, ModelCost, ProviderPayload, WEEKLY_HISTORY_DAYS, recent_periods,
@@ -104,15 +104,30 @@ pub struct RecentEvent {
     pub tokens: u64,
 }
 
+/// A 64-bit digest with a **specified** algorithm.
+///
+/// `DefaultHasher` is explicitly not stable across Rust releases, and both of
+/// this crate's 64-bit keys outlive the run that produced them: a day
+/// fingerprint that two machines have to agree on, and the hash of the last
+/// published contribution. Two machines on different toolchains would never
+/// agree, which would silently disable the double-counting check.
+///
+/// Each part is length-prefixed so `("ab", "c")` and `("a", "bc")` differ.
+pub(crate) fn digest_u64(parts: &[&[u8]]) -> u64 {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part);
+    }
+    let digest = hasher.finalize();
+    u64::from_be_bytes(digest[..8].try_into().expect("sha256 is 32 bytes"))
+}
+
 /// Stable 64-bit key for a pair of identifiers, used to drop transcript records
 /// a resumed session copied forward. Hashed rather than stored whole so the
 /// set stays small enough to persist between runs.
 pub fn dedup_key(a: &str, b: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    a.hash(&mut hasher);
-    0xffu8.hash(&mut hasher);
-    b.hash(&mut hasher);
-    hasher.finish()
+    digest_u64(&[a.as_bytes(), b.as_bytes()])
 }
 
 /// Every `.jsonl` under `root` that could hold an event dated `since` or later.

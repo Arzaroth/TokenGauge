@@ -257,10 +257,12 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
     // `--sync-setup` returns as soon as it has spawned a terminal, so the
     // snapshot read chained behind it is not waiting on the user; `;` rather
-    // than `&&` so the panel still refreshes when no terminal was found.
+    // than `&&` so the panel still refreshes when no terminal was found. Only
+    // stdout is discarded: stderr carries "no terminal found", which is the
+    // whole message the user needs when the button appears to do nothing.
     _openSyncSetup() {
         const bin = shellQuote(this._binary());
-        this._refreshSnapshot(`${bin} --sync-setup >/dev/null 2>&1; ${bin} --json`);
+        this._refreshSnapshot(`${bin} --sync-setup >/dev/null; ${bin} --json`);
     }
 
     // --update's human-readable stdout is discarded so only the JSON payload

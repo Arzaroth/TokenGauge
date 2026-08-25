@@ -564,6 +564,14 @@ impl TokenGaugeConfig {
                 .map(|k| format!("providers.{k}")),
         );
         keys.extend(self.waybar.unknown.keys().map(|k| format!("waybar.{k}")));
+        keys.extend(self.sync.unknown.keys().map(|k| format!("sync.{k}")));
+        keys.extend(
+            self.sync
+                .providers
+                .unknown
+                .keys()
+                .map(|k| format!("sync.providers.{k}")),
+        );
         keys.sort();
         keys
     }

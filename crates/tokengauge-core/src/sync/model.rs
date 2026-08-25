@@ -2,14 +2,13 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::hash::{Hash, Hasher};
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::cost::pricing::PriceTable;
-use crate::cost::{TokenCounts, UsageEvent};
+use crate::cost::{TokenCounts, UsageEvent, digest_u64};
 use crate::{DeviceIdentity, NATIVELY_READ, PROVIDERS};
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -280,17 +279,31 @@ pub fn day_digests(events: &[UsageEvent]) -> Vec<DayDigest> {
 }
 
 /// Stable over `written_at_ms`, so a device republishes only when its data
-/// actually moved.
+/// actually moved. Persisted and compared on the next cycle, which is why the
+/// algorithm has to be a specified one - see [`digest_u64`].
 pub fn content_hash(contribution: &Contribution) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    contribution.device.id.hash(&mut hasher);
-    contribution.covers_from.hash(&mut hasher);
-    contribution.providers.hash(&mut hasher);
+    fn feed(buf: &mut Vec<u8>, bytes: &[u8]) {
+        buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        buf.extend_from_slice(bytes);
+    }
+
+    let mut buf = Vec::new();
+    feed(&mut buf, contribution.device.id.as_bytes());
+    feed(&mut buf, contribution.covers_from.to_string().as_bytes());
+    for provider in &contribution.providers {
+        feed(&mut buf, provider.as_bytes());
+    }
     for bucket in &contribution.buckets {
-        bucket.hour.hash(&mut hasher);
-        bucket.provider.hash(&mut hasher);
-        bucket.model.hash(&mut hasher);
-        bucket.granularity.is_hour().hash(&mut hasher);
+        feed(&mut buf, bucket.hour.to_string().as_bytes());
+        feed(&mut buf, bucket.provider.as_bytes());
+        feed(&mut buf, bucket.model.as_bytes());
+        feed(
+            &mut buf,
+            &[match bucket.granularity {
+                Granularity::Hour => 0u8,
+                Granularity::Day => 1u8,
+            }],
+        );
         let t = &bucket.tokens;
         for field in [
             t.input,
@@ -299,15 +312,15 @@ pub fn content_hash(contribution: &Contribution) -> u64 {
             t.cache_write_1h,
             t.cache_read,
         ] {
-            field.hash(&mut hasher);
+            feed(&mut buf, &field.to_le_bytes());
         }
     }
     for day in &contribution.days {
-        day.date.hash(&mut hasher);
-        day.events.hash(&mut hasher);
-        day.digest.hash(&mut hasher);
+        feed(&mut buf, day.date.to_string().as_bytes());
+        feed(&mut buf, &day.events.to_le_bytes());
+        feed(&mut buf, day.digest.as_bytes());
     }
-    hasher.finish()
+    digest_u64(&[&buf])
 }
 
 impl Default for FleetStore {

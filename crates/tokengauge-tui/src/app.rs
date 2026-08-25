@@ -277,6 +277,12 @@ impl App {
                 self.state.last_error = Some(error.to_string());
             }
         }
+        // A refresh writes a newer sync status; an open sync screen read its
+        // copy once and would otherwise sit on the old device list until the
+        // user pressed `r`.
+        if let Some(sync) = self.state.sync.as_mut() {
+            sync.reload();
+        }
         if let Some(provider) = self.state.initial_provider.take() {
             let lower = provider.to_lowercase();
             if let Some(idx) = self

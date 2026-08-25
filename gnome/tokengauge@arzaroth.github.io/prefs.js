@@ -86,7 +86,7 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
         const status = new Adw.ActionRow({title: _('Reading providers…')});
         group.add(status);
 
-        const bin = () => shellQuote(settings.get_string('waybar-binary') || 'tokengauge');
+        const bin = () => shellQuote(settings.get_string('waybar-binary') || 'tokengauge-waybar');
 
         // Both versions, because the extension and the binary are installed
         // separately: `--update` replaces binaries, and until the extension is

@@ -239,8 +239,12 @@ impl Transport for S3Transport {
 
     fn get(&self, entry: &PeerEntry, known_version: Option<&str>) -> Result<Option<Vec<u8>>> {
         let path = self.path_for(Some(&self.key_for(&entry.name)));
+        // `parse_listing` strips the quotes S3 wraps an ETag in. AWS accepts
+        // the bare form, but a stricter S3-compatible endpoint may ignore the
+        // conditional and send the whole object back.
         let extra: Vec<(&str, String)> = known_version
-            .map(|version| vec![("if-none-match", version.to_string())])
+            .filter(|version| !version.is_empty())
+            .map(|version| vec![("if-none-match", quoted_etag(version))])
             .unwrap_or_default();
         let response = self.request(reqwest::Method::GET, &path, "", None, &extra)?;
 
@@ -316,6 +320,16 @@ fn parse_listing(xml: &str) -> (Vec<PeerEntry>, Option<String>) {
         .then(|| between(xml, "<NextContinuationToken>", "</NextContinuationToken>"))
         .flatten();
     (entries, next)
+}
+
+/// `parse_listing` strips the quotes S3 wraps an ETag in; the conditional
+/// header wants them back.
+fn quoted_etag(version: &str) -> String {
+    if version.starts_with('"') && version.ends_with('"') && version.len() > 1 {
+        version.to_string()
+    } else {
+        format!("\"{version}\"")
+    }
 }
 
 fn between(text: &str, open: &str, close: &str) -> Option<String> {
@@ -530,6 +544,13 @@ mod tests {
         let (entries, next) = parse_listing(xml);
         assert!(entries.is_empty());
         assert_eq!(next, None);
+    }
+
+    #[test]
+    fn a_conditional_read_sends_a_quoted_etag() {
+        assert_eq!(quoted_etag("abc123"), "\"abc123\"");
+        assert_eq!(quoted_etag("\"abc123\""), "\"abc123\"");
+        assert_eq!(quoted_etag("\""), "\"\"\"");
     }
 
     #[test]

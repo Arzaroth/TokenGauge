@@ -130,13 +130,46 @@ impl Transport for DirTransport {
     }
 }
 
+/// A bare `~` counts too: left literal it becomes a directory called `~` under
+/// whatever working directory the frontend happened to have.
 fn expand_home(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
-    match text.strip_prefix("~/") {
-        Some(rest) => match dirs::home_dir() {
-            Some(home) => home.join(rest),
-            None => path.to_path_buf(),
-        },
+    let rest = if text == "~" {
+        ""
+    } else if let Some(rest) = text.strip_prefix("~/") {
+        rest
+    } else {
+        return path.to_path_buf();
+    };
+    match dirs::home_dir() {
+        Some(home) => home.join(rest),
         None => path.to_path_buf(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_our_objects_are_listed() {
+        let name = "0123456789abcdef0123456789abcdef";
+        assert!(is_object_name(&format!("{name}.tgsync")));
+        assert!(!is_object_name(&format!(
+            "{name}.sync-conflict-20260825.tgsync"
+        )));
+        assert!(!is_object_name(&format!("probe-{name}.tgsync")));
+        assert!(!is_object_name("README.md"));
+    }
+
+    #[test]
+    fn a_bare_tilde_is_a_home_directory_too() {
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        assert_eq!(expand_home(Path::new("~")), home);
+        assert_eq!(expand_home(Path::new("~/Sync")), home.join("Sync"));
+        // Only a leading `~` is a home marker.
+        assert_eq!(expand_home(Path::new("/tmp/~")), PathBuf::from("/tmp/~"));
     }
 }

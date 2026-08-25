@@ -103,11 +103,14 @@ pub fn refresh(
     let identity = crate::device_identity(&config.cache_file);
     let device = DeviceRecord::new(&identity, &config.sync.label);
 
-    let mut store = store::load(&config.cache_file);
+    let (mut store, store_error) = store::load(&config.cache_file);
+    status.error = store_error;
     store.upsert_local(&device, from, local_events, now.timestamp_millis());
 
     if let Err(e) = cycle(config, &device, &mut store, now, &mut status) {
-        status.error = Some(format!("{e:#}"));
+        // A store that would not parse is the more serious of the two, so it
+        // keeps the slot if it already claimed it.
+        status.error.get_or_insert(format!("{e:#}"));
     }
 
     store.prune(now);
@@ -374,16 +377,22 @@ pub fn test_round_trip(config: &TokenGaugeConfig) -> Result<Vec<String>> {
         version: String::new(),
         size: 0,
     };
-    let read = transport
-        .get(&entry, None)?
-        .context("the probe could not be read back")?;
-    let opened = key
-        .open(&name, &read)
-        .map_err(|e| anyhow::anyhow!("the probe did not open: {e}"))?;
-    anyhow::ensure!(opened == body, "the probe read back different bytes");
+    // The probe is removed whatever the read does, or a failed test leaves
+    // litter in the user's folder that no command ever cleans up.
+    let checked = (|| -> Result<()> {
+        let read = transport
+            .get(&entry, None)?
+            .context("the probe could not be read back")?;
+        let opened = key
+            .open(&name, &read)
+            .map_err(|e| anyhow::anyhow!("the probe did not open: {e}"))?;
+        anyhow::ensure!(opened == body, "the probe read back different bytes");
+        Ok(())
+    })();
+    let removed = transport.delete(&name);
+    checked?;
     steps.push("read it back and opened it".to_string());
-
-    transport.delete(&name)?;
+    removed?;
     steps.push("removed it".to_string());
     Ok(steps)
 }
@@ -392,7 +401,7 @@ pub fn test_round_trip(config: &TokenGaugeConfig) -> Result<Vec<String>> {
 ///
 /// Matched on device id or label, because nobody remembers a machine id.
 pub fn forget(config: &TokenGaugeConfig, wanted: &str) -> Result<String> {
-    let mut store = store::load(&config.cache_file);
+    let (mut store, _) = store::load(&config.cache_file);
     let local = crate::device_identity(&config.cache_file).machine_id;
     let matched: Vec<String> = store
         .devices

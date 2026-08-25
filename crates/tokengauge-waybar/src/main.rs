@@ -225,7 +225,7 @@ fn main() -> Result<()> {
 
     if let Some(raw) = args.sync_join.as_deref() {
         let key = tokengauge_core::sync::FleetKey::parse(raw)?;
-        let path = tokengauge_core::sync::store_key(&config.cache_file, &key, true)?;
+        let path = tokengauge_core::sync::store_key(&config.cache_file, &key, args.sync_force)?;
         eprintln!("Joined fleet {} (key at {})", key.id_hex(), path.display());
         return Ok(());
     }

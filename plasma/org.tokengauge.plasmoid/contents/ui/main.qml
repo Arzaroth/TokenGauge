@@ -172,9 +172,10 @@ PlasmoidItem {
     // Opens the TUI's sync screen in a terminal. `--sync-setup` returns as soon
     // as it has spawned one, so the `--json` chained behind it is not waiting on
     // the user; `;` rather than `&&` so the panel still refreshes if no terminal
-    // was found and the flag failed.
+    // was found. Only stdout is discarded, so "no terminal found" still reaches
+    // root.lastError - the same reason applyUpdate keeps stderr.
     function openSyncSetup() {
-        exec.connectSource(cmd(root.waybarBin + " --sync-setup >/dev/null 2>&1; "
+        exec.connectSource(cmd(root.waybarBin + " --sync-setup >/dev/null; "
                                + root.waybarBin + " --json"))
     }
 

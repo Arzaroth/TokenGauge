@@ -73,8 +73,8 @@ pub const LEGACY_BINARY: &str = "tokengauge-waybar";
 /// a stale copy answer for `tokengauge-waybar` forever.
 #[cfg(unix)]
 fn refresh_legacy_alias(install_dir: &Path) {
-    // Never trade a working binary for a link to nothing.
-    if !install_dir.join(BINARIES[0]).exists() {
+    // Never trade a working binary for a link to nothing - or to a directory.
+    if !install_dir.join(BINARIES[0]).is_file() {
         return;
     }
     let alias = install_dir.join(LEGACY_BINARY);
@@ -142,6 +142,27 @@ mod alias_tests {
         // The half-extracted archive case: replacing a working 0.22.x binary
         // with a link to a file that is not there is worse than doing nothing.
         let dir = scratch("dangling");
+        std::fs::write(dir.join(LEGACY_BINARY), b"old real binary").expect("write");
+        refresh_legacy_alias(&dir);
+
+        let alias = dir.join(LEGACY_BINARY);
+        assert!(
+            !std::fs::symlink_metadata(&alias)
+                .expect("meta")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read(&alias).expect("still there"),
+            b"old real binary"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_directory_named_like_the_binary_is_not_a_binary() {
+        let dir = scratch("dir-primary");
+        std::fs::create_dir(dir.join(BINARIES[0])).expect("mkdir");
         std::fs::write(dir.join(LEGACY_BINARY), b"old real binary").expect("write");
         refresh_legacy_alias(&dir);
 
@@ -376,8 +397,12 @@ pub fn apply_full(cache_file: &Path) -> Result<Applied> {
         // unix the alias below would point the old name at a file that does
         // not exist - bricking an install that was working a moment ago, while
         // reporting success because `tokengauge-tui` moved fine.
+        // `is_file`, not `exists`: `Move::to_dest` renames without checking
+        // what it is moving, so a directory of that name in the archive would
+        // pass, land on the installed binary's path, and become what the alias
+        // points at.
         let primary = tmp.join(BINARIES[0]);
-        if !primary.exists() {
+        if !primary.is_file() {
             return Err(anyhow!(
                 "release archive has no {} - refusing a partial update",
                 BINARIES[0]

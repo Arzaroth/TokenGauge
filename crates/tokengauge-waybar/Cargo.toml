@@ -4,6 +4,13 @@ version = "0.22.0"
 edition = "2024"
 rust-version.workspace = true
 
+# The crate grew out of a Waybar module and is now the shared backend every
+# frontend shells out to, so the binary is named for what it is. The old name
+# ships alongside it as a symlink for a deprecation window - see update.rs.
+[[bin]]
+name = "tokengauge"
+path = "src/main.rs"
+
 [dependencies]
 tokengauge-core = { path = "../tokengauge-core", features = ["self-update"] }
 anyhow = { workspace = true }

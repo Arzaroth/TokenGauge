@@ -50,7 +50,7 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
         page.add(panel);
 
         const binary = new Adw.EntryRow({
-            title: _('tokengauge-waybar binary'),
+            title: _('TokenGauge binary'),
             show_apply_button: true,
         });
         binary.text = settings.get_string('waybar-binary');
@@ -113,7 +113,7 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
             }
             version.subtitle =
                 _('extension v%s, binary v%s - reinstall the extension: %s --install-frontend gnome')
-                    .format(extensionVersion, binaryVersion, 'tokengauge-waybar');
+                    .format(extensionVersion, binaryVersion, 'tokengauge');
         });
 
         run(`${bin()} --json`, cancellable, (successful, stdout, stderr) => {
@@ -133,7 +133,7 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
             const names = snapshot.providers || [];
             if (names.length === 0) {
                 status.title = _('No provider list in the snapshot');
-                status.subtitle = _('Update tokengauge-waybar to 0.15.0 or newer');
+                status.subtitle = _('Update TokenGauge to 0.15.0 or newer');
                 return;
             }
             group.remove(status);

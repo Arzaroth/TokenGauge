@@ -72,7 +72,7 @@ Widget settings live inline on its entry in `~/.config/omarchy/shell.json`:
 | Key | Default | What it does |
 |---|---|---|
 | `refreshIntervalSec` | `600` | How often the snapshot is re-read |
-| `binary` | `tokengauge` | Command used to read the snapshot |
+| `binary` | `tokengauge-waybar` | Command used to read the snapshot (the binary ships a symlink under that name; the default moves to `tokengauge` a release after the rename) |
 
 Numbers need `--json`, or they land in `shell.json` as strings:
 

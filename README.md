@@ -158,7 +158,8 @@ When the daemon is running:
 
 Waybar config is unchanged - same `exec: tokengauge` with `interval: 60`. The binary auto-detects the socket and uses it; without the daemon it falls back to direct fetch.
 
-The daemon also reloads its config on `SIGHUP` (`pkill -HUP tokengauge`) so theme / refresh_secs / providers / click action changes take effect without a restart.
+The daemon also reloads its config on `SIGHUP` (`pkill -HUP -f 'tokengauge(-waybar)? --daemon'` - the old binary name still
+starts daemons from an existing unit) so theme / refresh_secs / providers / click action changes take effect without a restart.
 
 ## Click action
 
@@ -319,6 +320,9 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
    tar -xzf tokengauge-<version>-linux-<arch>.tar.gz
    install -m 0755 tokengauge ~/.local/bin/
    install -m 0755 tokengauge-tui ~/.local/bin/
+   # The binary was `tokengauge-waybar` before 0.23.0. Keep that name resolving
+   # so an existing waybar config, systemd unit or frontend setting still works.
+   ln -sf tokengauge ~/.local/bin/tokengauge-waybar
    ```
 
 3. Create config:

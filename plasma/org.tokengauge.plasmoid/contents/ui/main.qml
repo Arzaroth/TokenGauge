@@ -169,6 +169,15 @@ PlasmoidItem {
         exec.connectSource(updateSource)
     }
 
+    // Opens the TUI's sync screen in a terminal. `--sync-setup` returns as soon
+    // as it has spawned one, so the `--json` chained behind it is not waiting on
+    // the user; `;` rather than `&&` so the panel still refreshes if no terminal
+    // was found and the flag failed.
+    function openSyncSetup() {
+        exec.connectSource(cmd(root.waybarBin + " --sync-setup >/dev/null 2>&1; "
+                               + root.waybarBin + " --json"))
+    }
+
     function shellQuote(s) {
         return "'" + String(s).replace(/'/g, "'\\''") + "'"
     }

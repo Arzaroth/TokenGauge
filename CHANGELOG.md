@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Fleet sync: one panel covering every machine you code on.** Enable `[sync]` and the cost, token and burn figures cover the whole fleet instead of one machine, with a new "Tokens by device" section showing where the spend came from. Every frontend gets it at once, because the merged figures land where the local ones did and the new section reuses an existing row kind.
+- Sync moves one encrypted object per machine through storage you already have: a folder your sync tool handles (Syncthing, Dropbox, Nextcloud, a NAS) today, S3-compatible buckets next. There is no service to run and no account to make. `--sync-init` creates the fleet key and prints it; `--sync-join <key>` adds the next machine.
+- What crosses the wire is token counts bucketed by UTC hour, provider and model - never dollars, so a machine with a stale price table cannot skew the fleet total, and never prompts, paths or credentials. Objects are sealed with XChaCha20-Poly1305 and named with a keyed digest, so whoever holds the folder cannot read your usage or even count your machines.
+- The COST section grows a "Sync" row that leads with problems: a transport that is down, an object it could not use, or a fleet that has gone stale. Configured-but-not-working under-reports silently, and a total that is quietly too low is worse than one that is visibly missing.
+- `[sync.providers]` turns sync off per provider. Use it if you sync `~/.claude/projects` between machines yourself - both machines would otherwise read the same transcripts and double the total. TokenGauge detects that case and says so, but the fix is to leave that provider out.
+- Providers whose costs come from ccusage (a Kimi or Grok plan driven from its own CLI) cannot sync yet: there are no per-call events behind them to bucket.
+- **A sync screen in the TUI**, reached with `S` or from anywhere with `tokengauge --sync-setup`, which opens it in a terminal for you. Turn sync on, name this machine, point it at a folder, generate or paste a fleet key, and run a round-trip test, all in one place. There is no per-desktop settings pane by design: this screen handles a fleet key, and five implementations of a secret input is five chances to leak one.
+- **An S3-compatible bucket as the alternative to a folder**: S3, Cloudflare R2, Backblaze B2's S3 endpoint, MinIO and Garage. Credentials come from `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, never written into the config by the setup screen. Requests are SigV4-signed directly over the HTTP client TokenGauge already links, rather than pulling an AWS SDK and an async runtime in to sign three verbs.
+- Every frontend can reach the setup screen: a button in the Plasma settings pane, one in the GNOME popup header, `y` in the Omarchy widget's settings, and a Windows tray menu item.
+- `--sync-status` prints what the last cycle did, with `--json` for the raw object. `--sync-test` writes a probe, reads it back and removes it, so you can check the transport and the key before trusting the figures. `--sync-forget <device>` drops a machine you no longer use.
+
 ## [0.23.0] - 2026-08-25
 
 ### Changed

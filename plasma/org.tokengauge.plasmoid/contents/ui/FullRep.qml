@@ -346,6 +346,28 @@ Item {
                 }
                 PlasmaComponents.Label {
                     visible: full.settingsOpen
+                    text: i18n("Fleet sync")
+                    font.bold: true
+                }
+                PlasmaComponents.Button {
+                    visible: full.settingsOpen
+                    icon.name: "folder-sync"
+                    text: i18n("Set up sync…")
+                    onClicked: root.openSyncSetup()
+                }
+                PlasmaComponents.Label {
+                    Layout.fillWidth: true
+                    visible: full.settingsOpen
+                    wrapMode: Text.WordWrap
+                    opacity: 0.7
+                    text: i18n("Adds up tokens and cost across your machines. Opens in a terminal.")
+                }
+                Kirigami.Separator {
+                    Layout.fillWidth: true
+                    visible: full.settingsOpen
+                }
+                PlasmaComponents.Label {
+                    visible: full.settingsOpen
                     text: i18n("Pin to bar")
                     font.bold: true
                 }

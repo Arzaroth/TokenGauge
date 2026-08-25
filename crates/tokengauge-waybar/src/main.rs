@@ -120,6 +120,31 @@ struct Args {
     /// `--update` already refreshes whichever are present.
     #[arg(long, value_name = "NAME")]
     install_frontend: Option<String>,
+    /// Start a sync fleet: generate this machine's key and print it. Copy it to
+    /// every other machine with `--sync-join`.
+    #[arg(long)]
+    sync_init: bool,
+    /// Join the fleet a `--sync-init` key belongs to.
+    #[arg(long, value_name = "KEY")]
+    sync_join: Option<String>,
+    /// Replace an existing fleet key. Every machine has to be re-keyed
+    /// together: devices holding the old key stop being readable.
+    #[arg(long)]
+    sync_force: bool,
+    /// Print what the last sync cycle did. Add `--json` for the raw object.
+    #[arg(long)]
+    sync_status: bool,
+    /// Write a probe object, read it back and remove it, to check the transport
+    /// and the key before trusting the figures.
+    #[arg(long)]
+    sync_test: bool,
+    /// Drop a device from the fleet by label or id: deletes its object and
+    /// forgets its buckets.
+    #[arg(long, value_name = "DEVICE")]
+    sync_forget: Option<String>,
+    /// Open the TUI on its sync screen, in a terminal.
+    #[arg(long)]
+    sync_setup: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -188,6 +213,49 @@ fn main() -> Result<()> {
     tokengauge_core::install_theme(config.theme.resolve());
     ensure_cache_dir(&config.cache_file)?;
     tokengauge_core::ensure_revision(&config.cache_file);
+
+    if args.sync_init {
+        let key = tokengauge_core::sync::FleetKey::generate();
+        let path = tokengauge_core::sync::store_key(&config.cache_file, &key, args.sync_force)?;
+        println!("{}", key.display());
+        eprintln!("Fleet key written to {}", path.display());
+        eprintln!("Run `tokengauge --sync-join <key>` on every other machine.");
+        return Ok(());
+    }
+
+    if let Some(raw) = args.sync_join.as_deref() {
+        let key = tokengauge_core::sync::FleetKey::parse(raw)?;
+        let path = tokengauge_core::sync::store_key(&config.cache_file, &key, true)?;
+        eprintln!("Joined fleet {} (key at {})", key.id_hex(), path.display());
+        return Ok(());
+    }
+
+    if args.sync_status {
+        return handle_sync_status(&config, args.json);
+    }
+
+    if args.sync_test {
+        for step in tokengauge_core::sync::test_round_trip(&config)? {
+            println!("ok  {step}");
+        }
+        return Ok(());
+    }
+
+    if let Some(device) = args.sync_forget.as_deref() {
+        let label = tokengauge_core::sync::forget(&config, device)?;
+        eprintln!("Dropped {label} from the fleet.");
+        return Ok(());
+    }
+
+    if args.sync_setup {
+        let command = tokengauge_core::launch::tui_sync_command(&config);
+        if !tokengauge_core::launch::spawn_shell(&command) {
+            anyhow::bail!(
+                "no terminal found to open the TUI in; set [waybar] tui_command, or run `tokengauge-tui --sync` yourself"
+            );
+        }
+        return Ok(());
+    }
 
     if args.internal_refresh_worker {
         worker_do_refresh(&config);
@@ -447,6 +515,11 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
         WaybarWindow::Weekly => "weekly",
     };
     let update_status = tokengauge_core::read_update_status(&config.cache_file);
+    // Read back rather than threaded through: `maybe_refresh` either just wrote
+    // this or served the snapshot that holds it, so both paths agree.
+    let sync_status = read_cache_full(&config.cache_file)
+        .ok()
+        .and_then(|cached| cached.sync().cloned());
     let out = serde_json::json!({
         // Frontends show this in their settings pane; `update` only carries a
         // version once a release check has run, and is null until then.
@@ -466,6 +539,9 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
             "neutral": t.neutral,
         },
         "update": update_status,
+        // Null when fleet sync has never run. Frontends read the by-device rows
+        // out of `panel`; this is for sync state as chrome.
+        "sync": sync_status,
         // Frontends watch this file and re-read the snapshot when it changes,
         // so a fetch by the daemon or by another frontend lands immediately
         // instead of on the next poll. It holds no provider data.
@@ -519,6 +595,7 @@ fn refresh_inline(config: &TokenGaugeConfig) {
         payloads,
         errors,
         costs,
+        sync,
     } = fetch_all_providers(config);
     let _ = write_cache_full(
         &config.cache_file,
@@ -526,6 +603,7 @@ fn refresh_inline(config: &TokenGaugeConfig) {
         &errors,
         &costs,
         &config.providers,
+        Some(&sync),
     );
     let _ = std::fs::remove_file(&sentinel);
     check_and_notify(config, &payloads, &costs);
@@ -990,6 +1068,7 @@ fn worker_do_refresh(config: &TokenGaugeConfig) {
         payloads,
         errors,
         costs,
+        sync,
     } = fetch_all_providers(config);
     let _ = write_cache_full(
         &config.cache_file,
@@ -997,6 +1076,7 @@ fn worker_do_refresh(config: &TokenGaugeConfig) {
         &errors,
         &costs,
         &config.providers,
+        Some(&sync),
     );
     let _ = std::fs::remove_file(&sentinel);
     check_and_notify(config, &payloads, &costs);
@@ -1375,7 +1455,7 @@ fn handle_doctor(config_path: &Path) -> i32 {
             .next()
             .unwrap_or("")
             .to_string();
-        let on_path = which(&first).is_some() || first.starts_with('/');
+        let on_path = tokengauge_core::launch::which(&first).is_some() || first.starts_with('/');
         (
             format!(
                 "click action: {:?} -> {}",
@@ -1390,6 +1470,108 @@ fn handle_doctor(config_path: &Path) -> i32 {
         )
     };
     record(DoctorCheck { label, ok, detail });
+
+    if cfg.sync.enabled {
+        section("Fleet sync");
+        let status = read_cache_full(&cfg.cache_file)
+            .ok()
+            .and_then(|cached| cached.sync().cloned());
+
+        record(match tokengauge_core::sync::load_key(&cfg.cache_file) {
+            Ok(Some(key)) => DoctorCheck {
+                label: format!("fleet key {}", key.id_hex()),
+                ok: true,
+                detail: tokengauge_core::sync::key_path(&cfg.cache_file)
+                    .display()
+                    .to_string(),
+            },
+            _ => DoctorCheck {
+                label: "no fleet key".into(),
+                ok: false,
+                detail: "run: tokengauge --sync-init, or --sync-join <key>".into(),
+            },
+        });
+
+        let syncing = cfg
+            .sync
+            .providers
+            .resolve(&cfg.providers.enabled_providers());
+        record(DoctorCheck {
+            label: format!("providers syncing: {}", syncing.join(", ")),
+            ok: !syncing.is_empty(),
+            detail: if syncing.is_empty() {
+                "no enabled provider can sync; only claude and codex have transcript readers".into()
+            } else {
+                String::new()
+            },
+        });
+
+        match &status {
+            None => record(DoctorCheck {
+                label: "no cycle has run yet".into(),
+                ok: false,
+                detail: "run: tokengauge --sync-test".into(),
+            }),
+            Some(status) => {
+                record(match &status.error {
+                    Some(error) => DoctorCheck {
+                        label: "last cycle failed".into(),
+                        ok: false,
+                        detail: error.clone(),
+                    },
+                    None => DoctorCheck {
+                        label: format!("{} device(s) in the fleet", status.devices.len()),
+                        ok: true,
+                        detail: status.transport.clone(),
+                    },
+                });
+                for skipped in &status.skipped {
+                    record(DoctorCheck {
+                        label: "object skipped".into(),
+                        ok: false,
+                        detail: format!("{} - {}", skipped.name, skipped.reason),
+                    });
+                }
+                for overlap in &status.overlaps {
+                    record(DoctorCheck {
+                        label: "the same transcripts were read twice".into(),
+                        ok: false,
+                        detail: format!(
+                            "{} on {}; counted once. Turn that provider off under [sync.providers] on one of them.",
+                            overlap.devices.join(" and "),
+                            overlap.date
+                        ),
+                    });
+                }
+                // A device id is derived from the machine, so one id under two
+                // hostnames means a cloned image rather than two machines.
+                let mut seen: std::collections::HashMap<&str, &str> =
+                    std::collections::HashMap::new();
+                for device in &status.devices {
+                    if let Some(previous) =
+                        seen.insert(device.device_id.as_str(), device.hostname.as_str())
+                        && previous != device.hostname
+                    {
+                        record(DoctorCheck {
+                            label: "two machines share one device id".into(),
+                            ok: false,
+                            detail: format!(
+                                "{previous} and {} - a cloned image or restored disk",
+                                device.hostname
+                            ),
+                        });
+                    }
+                }
+                for device in status.devices.iter().filter(|d| d.stale) {
+                    record(DoctorCheck {
+                        label: format!("{} has gone quiet", device.label),
+                        ok: true,
+                        detail: "its past days still count; --sync-forget drops it".into(),
+                    });
+                }
+            }
+        }
+    }
 
     section("Updates");
     record(DoctorCheck {
@@ -1909,6 +2091,7 @@ fn do_fetch_and_broadcast(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeCo
         payloads,
         errors,
         mut costs,
+        sync,
     } = fetch_all_providers(config);
     if costs.is_empty() && !prior_costs.is_empty() {
         costs = prior_costs;
@@ -1919,6 +2102,7 @@ fn do_fetch_and_broadcast(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeCo
         &errors,
         &costs,
         &config.providers,
+        Some(&sync),
     ) {
         dlog("cache", &format!("write failed: {e}"));
     }
@@ -2150,6 +2334,79 @@ fn open_url_for_provider(provider: &str, target: OpenTarget) {
     }
 }
 
+fn handle_sync_status(config: &TokenGaugeConfig, as_json: bool) -> Result<()> {
+    let status = read_cache_full(&config.cache_file)
+        .ok()
+        .and_then(|cached| cached.sync().cloned());
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&status)?);
+        return Ok(());
+    }
+
+    let Some(status) = status else {
+        println!("Sync has not run yet.");
+        if !config.sync.enabled {
+            println!("It is off; set `enabled = true` under [sync] to turn it on.");
+        }
+        return Ok(());
+    };
+
+    println!("Sync       {}", if status.enabled { "on" } else { "off" });
+    if !status.transport.is_empty() {
+        println!("Transport  {}", status.transport);
+    }
+    if !status.key_id.is_empty() {
+        println!("Fleet key  {}", status.key_id);
+    }
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    if let Some(last) = status.last_pull_ms {
+        println!(
+            "Last pull  {}",
+            tokengauge_core::panel::ago_public(last, now_ms)
+        );
+    }
+
+    if !status.devices.is_empty() {
+        println!("\nDevices");
+        for device in &status.devices {
+            let mut notes = Vec::new();
+            if device.is_local {
+                notes.push("this machine".to_string());
+            }
+            if device.stale {
+                notes.push("silent".to_string());
+            }
+            notes.push(tokengauge_core::panel::ago_public(
+                device.updated_at_ms,
+                now_ms,
+            ));
+            println!("  {:<20} {}", device.label, notes.join(", "));
+        }
+    }
+
+    let problems =
+        status.error.is_some() || !status.skipped.is_empty() || !status.overlaps.is_empty();
+    if problems {
+        println!("\nProblems");
+        if let Some(error) = &status.error {
+            println!("  {error}");
+        }
+        for skipped in &status.skipped {
+            println!("  {} - {}", skipped.name, skipped.reason);
+        }
+        for overlap in &status.overlaps {
+            println!(
+                "  {} read the same transcripts on {}; counted once, from {}",
+                overlap.devices.join(" and "),
+                overlap.date,
+                overlap.kept
+            );
+        }
+    }
+    Ok(())
+}
+
 fn handle_click(config: &TokenGaugeConfig) {
     let cmd = resolve_click_command(config);
     if cmd.is_empty() {
@@ -2167,45 +2424,13 @@ fn handle_click(config: &TokenGaugeConfig) {
 /// Resolve the shell command that the waybar `on-click` should run, based
 /// on the user's `[waybar].click_action` plus the matching override field.
 /// Empty return = nothing to spawn.
+///
+/// Terminal discovery lives in the core so every frontend's "open" button can
+/// be a spawn of the binary rather than toolkit-specific terminal knowledge.
 fn resolve_click_command(config: &TokenGaugeConfig) -> String {
     // The GTK popover is gone, so both actions land on the TUI. A config still
     // set to "popover" resolves here rather than doing nothing on click.
-    let explicit = config.waybar.tui_command.trim();
-    if !explicit.is_empty() {
-        return explicit.to_string();
-    }
-    default_tui_launcher()
-}
-
-fn default_tui_launcher() -> String {
-    // Prefer omarchy's launcher if installed.
-    if which("omarchy-launch-or-focus-tui").is_some() {
-        return "omarchy-launch-or-focus-tui tokengauge-tui".to_string();
-    }
-    // Fall back to $TERMINAL, then a list of common terminals.
-    let candidates: Vec<String> = std::env::var("TERMINAL")
-        .ok()
-        .into_iter()
-        .chain(
-            ["ghostty", "alacritty", "kitty", "wezterm", "foot", "xterm"]
-                .iter()
-                .map(|s| s.to_string()),
-        )
-        .collect();
-    for term in candidates {
-        if which(&term).is_some() {
-            return format!("{term} -e tokengauge-tui");
-        }
-    }
-    String::new()
-}
-
-fn which(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).find_map(|dir| {
-        let candidate = dir.join(name);
-        candidate.is_file().then_some(candidate)
-    })
+    tokengauge_core::launch::tui_command(config)
 }
 
 fn handle_rotate(config: &TokenGaugeConfig, dir: RotateDir) -> Result<()> {
@@ -2270,6 +2495,7 @@ fn maybe_refresh(config: &TokenGaugeConfig) -> Result<RefreshSnapshot> {
             payloads,
             errors,
             mut costs,
+            sync,
         } = fetch_all_providers(config);
         if costs.is_empty() && !prior_costs.is_empty() {
             costs = prior_costs;
@@ -2280,6 +2506,7 @@ fn maybe_refresh(config: &TokenGaugeConfig) -> Result<RefreshSnapshot> {
             &errors,
             &costs,
             &config.providers,
+            Some(&sync),
         )?;
         check_and_notify(config, &payloads, &costs);
         Ok((payloads, errors, costs))
@@ -2823,6 +3050,7 @@ mod tests {
 
     fn test_config(cache_file: PathBuf) -> TokenGaugeConfig {
         TokenGaugeConfig {
+            sync: Default::default(),
             refresh_secs: 600,
             timeout_secs: 10,
             stagger_ms: 0,

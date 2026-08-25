@@ -150,6 +150,14 @@ Item {
     action("--set-primary " + shellQuote(name))
   }
 
+  // `--sync-setup` returns as soon as it has spawned a terminal, so the
+  // snapshot read chained behind it is not waiting on the user. `;` rather than
+  // `&&` so the panel still refreshes when no terminal was found.
+  function openSyncSetup() {
+    run(shellQuote(binary) + " --sync-setup >/dev/null 2>&1; "
+        + shellQuote(binary) + " --json")
+  }
+
   function applyUpdate() {
     // --update's human-readable stdout would break JSON.parse; its stderr is
     // kept so a failed update still surfaces. The flag is armed only once the

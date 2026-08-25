@@ -255,6 +255,14 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         this._refreshSnapshot(`${bin} ${flag}${suffix} && ${bin} --json`);
     }
 
+    // `--sync-setup` returns as soon as it has spawned a terminal, so the
+    // snapshot read chained behind it is not waiting on the user; `;` rather
+    // than `&&` so the panel still refreshes when no terminal was found.
+    _openSyncSetup() {
+        const bin = shellQuote(this._binary());
+        this._refreshSnapshot(`${bin} --sync-setup >/dev/null 2>&1; ${bin} --json`);
+    }
+
     // --update's human-readable stdout is discarded so only the JSON payload
     // reaches JSON.parse; stderr still surfaces a failed update.
     _applyUpdate() {
@@ -440,6 +448,11 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             () => {
                 this.menu.close();
                 this._action('--open=dashboard');
+            }));
+        header.add_child(this._iconButton('folder-remote-symbolic', _('Set up fleet sync'),
+            () => {
+                this.menu.close();
+                this._openSyncSetup();
             }));
         header.add_child(this._iconButton('emblem-system-symbolic', _('Settings'),
             () => {

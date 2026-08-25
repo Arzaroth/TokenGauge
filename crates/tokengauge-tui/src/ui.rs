@@ -41,6 +41,11 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, is_refreshing: bool) {
     render_body(frame, layout[1], state);
     render_footer(frame, layout[2], state, is_refreshing);
 
+    if let Some(sync) = state.sync.as_ref() {
+        sync.render(frame, area);
+        return;
+    }
+
     if state.show_help {
         render_help_popup(frame, area);
     }
@@ -918,6 +923,9 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing:
         Span::styled("s", key),
         Span::styled(" status", dim_s),
         Span::styled("  ", sep),
+        Span::styled("S", key),
+        Span::styled(" sync", dim_s),
+        Span::styled("  ", sep),
         Span::styled("?", key),
         Span::styled(" help", dim_s),
         Span::styled("  ", sep),
@@ -962,6 +970,7 @@ fn render_help_popup(frame: &mut Frame, area: Rect) {
         binding_line("r", "refresh now", key, desc),
         binding_line("u", "open provider dashboard", key, desc),
         binding_line("s", "open provider status page", key, desc),
+        binding_line("S", "fleet sync setup", key, desc),
         binding_line("?", "toggle this help", key, desc),
         binding_line("q / esc", "quit", key, desc),
         Line::from(""),

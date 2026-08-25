@@ -12,7 +12,8 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 
 - **Waybar module**: bar + percentage per provider with brand-colored icons, and a pango-markup tooltip that *is* the waybar panel - every section below, drawn with text bars
 - **TUI dashboard** (ratatui): per-provider sidebar, Session / Weekly / Sonnet-only / Tertiary windows, Extra usage rates, cost breakdown
-- **One panel, five surfaces**: the waybar tooltip, the KDE Plasma applet, the GNOME extension, the Quickshell widget and the Windows tray window all render the same sections in the same order - LIMITS, COST, TOKENS BY DAY, TOKENS BY MODEL - from a single layout resolved in `tokengauge-core`. See [CLAUDE.md](CLAUDE.md) for the parity rule.
+- **Fleet sync**: add up tokens and cost across every machine you code on. One encrypted object per machine, moved through a folder your sync tool already handles or an S3-compatible bucket. No service to run, no account to make. See [Fleet sync](#fleet-sync).
+- **One panel, five surfaces**: the waybar tooltip, the KDE Plasma applet, the GNOME extension, the Quickshell widget and the Windows tray window all render the same sections in the same order - LIMITS, COST, TOKENS BY DAY, TOKENS BY MODEL, TOKENS BY DEVICE - from a single layout resolved in `tokengauge-core`. See [CLAUDE.md](CLAUDE.md) for the parity rule.
 - **KDE Plasma 6 applet**: native panel widget (QML plasmoid) - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
 - **Native cost tracking**: today, month, 7-day rolling, per-model split, burn rate $/hr anchored to the provider's real session window, 7-day chart, today's spend vs the average of the prior days
 - **Multi-provider**: Claude, Codex, Kimi, Grok, and GLM (z.ai)
@@ -85,6 +86,7 @@ terminal TUI. The waybar panel itself is the tooltip - hover the module.
 | `g` / `G` / Home / End | Top / bottom |
 | `u` | Open active provider's usage dashboard |
 | `s` | Open active provider's status page |
+| `S` | Fleet sync setup |
 | `q` / `Esc` | Quit |
 
 ## Configuration
@@ -114,6 +116,102 @@ Edit `~/.config/tokengauge/config.toml`:
 | `update.check_interval_secs` | Seconds between daemon update checks | `21600` |
 
 `ccusage` is auto-detected on PATH (preferring a global install, then `bunx`, then `npx`).
+
+## Fleet sync
+
+Two machines, one set of figures. Turn it on and the cost, token and burn rows
+cover the whole fleet, with a **TOKENS BY DEVICE** section showing where the
+spend came from.
+
+There is no service and no account. Each machine writes **one encrypted object
+that only it ever writes**, into storage you already have, and reads the others.
+Single-writer objects are why there is no conflict resolution anywhere in this:
+no two machines ever write the same thing.
+
+### Setting it up
+
+On the first machine:
+
+```bash
+tokengauge --sync-setup        # opens the TUI's sync screen in a terminal
+```
+
+Press `e` to turn sync on, `d` to point it at a folder your sync tool handles
+(`~/Sync/tokengauge`, a Dropbox or Nextcloud folder, a NAS mount), `g` to
+generate the fleet key, and `t` to check the round trip. Copy the key it shows.
+
+On every other machine, the same screen, but press `j` and paste the key instead
+of `g`. Or from a shell:
+
+```bash
+tokengauge --sync-join tgsync1…
+```
+
+The desktop frontends all have a button for this: the Plasma applet's settings
+pane, the GNOME popup header, `y` in the Omarchy widget's settings, and the
+Windows tray menu.
+
+### An S3-compatible bucket instead
+
+Press `x` on the sync screen to switch, then set the endpoint, bucket, region
+and prefix. Works with S3, Cloudflare R2, Backblaze B2's S3 endpoint, MinIO and
+Garage. Credentials come from `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+rather than the config file.
+
+```toml
+[sync]
+enabled = true
+transport = "s3"
+label = "desktop"
+
+[sync.s3]
+endpoint = "https://<account>.r2.cloudflarestorage.com"
+region = "auto"
+bucket = "tokengauge"
+prefix = "fleet/"
+```
+
+### What actually crosses the wire
+
+Token counts, bucketed by UTC hour, provider and model. **Never dollars** -
+money is tokens times each machine's own price table, so shipping a figure would
+let a stale price table on one machine skew the fleet total. Never prompts, file
+paths, project names or credentials.
+
+Each object is sealed with XChaCha20-Poly1305 under the fleet key and named with
+a keyed digest, so whoever holds the folder or bucket cannot read your usage or
+even count your machines. What that does **not** hide is *when* you write, so
+your working hours are still visible to them. And a symmetric key means there is
+no revocation: a lost machine can read the fleet until you re-key every other
+one with `--sync-init --sync-force` and `--sync-join`.
+
+### If you sync `~/.claude/projects` yourself
+
+Then both machines read the same transcripts and the fleet total doubles.
+TokenGauge fingerprints each day and tells you when it sees this, counting the
+day once, but the fix is to leave that provider out:
+
+```toml
+[sync.providers]
+claude = false
+codex = true
+```
+
+Providers whose costs come from ccusage - a Kimi or Grok plan driven from its own
+CLI - cannot sync at all yet: there are no per-call events behind them to bucket.
+
+### Checking on it
+
+```bash
+tokengauge --sync-status          # what the last cycle did; --json for the raw object
+tokengauge --sync-test            # write a probe, read it back, remove it
+tokengauge --sync-forget laptop   # drop a machine you no longer use
+```
+
+The COST section also carries a **Sync** row that leads with problems: a
+transport that is down, an object it could not use, a fleet gone stale.
+Configured-but-not-working under-reports silently, and a total that is quietly
+too low is worse than one that is visibly missing.
 
 ## CSS tier classes (waybar theming)
 

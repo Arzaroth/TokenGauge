@@ -208,10 +208,11 @@ pub(super) fn read_file(
 
         // A resumed session replayed into a second file would repeat the same
         // cumulative readings; the session and its running total identify one.
-        if !seen.insert(dedup_key(
+        let key = dedup_key(
             &session_id,
             &format!("{}|{}", record.timestamp, cumulative.total_tokens),
-        )) {
+        );
+        if !seen.insert(key) {
             continue;
         }
 
@@ -225,6 +226,7 @@ pub(super) fn read_file(
             date,
             at: timestamp,
             tokens,
+            key: Some(key),
         });
     }
 

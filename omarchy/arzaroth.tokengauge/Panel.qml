@@ -399,6 +399,7 @@ Panel {
         if (t === "r" || t === "R") usage.refreshNow()
         else if (t === ",") root.settingsOpen = !root.settingsOpen
         else if (root.settingsOpen && (t === "p" || t === "P")) root.cyclePin()
+        else if (root.settingsOpen && (t === "y" || t === "Y")) usage.openSyncSetup()
         else if (root.settingsOpen && /^[1-9]$/.test(t)) root.toggleProviderAt(Number(t) - 1)
         else if (t === "u" || t === "U") root.openProviderUrl("dashboard_url")
         else if (t === "s" || t === "S") root.openProviderUrl("status_url")
@@ -741,7 +742,7 @@ Panel {
             visible: root.settingsOpen
             width: parent.width
             topPadding: Style.space(4)
-            text: "A number toggles a provider, p walks the pin, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml."
+            text: "A number toggles a provider, p walks the pin, y sets up fleet sync so tokens and cost add up across your machines, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

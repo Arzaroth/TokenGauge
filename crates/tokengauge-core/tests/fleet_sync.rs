@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use chrono::{Duration, Utc};
 use tokengauge_core::cost::{TokenCounts, UsageEvent};
-use tokengauge_core::sync::model::{Contribution, DeviceRecord, Hour, bucketize};
 use tokengauge_core::sync::{self, FleetKey, SCHEMA_VERSION};
+use tokengauge_core::sync::{Contribution, DeviceRecord, Hour, bucketize};
 use tokengauge_core::{SyncConfig, SyncDirConfig, TokenGaugeConfig};
 
 const PEER_ID: &str = "0000feedfacecafe";
@@ -392,4 +392,126 @@ fn a_sync_tools_conflict_copy_is_not_mistaken_for_a_contribution() {
     )));
     assert!(!is_object_name(&format!("{name}.tgsync.tmp1234")));
     assert!(!is_object_name("README.md"));
+}
+
+/// The seam where peer buckets actually reach the panel. It used to be reachable
+/// only through a real home directory, so nothing proved a peer's tokens land in
+/// `by_device` or that the sync note reaches every provider row.
+#[test]
+fn a_peers_buckets_reach_the_panel_rows() {
+    use tokengauge_core::cost::build_report;
+    use tokengauge_core::cost::pricing::PriceTable;
+
+    let root = scratch("panel-seam");
+    let config = config(&root);
+    let since = (Utc::now() - Duration::days(7))
+        .with_timezone(&chrono::Local)
+        .date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+    publish_peer(&root, &key, 4242);
+
+    let local = vec![event(2, 1000, 1)];
+    let outcome = sync::refresh(&config, &local, since);
+
+    let mut events = local.clone();
+    events.extend(outcome.events);
+    let prices = PriceTable::default();
+    let today = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let mut report = build_report(&events, &prices, today);
+
+    tokengauge_core::attach_fleet(
+        &mut report,
+        &outcome.store,
+        &prices,
+        today,
+        &sync::local_device_id(&config),
+        sync::note(&outcome.status, 600, Utc::now().timestamp_millis()),
+    );
+
+    let claude = report.costs.get("claude").expect("a claude row");
+    assert_eq!(
+        claude.by_device.len(),
+        2,
+        "both machines appear: {:?}",
+        claude.by_device
+    );
+    assert!(
+        claude
+            .by_device
+            .iter()
+            .any(|d| d.is_local && d.tokens == 1000),
+        "{:?}",
+        claude.by_device
+    );
+    assert!(
+        claude
+            .by_device
+            .iter()
+            .any(|d| !d.is_local && d.tokens == 4242),
+        "the peer's tokens have to reach the rows, not just the total"
+    );
+    assert!(
+        claude.sync_note.is_some(),
+        "every provider row carries the sync state"
+    );
+}
+
+/// A peer on a newer TokenGauge syncing a provider this build cannot rate used
+/// to have its tokens vanish from the total with nothing said.
+#[test]
+fn a_provider_this_build_cannot_rate_is_reported_not_swallowed() {
+    let root = scratch("unknown-provider");
+    let config = config(&root);
+    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+
+    let device = DeviceRecord {
+        id: PEER_ID.into(),
+        hostname: "laptop".into(),
+        label: "laptop".into(),
+        os: "linux".into(),
+    };
+    let mut bucket = bucketize(&[event(3, 999, 7)]);
+    bucket[0].provider = "quasar".into();
+    let contribution = Contribution {
+        schema_version: SCHEMA_VERSION,
+        device,
+        written_at_ms: Utc::now().timestamp_millis(),
+        tz_offset_minutes: 0,
+        covers_from: Hour::containing(Utc::now()).minus_days(30),
+        providers: vec!["quasar".into()],
+        buckets: bucket,
+        days: Vec::new(),
+    };
+    let name = key.object_name(PEER_ID);
+    let dir = root.join("shared").join("v1");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(
+        dir.join(&name),
+        key.seal(&name, &serde_json::to_vec(&contribution).expect("json"))
+            .expect("seal"),
+    )
+    .expect("write");
+
+    let outcome = sync::refresh(&config, &[], since);
+
+    assert!(
+        outcome.events.is_empty(),
+        "it cannot be rated, so it is not counted"
+    );
+    assert_eq!(
+        outcome.status.unreadable_providers,
+        vec!["quasar".to_string()]
+    );
+    let report = sync::describe(&outcome.status, Utc::now().timestamp_millis());
+    assert!(
+        report
+            .problems
+            .iter()
+            .any(|p| p.contains("quasar") && p.contains("update TokenGauge")),
+        "the gap has to be visible: {:?}",
+        report.problems
+    );
 }

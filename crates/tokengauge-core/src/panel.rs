@@ -399,7 +399,10 @@ fn cost_rows(cost: &CostInfo) -> Vec<PanelRow> {
         );
         r.badge = note.headline.clone();
         r.badge_tone = note.tone;
-        r.suffix = note.detail.clone();
+        // A transport error can be a paragraph. Rows renderers print the suffix
+        // inline on surfaces with no wrapping, so the line is capped and the
+        // whole sentence kept for the tooltip.
+        r.suffix = ellipsize(&note.detail, 72);
         r.tooltip = if note.detail.is_empty() {
             "Cost and token figures cover every machine in the fleet".to_string()
         } else {
@@ -514,6 +517,19 @@ fn model_tooltip(m: &ModelCost) -> String {
 /// `$1.23` under a hundred, `$312` above it - cents stop carrying information
 /// once the figure is that large, and the extra digits push the value column
 /// wide on a narrow panel.
+/// Cut to `max` characters on a word boundary where there is one.
+fn ellipsize(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(max - 1).collect();
+    let trimmed = match cut.rsplit_once(' ') {
+        Some((head, _)) if head.chars().count() >= max / 2 => head,
+        _ => cut.trim_end(),
+    };
+    format!("{trimmed}…")
+}
+
 pub fn money(value: f64) -> String {
     if !value.is_finite() {
         return "-".to_string();
@@ -964,6 +980,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_long_problem_does_not_run_off_the_row() {
+        let long = "could not list: AccessDenied (403) the request signature we \
+                    calculated does not match the signature you provided";
+        let cut = ellipsize(long, 72);
+        assert!(cut.chars().count() <= 72, "{cut}");
+        assert!(cut.ends_with('…'));
+        assert!(!cut.contains("  "), "cut on a word boundary: {cut}");
+        assert_eq!(ellipsize("short enough", 72), "short enough");
     }
 
     #[test]

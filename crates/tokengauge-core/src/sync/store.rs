@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::model::FleetStore;
+use super::fleet::FleetStore;
 use crate::write_atomic;
 
 /// Derived from the snapshot's parent, like every other state file, but a

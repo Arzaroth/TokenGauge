@@ -28,8 +28,22 @@ pub struct AppState {
     pub viewport_height: u16,
     pub active_tab: usize,
     pub initial_provider: Option<String>,
-    pub show_help: bool,
-    pub sync: Option<crate::sync_view::SyncView>,
+    pub overlay: Overlay,
+}
+
+/// What is drawn over the panel, and what owns the keyboard while it is.
+///
+/// One state rather than a flag plus an option: each overlay used to need its
+/// own carve-out in both the key handler and the renderer, so a third would
+/// have cost four.
+#[derive(Debug, Default)]
+pub enum Overlay {
+    #[default]
+    None,
+    Help,
+    /// Boxed: a `SyncView` carries a whole config, and `AppState` is cloned
+    /// around the draw loop.
+    Sync(Box<crate::sync_view::SyncView>),
 }
 
 impl AppState {
@@ -47,8 +61,7 @@ impl AppState {
             viewport_height: 0,
             active_tab: 0,
             initial_provider: None,
-            show_help: false,
-            sync: None,
+            overlay: Overlay::default(),
         }
     }
 
@@ -138,9 +151,9 @@ impl App {
     }
 
     pub fn open_sync(&mut self) {
-        self.state.sync = Some(crate::sync_view::SyncView::open(
+        self.state.overlay = Overlay::Sync(Box::new(crate::sync_view::SyncView::open(
             self.config_override.clone(),
-        ));
+        )));
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -215,25 +228,26 @@ impl App {
         let Event::Key(key) = event::read()? else {
             return Ok(());
         };
-        // The sync screen owns every key while it is up, including `q`: it has
-        // a text field, and a typed `q` must not quit the process.
-        if self.state.sync.is_some() {
-            let keep = self.state.sync.as_mut().expect("just checked").on_key(key);
-            if !keep {
-                self.state.sync = None;
+        // An overlay owns the keyboard while it is up. The sync screen includes
+        // `q`, because it has text fields and a typed `q` must not quit.
+        match &mut self.state.overlay {
+            Overlay::Sync(sync) => {
+                if !sync.on_key(key) {
+                    self.state.overlay = Overlay::None;
+                }
+                return Ok(());
             }
-            return Ok(());
+            Overlay::Help => {
+                if should_exit(key) {
+                    self.should_quit = true;
+                } else {
+                    self.state.overlay = Overlay::None;
+                }
+                return Ok(());
+            }
+            Overlay::None => {}
         }
 
-        // If help popup is open, any key closes it (except quit).
-        if self.state.show_help {
-            if should_exit(key) {
-                self.should_quit = true;
-            } else {
-                self.state.show_help = false;
-            }
-            return Ok(());
-        }
         if should_exit(key) {
             self.should_quit = true;
             return Ok(());
@@ -243,7 +257,7 @@ impl App {
             self.pending_refresh = Some(spawn_refresh(self.config_override.clone(), true));
         }
         match key.code {
-            KeyCode::Char('?') => self.state.show_help = true,
+            KeyCode::Char('?') => self.state.overlay = Overlay::Help,
             KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => self.state.next_tab(),
             KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => self.state.prev_tab(),
             KeyCode::Char('l') | KeyCode::Right => self.state.next_tab(),
@@ -280,7 +294,7 @@ impl App {
         // A refresh writes a newer sync status; an open sync screen read its
         // copy once and would otherwise sit on the old device list until the
         // user pressed `r`.
-        if let Some(sync) = self.state.sync.as_mut() {
+        if let Overlay::Sync(sync) = &mut self.state.overlay {
             sync.reload();
         }
         if let Some(provider) = self.state.initial_provider.take() {

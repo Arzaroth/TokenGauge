@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A day and a model say which machine they came from.** Hovering a row in "Tokens by day" or "Tokens by model" now lists the fleet's split of it, tokens and dollars per device, under the figure it divides. The by-device section answers where a month's total came from; this answers the same question one row at a time, which is the one you have when a Tuesday looks wrong. It comes out of the buckets the row total is built from, so the split cannot disagree with the row above it, and a machine that joined part-way through carries the same `partial` marker the by-device rows use.
+- The split is filled only when the fleet holds more than one machine. On a lone machine it would restate the row it hangs off, and a hover target that says nothing teaches you not to hover.
+- **The GNOME popup has tooltips at all now.** It was the one panel that rendered none, so the sync note's full sentence, a day's exact token count and now the per-device split were all written for it and never shown. Meters, bar rows and cost rows all carry one.
+
 ## [0.24.4] - 2026-08-26
 
 ### Fixed

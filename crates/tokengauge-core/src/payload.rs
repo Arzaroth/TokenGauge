@@ -190,6 +190,10 @@ pub struct DayCost {
     pub date: String,
     pub usd: f64,
     pub tokens: u64,
+    /// Which machines this day came from. Filled only when the fleet has more
+    /// than one, because on a single machine it restates the row it hangs off.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by_device: Vec<sync::DeviceCost>,
 }
 
 /// Per-model cost slice (ccusage modelBreakdowns).
@@ -206,6 +210,9 @@ pub struct ModelCost {
     pub cache_creation_tokens: u64,
     #[serde(default)]
     pub cache_read_tokens: u64,
+    /// Which machines ran this model. See [`DayCost::by_device`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by_device: Vec<sync::DeviceCost>,
 }
 
 /// Current burn rate + 5h-block projection from ccusage `blocks --active`.

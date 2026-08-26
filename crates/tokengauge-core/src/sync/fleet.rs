@@ -404,7 +404,12 @@ impl FleetStore {
         unknown.into_iter().collect()
     }
 
-    /// Per-device share of one provider's spend over a local-calendar range.
+    /// Per-device share of one provider's spend over a local-calendar range,
+    /// narrowed to a single model when `model` is set.
+    ///
+    /// The narrowing is what lets a day row and a model row answer "which
+    /// machine did this come from" from the same buckets the section total is
+    /// built out of, so the split cannot disagree with the row above it.
     pub fn device_totals(
         &self,
         provider: &str,
@@ -412,6 +417,7 @@ impl FleetStore {
         offset: FixedOffset,
         prices: &PriceTable,
         local_id: &str,
+        model: Option<&str>,
     ) -> Vec<DeviceCost> {
         let (from, to) = range;
         let mut rows: Vec<DeviceCost> = self
@@ -422,6 +428,9 @@ impl FleetStore {
                 let mut usd = 0.0;
                 for bucket in &slice.buckets {
                     if !bucket.provider.eq_ignore_ascii_case(provider) {
+                        continue;
+                    }
+                    if model.is_some_and(|want| !bucket.model.eq_ignore_ascii_case(want)) {
                         continue;
                     }
                     let date = bucket.hour.date_at(offset);
@@ -791,6 +800,7 @@ mod tests {
             utc,
             &PriceTable::default(),
             "a",
+            None,
         );
 
         assert_eq!(rows.len(), 2);
@@ -798,6 +808,41 @@ mod tests {
         assert!(rows[0].partial, "joined mid-month");
         assert!(!rows[1].partial);
         assert!(rows[1].is_local);
+    }
+
+    /// The narrowed total is what a model row's tooltip attributes, so it has
+    /// to come out of the same buckets the unnarrowed one adds up.
+    #[test]
+    fn device_totals_narrow_to_one_model() {
+        let utc = FixedOffset::east_opt(0).expect("offset");
+        let mut store = FleetStore::new();
+        store.upsert_local(
+            &device("a"),
+            hour("2026-08-01T00"),
+            &[
+                event("claude", "opus", hour("2026-08-04T09"), 10, Some(1)),
+                event("claude", "haiku", hour("2026-08-04T10"), 90, Some(2)),
+            ],
+            1,
+        );
+
+        let range = (
+            hour("2026-08-01T00").utc_date(),
+            hour("2026-08-25T00").utc_date(),
+        );
+        let prices = PriceTable::default();
+        let all = store.device_totals("claude", range, utc, &prices, "a", None);
+        let opus = store.device_totals("claude", range, utc, &prices, "a", Some("opus"));
+        let haiku = store.device_totals("claude", range, utc, &prices, "a", Some("haiku"));
+
+        assert_eq!(all[0].tokens, 100);
+        assert_eq!(opus[0].tokens, 10);
+        assert_eq!(haiku[0].tokens, 90);
+        assert_eq!(
+            opus[0].tokens + haiku[0].tokens,
+            all[0].tokens,
+            "a split that does not add up to its row is worse than none"
+        );
     }
 
     #[test]

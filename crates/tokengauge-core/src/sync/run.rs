@@ -239,7 +239,7 @@ fn cycle(
     let own_name = key.object_name(&device.id);
 
     if let Some(contribution) = store.contribution(&device.id, now, &providers) {
-        let hash = content_hash(&contribution);
+        let hash = publish_stamp(&contribution, &transport.describe(), &own_name);
         if store.published_hash != Some(hash) {
             let body =
                 serde_json::to_vec(&contribution).context("could not serialise a contribution")?;
@@ -310,6 +310,21 @@ fn cycle(
 
     store.last_pull_ms = Some(now.timestamp_millis());
     Ok(())
+}
+
+/// The contribution's content bound to **where** it goes.
+///
+/// Content alone is not enough: changing the folder, the bucket, the prefix or
+/// the fleet key leaves the data identical but sends it to a different object
+/// in a different place, and a device that skipped the write would never appear
+/// there. The key is folded in through the object name, which is derived from
+/// it.
+fn publish_stamp(contribution: &Contribution, target: &str, name: &str) -> u64 {
+    crate::cost::digest_u64(&[
+        &content_hash(contribution).to_le_bytes(),
+        target.as_bytes(),
+        name.as_bytes(),
+    ])
 }
 
 fn device_statuses(

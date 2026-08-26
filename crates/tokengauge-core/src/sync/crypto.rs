@@ -78,8 +78,9 @@ impl FleetKey {
     }
 
     /// The object one device writes to. Keyed rather than the raw device id, so
-    /// whoever holds the folder or bucket cannot count the fleet or link an
-    /// object to a machine.
+    /// whoever holds the folder or bucket cannot link an object to a machine or
+    /// follow one across fleets. It does not hide the fleet's *size*: there is
+    /// one object per device, so they are countable whatever they are called.
     pub fn object_name(&self, device_id: &str) -> String {
         let mut mac =
             <Hmac<Sha256> as Mac>::new_from_slice(&self.0).expect("hmac takes any length");

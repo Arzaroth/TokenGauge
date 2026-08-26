@@ -55,7 +55,11 @@ fn event(hours_ago: i64, out: u64, key: u64) -> UsageEvent {
 }
 
 fn objects(root: &Path) -> Vec<String> {
-    let dir = root.join("shared").join("v1");
+    objects_in(&root.join("shared"))
+}
+
+fn objects_in(sync_dir: &Path) -> Vec<String> {
+    let dir = sync_dir.join("v1");
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -133,6 +137,46 @@ fn a_fleet_of_two_meets_through_a_folder() {
         "the peer's tokens arrived, and this machine's own were left to its transcripts"
     );
     assert_eq!(objects(&root).len(), 2);
+}
+
+/// Content alone decided whether to publish, so pointing sync at a new folder
+/// or re-keying the fleet left the new target empty until the data happened to
+/// change.
+#[test]
+fn a_new_target_gets_this_machine_even_when_the_data_has_not_changed() {
+    let root = scratch("retarget");
+    let mut config = config(&root);
+    let since = (Utc::now() - Duration::days(7))
+        .with_timezone(&chrono::Local)
+        .date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+    let local = vec![event(2, 100, 1)];
+
+    assert!(sync::refresh(&config, &local, since).status.published);
+    assert!(
+        !sync::refresh(&config, &local, since).status.published,
+        "unchanged data to the same place must not churn"
+    );
+
+    let moved = root.join("moved");
+    config.sync.dir.path = moved.clone();
+    let status = sync::refresh(&config, &local, since).status;
+    assert!(status.published, "a new folder has to receive this machine");
+    assert_eq!(objects_in(&moved).len(), 1);
+
+    // Re-keying changes the object name, so the fleet's new object is a
+    // different one and has to be written even though the tokens are identical.
+    let rekeyed = FleetKey::generate();
+    sync::store_key(&config.cache_file, &rekeyed, true).expect("re-key");
+    let status = sync::refresh(&config, &local, since).status;
+    assert!(status.published, "a re-keyed fleet writes a new object");
+    assert_eq!(
+        objects_in(&moved).len(),
+        2,
+        "the old object stays until --sync-forget removes it"
+    );
+    assert!(objects_in(&moved).contains(&rekeyed.object_name(&sync::local_device_id(&config))));
 }
 
 #[test]

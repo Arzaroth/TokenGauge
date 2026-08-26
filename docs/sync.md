@@ -106,12 +106,18 @@ race because no two writers ever touch the same object.
 ```
 
 The object name is keyed, not the raw `DeviceIdentity::machine_id`, so the
-folder or bucket holder cannot count the fleet or link an object to a machine.
-The real device id travels inside the encrypted body. `--sync-forget` still
-resolves a name locally, because the local machine holds the key.
+folder or bucket holder cannot link an object to a machine or carry a name
+across fleets. The real device id travels inside the encrypted body.
+`--sync-forget` still resolves a name locally, because the local machine holds
+the key.
 
-What this does not fix, and the docs must say so: write timing still leaks
-working hours to whoever holds the storage. No filename scheme changes that.
+What this does **not** hide, and the docs have to say so rather than let
+"encrypted" imply it:
+
+- **How many machines you have.** There is exactly one object per device, so
+  counting objects counts the fleet. A keyed name hides *which* machine, not
+  *how many*.
+- **When you work.** Write timing is visible, and no naming scheme changes that.
 
 Plaintext payload, before compression and encryption:
 

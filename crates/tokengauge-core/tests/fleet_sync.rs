@@ -259,6 +259,102 @@ fn an_object_for_another_fleet_is_named_and_not_retried() {
     );
 }
 
+/// `refresh` promises it never fails and keeps the totals. One unusable object
+/// among healthy peers is the cheapest way that promise breaks.
+#[test]
+fn one_unusable_object_does_not_cost_the_other_peers_their_cycle() {
+    let root = scratch("bad-apple");
+    let config = config(&root);
+    let since = (Utc::now() - Duration::days(7))
+        .with_timezone(&chrono::Local)
+        .date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+
+    publish_peer(&root, &key, 4242);
+    let dir = root.join("shared").join("v1");
+    // A name that lists like ours but is not one of our envelopes at all.
+    std::fs::write(
+        dir.join("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.tgsync"),
+        b"garbage",
+    )
+    .expect("write junk");
+
+    let outcome = sync::refresh(&config, &[event(1, 10, 1)], since);
+
+    assert_eq!(outcome.status.error, None, "the cycle must not abort");
+    assert_eq!(
+        outcome.events.iter().map(|e| e.tokens.output).sum::<u64>(),
+        4242,
+        "the healthy peer still landed"
+    );
+    assert_eq!(
+        outcome.status.skipped.len(),
+        1,
+        "{:?}",
+        outcome.status.skipped
+    );
+    assert!(
+        outcome.status.skipped[0]
+            .reason
+            .contains("not a TokenGauge sync object")
+    );
+}
+
+#[test]
+fn forget_matches_a_machine_the_way_a_person_names_it() {
+    let root = scratch("forget");
+    let config = config(&root);
+    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+    publish_peer(&root, &key, 500);
+    sync::refresh(&config, &[event(1, 10, 1)], since);
+
+    assert!(sync::forget(&config, "nobody").is_err(), "unknown name");
+    let local = sync::local_device_id(&config);
+    let refused = sync::forget(&config, &local).expect_err("this machine");
+    assert!(format!("{refused}").contains("this machine"), "{refused}");
+
+    // label, id and hostname all name the same device to a person.
+    assert_eq!(sync::forget(&config, "laptop").expect("by label"), "laptop");
+    assert!(
+        !objects(&root).contains(&key.object_name(PEER_ID)),
+        "the peer's object must go, or it rejoins next cycle"
+    );
+
+    let outcome = sync::refresh(&config, &[event(1, 10, 1)], since);
+    assert_eq!(outcome.status.devices.len(), 1);
+    assert!(outcome.events.is_empty());
+}
+
+#[test]
+fn absorbing_the_same_contribution_twice_does_not_double_it() {
+    let root = scratch("idempotent");
+    let config = config(&root);
+    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+    publish_peer(&root, &key, 700);
+
+    let first = sync::refresh(&config, &[], since);
+    assert_eq!(
+        first.events.iter().map(|e| e.tokens.output).sum::<u64>(),
+        700
+    );
+
+    // Republished with the same tokens: a peer that rewrites its object must
+    // replace what we hold, never add to it. This is the failure class the
+    // whole feature exists to prevent.
+    publish_peer(&root, &key, 700);
+    let again = sync::refresh(&config, &[], since);
+    assert_eq!(
+        again.events.iter().map(|e| e.tokens.output).sum::<u64>(),
+        700,
+        "absorb must replace its covered range, not accumulate"
+    );
+}
+
 #[test]
 fn sync_that_is_off_reads_nothing_and_writes_nothing() {
     let root = scratch("off");

@@ -287,7 +287,22 @@ fn cycle(
             continue;
         }
         let known = store.objects.get(&entry.name).cloned();
-        let sealed = transport.get(&entry, known.as_ref().map(|o| o.version.as_str()))?;
+
+        // One object we cannot fetch must not end the pull. Propagating here
+        // would drop every other peer's update for this cycle over a single
+        // unreadable file, which is the opposite of what the durable store is
+        // for. The version is deliberately not recorded, so it is retried.
+        let sealed = match transport.get(&entry, known.as_ref().map(|o| o.version.as_str())) {
+            Ok(sealed) => sealed,
+            Err(e) => {
+                status.skipped.push(SkippedObject {
+                    name: entry.name,
+                    reason: format!("{e:#}"),
+                });
+                continue;
+            }
+        };
+
         let Some(sealed) = sealed else {
             // Unchanged since we last looked. A standing rejection still gets
             // reported, or it would go quiet after the first cycle.
@@ -300,45 +315,13 @@ fn cycle(
             continue;
         };
 
-        // An object under a key we used to hold is our own past, not a fleet
-        // sharing our storage, so it is passed over rather than reported.
-        if let Err(crypto::OpenError::ForeignKey { key_id }) = key.open(&entry.name, &sealed)
-            && store.retired_key_ids.contains(&key_id)
-        {
-            store.objects.insert(
-                entry.name,
-                ObjectState {
-                    version: entry.version,
-                    reason: None,
-                },
-            );
-            continue;
-        }
-
-        let outcome = key
-            .open(&entry.name, &sealed)
-            .map_err(|e| e.to_string())
-            .and_then(|plain| {
-                serde_json::from_slice::<Contribution>(&plain)
-                    .map_err(|e| format!("contribution did not parse: {e}"))
-            })
-            .and_then(|contribution| {
-                if contribution.schema_version > SCHEMA_VERSION {
-                    Err(format!(
-                        "written by a newer TokenGauge (schema {})",
-                        contribution.schema_version
-                    ))
-                } else {
-                    Ok(contribution)
-                }
-            });
-
-        let reason = match outcome {
-            Ok(contribution) => {
+        let reason = match read_peer(&key, &store.retired_key_ids, &entry.name, &sealed) {
+            PeerOutcome::Absorbed(contribution) => {
                 store.absorb(&contribution);
                 None
             }
-            Err(reason) => {
+            PeerOutcome::Ignored => None,
+            PeerOutcome::Rejected(reason) => {
                 status.skipped.push(SkippedObject {
                     name: entry.name.clone(),
                     reason: reason.clone(),
@@ -372,6 +355,40 @@ fn publish_stamp(contribution: &Contribution, target: &str, name: &str) -> u64 {
         target.as_bytes(),
         name.as_bytes(),
     ])
+}
+
+/// What one peer object turned out to be.
+///
+/// Split out of the pull loop so the decision is made once, from one decrypt,
+/// and can be tested on bytes instead of only through a folder.
+#[derive(Debug)]
+enum PeerOutcome {
+    Absorbed(Box<Contribution>),
+    /// Ours, sealed under a key we have retired. Passed over in silence: it is
+    /// our own past, not another fleet sharing the storage.
+    Ignored,
+    Rejected(String),
+}
+
+fn read_peer(key: &crypto::FleetKey, retired: &[String], name: &str, sealed: &[u8]) -> PeerOutcome {
+    let plain = match key.open(name, sealed) {
+        Ok(plain) => plain,
+        Err(crypto::OpenError::ForeignKey { key_id }) if retired.contains(&key_id) => {
+            return PeerOutcome::Ignored;
+        }
+        Err(e) => return PeerOutcome::Rejected(e.to_string()),
+    };
+    let contribution = match serde_json::from_slice::<Contribution>(&plain) {
+        Ok(contribution) => contribution,
+        Err(e) => return PeerOutcome::Rejected(format!("contribution did not parse: {e}")),
+    };
+    if contribution.schema_version > SCHEMA_VERSION {
+        return PeerOutcome::Rejected(format!(
+            "written by a newer TokenGauge (schema {})",
+            contribution.schema_version
+        ));
+    }
+    PeerOutcome::Absorbed(Box::new(contribution))
 }
 
 fn device_statuses(
@@ -503,9 +520,10 @@ pub fn forget(config: &TokenGaugeConfig, wanted: &str) -> Result<String> {
         .map(|slice| slice.device.display().to_string())
         .unwrap_or_else(|| id.clone());
 
-    if let Some(key) = crypto::load_key(&config.cache_file)?
-        && let Ok(transport) = transport::open(&config.sync)
-    {
+    // A delete that failed used to be swallowed, reporting success while the
+    // object stayed in storage and the device rejoined on the next cycle.
+    if let Some(key) = crypto::load_key(&config.cache_file)? {
+        let transport = transport::open(&config.sync)?;
         let name = key.object_name(id);
         transport.delete(&name)?;
         store.objects.remove(&name);
@@ -513,4 +531,171 @@ pub fn forget(config: &TokenGaugeConfig, wanted: &str) -> Result<String> {
     store.devices.remove(id);
     store::save(&config.cache_file, &store)?;
     Ok(label)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync::model::{Bucket, DeviceRecord, Granularity};
+
+    fn contribution(schema: u32) -> Contribution {
+        Contribution {
+            schema_version: schema,
+            device: DeviceRecord {
+                id: "peer".into(),
+                hostname: "laptop".into(),
+                label: String::new(),
+                os: "linux".into(),
+            },
+            written_at_ms: 1,
+            tz_offset_minutes: 0,
+            covers_from: Hour::containing(Utc::now()).minus_days(30),
+            providers: vec!["claude".into()],
+            buckets: vec![Bucket {
+                hour: Hour::containing(Utc::now()),
+                provider: "claude".into(),
+                model: "opus".into(),
+                granularity: Granularity::Hour,
+                tokens: Default::default(),
+            }],
+            days: Vec::new(),
+        }
+    }
+
+    fn sealed(key: &crypto::FleetKey, name: &str, schema: u32) -> Vec<u8> {
+        let body = serde_json::to_vec(&contribution(schema)).expect("serialise");
+        key.seal(name, &body).expect("seal")
+    }
+
+    #[test]
+    fn every_way_a_peer_object_can_be_unusable_is_named() {
+        let key = crypto::FleetKey::generate();
+        let name = key.object_name("peer");
+        let retired = Vec::new();
+
+        assert!(matches!(
+            read_peer(&key, &retired, &name, &sealed(&key, &name, SCHEMA_VERSION)),
+            PeerOutcome::Absorbed(_)
+        ));
+
+        let mut tampered = sealed(&key, &name, SCHEMA_VERSION);
+        let last = tampered.len() - 1;
+        tampered[last] ^= 1;
+        match read_peer(&key, &retired, &name, &tampered) {
+            PeerOutcome::Rejected(why) => assert!(why.contains("authentication"), "{why}"),
+            other => panic!("a tampered object must be rejected, got {other:?}"),
+        }
+
+        let not_json = key.seal(&name, b"{ not a contribution").expect("seal");
+        match read_peer(&key, &retired, &name, &not_json) {
+            PeerOutcome::Rejected(why) => assert!(why.contains("did not parse"), "{why}"),
+            other => panic!("expected a parse rejection, got {other:?}"),
+        }
+
+        match read_peer(
+            &key,
+            &retired,
+            &name,
+            &sealed(&key, &name, SCHEMA_VERSION + 1),
+        ) {
+            PeerOutcome::Rejected(why) => assert!(why.contains("newer TokenGauge"), "{why}"),
+            other => panic!("expected a schema rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn our_own_retired_key_is_passed_over_but_a_strangers_is_reported() {
+        let mine = crypto::FleetKey::generate();
+        let old = crypto::FleetKey::generate();
+        let stranger = crypto::FleetKey::generate();
+        let name = mine.object_name("peer");
+
+        let ours = sealed(&old, &name, SCHEMA_VERSION);
+        assert!(matches!(
+            read_peer(&mine, &[old.id_hex()], &name, &ours),
+            PeerOutcome::Ignored
+        ));
+
+        let theirs = sealed(&stranger, &name, SCHEMA_VERSION);
+        match read_peer(&mine, &[old.id_hex()], &name, &theirs) {
+            PeerOutcome::Rejected(why) => assert!(why.contains("another fleet key"), "{why}"),
+            other => panic!("a stranger's object must be reported, got {other:?}"),
+        }
+    }
+
+    fn status_with(devices: usize, last_pull_ms: Option<i64>) -> SyncStatus {
+        SyncStatus {
+            enabled: true,
+            devices: (0..devices)
+                .map(|n| DeviceStatus {
+                    device_id: format!("d{n}"),
+                    label: format!("machine {n}"),
+                    hostname: "host".into(),
+                    updated_at_ms: 0,
+                    is_local: n == 0,
+                    stale: false,
+                })
+                .collect(),
+            last_pull_ms,
+            ..Default::default()
+        }
+    }
+
+    /// The wording every frontend shows, and its worst-first order.
+    #[test]
+    fn the_health_note_reports_the_worst_thing_first() {
+        let now = 10_000_000_000;
+        let fresh = Some(now - 1000);
+        let refresh_secs = 600;
+        let tone = |status: &SyncStatus| note(status, refresh_secs, now).expect("enabled").tone;
+
+        assert_eq!(note(&SyncStatus::default(), refresh_secs, now), None);
+
+        let healthy = status_with(2, fresh);
+        assert_eq!(tone(&healthy), crate::panel::Tone::Good);
+        assert_eq!(tone(&status_with(1, fresh)), crate::panel::Tone::Dim);
+        assert_eq!(tone(&status_with(2, None)), crate::panel::Tone::Warn);
+
+        // Three pull intervals is a warning; a day is not.
+        let mut behind = status_with(2, Some(now - 4 * 600 * 1000));
+        assert_eq!(tone(&behind), crate::panel::Tone::Warn);
+        behind.last_pull_ms = Some(now - 25 * 3_600 * 1000);
+        assert_eq!(tone(&behind), crate::panel::Tone::Critical);
+
+        // Worst-first: each of these outranks the staleness above it.
+        let mut skipped = behind.clone();
+        skipped.skipped = vec![SkippedObject {
+            name: "x".into(),
+            reason: "sealed for another fleet key".into(),
+        }];
+        assert_eq!(
+            note(&skipped, refresh_secs, now).unwrap().headline,
+            "skipped"
+        );
+
+        let mut dropped = skipped.clone();
+        dropped.dropped = vec!["laptop".into()];
+        assert_eq!(
+            note(&dropped, refresh_secs, now).unwrap().headline,
+            "re-keyed"
+        );
+
+        // Wrong numbers outrank an informational re-key: a transcript tree
+        // counted twice is the one thing here that makes the totals lie.
+        let mut overlapping = dropped.clone();
+        overlapping.overlaps = vec![OverlapNote {
+            date: "2026-08-25".into(),
+            devices: vec!["a".into(), "b".into()],
+            kept: "a".into(),
+        }];
+        let duplicate = note(&overlapping, refresh_secs, now).unwrap();
+        assert_eq!(duplicate.headline, "duplicate");
+        assert_eq!(duplicate.tone, crate::panel::Tone::Critical);
+
+        let mut failed = overlapping.clone();
+        failed.error = Some("the folder is gone".into());
+        let worst = note(&failed, refresh_secs, now).unwrap();
+        assert_eq!(worst.headline, "error");
+        assert_eq!(worst.tone, crate::panel::Tone::Critical);
+    }
 }

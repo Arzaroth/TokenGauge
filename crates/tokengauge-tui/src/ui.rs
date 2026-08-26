@@ -1,4 +1,3 @@
-use chrono::{Datelike, Duration as ChronoDuration, Local, Weekday};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -7,14 +6,11 @@ use ratatui::widgets::{
     Bar, BarChart, BarGroup, Block, BorderType, Borders, Clear, List, ListItem, ListState,
     Paragraph, Wrap,
 };
-use tokengauge_core::panel::{PanelRow, panel_spec};
-use tokengauge_core::{
-    CostInfo, ModelCost, ProviderRow, UsagePace, format_tokens, format_updated_relative, theme,
-    window_labels,
-};
+use tokengauge_core::panel::{PanelRow, Section, SectionKind, Tone, panel_spec};
+use tokengauge_core::{ProviderRow, format_updated_relative, theme};
 
 use crate::app::{AppState, Overlay};
-use crate::theme::{color_for, dim, green, hex_to_color, provider_icon_color, tone_color};
+use crate::theme::{dim, green, hex_to_color, provider_icon_color, tone_color};
 
 // Width breakpoints: hide sidebar on narrow terminals.
 const NARROW_BREAKPOINT: u16 = 80;
@@ -131,8 +127,6 @@ fn render_body(frame: &mut Frame, area: Rect, state: &mut AppState) {
             .style(Style::default().fg(Color::Red))
             .block(block);
         frame.render_widget(paragraph, area);
-        state.content_height = 0;
-        state.viewport_height = area.height;
         return;
     }
 
@@ -178,7 +172,10 @@ fn render_sidebar(frame: &mut Frame, area: Rect, state: &mut AppState) {
         .map(|row| {
             let (icon, color) = provider_icon_color(&row.provider);
             let used = row.session_used.or(row.weekly_used).unwrap_or(0);
-            let pct_color = color_for(used);
+            // Tone::for_percent is the tier's owner; the palette is this
+            // frontend's. Reaching for a second threshold table here is how the
+            // sidebar and the gauge under it come to disagree.
+            let pct_color = tone_color(Tone::for_percent(used));
             let name = truncate(&row.provider, 12);
             let pct_str = if row.session_used.is_some() || row.weekly_used.is_some() {
                 format!("{used}%")
@@ -230,41 +227,28 @@ fn render_detail(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Vertical split: usage gauges, cost section, credits
-    let mut sections: Vec<Constraint> = Vec::new();
-    let usage_lines = count_usage_lines(row);
-    let devices = device_rows(row);
-    let cost_block_height = row
-        .cost
-        .as_ref()
-        .map(|cost| estimate_cost_height(cost, &devices))
-        .unwrap_or(0);
+    // The core resolves the whole panel: which sections exist, in what order,
+    // and every string in them. This frontend picks a shape per kind and loops,
+    // so a section added in panel.rs reaches the terminal with no edit here.
+    let spec = panel_spec(row);
     let credits_height = (row.credits != "—" && !row.credits.is_empty()) as u16 * 2;
 
-    sections.push(Constraint::Length(usage_lines));
-    if cost_block_height > 0 {
-        sections.push(Constraint::Length(cost_block_height));
+    let mut constraints: Vec<Constraint> = spec
+        .iter()
+        .map(|section| Constraint::Length(section_height(section)))
+        .collect();
+    if credits_height > 0 {
+        constraints.push(Constraint::Length(credits_height));
+    }
+    constraints.push(Constraint::Min(0));
+
+    let chunks = Layout::vertical(constraints).split(inner);
+    for (i, section) in spec.iter().enumerate() {
+        render_section(frame, chunks[i], section);
     }
     if credits_height > 0 {
-        sections.push(Constraint::Length(credits_height));
+        render_credits(frame, chunks[spec.len()], row);
     }
-    sections.push(Constraint::Min(0));
-
-    let chunks = Layout::vertical(sections).split(inner);
-    let mut idx = 0;
-    render_usage(frame, chunks[idx], row);
-    idx += 1;
-    if cost_block_height > 0 {
-        render_cost(frame, chunks[idx], row.cost.as_ref().unwrap(), &devices);
-        idx += 1;
-    }
-    if credits_height > 0 {
-        render_credits(frame, chunks[idx], row);
-    }
-
-    // Track viewport height for any future scroll
-    state.content_height = usage_lines + cost_block_height + credits_height;
-    state.viewport_height = inner.height;
 }
 
 fn detail_title_line(row: &ProviderRow) -> Line<'static> {
@@ -296,87 +280,89 @@ fn detail_title_line(row: &ProviderRow) -> Line<'static> {
 }
 
 // ---------------------------------------------------------------------------
-// Usage section: Gauge widgets per window
+// Panel sections
 // ---------------------------------------------------------------------------
 
-struct UsageRow {
-    label: String,
-    used: Option<u8>,
-    reset: String,
-    pace: Option<UsagePace>,
-}
+/// Rows past this are dropped from a `Bars` section. The detail pane is one
+/// screen with no scroll, and a long tail of sub-1% models pushes the sections
+/// under it off the bottom.
+const BARS_ROW_CAP: usize = 6;
 
-fn collect_usage_rows(row: &ProviderRow) -> Vec<UsageRow> {
-    let (session_label, weekly_label, tertiary_label) = window_labels(&row.provider);
-    let mut rows = vec![
-        UsageRow {
-            label: session_label.to_string(),
-            used: row.session_used,
-            reset: row.session_reset.clone(),
-            pace: row.session_pace,
-        },
-        UsageRow {
-            label: weekly_label.to_string(),
-            used: row.weekly_used,
-            reset: row.weekly_reset.clone(),
-            pace: row.weekly_pace,
-        },
-    ];
-    if row.tertiary_used.is_some() || row.tertiary_reset != "—" {
-        rows.push(UsageRow {
-            label: tertiary_label.to_string(),
-            used: row.tertiary_used,
-            reset: row.tertiary_reset.clone(),
-            pace: None,
-        });
+/// The section drawn as a chart instead of a row list. Same section, same
+/// numbers, a shape worth the vertical space a terminal has - the layout
+/// exemption this frontend holds is exactly this kind of swap, and the strings
+/// still come from the spec.
+const DAY_CHART_ID: &str = "tokens_by_day";
+const DAY_CHART_HEIGHT: u16 = 5;
+
+fn section_rows(section: &Section) -> &[PanelRow] {
+    match section.kind {
+        SectionKind::Bars => &section.rows[..section.rows.len().min(BARS_ROW_CAP)],
+        _ => &section.rows,
     }
-    for extra in &row.extra_windows {
-        // A window the provider exposes a slot for but reports nothing in is a
-        // permanently empty row on a dashboard. The waybar tooltip keeps them
-        // so its shape does not shift; here there is nothing to hold in place.
-        if extra.placeholder {
-            continue;
-        }
-        rows.push(UsageRow {
-            label: extra.title.clone(),
-            used: extra.used,
-            reset: extra.reset.clone(),
-            pace: extra.pace,
-        });
+}
+
+fn section_height(section: &Section) -> u16 {
+    if section.id == DAY_CHART_ID {
+        return DAY_CHART_HEIGHT;
     }
-    rows
+    let rows = section_rows(section).len() as u16;
+    match section.kind {
+        // Header line, one line per meter, then a spacer before what follows.
+        SectionKind::Meters => rows + 2,
+        // The title rides a top border rather than taking a line of its own.
+        SectionKind::Bars | SectionKind::Rows => rows + 1,
+    }
 }
 
-fn count_usage_lines(row: &ProviderRow) -> u16 {
-    // 1 header row + 1 row per gauge + 1 trailing spacer
-    collect_usage_rows(row).len() as u16 + 2
-}
-
-fn render_usage(frame: &mut Frame, area: Rect, row: &ProviderRow) {
-    let usage_rows = collect_usage_rows(row);
-    if usage_rows.is_empty() {
+fn render_section(frame: &mut Frame, area: Rect, section: &Section) {
+    if section.id == DAY_CHART_ID {
+        render_day_chart(frame, area, section);
         return;
     }
+    match section.kind {
+        SectionKind::Meters => render_meters(frame, area, section),
+        SectionKind::Bars => render_bars(frame, area, section),
+        SectionKind::Rows => render_rows(frame, area, section),
+    }
+}
 
-    let header_line = Line::from(Span::styled(
-        " Usage windows",
+/// A dim heading on a line of its own, for the kinds that do not draw a table.
+fn section_header(title: &str) -> Paragraph<'static> {
+    Paragraph::new(Line::from(Span::styled(
+        format!(" {title}"),
         Style::default().fg(dim()).add_modifier(Modifier::BOLD),
-    ));
-    let header_para = Paragraph::new(header_line);
-    let constraints: Vec<Constraint> = std::iter::once(Constraint::Length(1))
-        .chain(usage_rows.iter().map(|_| Constraint::Length(1)))
-        .chain(std::iter::once(Constraint::Length(1)))
-        .collect();
-    let chunks = Layout::vertical(constraints).split(area);
-    frame.render_widget(header_para, chunks[0]);
+    )))
+}
 
-    // Tight mode: drop the trailing "resets ..." column when there isn't
-    // room (~28 chars min for a readable gauge + label).
-    // Size label column to the widest label (capped) so full names like
-    // "Weekly (Sonnet)" / "Daily Routine" don't ellipsize in wide mode.
-    let widest_label = usage_rows
+/// A heading riding a top border, for the kinds that do.
+fn section_block(title: &str) -> Block<'static> {
+    Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(dim()))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default().fg(dim()).add_modifier(Modifier::BOLD),
+        ))
+}
+
+/// Label, gauge and value on one line, the footnote and the tinted pace badge
+/// trailing. The gauge is hand-rolled: ratatui's Gauge rounds up to keep its
+/// inline label visible, which exaggerated low percentages.
+fn render_meters(frame: &mut Frame, area: Rect, section: &Section) {
+    let rows = section_rows(section);
+    if rows.is_empty() {
+        return;
+    }
+    let constraints: Vec<Constraint> = (0..rows.len() + 2).map(|_| Constraint::Length(1)).collect();
+    let chunks = Layout::vertical(constraints).split(area);
+    frame.render_widget(section_header(section.title), chunks[0]);
+
+    // Size the label column to the widest label, capped, so a full name like
+    // "Weekly (Sonnet)" does not ellipsize when there is room for it.
+    let widest = rows
         .iter()
-        .map(|u| u.label.chars().count())
+        .map(|r| r.label.chars().count())
         .max()
         .unwrap_or(0);
     let max_label_w = if area.width >= 100 {
@@ -386,25 +372,27 @@ fn render_usage(frame: &mut Frame, area: Rect, row: &ProviderRow) {
     } else {
         16
     };
-    let label_w: u16 = widest_label.clamp(8, max_label_w) as u16;
-    let tight = area.width < 64;
-    let trail_w: u16 = if tight { 0 } else { 26 };
-    // truncate to label_w (not label_w - 1) so widest label fits exactly
-    // - the layout split already reserves label_w columns.
+    let label_w = widest.clamp(8, max_label_w) as u16;
+    let value_w = rows
+        .iter()
+        .map(|r| r.value.chars().count())
+        .max()
+        .unwrap_or(0);
+    // Below this width the trailing "Resets ..." column costs more than the
+    // gauge it would squeeze.
+    let trail_w: u16 = if area.width < 64 { 0 } else { 26 };
+    // Two columns of gutter so the gauge does not butt up against the label.
+    const GUTTER: u16 = 2;
 
-    for (i, urow) in usage_rows.iter().enumerate() {
-        let slot = chunks[i + 1];
-        let inner = slot.inner(Margin {
+    for (i, row) in rows.iter().enumerate() {
+        let inner = chunks[i + 1].inner(Margin {
             horizontal: 1,
             vertical: 0,
         });
-        // Reserve 2 cols of gutter between the label and the bar so the
-        // gauge doesn't butt up against the label text.
-        let gutter: u16 = 2;
         let (label_slot, bar_slot, trail_slot) = if trail_w > 0 {
             let split = Layout::horizontal([
                 Constraint::Length(label_w),
-                Constraint::Length(gutter),
+                Constraint::Length(GUTTER),
                 Constraint::Min(20),
                 Constraint::Length(trail_w),
             ])
@@ -413,367 +401,88 @@ fn render_usage(frame: &mut Frame, area: Rect, row: &ProviderRow) {
         } else {
             let split = Layout::horizontal([
                 Constraint::Length(label_w),
-                Constraint::Length(gutter),
+                Constraint::Length(GUTTER),
                 Constraint::Min(10),
             ])
             .split(inner);
             (split[0], split[2], None)
         };
 
-        let label_text = truncate(&urow.label, label_w as usize);
-        let label = Paragraph::new(Line::from(Span::styled(
-            label_text,
-            Style::default().fg(dim()).add_modifier(Modifier::BOLD),
-        )));
-        frame.render_widget(label, label_slot);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                truncate(&row.label, label_w as usize),
+                Style::default().fg(dim()).add_modifier(Modifier::BOLD),
+            ))),
+            label_slot,
+        );
 
-        // Hand-rolled bar gives us exact width semantics (Gauge widget
-        // rounds up to keep its inline label visible, which exaggerated
-        // low percentages).
-        let bar_inner = bar_slot;
-        match urow.used {
-            Some(pct) => {
-                let pct_clamped = pct.min(100);
-                let pct_label = format!(" {pct_clamped:>3}%");
-                let label_w = pct_label.chars().count() as u16;
-                let bar_w = bar_inner.width.saturating_sub(label_w + 1);
-                let filled = ((pct_clamped as usize * bar_w as usize) + 50) / 100; // round to nearest
-                let filled = filled.min(bar_w as usize);
-                let empty = bar_w as usize - filled;
-                let bar_color = color_for(pct_clamped);
-                let line = Line::from(vec![
-                    Span::styled("█".repeat(filled), Style::default().fg(bar_color)),
-                    Span::styled("░".repeat(empty), Style::default().fg(dim())),
-                    Span::styled(
-                        pct_label,
-                        Style::default().fg(bar_color).add_modifier(Modifier::BOLD),
-                    ),
-                ]);
-                frame.render_widget(Paragraph::new(line), bar_inner);
-            }
-            None => {
-                let placeholder = Paragraph::new(Line::from(vec![
-                    Span::styled(
-                        "─".repeat(bar_inner.width.saturating_sub(8) as usize),
-                        Style::default().fg(dim()),
-                    ),
-                    Span::styled("    n/a", Style::default().fg(dim())),
-                ]));
-                frame.render_widget(placeholder, bar_inner);
-            }
-        }
-
-        if let Some(trail_area) = trail_slot {
-            let trailing = match (urow.used, urow.reset.as_str()) {
-                (None, _) => "no data".to_string(),
-                (Some(0), "—") => String::new(),
-                (Some(_), "—") => "not started".to_string(),
-                (Some(_), reset) => format!("resets {reset}"),
-            };
-            let mut spans = Vec::new();
-            let pace_badge = urow.pace.map(|p| p.badge());
-            let reset_budget = match &pace_badge {
-                // Reserve room for " · {badge}" so the pace stays visible.
-                Some(badge) => (trail_w as usize).saturating_sub(badge.chars().count() + 4),
-                None => trail_w as usize - 1,
-            };
-            spans.push(Span::styled(
-                truncate(&trailing, reset_budget),
-                Style::default().fg(dim()),
-            ));
-            if let (Some(pace), Some(badge)) = (urow.pace, pace_badge) {
-                let color = if pace.stage.is_ahead() {
-                    if pace.delta_percent.abs() > 6.0 {
-                        color_for(90)
-                    } else {
-                        color_for(60)
-                    }
-                } else if pace.stage.is_behind() {
-                    green()
-                } else {
-                    dim()
-                };
-                spans.push(Span::styled(
-                    format!(" · {badge}"),
-                    Style::default().fg(color),
-                ));
-            }
-            frame.render_widget(Paragraph::new(Line::from(spans)), trail_area);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Cost section: text + Sparkline + BarChart
-// ---------------------------------------------------------------------------
-
-/// Rows the panel spec already resolved for the fleet, so the machine labels,
-/// the partial marker and the "last published" trailer read the same here as
-/// they do in every other frontend. Empty for a provider that does not sync.
-fn device_rows(row: &ProviderRow) -> Vec<PanelRow> {
-    panel_spec(row)
-        .into_iter()
-        .find(|section| section.id == "tokens_by_device")
-        .map(|section| section.rows)
-        .unwrap_or_default()
-}
-
-const DEVICE_ROW_CAP: usize = 6;
-
-fn estimate_cost_height(cost: &CostInfo, devices: &[PanelRow]) -> u16 {
-    // header + (rate? + session? + weekly?) totals + today + month + spark + barchart
-    let mut h = 1; // section header line
-    if cost.burn_rate.is_some() {
-        h += 1;
-    }
-    if cost.session_usd > 0.0 {
-        h += 1;
-    }
-    if cost.weekly_usd > 0.0 {
-        h += 1;
-    }
-    h += 1; // Today
-    h += 1; // Month
-    if cost.sync_note.is_some() {
-        h += 1;
-    }
-    if !cost.weekly_cost_history.is_empty() {
-        // 1 title border + 2 bar body + 1 weekday label + 1 dollar caption
-        h += 5;
-    }
-    if !cost.today_models.is_empty() {
-        // 1 title row + 1 row per model (capped at 6)
-        h += 1 + cost.today_models.len().min(6) as u16;
-    }
-    if !devices.is_empty() {
-        h += 1 + devices.len().min(DEVICE_ROW_CAP) as u16;
-    }
-    h.min(40)
-}
-
-fn render_cost(frame: &mut Frame, area: Rect, cost: &CostInfo, devices: &[PanelRow]) {
-    let header = Paragraph::new(Line::from(Span::styled(
-        " Cost",
-        Style::default().fg(dim()).add_modifier(Modifier::BOLD),
-    )));
-
-    // Vertical split: header, summary text, sparkline, barchart
-    let has_spark = !cost.weekly_cost_history.is_empty();
-    let has_bars = !cost.today_models.is_empty();
-    let has_devices = !devices.is_empty();
-
-    let summary_h = {
-        let mut h = 2; // today + month
-        if cost.burn_rate.is_some() {
-            h += 1;
-        }
-        if cost.session_usd > 0.0 {
-            h += 1;
-        }
-        if cost.weekly_usd > 0.0 {
-            h += 1;
-        }
-        if cost.sync_note.is_some() {
-            h += 1;
-        }
-        h
-    };
-
-    let mut constraints = vec![Constraint::Length(1), Constraint::Length(summary_h)];
-    if has_spark {
-        constraints.push(Constraint::Length(5));
-    }
-    if has_bars {
-        let rows = cost.today_models.len().min(6) as u16;
-        constraints.push(Constraint::Length(1 + rows));
-    }
-    if has_devices {
-        constraints.push(Constraint::Length(
-            1 + devices.len().min(DEVICE_ROW_CAP) as u16,
-        ));
-    }
-    let chunks = Layout::vertical(constraints).split(area);
-
-    frame.render_widget(header, chunks[0]);
-    frame.render_widget(cost_summary(cost), chunks[1]);
-
-    let mut idx = 2;
-    if has_spark {
-        render_sparkline(frame, chunks[idx], cost);
-        idx += 1;
-    }
-    if has_bars {
-        render_today_models(frame, chunks[idx], cost);
-        idx += 1;
-    }
-    if has_devices {
-        render_devices(frame, chunks[idx], devices);
-    }
-}
-
-fn cost_summary(cost: &CostInfo) -> Paragraph<'static> {
-    let pad = "  ";
-    let label_w = 8;
-    let value_w = 9;
-    let mut lines: Vec<Line> = Vec::new();
-
-    if let Some(br) = cost.burn_rate.as_ref() {
-        lines.push(Line::from(vec![
-            Span::raw(pad),
-            Span::styled(
-                format!("{:<label_w$}", "Rate"),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("{:>value_w$}/hr", format!("${:.2}", br.cost_per_hour)),
-                Style::default().fg(green()),
-            ),
-        ]));
-    }
-
-    let money_row = |label: &str, usd: f64| {
-        Line::from(vec![
-            Span::raw(pad),
-            Span::styled(
-                format!("{label:<label_w$}"),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("{:>value_w$}", format!("${usd:.2}")),
-                Style::default().fg(green()),
-            ),
-        ])
-    };
-    if cost.session_usd > 0.0 {
-        lines.push(money_row("Session", cost.session_usd));
-    }
-    if cost.weekly_usd > 0.0 {
-        lines.push(money_row("Weekly", cost.weekly_usd));
-    }
-    let today_tokens = format_tokens(cost.today_tokens);
-    let month_tokens = format_tokens(cost.monthly_tokens);
-    let mut today_spans = vec![
-        Span::raw(pad),
-        Span::styled(
-            format!("{:<label_w$}", "Today"),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:>value_w$}", format!("${:.2}", cost.today_usd)),
-            Style::default().fg(green()),
-        ),
-    ];
-    if let Some(pct) = cost.today_vs_avg_percent() {
-        let arrow = if pct >= 0.0 { "↑" } else { "↓" };
-        let trend_color = if pct >= 25.0 {
-            hex_to_color(&theme().red)
-        } else if pct >= -10.0 {
-            hex_to_color(&theme().yellow)
-        } else {
-            green()
-        };
-        today_spans.push(Span::raw("  "));
-        today_spans.push(Span::styled(
-            format!("{arrow}{:.0}%", pct.abs()),
-            Style::default().fg(trend_color),
-        ));
-        today_spans.push(Span::styled(" vs prior avg", Style::default().fg(dim())));
-    }
-    today_spans.push(Span::styled(
-        format!("  ·  {today_tokens} tokens"),
-        Style::default().fg(dim()),
-    ));
-    lines.push(Line::from(today_spans));
-    lines.push(Line::from(vec![
-        Span::raw(pad),
-        Span::styled(
-            format!("{:<label_w$}", "Month"),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:>value_w$}", format!("${:.2}", cost.monthly_usd)),
-            Style::default().fg(green()),
-        ),
-        Span::styled(
-            format!("  ·  {month_tokens} tokens"),
-            Style::default().fg(dim()),
-        ),
-    ]));
-
-    // Sync configured but not working under-reports every figure above without
-    // breaking, so it is said next to them rather than only on the sync screen.
-    if let Some(note) = cost.sync_note.as_ref() {
-        let tone = tone_color(note.tone);
-        let mut spans = vec![
-            Span::raw(pad),
-            Span::styled(
-                format!("{:<label_w$}", "Sync"),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(
-                    "{:>value_w$}",
-                    match note.devices {
-                        1 => "1 device".to_string(),
-                        n => format!("{n} devices"),
-                    }
+        let color = tone_color(row.tone);
+        let bar_w = bar_slot.width.saturating_sub(value_w as u16 + 2) as usize;
+        let filled = (row.fraction.unwrap_or(0.0).clamp(0.0, 1.0) * bar_w as f64).round() as usize;
+        let filled = filled.min(bar_w);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("█".repeat(filled), Style::default().fg(color)),
+                Span::styled("░".repeat(bar_w - filled), Style::default().fg(dim())),
+                Span::styled(
+                    format!(" {:>value_w$}", row.value),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ),
-                Style::default().fg(tone),
-            ),
-        ];
-        if !note.headline.is_empty() {
-            spans.push(Span::raw("  "));
-            spans.push(Span::styled(
-                note.headline.clone(),
-                Style::default().fg(tone).add_modifier(Modifier::BOLD),
-            ));
-        }
-        if !note.detail.is_empty() {
-            spans.push(Span::styled(
-                format!("  ·  {}", note.detail),
-                Style::default().fg(dim()),
-            ));
-        }
-        lines.push(Line::from(spans));
-    }
+            ])),
+            bar_slot,
+        );
 
-    Paragraph::new(lines)
+        let Some(trail_area) = trail_slot else {
+            continue;
+        };
+        // Reserve room for " · {badge}" so the pace projection never loses the
+        // column to a long reset time.
+        let footnote_budget = if row.badge.is_empty() {
+            trail_w as usize - 1
+        } else {
+            (trail_w as usize).saturating_sub(row.badge.chars().count() + 4)
+        };
+        let mut spans = vec![Span::styled(
+            truncate(&row.footnote, footnote_budget),
+            Style::default().fg(dim()),
+        )];
+        if !row.badge.is_empty() {
+            spans.push(Span::styled(
+                format!(" · {}", row.badge),
+                Style::default().fg(tone_color(row.badge_tone)),
+            ));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), trail_area);
+    }
 }
 
-/// The fleet's share of the month, drawn like the model bars beside it. The
-/// strings come from the panel spec, so this machine's row is marked and a
-/// peer's staleness is worded exactly as it is everywhere else.
-fn render_devices(frame: &mut Frame, area: Rect, devices: &[PanelRow]) {
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(dim()))
-        .title(Span::styled(
-            " By device · this month ",
-            Style::default().fg(dim()).add_modifier(Modifier::BOLD),
-        ));
+/// One line per row with the share bar between the name and the value. Tokens
+/// by model and tokens by device both land here.
+fn render_bars(frame: &mut Frame, area: Rect, section: &Section) {
+    let block = section_block(section.title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let devices: Vec<&PanelRow> = devices.iter().take(DEVICE_ROW_CAP).collect();
-    if devices.is_empty() {
+    let rows = section_rows(section);
+    if rows.is_empty() {
         return;
     }
 
     let name_cap = ((inner.width as usize).saturating_sub(20) / 2).clamp(8, 24);
-    let name_w = devices
+    let name_w = rows
         .iter()
-        .map(|d| truncate(&d.label, name_cap).chars().count())
+        .map(|r| truncate(&r.label, name_cap).chars().count())
         .max()
         .unwrap_or(8)
         .max(8);
-    let value_w = devices
+    let value_w = rows
         .iter()
-        .map(|d| d.value.chars().count())
+        .map(|r| r.value.chars().count())
         .max()
         .unwrap_or(6);
-    let suffix_w = devices
+    let suffix_w = rows
         .iter()
-        .map(|d| d.suffix.chars().count())
+        .map(|r| r.suffix.chars().count())
         .max()
         .unwrap_or(0);
 
@@ -782,212 +491,168 @@ fn render_devices(frame: &mut Frame, area: Rect, devices: &[PanelRow]) {
         .saturating_sub(pad.len() + name_w + 2 + value_w + 2 + suffix_w)
         .max(4);
 
-    let lines: Vec<Line<'static>> = devices
+    let lines: Vec<Line<'static>> = rows
         .iter()
-        .map(|device| {
-            let filled = ((device.fraction.unwrap_or(0.0).clamp(0.0, 1.0)) * bar_room as f64)
-                .round() as usize;
+        .map(|row| {
+            let filled =
+                (row.fraction.unwrap_or(0.0).clamp(0.0, 1.0) * bar_room as f64).round() as usize;
             let filled = filled.min(bar_room);
-            let bar = format!("{}{}", "█".repeat(filled), "░".repeat(bar_room - filled));
-            let name_style = if device.emphasized {
+            let name_style = if row.emphasized {
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(dim())
             };
-            Line::from(vec![
+            let mut spans = vec![
                 Span::raw(pad),
                 Span::styled(
-                    format!("{:<name_w$}", truncate(&device.label, name_w)),
+                    format!("{:<name_w$}", truncate(&row.label, name_w)),
                     name_style,
                 ),
                 Span::raw(" "),
-                Span::styled(bar, Style::default().fg(green())),
+                Span::styled(
+                    format!("{}{}", "█".repeat(filled), "░".repeat(bar_room - filled)),
+                    Style::default().fg(green()),
+                ),
                 Span::raw(" "),
                 Span::styled(
-                    format!("{:>value_w$}", device.value),
+                    format!("{:>value_w$}", row.value),
                     Style::default().fg(green()).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(format!("  {}", device.suffix), Style::default().fg(dim())),
-            ])
+            ];
+            if !row.suffix.is_empty() {
+                spans.push(Span::styled(
+                    format!("  {}", row.suffix),
+                    Style::default().fg(dim()),
+                ));
+            }
+            Line::from(spans)
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn weekday_initial(w: Weekday) -> &'static str {
-    match w {
-        Weekday::Mon => "M",
-        Weekday::Tue => "T",
-        Weekday::Wed => "W",
-        Weekday::Thu => "T",
-        Weekday::Fri => "F",
-        Weekday::Sat => "S",
-        Weekday::Sun => "S",
-    }
+/// Label, value, tinted badge and dim suffix on one line, no bar. The cost
+/// figures - and the sync health note that qualifies every one of them, which
+/// is why it is drawn here and not only on the sync screen.
+fn render_rows(frame: &mut Frame, area: Rect, section: &Section) {
+    let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
+    frame.render_widget(section_header(section.title), chunks[0]);
+
+    let rows = section_rows(section);
+    let label_w = rows
+        .iter()
+        .map(|r| r.label.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(8);
+    let value_w = rows
+        .iter()
+        .map(|r| r.value.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let lines: Vec<Line<'static>> = rows
+        .iter()
+        .map(|row| {
+            let mut spans = vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!("{:<label_w$}", row.label),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    format!("{:>value_w$}", row.value),
+                    Style::default().fg(green()),
+                ),
+            ];
+            if !row.badge.is_empty() {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    row.badge.clone(),
+                    Style::default().fg(tone_color(row.badge_tone)),
+                ));
+            }
+            if !row.suffix.is_empty() {
+                spans.push(Span::styled(
+                    format!("  ·  {}", row.suffix),
+                    Style::default().fg(dim()),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), chunks[1]);
 }
 
-fn render_sparkline(frame: &mut Frame, area: Rect, cost: &CostInfo) {
-    let raw = &cost.weekly_cost_history;
-    if raw.is_empty() {
-        return;
-    }
-    let n = raw.len();
-    let max = raw.iter().copied().fold(0.0_f64, f64::max);
-
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(dim()))
-        .title(Span::styled(
-            " 7-day cost ",
-            Style::default().fg(dim()).add_modifier(Modifier::BOLD),
-        ));
+/// The day rows as a bar chart. The day names and the amounts under them are
+/// the spec's own strings, so nothing here derives a date from the wall clock -
+/// the weekday letters used to be counted back from `now`, which relabelled the
+/// whole week in a shell left open past midnight.
+fn render_day_chart(frame: &mut Frame, area: Rect, section: &Section) {
+    let block = section_block(section.title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let peak_str = format!("peak ${max:.2}");
-    let peak_w = (peak_str.chars().count() as u16) + 2;
-    let split = Layout::horizontal([Constraint::Min(10), Constraint::Length(peak_w)]).split(inner);
-    let chart_area = split[0];
-    let peak_area = split[1];
-
-    // Per-day weekday initials (oldest first, today last).
-    let today = Local::now().date_naive();
-    let day_labels: Vec<String> = (0..n)
-        .map(|i| {
-            let offset = (n - 1 - i) as i64;
-            let day = today - ChronoDuration::days(offset);
-            weekday_initial(day.weekday()).to_string()
-        })
-        .collect();
-    let dollar_labels: Vec<String> = raw.iter().map(|usd| format!("${usd:.0}")).collect();
-
-    // BarChart only carries one label row; build bars with the day letter
-    // there, then layout a second caption row below for the $ amounts.
+    let rows = &section.rows;
+    if rows.is_empty() || inner.width == 0 {
+        return;
+    }
+    let n = rows.len() as u16;
     let gap: u16 = 1;
-    let bar_width =
-        ((chart_area.width.saturating_sub(gap * (n as u16 - 1)) / n as u16) as u16).max(3);
+    let bar_width = (inner.width.saturating_sub(gap * (n - 1)) / n).max(3);
     let stride = bar_width + gap;
 
-    // Reserve bottom row of chart_area for dollar amounts.
-    let split_v = Layout::vertical([Constraint::Min(2), Constraint::Length(1)]).split(chart_area);
-    let bars_area = split_v[0];
-    let dollars_area = split_v[1];
+    // BarChart carries one label row; the amounts get a caption row below it.
+    let split = Layout::vertical([Constraint::Min(2), Constraint::Length(1)]).split(inner);
+    let (bars_area, amounts_area) = (split[0], split[1]);
 
-    let bars: Vec<Bar> = raw
+    // Charted on the share the spec resolved rather than the raw value, so the
+    // tallest day fills the chart whatever unit is behind it.
+    let bars: Vec<Bar> = rows
         .iter()
-        .zip(day_labels.iter())
-        .map(|(usd, label)| {
-            let cents = (*usd * 100.0).round().max(0.0) as u64;
+        .map(|row| {
             Bar::default()
-                .value(cents)
-                .label(Line::from(label.clone()))
-                .text_value(String::new()) // hide inline value
+                .value((row.fraction.unwrap_or(0.0).clamp(0.0, 1.0) * 1000.0).round() as u64)
+                .label(Line::from(truncate(&row.label, bar_width as usize)))
+                .text_value(String::new())
                 .style(Style::default().fg(green()))
                 .value_style(Style::default().fg(green()).bg(green()))
         })
         .collect();
     let group = BarGroup::default().bars(&bars);
-    let chart = BarChart::default()
-        .data(group)
-        .bar_width(bar_width)
-        .bar_gap(gap)
-        .label_style(Style::default().fg(dim()));
-    frame.render_widget(chart, bars_area);
+    frame.render_widget(
+        BarChart::default()
+            .data(group)
+            .max(1000)
+            .bar_width(bar_width)
+            .bar_gap(gap)
+            .label_style(Style::default().fg(dim())),
+        bars_area,
+    );
 
-    // Render dollar amounts centered under each day column.
-    for (i, dollar) in dollar_labels.iter().enumerate() {
-        let x_offset = i as u16 * stride;
-        if x_offset >= dollars_area.width {
+    for (i, row) in rows.iter().enumerate() {
+        let x = i as u16 * stride;
+        if x >= amounts_area.width {
             break;
         }
-        let cell_w = bar_width.min(dollars_area.width.saturating_sub(x_offset));
         let cell = Rect {
-            x: dollars_area.x + x_offset,
-            y: dollars_area.y,
-            width: cell_w,
+            x: amounts_area.x + x,
+            y: amounts_area.y,
+            width: bar_width.min(amounts_area.width - x),
             height: 1,
         };
-        let para = Paragraph::new(Line::from(Span::styled(
-            dollar.clone(),
-            Style::default().fg(green()).add_modifier(Modifier::BOLD),
-        )))
-        .alignment(Alignment::Center);
-        frame.render_widget(para, cell);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                truncate(&row.suffix, cell.width as usize),
+                Style::default().fg(green()).add_modifier(Modifier::BOLD),
+            )))
+            .alignment(Alignment::Center),
+            cell,
+        );
     }
-
-    let peak_para = Paragraph::new(Line::from(Span::styled(
-        peak_str,
-        Style::default().fg(dim()),
-    )));
-    frame.render_widget(peak_para, peak_area);
-}
-
-fn render_today_models(frame: &mut Frame, area: Rect, cost: &CostInfo) {
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(dim()))
-        .title(Span::styled(
-            " Today by model · spend in $ ",
-            Style::default().fg(dim()).add_modifier(Modifier::BOLD),
-        ));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let models: Vec<&ModelCost> = cost.today_models.iter().take(6).collect();
-    if models.is_empty() {
-        return;
-    }
-
-    // Auto-fit name column to the widest model name (capped) and dollar
-    // column to the widest formatted amount; rest of the row is the bar.
-    let max_total = models.iter().map(|m| m.usd).fold(0.0_f64, f64::max);
-    let name_cap = ((inner.width as usize).saturating_sub(20) / 2).clamp(8, 24);
-    let name_w = models
-        .iter()
-        .map(|m| truncate(&m.model, name_cap).chars().count())
-        .max()
-        .unwrap_or(8)
-        .max(8);
-    let usd_strs: Vec<String> = models.iter().map(|m| format!("${:.2}", m.usd)).collect();
-    let usd_w = usd_strs
-        .iter()
-        .map(|s| s.chars().count())
-        .max()
-        .unwrap_or(6);
-
-    let pad = "  ";
-    let bar_room = (inner.width as usize).saturating_sub(pad.len() + name_w + 2 + usd_w + 1);
-    let bar_room = bar_room.max(4);
-
-    let lines: Vec<Line<'static>> = models
-        .iter()
-        .zip(usd_strs.iter())
-        .map(|(m, usd)| {
-            let frac = if max_total > 0.0 {
-                m.usd / max_total
-            } else {
-                0.0
-            };
-            let filled = (frac * bar_room as f64).round() as usize;
-            let filled = filled.min(bar_room);
-            let bar = format!("{}{}", "█".repeat(filled), "░".repeat(bar_room - filled));
-            let name = truncate(&m.model, name_w);
-            Line::from(vec![
-                Span::raw(pad),
-                Span::styled(format!("{name:<name_w$}"), Style::default().fg(dim())),
-                Span::raw(" "),
-                Span::styled(bar, Style::default().fg(green())),
-                Span::raw(" "),
-                Span::styled(
-                    format!("{usd:>usd_w$}"),
-                    Style::default().fg(green()).add_modifier(Modifier::BOLD),
-                ),
-            ])
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_credits(frame: &mut Frame, area: Rect, row: &ProviderRow) {
@@ -1184,43 +849,72 @@ mod tests {
             .collect()
     }
 
-    fn cost_with_sync_note() -> CostInfo {
-        serde_json::from_value(serde_json::json!({
+    fn provider_with_sync_note() -> ProviderRow {
+        let cost: tokengauge_core::CostInfo = serde_json::from_value(serde_json::json!({
             "today_usd": 1.0,
             "today_tokens": 10,
             "monthly_usd": 9.0,
             "monthly_tokens": 90,
+            "weekly_history": [
+                {"date": "2026-08-24", "usd": 2.0, "tokens": 400},
+                {"date": "2026-08-25", "usd": 5.0, "tokens": 900},
+                {"date": "2026-08-26", "usd": 1.0, "tokens": 200},
+            ],
+            "monthly_models": [
+                {"model": "claude-sonnet-4-5", "usd": 7.0, "tokens": 70},
+                {"model": "claude-haiku-4-5", "usd": 2.0, "tokens": 20},
+            ],
             "sync_note": {
                 "devices": 2,
                 "tone": "critical",
                 "headline": "error",
                 "detail": "bucket unreachable",
             },
+            "by_device": [
+                {"deviceId": "aaaa", "label": "desktop", "tokens": 1200000, "usd": 4.10,
+                 "isLocal": true, "partial": false, "updatedAtMs": 0},
+                {"deviceId": "bbbb", "label": "laptop", "tokens": 600000, "usd": 2.00,
+                 "isLocal": false, "partial": false, "updatedAtMs": 0},
+            ],
         }))
-        .expect("cost")
+        .expect("cost");
+        ProviderRow {
+            provider: "claude".into(),
+            session_used: Some(31),
+            session_window_minutes: None,
+            session_reset: "in 2h".into(),
+            session_pace: None,
+            weekly_used: None,
+            weekly_window_minutes: None,
+            weekly_reset: "—".into(),
+            weekly_pace: None,
+            tertiary_used: None,
+            tertiary_reset: "—".into(),
+            credits: "—".into(),
+            source: "oauth".into(),
+            updated: "now".into(),
+            updated_iso: None,
+            plan_label: None,
+            extra_windows: Vec::new(),
+            cost: Some(cost),
+            stale: false,
+        }
     }
 
-    fn device(label: &str, value: &str, suffix: &str, local: bool) -> PanelRow {
-        PanelRow {
-            label: label.into(),
-            value: value.into(),
-            suffix: suffix.into(),
-            badge: String::new(),
-            badge_tone: tokengauge_core::panel::Tone::Dim,
-            footnote: String::new(),
-            fraction: Some(0.5),
-            tone: tokengauge_core::panel::Tone::Normal,
-            emphasized: local,
-            tooltip: String::new(),
-        }
+    fn section(row: &ProviderRow, id: &str) -> Section {
+        panel_spec(row)
+            .into_iter()
+            .find(|s| s.id == id)
+            .unwrap_or_else(|| panic!("no `{id}` section"))
     }
 
     /// Sync configured but failing under-reports every figure in this section,
     /// so the provider view has to say so - not only the sync screen.
     #[test]
     fn the_cost_section_carries_the_sync_health_note() {
-        let out =
-            screen(|frame| frame.render_widget(cost_summary(&cost_with_sync_note()), frame.area()));
+        let row = provider_with_sync_note();
+        let cost = section(&row, "cost");
+        let out = screen(|frame| render_rows(frame, frame.area(), &cost));
         assert!(out.contains("Sync"), "{out}");
         assert!(out.contains("2 devices"), "{out}");
         assert!(out.contains("error"), "{out}");
@@ -1229,27 +923,57 @@ mod tests {
 
     #[test]
     fn a_merged_total_is_shown_broken_down_by_machine() {
-        let rows = vec![
-            device("desktop", "1.2M", "$4.10", true),
-            device("laptop", "600.0K", "$2.00 · 3h ago", false),
-        ];
-        let out = screen(|frame| render_devices(frame, frame.area(), &rows));
+        let row = provider_with_sync_note();
+        let devices = section(&row, "tokens_by_device");
+        let out = screen(|frame| render_bars(frame, frame.area(), &devices));
         assert!(out.contains("desktop"), "{out}");
         assert!(out.contains("laptop"), "{out}");
-        assert!(out.contains("3h ago"), "{out}");
+    }
+
+    /// The drift this frontend used to carry: its own copies of the pace and
+    /// trend thresholds, its own labels, and its own money formatter. Reading
+    /// the spec's strings is what keeps it from happening again.
+    #[test]
+    fn the_panel_content_is_the_specs_and_not_this_files() {
+        let row = provider_with_sync_note();
+        let cost = section(&row, "cost");
+        let out = screen(|frame| render_rows(frame, frame.area(), &cost));
+        for label in ["Today", "This month"] {
+            assert!(out.contains(label), "missing `{label}`:\n{out}");
+        }
+        assert!(!out.contains("Month "), "the old TUI-only heading survived");
+    }
+
+    /// Every kind the spec can hand over has a shape here. A new kind added to
+    /// the core stops compiling this match rather than silently drawing blank.
+    #[test]
+    fn every_section_kind_has_a_height_and_a_renderer() {
+        let row = provider_with_sync_note();
+        for section in panel_spec(&row) {
+            assert!(
+                section_height(&section) > 0,
+                "{} reserves no lines",
+                section.id
+            );
+            let out = screen(|frame| render_section(frame, frame.area(), &section));
+            assert!(
+                out.trim()
+                    .contains(section.title.split(' ').next().unwrap_or(section.title)),
+                "{} drew no title:\n{out}",
+                section.id
+            );
+        }
     }
 
     #[test]
-    fn the_cost_block_reserves_room_for_the_fleet_rows() {
-        let cost = cost_with_sync_note();
-        let bare = estimate_cost_height(&cost, &[]);
-        let with_devices = estimate_cost_height(
-            &cost,
-            &[
-                device("desktop", "1.2M", "$4.10", true),
-                device("laptop", "600.0K", "$2.00", false),
-            ],
-        );
-        assert_eq!(with_devices, bare + 3, "title row plus one row per device");
+    fn a_meter_paints_its_pace_badge_in_the_specs_tone() {
+        let row = provider_with_sync_note();
+        let limits = section(&row, "limits");
+        assert_eq!(limits.kind, SectionKind::Meters);
+        let out = screen(|frame| render_meters(frame, frame.area(), &limits));
+        assert!(out.contains("31%"), "{out}");
+        // Dropped rows stay dropped: a window the provider does not report has
+        // no meter, rather than a permanently empty one.
+        assert!(!out.contains("n/a"), "{out}");
     }
 }

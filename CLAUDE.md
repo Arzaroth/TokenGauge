@@ -12,7 +12,7 @@ on all of them, or it is not done.**
 | GNOME      | `gnome/tokengauge@arzaroth.github.io`         | yes |
 | Quickshell | `omarchy/arzaroth.tokengauge`                 | yes |
 | Tray (Windows) | `crates/tokengauge-tray`                  | yes |
-| TUI        | `crates/tokengauge-tui`                       | no - exempt from layout parity only |
+| TUI        | `crates/tokengauge-tui`                       | yes - exempt from layout parity only |
 
 Shipping a feature on one frontend and leaving the rest "for later" is the
 failure mode to avoid: the desktop frontends install separately from the binary,
@@ -40,12 +40,19 @@ frontend implements exactly three primitives and loops:
 | `Rows` | label, value, tinted `badge`, dim `suffix` on one line, no bar. The cost figures. |
 
 Canonical sections, in order (`panel::SECTION_IDS`), each dropped when it has no
-data: `limits`, `cost`, `tokens_by_day`, `tokens_by_model`.
+data: `limits`, `cost`, `tokens_by_day`, `tokens_by_model`, `tokens_by_device`.
 
 Adding a section means editing `panel.rs` and nothing else. Adding a *kind*
-means touching all five frontends - `panel::tests::every_panel_frontend_handles_every_section_kind`
+means touching all six frontends - `panel::tests::every_panel_frontend_handles_every_section_kind`
 reads each frontend's source and fails when one of them never mentions a kind,
 which is the backstop for the QML and JS frontends the compiler cannot check.
+
+The TUI's exemption is *layout*, not content: it draws `tokens_by_day` as a bar
+chart rather than a row list, and keeps its sidebar, gauges and keybindings, but
+every string a user reads there is the spec's. It used to carry its own copies
+of `Tone::for_pace` and `Tone::for_trend`, its own section labels and its own
+money formatter, and all four had drifted from the spec by the time anyone
+noticed.
 
 What stays per-frontend is **chrome**, not content: the header, the update
 banner, the provider selector, the settings pane and the input hints are

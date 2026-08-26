@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Omarchy widget painted the pace projection as dim caption text, so `ends ~120%` read like a footnote rather than the warning it is. It now carries its own tone, and the widget surfaces a fetch error and the "showing last known values" state that the GNOME and Plasma panels already did.
 - The COST section's Sync row kept its full detail in a tooltip that no frontend drew. The Plasma applet, the GNOME popup, the Omarchy widget and the Windows tray now show it on hover; the waybar tooltip keeps the shortened inline copy, having nowhere to hover.
 - The Plasma compact tooltip formatted today's spend itself and disagreed with every other surface above a hundred dollars ($312.21 against $312). It reads the figure off the panel spec now.
+- **The TUI reads the panel from the core like every other frontend does.** It carried its own copies of the pace and trend thresholds, its own section labels ("Rate", "Weekly" against "Burn rate", "7-day"), its own money formatter, and it listed today's models where every other surface lists the month's. All four had drifted. It now loops over the same ordered section list, so the fleet's sync note and per-device breakdown reach it too, and a section added to the core reaches the terminal with no edit. The gauges, the sidebar and the 7-day chart stay - the chart's weekday letters now come off the data's own dates rather than counting back from the wall clock, which relabelled the whole week in a shell left open past midnight.
+- PageUp and PageDown in the TUI did nothing: the scroll offset they moved was never read by anything that draws. Removed rather than left as a key that looks bound.
 
 ## [0.23.0] - 2026-08-25
 

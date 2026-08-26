@@ -23,9 +23,6 @@ pub struct AppState {
     pub last_error: Option<String>,
     pub status_message: Option<String>,
     pub spinner_index: usize,
-    pub scroll: u16,
-    pub content_height: u16,
-    pub viewport_height: u16,
     pub active_tab: usize,
     pub initial_provider: Option<String>,
     pub overlay: Overlay,
@@ -56,28 +53,15 @@ impl AppState {
             last_error: None,
             status_message: None,
             spinner_index: 0,
-            scroll: 0,
-            content_height: 0,
-            viewport_height: 0,
             active_tab: 0,
             initial_provider: None,
             overlay: Overlay::default(),
         }
     }
 
-    pub fn max_scroll(&self) -> u16 {
-        self.content_height.saturating_sub(self.viewport_height)
-    }
-
-    fn scroll_by(&mut self, delta: i32) {
-        let new = (self.scroll as i32 + delta).max(0) as u16;
-        self.scroll = new.min(self.max_scroll());
-    }
-
     fn next_tab(&mut self) {
         if !self.rows.is_empty() {
             self.active_tab = (self.active_tab + 1) % self.rows.len();
-            self.scroll = 0;
         }
     }
 
@@ -88,7 +72,6 @@ impl AppState {
             } else {
                 self.active_tab - 1
             };
-            self.scroll = 0;
         }
     }
 
@@ -262,8 +245,6 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => self.state.prev_tab(),
             KeyCode::Char('l') | KeyCode::Right => self.state.next_tab(),
             KeyCode::Char('h') | KeyCode::Left => self.state.prev_tab(),
-            KeyCode::PageDown => self.state.scroll_by(self.state.viewport_height as i32),
-            KeyCode::PageUp => self.state.scroll_by(-(self.state.viewport_height as i32)),
             KeyCode::Char('g') | KeyCode::Home if !self.state.rows.is_empty() => {
                 self.state.active_tab = 0;
             }

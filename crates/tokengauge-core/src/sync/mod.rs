@@ -29,7 +29,8 @@ pub use fleet::{
 };
 pub use hour::Hour;
 pub use report::{
-    DeviceLine, DeviceStatus, OverlapNote, SkippedObject, SyncReport, SyncStatus, describe, note,
+    DeviceLine, DeviceStatus, Finding, OverlapNote, SkippedObject, SyncReport, SyncStatus,
+    describe, findings, note,
 };
 pub use run::{SyncOutcome, forget, local_device_id, refresh, test_round_trip};
 pub use transport::{PeerEntry, Transport};

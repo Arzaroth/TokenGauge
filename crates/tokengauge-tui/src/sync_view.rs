@@ -429,11 +429,9 @@ impl SyncView {
         }
 
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let Some(report) = self
-            .status
-            .as_ref()
-            .map(|status| tokengauge_core::sync::describe(status, now_ms))
-        else {
+        let Some(report) = self.status.as_ref().map(|status| {
+            tokengauge_core::sync::describe(status, self.config.refresh_secs, now_ms)
+        }) else {
             lines.push(field(
                 "Last sync",
                 "has not run yet".into(),
@@ -454,13 +452,6 @@ impl SyncView {
                 Span::styled(device.detail.clone(), dim),
             ]));
         }
-        if report.devices.len() < 2 {
-            lines.push(Line::from(Span::styled(
-                "  no other machine has published yet",
-                dim,
-            )));
-        }
-
         if !report.problems.is_empty() {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled("Problems", dim)));

@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Plasma compact tooltip formatted today's spend itself and disagreed with every other surface above a hundred dollars ($312.21 against $312). It reads the figure off the panel spec now.
 - **The TUI reads the panel from the core like every other frontend does.** It carried its own copies of the pace and trend thresholds, its own section labels ("Rate", "Weekly" against "Burn rate", "7-day"), its own money formatter, and it listed today's models where every other surface lists the month's. All four had drifted. It now loops over the same ordered section list, so the fleet's sync note and per-device breakdown reach it too, and a section added to the core reaches the terminal with no edit. The gauges, the sidebar and the 7-day chart stay - the chart's weekday letters now come off the data's own dates rather than counting back from the wall clock, which relabelled the whole week in a shell left open past midnight.
 - PageUp and PageDown in the TUI did nothing: the scroll offset they moved was never read by anything that draws. Removed rather than left as a key that looks bound.
+- Sync wording lived in four places - the panel badge, `--sync-status`, `--doctor` and the TUI sync screen - and all four had drifted. There is one `sync::findings()` list now; the doctor's cloned-disk check, which only it had, reaches the panel and `--sync-status` too, and the "no other machine has published yet" line the TUI printed itself is the core's.
 
 ## [0.23.0] - 2026-08-25
 

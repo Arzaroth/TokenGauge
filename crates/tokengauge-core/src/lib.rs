@@ -372,6 +372,11 @@ impl ProvidersConfig {
 #[serde(default)]
 pub struct WaybarConfig {
     pub window: WaybarWindow,
+    /// Which side of the bar the module is installed on. No Rust code reads
+    /// this - `scripts/install.sh` does, to decide where in waybar's own
+    /// `modules-left`/`modules-right` to insert us, and it reads the value back
+    /// out of here so a re-install keeps the side you chose. It is declared
+    /// here so the field is not reported as an unknown key.
     pub placement: WaybarPlacement,
     pub primary: Option<String>,
     pub scroll_throttle_ms: u64,

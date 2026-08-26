@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every frontend can reach the setup screen: a button in the Plasma settings pane, one in the GNOME popup header, `y` in the Omarchy widget's settings, and a Windows tray menu item.
 - `--sync-status` prints what the last cycle did, with `--json` for the raw object. `--sync-test` writes a probe, reads it back and removes it, so you can check the transport and the key before trusting the figures. `--sync-forget <device>` drops a machine you no longer use.
 
+### Fixed
+
+- Middle-clicking the waybar module opened the dashboard of a provider you had switched off. The click resolved the provider from an unfiltered snapshot, so it counted rows nothing else was drawing.
+- A transient cost-read failure during `--set-provider` or `--refresh` wiped the recorded history of past days' tokens and costs. The snapshot holds the only copy; every path that refetches now keeps the prior figures when a fetch reads no costs at all, as two of the four already did.
+- The Omarchy widget painted the pace projection as dim caption text, so `ends ~120%` read like a footnote rather than the warning it is. It now carries its own tone, and the widget surfaces a fetch error and the "showing last known values" state that the GNOME and Plasma panels already did.
+- The COST section's Sync row kept its full detail in a tooltip that no frontend drew. The Plasma applet, the GNOME popup, the Omarchy widget and the Windows tray now show it on hover; the waybar tooltip keeps the shortened inline copy, having nowhere to hover.
+- The Plasma compact tooltip formatted today's spend itself and disagreed with every other surface above a hundred dollars ($312.21 against $312). It reads the figure off the panel spec now.
+
 ## [0.23.0] - 2026-08-25
 
 ### Changed

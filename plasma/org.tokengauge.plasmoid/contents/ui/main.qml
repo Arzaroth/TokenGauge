@@ -64,8 +64,15 @@ PlasmoidItem {
                            + root.toneColor(rows[j].tone) + "\"><b>"
                            + root.escapeHtml(rows[j].value) + "</b></font>")
         }
-        if (r.cost)
-            lines.push(i18n("Today") + ":&nbsp;<b>" + root.fmtUsd(r.cost.today_usd) + "</b>")
+        // Today's spend comes off the same section list, not off raw
+        // today_usd: the local formatter this replaces disagreed with core's
+        // money() above a hundred dollars ($312.21 against $312).
+        for (var k = 0; k < sections.length; k++) {
+            if (sections[k].id !== "cost" || sections[k].rows.length === 0) continue
+            var today = sections[k].rows[0]
+            lines.push(root.escapeHtml(today.label) + ":&nbsp;<b>"
+                       + root.escapeHtml(today.value) + "</b>")
+        }
         return lines.join("<br>")
     }
 
@@ -240,11 +247,6 @@ PlasmoidItem {
     function windowPercent(row) {
         if (!row) return null
         return root.snapshot.window === "weekly" ? row.weekly_used : row.session_used
-    }
-
-    function fmtUsd(v) {
-        if (v === null || v === undefined) return "—"
-        return "$" + Number(v).toFixed(2)
     }
 
     compactRepresentation: CompactRep {}

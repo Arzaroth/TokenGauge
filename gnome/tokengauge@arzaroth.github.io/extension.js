@@ -45,12 +45,6 @@ function spacer() {
     return new St.Widget({x_expand: true});
 }
 
-function fmtUsd(v) {
-    if (v === null || v === undefined)
-        return '—';
-    return `$${Number(v).toFixed(2)}`;
-}
-
 const Indicator = GObject.registerClass(
 class TokenGaugeIndicator extends PanelMenu.Button {
     _init(extension) {

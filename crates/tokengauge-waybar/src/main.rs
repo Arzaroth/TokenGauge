@@ -220,7 +220,7 @@ fn main() -> Result<()> {
     tokengauge_core::ensure_revision(&config.cache_file);
 
     if let Some(command) = sync_cli::from_args(&args) {
-        return sync_cli::run(command, &config);
+        return sync_cli::run(command, &config, &config_path);
     }
 
     if args.internal_refresh_worker {
@@ -313,35 +313,8 @@ fn main() -> Result<()> {
     let refreshing = refresh_in_progress(&sentinel);
 
     if refreshing {
-        let yellow = theme().yellow.as_str();
-        let cached = read_cache_full(&config.cache_file).ok();
-        let (rows, errors) = match cached {
-            Some(c) => {
-                let (mut payloads, mut errors, costs) = c.into_parts();
-                retain_enabled(&mut payloads, &mut errors, &config.providers);
-                (payload_to_rows_with_costs(payloads, &costs), errors)
-            }
-            None => (Vec::new(), Vec::new()),
-        };
-        let selected = selected_provider_for_tooltip(&config, &rows);
-        let tooltip_refs: Vec<&ProviderRow> = match selected {
-            Some(idx) => vec![&rows[idx]],
-            None => rows.iter().collect(),
-        };
-        let tooltip = format_tooltip_with_errors(&tooltip_refs, &errors, true, "open");
-        let text = if rows.is_empty() && errors.is_empty() {
-            format!("   <span foreground=\"{yellow}\">⟳ Refreshing...</span>")
-        } else {
-            format!(
-                "   <span foreground=\"{yellow}\">⟳</span> {}",
-                build_text_for_rows_with_errors(&rows, &errors, &config)
-            )
-        };
-        let output = WaybarOutput {
-            text,
-            tooltip,
-            class: "tokengauge tokengauge-refreshing".into(),
-        };
+        let (rows, errors) = rows_from_cache(&config);
+        let output = render_output(&config, &rows, &errors, true);
         println!("{}", serde_json::to_string(&output)?);
         return Ok(());
     }
@@ -360,36 +333,7 @@ fn main() -> Result<()> {
     };
 
     let rows = payload_to_rows_with_costs(payloads, &costs);
-    if rows.is_empty() && errors.is_empty() {
-        let output = WaybarOutput {
-            text: "—".into(),
-            tooltip: "<tt>TokenGauge: no providers</tt>".into(),
-            class: "tokengauge-empty".into(),
-        };
-        println!("{}", serde_json::to_string(&output)?);
-        return Ok(());
-    }
-
-    let text = format!(
-        "   {}",
-        build_text_for_rows_with_errors(&rows, &errors, &config)
-    );
-    let selected = selected_provider_for_tooltip(&config, &rows);
-    let tooltip_rows: Vec<&ProviderRow> = match selected {
-        Some(idx) => vec![&rows[idx]],
-        None => rows.iter().collect(),
-    };
-    let tooltip =
-        format_tooltip_with_errors(&tooltip_rows, &errors, false, &left_click_label(&config));
-
-    let class = compute_class(&rows, &errors, false, config.waybar.window.clone());
-
-    let output = WaybarOutput {
-        text,
-        tooltip,
-        class,
-    };
-
+    let output = render_output(&config, &rows, &errors, false);
     println!("{}", serde_json::to_string(&output)?);
     Ok(())
 }
@@ -550,19 +494,8 @@ fn refresh_inline(config: &TokenGaugeConfig) {
     let _ = std::fs::write(&sentinel, refresh_sentinel_deadline_ms(config).to_string());
     signal_waybar();
     let FetchResult {
-        payloads,
-        errors,
-        costs,
-        sync,
-    } = fetch_all_providers(config);
-    let _ = write_cache_full(
-        &config.cache_file,
-        &payloads,
-        &errors,
-        &costs,
-        &config.providers,
-        Some(&sync),
-    );
+        payloads, costs, ..
+    } = fetch_and_write(config, false);
     let _ = std::fs::remove_file(&sentinel);
     check_and_notify(config, &payloads, &costs);
     signal_waybar();
@@ -1021,21 +954,9 @@ fn handle_refresh_quick(config: &TokenGaugeConfig) {
 /// Detached worker: do the actual fetch + clear sentinel + signal waybar.
 fn worker_do_refresh(config: &TokenGaugeConfig) {
     let sentinel = refresh_sentinel_path(&config.cache_file);
-    let _ = std::fs::remove_file(&config.cache_file);
     let FetchResult {
-        payloads,
-        errors,
-        costs,
-        sync,
-    } = fetch_all_providers(config);
-    let _ = write_cache_full(
-        &config.cache_file,
-        &payloads,
-        &errors,
-        &costs,
-        &config.providers,
-        Some(&sync),
-    );
+        payloads, costs, ..
+    } = fetch_and_write(config, true);
     let _ = std::fs::remove_file(&sentinel);
     check_and_notify(config, &payloads, &costs);
     signal_waybar();
@@ -1597,15 +1518,7 @@ fn try_get_snapshot(config: &TokenGaugeConfig) -> Result<String> {
 fn current_snapshot(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) -> WaybarOutput {
     let sentinel = refresh_sentinel_path(&config.cache_file);
     if refresh_in_progress(&sentinel) {
-        let cached = read_cache_full(&config.cache_file).ok();
-        let (rows, errors) = match cached {
-            Some(c) => {
-                let (mut payloads, mut errors, costs) = c.into_parts();
-                retain_enabled(&mut payloads, &mut errors, &config.providers);
-                (payload_to_rows_with_costs(payloads, &costs), errors)
-            }
-            None => (Vec::new(), Vec::new()),
-        };
+        let (rows, errors) = rows_from_cache(config);
         return render_output(config, &rows, &errors, true);
     }
     state
@@ -1841,15 +1754,7 @@ fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
                             // Otherwise re-render cached output with the new
                             // theme/config so colour changes show up before the
                             // next fetch, without paying for a fetch.
-                            let cached = read_cache_full(&new_cfg.cache_file).ok();
-                            let (rows, errors) = match cached {
-                                Some(c) => {
-                                    let (mut payloads, mut errors, costs) = c.into_parts();
-                                    retain_enabled(&mut payloads, &mut errors, &new_cfg.providers);
-                                    (payload_to_rows_with_costs(payloads, &costs), errors)
-                                }
-                                None => (Vec::new(), Vec::new()),
-                            };
+                            let (rows, errors) = rows_from_cache(&new_cfg);
                             let output = render_output(&new_cfg, &rows, &errors, false);
                             let mut s = state.lock().expect("daemon state mutex poisoned");
                             s.output = output;
@@ -1948,28 +1853,12 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 
 fn do_fetch_and_broadcast(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) {
     let started = std::time::Instant::now();
-    let prior_costs = read_cache_full(&config.cache_file)
-        .map(|c| c.costs())
-        .unwrap_or_default();
     let FetchResult {
         payloads,
         errors,
-        mut costs,
-        sync,
-    } = fetch_all_providers(config);
-    if costs.is_empty() && !prior_costs.is_empty() {
-        costs = prior_costs;
-    }
-    if let Err(e) = write_cache_full(
-        &config.cache_file,
-        &payloads,
-        &errors,
-        &costs,
-        &config.providers,
-        Some(&sync),
-    ) {
-        dlog("cache", &format!("write failed: {e}"));
-    }
+        costs,
+        ..
+    } = fetch_and_write(config, false);
     check_and_notify(config, &payloads, &costs);
     let rows = payload_to_rows_with_costs(payloads, &costs);
     let output = render_output(config, &rows, &errors, false);
@@ -2084,15 +1973,7 @@ fn handle_client(
             // Re-render from current cache + rotation, scoped to the enabled set
             // like handle_rotate just was: rotating off an unfiltered cache would
             // put a disabled provider back in the bar.
-            let cached = read_cache_full(&config.cache_file).ok();
-            let (rows, errors) = match cached {
-                Some(c) => {
-                    let (mut payloads, mut errors, costs) = c.into_parts();
-                    retain_enabled(&mut payloads, &mut errors, &config.providers);
-                    (payload_to_rows_with_costs(payloads, &costs), errors)
-                }
-                None => (Vec::new(), Vec::new()),
-            };
+            let (rows, errors) = rows_from_cache(&config);
             let output = render_output(&config, &rows, &errors, false);
             let mut s = state.lock().expect("daemon state mutex poisoned");
             s.output = output;
@@ -2167,11 +2048,10 @@ fn run_client_tail(config: &TokenGaugeConfig) -> Result<()> {
 }
 
 fn handle_open(config: &TokenGaugeConfig, target: OpenTarget) {
-    let cached = match read_cache_full(&config.cache_file) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    let rows = payload_to_rows_with_costs(cached.payloads().to_vec(), &cached.costs());
+    // Scoped to the enabled set like every other consumer of the snapshot: the
+    // selection resolves by index, so an unfiltered read opens the dashboard of
+    // whatever provider the user just switched off.
+    let (rows, _) = rows_from_cache(config);
     let Some(idx) = selected_provider_for_tooltip(config, &rows) else {
         // No selection: use first row if any.
         if rows.is_empty() {
@@ -2225,15 +2105,9 @@ fn resolve_click_command(config: &TokenGaugeConfig) -> String {
 }
 
 fn handle_rotate(config: &TokenGaugeConfig, dir: RotateDir) -> Result<()> {
-    let cached = match read_cache_full(&config.cache_file) {
-        Ok(c) => c,
-        Err(_) => return Ok(()),
-    };
     // Scoped to the enabled set, or scroll would still stop on a provider the
     // user disabled and pin the selection to a row nothing else will render.
-    let (mut payloads, mut errors, costs) = cached.into_parts();
-    retain_enabled(&mut payloads, &mut errors, &config.providers);
-    let rows = payload_to_rows_with_costs(payloads, &costs);
+    let (rows, _) = rows_from_cache(config);
     if rows.is_empty() {
         return Ok(());
     }
@@ -2277,37 +2151,70 @@ type RefreshSnapshot = (
     HashMap<String, CostInfo>,
 );
 
+/// Read the snapshot and scope it to the enabled providers. Both steps or
+/// neither: the snapshot was written by whatever set was enabled at fetch time,
+/// so a caller that reads it raw still sees a provider disabled since then.
+fn cached_parts(config: &TokenGaugeConfig) -> Result<RefreshSnapshot> {
+    let (mut payloads, mut errors, costs) = read_cache_full(&config.cache_file)?.into_parts();
+    retain_enabled(&mut payloads, &mut errors, &config.providers);
+    Ok((payloads, errors, costs))
+}
+
+/// Enabled-provider rows, empty when there is no readable snapshot. Every path
+/// that renders or resolves a provider from cache goes through here.
+fn rows_from_cache(config: &TokenGaugeConfig) -> (Vec<ProviderRow>, Vec<ProviderFetchError>) {
+    match cached_parts(config) {
+        Ok((payloads, errors, costs)) => (payload_to_rows_with_costs(payloads, &costs), errors),
+        Err(_) => (Vec::new(), Vec::new()),
+    }
+}
+
+/// One fetch, one snapshot write, for every path that refetches. The cost
+/// fallback below has to be here rather than at each caller: it existed at two
+/// of the four sites, and the two without it discarded cost history on any
+/// transient reader failure.
+///
+/// `wipe_snapshot` is `--refresh`'s deliberate cold start. Prior costs are read
+/// before it fires, because the snapshot holds the only record of past days.
+fn fetch_and_write(config: &TokenGaugeConfig, wipe_snapshot: bool) -> FetchResult {
+    let prior_costs = read_cache_full(&config.cache_file)
+        .map(|c| c.costs())
+        .unwrap_or_default();
+    if wipe_snapshot {
+        let _ = std::fs::remove_file(&config.cache_file);
+    }
+    let mut result = fetch_all_providers(config);
+    // An empty cost map means the readers found nothing at all, which is a
+    // failure and not a history that ended. Keeping the prior figures shows
+    // stale money; dropping them loses every past day permanently.
+    if result.costs.is_empty() && !prior_costs.is_empty() {
+        result.costs = prior_costs;
+    }
+    if let Err(e) = write_cache_full(
+        &config.cache_file,
+        &result.payloads,
+        &result.errors,
+        &result.costs,
+        &config.providers,
+        Some(&result.sync),
+    ) {
+        dlog("cache", &format!("write failed: {e}"));
+    }
+    result
+}
+
 fn maybe_refresh(config: &TokenGaugeConfig) -> Result<RefreshSnapshot> {
     if cache_is_stale(config) {
-        let prior_costs = read_cache_full(&config.cache_file)
-            .map(|c| c.costs())
-            .unwrap_or_default();
         let FetchResult {
             payloads,
             errors,
-            mut costs,
-            sync,
-        } = fetch_all_providers(config);
-        if costs.is_empty() && !prior_costs.is_empty() {
-            costs = prior_costs;
-        }
-        write_cache_full(
-            &config.cache_file,
-            &payloads,
-            &errors,
-            &costs,
-            &config.providers,
-            Some(&sync),
-        )?;
+            costs,
+            ..
+        } = fetch_and_write(config, false);
         check_and_notify(config, &payloads, &costs);
         Ok((payloads, errors, costs))
     } else {
-        // Scope the cache to the currently-enabled providers: it was written by
-        // whatever set was enabled at fetch time, so without this a provider
-        // disabled since then keeps rendering until the cache next turns over.
-        let (mut payloads, mut errors, costs) = read_cache_full(&config.cache_file)?.into_parts();
-        retain_enabled(&mut payloads, &mut errors, &config.providers);
-        Ok((payloads, errors, costs))
+        cached_parts(config)
     }
 }
 

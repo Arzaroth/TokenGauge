@@ -5,7 +5,7 @@
 //! frontend's "open" button is a spawn of a command it already knows how to
 //! run. No frontend needs to know what a terminal is.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::TokenGaugeConfig;
@@ -77,17 +77,32 @@ fn terminal() -> Option<String> {
 }
 
 pub fn spawn_shell(command: &str) -> bool {
+    spawn_shell_inner(command, None)
+}
+
+/// The same, with the TUI pointed at the config the caller resolved. The child
+/// resolves its own config and would otherwise fall back to the default path,
+/// so `--config other.toml --sync-setup` opened the sync screen of a different
+/// fleet. It travels in the environment because the command is handed to
+/// `sh -c`, where a path would have to be quoted.
+pub fn spawn_shell_with_config(command: &str, config_path: &Path) -> bool {
+    spawn_shell_inner(command, Some(config_path))
+}
+
+fn spawn_shell_inner(command: &str, config_path: Option<&Path>) -> bool {
     if command.trim().is_empty() {
         return false;
     }
-    Command::new("sh")
-        .arg("-c")
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
         .arg(command)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .is_ok()
+        .stderr(Stdio::null());
+    if let Some(path) = config_path {
+        cmd.env("TOKENGAUGE_CONFIG", path);
+    }
+    cmd.spawn().is_ok()
 }
 
 #[cfg(test)]

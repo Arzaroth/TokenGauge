@@ -7,13 +7,14 @@ use ratatui::widgets::{
     Bar, BarChart, BarGroup, Block, BorderType, Borders, Clear, List, ListItem, ListState,
     Paragraph, Wrap,
 };
+use tokengauge_core::panel::{PanelRow, panel_spec};
 use tokengauge_core::{
     CostInfo, ModelCost, ProviderRow, UsagePace, format_tokens, format_updated_relative, theme,
     window_labels,
 };
 
 use crate::app::{AppState, Overlay};
-use crate::theme::{color_for, dim, green, hex_to_color, provider_icon_color};
+use crate::theme::{color_for, dim, green, hex_to_color, provider_icon_color, tone_color};
 
 // Width breakpoints: hide sidebar on narrow terminals.
 const NARROW_BREAKPOINT: u16 = 80;
@@ -232,7 +233,12 @@ fn render_detail(frame: &mut Frame, area: Rect, state: &mut AppState) {
     // Vertical split: usage gauges, cost section, credits
     let mut sections: Vec<Constraint> = Vec::new();
     let usage_lines = count_usage_lines(row);
-    let cost_block_height = row.cost.as_ref().map(estimate_cost_height).unwrap_or(0);
+    let devices = device_rows(row);
+    let cost_block_height = row
+        .cost
+        .as_ref()
+        .map(|cost| estimate_cost_height(cost, &devices))
+        .unwrap_or(0);
     let credits_height = (row.credits != "—" && !row.credits.is_empty()) as u16 * 2;
 
     sections.push(Constraint::Length(usage_lines));
@@ -249,7 +255,7 @@ fn render_detail(frame: &mut Frame, area: Rect, state: &mut AppState) {
     render_usage(frame, chunks[idx], row);
     idx += 1;
     if cost_block_height > 0 {
-        render_cost(frame, chunks[idx], row.cost.as_ref().unwrap());
+        render_cost(frame, chunks[idx], row.cost.as_ref().unwrap(), &devices);
         idx += 1;
     }
     if credits_height > 0 {
@@ -501,7 +507,20 @@ fn render_usage(frame: &mut Frame, area: Rect, row: &ProviderRow) {
 // Cost section: text + Sparkline + BarChart
 // ---------------------------------------------------------------------------
 
-fn estimate_cost_height(cost: &CostInfo) -> u16 {
+/// Rows the panel spec already resolved for the fleet, so the machine labels,
+/// the partial marker and the "last published" trailer read the same here as
+/// they do in every other frontend. Empty for a provider that does not sync.
+fn device_rows(row: &ProviderRow) -> Vec<PanelRow> {
+    panel_spec(row)
+        .into_iter()
+        .find(|section| section.id == "tokens_by_device")
+        .map(|section| section.rows)
+        .unwrap_or_default()
+}
+
+const DEVICE_ROW_CAP: usize = 6;
+
+fn estimate_cost_height(cost: &CostInfo, devices: &[PanelRow]) -> u16 {
     // header + (rate? + session? + weekly?) totals + today + month + spark + barchart
     let mut h = 1; // section header line
     if cost.burn_rate.is_some() {
@@ -515,6 +534,9 @@ fn estimate_cost_height(cost: &CostInfo) -> u16 {
     }
     h += 1; // Today
     h += 1; // Month
+    if cost.sync_note.is_some() {
+        h += 1;
+    }
     if !cost.weekly_cost_history.is_empty() {
         // 1 title border + 2 bar body + 1 weekday label + 1 dollar caption
         h += 5;
@@ -523,10 +545,13 @@ fn estimate_cost_height(cost: &CostInfo) -> u16 {
         // 1 title row + 1 row per model (capped at 6)
         h += 1 + cost.today_models.len().min(6) as u16;
     }
+    if !devices.is_empty() {
+        h += 1 + devices.len().min(DEVICE_ROW_CAP) as u16;
+    }
     h.min(40)
 }
 
-fn render_cost(frame: &mut Frame, area: Rect, cost: &CostInfo) {
+fn render_cost(frame: &mut Frame, area: Rect, cost: &CostInfo, devices: &[PanelRow]) {
     let header = Paragraph::new(Line::from(Span::styled(
         " Cost",
         Style::default().fg(dim()).add_modifier(Modifier::BOLD),
@@ -535,6 +560,7 @@ fn render_cost(frame: &mut Frame, area: Rect, cost: &CostInfo) {
     // Vertical split: header, summary text, sparkline, barchart
     let has_spark = !cost.weekly_cost_history.is_empty();
     let has_bars = !cost.today_models.is_empty();
+    let has_devices = !devices.is_empty();
 
     let summary_h = {
         let mut h = 2; // today + month
@@ -545,6 +571,9 @@ fn render_cost(frame: &mut Frame, area: Rect, cost: &CostInfo) {
             h += 1;
         }
         if cost.weekly_usd > 0.0 {
+            h += 1;
+        }
+        if cost.sync_note.is_some() {
             h += 1;
         }
         h
@@ -558,6 +587,11 @@ fn render_cost(frame: &mut Frame, area: Rect, cost: &CostInfo) {
         let rows = cost.today_models.len().min(6) as u16;
         constraints.push(Constraint::Length(1 + rows));
     }
+    if has_devices {
+        constraints.push(Constraint::Length(
+            1 + devices.len().min(DEVICE_ROW_CAP) as u16,
+        ));
+    }
     let chunks = Layout::vertical(constraints).split(area);
 
     frame.render_widget(header, chunks[0]);
@@ -570,6 +604,10 @@ fn render_cost(frame: &mut Frame, area: Rect, cost: &CostInfo) {
     }
     if has_bars {
         render_today_models(frame, chunks[idx], cost);
+        idx += 1;
+    }
+    if has_devices {
+        render_devices(frame, chunks[idx], devices);
     }
 }
 
@@ -661,7 +699,121 @@ fn cost_summary(cost: &CostInfo) -> Paragraph<'static> {
             Style::default().fg(dim()),
         ),
     ]));
+
+    // Sync configured but not working under-reports every figure above without
+    // breaking, so it is said next to them rather than only on the sync screen.
+    if let Some(note) = cost.sync_note.as_ref() {
+        let tone = tone_color(note.tone);
+        let mut spans = vec![
+            Span::raw(pad),
+            Span::styled(
+                format!("{:<label_w$}", "Sync"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "{:>value_w$}",
+                    match note.devices {
+                        1 => "1 device".to_string(),
+                        n => format!("{n} devices"),
+                    }
+                ),
+                Style::default().fg(tone),
+            ),
+        ];
+        if !note.headline.is_empty() {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                note.headline.clone(),
+                Style::default().fg(tone).add_modifier(Modifier::BOLD),
+            ));
+        }
+        if !note.detail.is_empty() {
+            spans.push(Span::styled(
+                format!("  ·  {}", note.detail),
+                Style::default().fg(dim()),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+
     Paragraph::new(lines)
+}
+
+/// The fleet's share of the month, drawn like the model bars beside it. The
+/// strings come from the panel spec, so this machine's row is marked and a
+/// peer's staleness is worded exactly as it is everywhere else.
+fn render_devices(frame: &mut Frame, area: Rect, devices: &[PanelRow]) {
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(dim()))
+        .title(Span::styled(
+            " By device · this month ",
+            Style::default().fg(dim()).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let devices: Vec<&PanelRow> = devices.iter().take(DEVICE_ROW_CAP).collect();
+    if devices.is_empty() {
+        return;
+    }
+
+    let name_cap = ((inner.width as usize).saturating_sub(20) / 2).clamp(8, 24);
+    let name_w = devices
+        .iter()
+        .map(|d| truncate(&d.label, name_cap).chars().count())
+        .max()
+        .unwrap_or(8)
+        .max(8);
+    let value_w = devices
+        .iter()
+        .map(|d| d.value.chars().count())
+        .max()
+        .unwrap_or(6);
+    let suffix_w = devices
+        .iter()
+        .map(|d| d.suffix.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let pad = "  ";
+    let bar_room = (inner.width as usize)
+        .saturating_sub(pad.len() + name_w + 2 + value_w + 2 + suffix_w)
+        .max(4);
+
+    let lines: Vec<Line<'static>> = devices
+        .iter()
+        .map(|device| {
+            let filled = ((device.fraction.unwrap_or(0.0).clamp(0.0, 1.0)) * bar_room as f64)
+                .round() as usize;
+            let filled = filled.min(bar_room);
+            let bar = format!("{}{}", "█".repeat(filled), "░".repeat(bar_room - filled));
+            let name_style = if device.emphasized {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(dim())
+            };
+            Line::from(vec![
+                Span::raw(pad),
+                Span::styled(
+                    format!("{:<name_w$}", truncate(&device.label, name_w)),
+                    name_style,
+                ),
+                Span::raw(" "),
+                Span::styled(bar, Style::default().fg(green())),
+                Span::raw(" "),
+                Span::styled(
+                    format!("{:>value_w$}", device.value),
+                    Style::default().fg(green()).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("  {}", device.suffix), Style::default().fg(dim())),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn weekday_initial(w: Weekday) -> &'static str {
@@ -1012,4 +1164,92 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         Constraint::Percentage((100 - percent_x) / 2),
     ])
     .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn screen(draw: impl FnOnce(&mut Frame)) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(110, 20)).expect("terminal");
+        terminal.draw(draw).expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    fn cost_with_sync_note() -> CostInfo {
+        serde_json::from_value(serde_json::json!({
+            "today_usd": 1.0,
+            "today_tokens": 10,
+            "monthly_usd": 9.0,
+            "monthly_tokens": 90,
+            "sync_note": {
+                "devices": 2,
+                "tone": "critical",
+                "headline": "error",
+                "detail": "bucket unreachable",
+            },
+        }))
+        .expect("cost")
+    }
+
+    fn device(label: &str, value: &str, suffix: &str, local: bool) -> PanelRow {
+        PanelRow {
+            label: label.into(),
+            value: value.into(),
+            suffix: suffix.into(),
+            badge: String::new(),
+            badge_tone: tokengauge_core::panel::Tone::Dim,
+            footnote: String::new(),
+            fraction: Some(0.5),
+            tone: tokengauge_core::panel::Tone::Normal,
+            emphasized: local,
+            tooltip: String::new(),
+        }
+    }
+
+    /// Sync configured but failing under-reports every figure in this section,
+    /// so the provider view has to say so - not only the sync screen.
+    #[test]
+    fn the_cost_section_carries_the_sync_health_note() {
+        let out =
+            screen(|frame| frame.render_widget(cost_summary(&cost_with_sync_note()), frame.area()));
+        assert!(out.contains("Sync"), "{out}");
+        assert!(out.contains("2 devices"), "{out}");
+        assert!(out.contains("error"), "{out}");
+        assert!(out.contains("bucket unreachable"), "{out}");
+    }
+
+    #[test]
+    fn a_merged_total_is_shown_broken_down_by_machine() {
+        let rows = vec![
+            device("desktop", "1.2M", "$4.10", true),
+            device("laptop", "600.0K", "$2.00 · 3h ago", false),
+        ];
+        let out = screen(|frame| render_devices(frame, frame.area(), &rows));
+        assert!(out.contains("desktop"), "{out}");
+        assert!(out.contains("laptop"), "{out}");
+        assert!(out.contains("3h ago"), "{out}");
+    }
+
+    #[test]
+    fn the_cost_block_reserves_room_for_the_fleet_rows() {
+        let cost = cost_with_sync_note();
+        let bare = estimate_cost_height(&cost, &[]);
+        let with_devices = estimate_cost_height(
+            &cost,
+            &[
+                device("desktop", "1.2M", "$4.10", true),
+                device("laptop", "600.0K", "$2.00", false),
+            ],
+        );
+        assert_eq!(with_devices, bare + 3, "title row plus one row per device");
+    }
 }

@@ -945,37 +945,57 @@ mod tests {
             .parent()
             .and_then(std::path::Path::parent)
             .expect("workspace root");
+        // Each frontend is named by its *directory* and the extensions its
+        // sources use, not by one file. A hardcoded path stops proving
+        // anything the moment the code moves to a sibling module - which it
+        // did, and this test went red rather than silently green only because
+        // the file it named stopped existing at that path.
         let frontends = [
             (
                 "waybar",
-                "crates/tokengauge-waybar/src/main.rs",
+                "crates/tokengauge-waybar/src",
+                "rs",
                 "SectionKind::",
             ),
-            (
-                "tray",
-                "crates/tokengauge-tray/src/main.rs",
-                "SectionKind::",
-            ),
-            (
-                "plasma",
-                "plasma/org.tokengauge.plasmoid/contents/ui/FullRep.qml",
-                "\"",
-            ),
-            (
-                "gnome",
-                "gnome/tokengauge@arzaroth.github.io/extension.js",
-                "'",
-            ),
-            ("quickshell", "omarchy/arzaroth.tokengauge/Panel.qml", "\""),
+            ("tray", "crates/tokengauge-tray/src", "rs", "SectionKind::"),
             // The TUI is exempt from *layout* parity, not content parity: it
             // draws the day section as a chart and keeps its own chrome, but
             // every string in a section comes from here.
-            ("tui", "crates/tokengauge-tui/src/ui.rs", "SectionKind::"),
+            ("tui", "crates/tokengauge-tui/src", "rs", "SectionKind::"),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+                "\"",
+            ),
+            ("gnome", "gnome/tokengauge@arzaroth.github.io", "js", "'"),
+            ("quickshell", "omarchy/arzaroth.tokengauge", "qml", "\""),
         ];
 
-        for (id, path, prefix) in frontends {
-            let src = std::fs::read_to_string(repo.join(path))
-                .unwrap_or_else(|e| panic!("{id}: cannot read {path}: {e}"));
+        for (id, dir, extension, prefix) in frontends {
+            let root = repo.join(dir);
+            let mut sources = Vec::new();
+            let mut stack = vec![root.clone()];
+            while let Some(next) = stack.pop() {
+                let entries = std::fs::read_dir(&next)
+                    .unwrap_or_else(|e| panic!("{id}: cannot read {}: {e}", next.display()));
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if path.extension().is_some_and(|e| e == extension) {
+                        sources.push(std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                            panic!("{id}: cannot read {}: {e}", path.display())
+                        }));
+                    }
+                }
+            }
+            assert!(
+                !sources.is_empty(),
+                "{id}: no .{extension} sources under {} - the path has gone stale",
+                root.display()
+            );
+
             for kind in ["meters", "bars", "rows"] {
                 let needle = if prefix == "SectionKind::" {
                     let mut c = kind.chars();
@@ -988,8 +1008,8 @@ mod tests {
                     format!("{prefix}{kind}{prefix}")
                 };
                 assert!(
-                    src.contains(&needle),
-                    "{id} ({path}) never handles the `{kind}` section kind - \
+                    sources.iter().any(|src| src.contains(&needle)),
+                    "{id} ({dir}) never handles the `{kind}` section kind - \
                      looked for {needle}"
                 );
             }

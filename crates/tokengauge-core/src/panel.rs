@@ -967,6 +967,10 @@ mod tests {
                 "'",
             ),
             ("quickshell", "omarchy/arzaroth.tokengauge/Panel.qml", "\""),
+            // The TUI is exempt from *layout* parity, not content parity: it
+            // draws the day section as a chart and keeps its own chrome, but
+            // every string in a section comes from here.
+            ("tui", "crates/tokengauge-tui/src/ui.rs", "SectionKind::"),
         ];
 
         for (id, path, prefix) in frontends {

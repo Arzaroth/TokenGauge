@@ -28,10 +28,6 @@ pub fn tone_color(tone: Tone) -> Color {
     }
 }
 
-pub fn color_for(percent: u8) -> Color {
-    hex_to_color(theme().color_for_percent(percent))
-}
-
 pub fn provider_icon_color(label: &str) -> (&'static str, Color) {
     let icon = tokengauge_core::provider_icon(label);
     (icon.glyph, hex_to_color(icon.color_hex))

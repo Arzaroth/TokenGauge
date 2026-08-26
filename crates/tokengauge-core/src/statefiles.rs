@@ -367,17 +367,24 @@ pub fn write_notify_state(path: &Path, state: &NotifyState) -> Result<()> {
         .with_context(|| format!("failed to write notify state {}", path.display()))
 }
 
+/// Anthropic recomputes `resets_at` per request, so the same window comes back
+/// with a sub-second component a few hundred microseconds later every fetch. A
+/// real roll-over moves the boundary by hours; anything under a minute is that
+/// jitter, and treating it as a new window re-fires every threshold on every
+/// poll.
+const ROLLOVER_TOLERANCE: chrono::TimeDelta = chrono::TimeDelta::minutes(1);
+
 /// Pure decision logic: given the current pct, the window's reset timestamp,
 /// and the previously-notified thresholds, returns (thresholds_to_fire,
 /// updated_notified_list).
 ///
 /// Window roll-over clears the one-shot guard so the new window can alert
 /// again. The reset timestamp is the reliable signal: when `resets_at` advances
-/// to a new value the window rolled. Only when a provider gives no timestamp do
-/// we fall back to the legacy heuristic (pct fell 10+ points below the highest
-/// fired threshold) - which mis-fires when a fresh window briefly reports a
-/// stale-high percent, or when the value wobbles near the top and clears + re-
-/// fires on every poll, spamming alerts.
+/// by more than `ROLLOVER_TOLERANCE` the window rolled. Only when a provider
+/// gives no timestamp do we fall back to the legacy heuristic (pct fell 10+
+/// points below the highest fired threshold) - which mis-fires when a fresh
+/// window briefly reports a stale-high percent, or when the value wobbles near
+/// the top and clears + re-fires on every poll, spamming alerts.
 pub fn thresholds_to_fire(
     pct: u8,
     resets_at: Option<&str>,
@@ -393,14 +400,14 @@ pub fn thresholds_to_fire(
             .is_some_and(|&max_notified| pct.saturating_add(10) < max_notified)
     };
     let rolled_over = match (resets_at, prev_resets_at) {
-        // Only a strictly forward move is a new window. A stale/older payload
-        // must not clear the guard, else the real timestamp returns next poll
-        // and notifications re-fire.
+        // Only a forward move past the tolerance is a new window. A stale/older
+        // payload must not clear the guard, else the real timestamp returns next
+        // poll and notifications re-fire.
         (Some(now), Some(prev)) => match (
             DateTime::parse_from_rfc3339(now),
             DateTime::parse_from_rfc3339(prev),
         ) {
-            (Ok(now), Ok(prev)) => now > prev,
+            (Ok(now), Ok(prev)) => now - prev > ROLLOVER_TOLERANCE,
             // Malformed timestamp: treat as unavailable, fall back to heuristic.
             _ => pct_drop(),
         },
@@ -610,6 +617,22 @@ pub(crate) mod tests {
         );
         assert_eq!(fire, vec![50, 80, 95]);
         assert_eq!(notified, vec![50, 80, 95]);
+    }
+
+    #[test]
+    fn thresholds_to_fire_subsecond_jitter_no_respam() {
+        // Anthropic recomputes resets_at per request: the same window comes
+        // back a few hundred microseconds later on every fetch. A strict `>`
+        // read that as a roll-over and re-fired every threshold every poll.
+        let (fire, notified) = thresholds_to_fire(
+            51,
+            Some("2026-08-27T10:00:00.737390+00:00"),
+            Some("2026-08-27T10:00:00.026022+00:00"),
+            &[50, 80, 95],
+            &[50],
+        );
+        assert!(fire.is_empty(), "sub-second jitter must not re-fire");
+        assert_eq!(notified, vec![50]);
     }
 
     #[test]

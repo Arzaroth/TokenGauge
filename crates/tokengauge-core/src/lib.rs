@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Days, Local, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Days, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -141,6 +141,11 @@ pub mod sync;
 pub use cost::{CostSource, NativeCostReport};
 pub use pace::{PaceStage, UsagePace};
 pub use panel::{PanelRow, Section, SectionKind, Tone, panel_spec};
+pub use sync::config::{
+    SyncConfig, SyncDirConfig, SyncProvidersConfig, SyncS3Config, SyncTransportKind,
+    config_set_sync_dir, config_set_sync_enabled, config_set_sync_label, config_set_sync_provider,
+    config_set_sync_s3, config_set_sync_transport,
+};
 
 /// Round and clamp a float percentage into the `0..=100` byte range the render
 /// layer expects. Mirrors the old `de_opt_percent` serde hook, now called from
@@ -423,103 +428,6 @@ pub enum ClickAction {
     /// config still carrying `click_action = "popover"` loads instead of
     /// failing to parse; it resolves to the TUI.
     Popover,
-}
-
-/// Which providers take part in fleet sync. The default is every enabled
-/// provider that *can*: a provider read through ccusage has a `CostInfo` and no
-/// usage events under it, so there is nothing to bucket. Turn one off when its
-/// transcript tree is itself synced between machines, or both machines will
-/// count it.
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-#[serde(default)]
-pub struct SyncProvidersConfig {
-    pub claude: Option<bool>,
-    pub codex: Option<bool>,
-    #[serde(flatten)]
-    pub unknown: HashMap<String, toml::Value>,
-}
-
-impl SyncProvidersConfig {
-    pub fn resolve(&self, enabled: &[&str]) -> Vec<String> {
-        enabled
-            .iter()
-            .filter(|name| sync::syncable(name))
-            .filter(|name| match name.to_ascii_lowercase().as_str() {
-                "claude" => self.claude.unwrap_or(true),
-                "codex" => self.codex.unwrap_or(true),
-                _ => false,
-            })
-            .map(|name| name.to_lowercase())
-            .collect()
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SyncTransportKind {
-    /// A folder the user already syncs: Syncthing, Dropbox, Nextcloud, a NAS.
-    #[default]
-    Dir,
-    /// Any S3-compatible bucket: S3, R2, B2, MinIO, Garage.
-    S3,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-#[serde(default)]
-pub struct SyncDirConfig {
-    pub path: PathBuf,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-#[serde(default)]
-pub struct SyncS3Config {
-    pub endpoint: String,
-    pub region: String,
-    pub bucket: String,
-    pub prefix: String,
-    /// Credentials belong in the environment; these exist for a machine where
-    /// that is awkward. They are never written into the snapshot or logged.
-    pub access_key_id: String,
-    pub secret_access_key: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
-pub struct SyncConfig {
-    pub enabled: bool,
-    pub transport: SyncTransportKind,
-    /// This machine's name in the by-device rows. Empty falls back to the
-    /// hostname.
-    pub label: String,
-    /// Days of buckets a contribution carries. The local store keeps far more,
-    /// because it is the only record left once a CLI rotates a transcript away.
-    pub retention_days: u32,
-    /// A device silent this long is reported as quiet by `--sync-status` and
-    /// `--doctor`. It does not stop counting: its past days really did happen,
-    /// and a machine with no tokens in the period shown is already absent from
-    /// the by-device rows without needing a rule.
-    pub peer_max_age_days: u32,
-    pub providers: SyncProvidersConfig,
-    pub dir: SyncDirConfig,
-    pub s3: SyncS3Config,
-    #[serde(flatten)]
-    pub unknown: HashMap<String, toml::Value>,
-}
-
-impl Default for SyncConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            transport: SyncTransportKind::default(),
-            label: String::new(),
-            retention_days: sync::WIRE_RETENTION_DAYS as u32,
-            peer_max_age_days: 30,
-            providers: SyncProvidersConfig::default(),
-            dir: SyncDirConfig::default(),
-            s3: SyncS3Config::default(),
-            unknown: HashMap::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -2419,24 +2327,39 @@ fn native_costs(
 
     let prices = cost::pricing::load(&config.cache_file, timeout, true);
     let mut report = cost::build_report(&events, &prices, today);
-
-    let month_start = today
-        .format("%Y-%m-01")
-        .to_string()
-        .parse::<chrono::NaiveDate>()
-        .unwrap_or(today);
-    let offset = *Local::now().offset();
-    let local_id = sync::local_device_id(config);
-    let note = sync::note(&outcome.status, config.refresh_secs, now_ms() as i64);
-    for (provider, cost) in report.costs.iter_mut() {
-        cost.by_device =
-            outcome
-                .store
-                .device_totals(provider, (month_start, today), offset, &prices, &local_id);
-        cost.sync_note = note.clone();
-    }
+    attach_fleet(
+        &mut report,
+        &outcome.store,
+        &prices,
+        today,
+        &sync::local_device_id(config),
+        sync::note(&outcome.status, config.refresh_secs, now_ms() as i64),
+    );
     report.sync = outcome.status;
     report
+}
+
+/// Attach the fleet view to a rated report: who spent what this month, and what
+/// the panel should say about sync.
+///
+/// Split from the reading because that is the seam where peer buckets actually
+/// reach the panel, and reading needs a home directory while this needs
+/// nothing.
+pub fn attach_fleet(
+    report: &mut NativeCostReport,
+    store: &sync::FleetStore,
+    prices: &cost::pricing::PriceTable,
+    today: chrono::NaiveDate,
+    local_id: &str,
+    note: Option<panel::SyncNote>,
+) {
+    let month_start = today.with_day(1).unwrap_or(today);
+    let offset = *Local::now().offset();
+    for (provider, cost) in report.costs.iter_mut() {
+        cost.by_device =
+            store.device_totals(provider, (month_start, today), offset, prices, local_id);
+        cost.sync_note = note.clone();
+    }
 }
 
 /// Enabled providers the native readers produced nothing for.
@@ -3260,7 +3183,10 @@ where
     Ok(())
 }
 
-fn ensure_table<'a>(doc: &'a mut toml_edit::DocumentMut, key: &str) -> &'a mut toml_edit::Table {
+pub(crate) fn ensure_table<'a>(
+    doc: &'a mut toml_edit::DocumentMut,
+    key: &str,
+) -> &'a mut toml_edit::Table {
     if doc.get(key).and_then(|i| i.as_table()).is_none() {
         // An existing inline table (`providers = { codex = true }`) reads as None
         // via as_table(); convert it in place so its keys survive instead of
@@ -3306,93 +3232,6 @@ pub fn config_set_oauth_provider(path: &Path, name: &str, enabled: bool) -> Resu
     edit_config_file(path, |doc| {
         let providers = ensure_table(doc, "providers");
         providers[&name] = toml_edit::value(enabled);
-    })
-}
-
-fn ensure_subtable<'a>(table: &'a mut toml_edit::Table, key: &str) -> &'a mut toml_edit::Table {
-    if table.get(key).and_then(|i| i.as_table()).is_none() {
-        let replacement = table
-            .get(key)
-            .and_then(|i| i.as_inline_table())
-            .cloned()
-            .map(|t| toml_edit::Item::Table(t.into_table()))
-            .unwrap_or_else(|| toml_edit::Item::Table(toml_edit::Table::new()));
-        table.insert(key, replacement);
-    }
-    table[key].as_table_mut().expect("just ensured table")
-}
-
-/// Turn fleet sync on or off.
-pub fn config_set_sync_enabled(path: &Path, enabled: bool) -> Result<()> {
-    edit_config_file(path, |doc| {
-        ensure_table(doc, "sync")["enabled"] = toml_edit::value(enabled);
-    })
-}
-
-pub fn config_set_sync_label(path: &Path, label: &str) -> Result<()> {
-    let label = label.to_string();
-    edit_config_file(path, |doc| {
-        ensure_table(doc, "sync")["label"] = toml_edit::value(label.as_str());
-    })
-}
-
-pub fn config_set_sync_transport(path: &Path, kind: &str) -> Result<()> {
-    let kind = match kind.to_ascii_lowercase().as_str() {
-        "dir" => "dir",
-        "s3" => "s3",
-        other => {
-            return Err(anyhow!(
-                "unknown sync transport '{other}' (expected dir or s3)"
-            ));
-        }
-    };
-    edit_config_file(path, |doc| {
-        ensure_table(doc, "sync")["transport"] = toml_edit::value(kind);
-    })
-}
-
-/// Point the folder transport at a directory the user's sync tool handles.
-pub fn config_set_sync_dir(path: &Path, dir: &str) -> Result<()> {
-    let dir = dir.trim().to_string();
-    edit_config_file(path, |doc| {
-        let sync = ensure_table(doc, "sync");
-        ensure_subtable(sync, "dir")["path"] = toml_edit::value(dir.as_str());
-    })
-}
-
-/// Set one `[sync.s3]` field.
-///
-/// Credentials are deliberately not settable here: they belong in the
-/// environment, not written into a config file by a setup screen.
-pub fn config_set_sync_s3(path: &Path, field: &str, value: &str) -> Result<()> {
-    const FIELDS: &[&str] = &["endpoint", "region", "bucket", "prefix"];
-    if !FIELDS.contains(&field) {
-        return Err(anyhow!(
-            "'{field}' is not a settable S3 field ({}); credentials come from AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY",
-            FIELDS.join(", ")
-        ));
-    }
-    let field = field.to_string();
-    let value = value.trim().to_string();
-    edit_config_file(path, |doc| {
-        let sync = ensure_table(doc, "sync");
-        ensure_subtable(sync, "s3")[&field] = toml_edit::value(value.as_str());
-    })
-}
-
-/// Take one provider in or out of sync. Only providers with a native reader can
-/// take part: a ccusage-sourced provider has no events to bucket.
-pub fn config_set_sync_provider(path: &Path, name: &str, enabled: bool) -> Result<()> {
-    if !sync::syncable(name) {
-        return Err(anyhow!(
-            "'{name}' has no transcript reader, so it cannot sync (it can be one of: {})",
-            NATIVELY_READ.join(", ")
-        ));
-    }
-    let name = name.to_lowercase();
-    edit_config_file(path, |doc| {
-        let sync = ensure_table(doc, "sync");
-        ensure_subtable(sync, "providers")[&name] = toml_edit::value(enabled);
     })
 }
 

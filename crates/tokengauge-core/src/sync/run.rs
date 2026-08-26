@@ -4,7 +4,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::model::{Contribution, DeviceRecord, FleetStore, Hour, ObjectState, content_hash};
+use super::contribution::{Contribution, DeviceRecord, content_hash};
+use super::fleet::{FleetStore, ObjectState};
+use super::hour::Hour;
 use super::{SCHEMA_VERSION, crypto, store, transport};
 use crate::TokenGaugeConfig;
 use crate::cost::UsageEvent;
@@ -40,6 +42,10 @@ pub struct SyncStatus {
     /// that noticed, so it reads as an event rather than a state.
     #[serde(default)]
     pub dropped: Vec<String>,
+    /// Providers a peer syncs that this build cannot rate, so their tokens are
+    /// missing from the totals. Usually a peer on a newer TokenGauge.
+    #[serde(default)]
+    pub unreadable_providers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +145,8 @@ pub fn refresh(
         })
         .collect();
 
+    status.unreadable_providers = store.unreadable_providers(&device.id);
+
     SyncOutcome {
         events: store.synthetic_events(&device.id, from),
         status,
@@ -190,6 +198,12 @@ pub fn describe(status: &SyncStatus, now_ms: i64) -> SyncReport {
         problems.push(format!(
             "new fleet key; dropped {} from the old fleet",
             status.dropped.join(", ")
+        ));
+    }
+    if !status.unreadable_providers.is_empty() {
+        problems.push(format!(
+            "{} is synced by another machine but unknown to this build, so its tokens are missing here; update TokenGauge",
+            status.unreadable_providers.join(", ")
         ));
     }
     for skipped in &status.skipped {
@@ -267,6 +281,16 @@ pub fn note(status: &SyncStatus, refresh_secs: u64, now_ms: i64) -> Option<crate
             format!(
                 "new fleet key; dropped {} from the old fleet",
                 status.dropped.join(", ")
+            ),
+        );
+    }
+    if !status.unreadable_providers.is_empty() {
+        return note(
+            Tone::Warn,
+            "incomplete",
+            format!(
+                "{} is missing from these totals; this build cannot rate it",
+                status.unreadable_providers.join(", ")
             ),
         );
     }
@@ -615,7 +639,7 @@ pub fn forget(config: &TokenGaugeConfig, wanted: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync::model::{Bucket, DeviceRecord, Granularity};
+    use crate::sync::contribution::{Bucket, DeviceRecord, Granularity};
 
     fn contribution(schema: u32) -> Contribution {
         Contribution {

@@ -8,19 +8,25 @@
 //! See `docs/sync.md` for the design and `docs/adr/0001-fleet-sync-shape.md`
 //! for why it is shaped this way.
 
+pub mod config;
+pub mod contribution;
 pub mod crypto;
-pub mod model;
+pub mod fleet;
+pub mod hour;
 pub mod run;
 pub mod s3;
 pub mod store;
 pub mod transport;
 
-pub use crypto::{FleetKey, OpenError, key_path, load_key, store_key};
-pub use model::{
-    Bucket, BucketKey, Contribution, DayDigest, DeviceCost, DeviceRecord, DeviceSlice, FleetStore,
-    Granularity, Hour, Overlap, SCHEMA_VERSION, STORE_RETENTION_DAYS, WIRE_RETENTION_DAYS,
-    content_hash, syncable,
+pub use contribution::{
+    Bucket, BucketKey, Contribution, DayDigest, DeviceRecord, Granularity, SCHEMA_VERSION,
+    WIRE_RETENTION_DAYS, bucketize, content_hash, day_digests, syncable,
 };
+pub use crypto::{FleetKey, OpenError, key_path, load_key, store_key};
+pub use fleet::{
+    DeviceCost, DeviceSlice, FleetStore, KeyChange, ObjectState, Overlap, STORE_RETENTION_DAYS,
+};
+pub use hour::Hour;
 pub use run::{
     DeviceLine, DeviceStatus, OverlapNote, SkippedObject, SyncOutcome, SyncReport, SyncStatus,
     describe, forget, local_device_id, note, refresh, test_round_trip,

@@ -1,198 +1,26 @@
-//! The unit that crosses machines, and the store that outlives a transcript.
+//! The durable record: buckets keyed by device and hour, this machine included.
+//!
+//! A contribution cannot be rebuilt from transcripts alone, because
+//! `cost::window_start` reaches back only to the start of the current month.
+//! Regenerated every cycle it would forget its own history twelve times a year,
+//! and asymmetrically, since peers keep what the writer lost.
 
 use std::collections::BTreeMap;
-use std::fmt;
 
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
-use serde::de::Error as _;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
 
+use super::contribution::{
+    Bucket, Contribution, DayDigest, DeviceRecord, SCHEMA_VERSION, bucketize, day_digests,
+    intern_provider, sort_key, syncable,
+};
+use super::hour::Hour;
+use crate::cost::UsageEvent;
 use crate::cost::pricing::PriceTable;
-use crate::cost::{TokenCounts, UsageEvent, digest_u64};
-use crate::{DeviceIdentity, NATIVELY_READ, PROVIDERS};
-
-pub const SCHEMA_VERSION: u32 = 1;
 
 /// Days of buckets the local store keeps. Once a CLI rotates a transcript away
 /// the store holds the only record of that day, and a bucket is small.
 pub const STORE_RETENTION_DAYS: i64 = 400;
-
-/// Default days of buckets a contribution carries, when `[sync] retention_days`
-/// says nothing. Tighter than the store's, because a contribution is
-/// re-uploaded whenever it changes.
-pub const WIRE_RETENTION_DAYS: i64 = 35;
-
-const SECONDS_PER_HOUR: i64 = 3600;
-
-/// Whether a provider can take part in sync at all. A provider read through
-/// ccusage has a `CostInfo` and no usage events under it, so it has nothing to
-/// bucket.
-pub fn syncable(provider: &str) -> bool {
-    NATIVELY_READ
-        .iter()
-        .any(|p| p.eq_ignore_ascii_case(provider))
-}
-
-fn intern_provider(name: &str) -> Option<&'static str> {
-    PROVIDERS
-        .iter()
-        .find(|known| known.eq_ignore_ascii_case(name))
-        .copied()
-}
-
-/// One UTC hour, as hours since the epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Hour(i64);
-
-impl Hour {
-    pub fn containing(at: DateTime<Utc>) -> Self {
-        Self(at.timestamp().div_euclid(SECONDS_PER_HOUR))
-    }
-
-    pub fn start(self) -> DateTime<Utc> {
-        Utc.timestamp_opt(self.0 * SECONDS_PER_HOUR, 0)
-            .single()
-            .unwrap_or_default()
-    }
-
-    /// The calendar day this hour falls in for a reader at `offset`. Each
-    /// device converts with its own, which is what lets one bucket set read
-    /// correctly in two timezones.
-    pub fn date_at(self, offset: FixedOffset) -> NaiveDate {
-        self.start().with_timezone(&offset).date_naive()
-    }
-
-    pub fn utc_date(self) -> NaiveDate {
-        self.start().date_naive()
-    }
-
-    pub fn minus_days(self, days: i64) -> Self {
-        Self(self.0 - days * 24)
-    }
-
-    fn parse(text: &str) -> Option<Self> {
-        let naive =
-            NaiveDateTime::parse_from_str(&format!("{text}:00:00"), "%Y-%m-%dT%H:%M:%S").ok()?;
-        Some(Self(
-            naive.and_utc().timestamp().div_euclid(SECONDS_PER_HOUR),
-        ))
-    }
-}
-
-impl fmt::Display for Hour {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.start().format("%Y-%m-%dT%H"))
-    }
-}
-
-impl Serialize for Hour {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for Hour {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = String::deserialize(deserializer)?;
-        Hour::parse(&raw).ok_or_else(|| D::Error::custom(format!("not an hour stamp: {raw}")))
-    }
-}
-
-/// How wide a bucket's span is. `Day` is reserved for the degraded contribution
-/// a ccusage-sourced provider would need, and is never produced yet.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Granularity {
-    #[default]
-    Hour,
-    Day,
-}
-
-impl Granularity {
-    fn is_hour(&self) -> bool {
-        matches!(self, Granularity::Hour)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct BucketKey {
-    pub hour: Hour,
-    pub provider: String,
-    pub model: String,
-}
-
-/// Tokens billed for one provider and model within one UTC hour.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Bucket {
-    #[serde(rename = "h")]
-    pub hour: Hour,
-    #[serde(rename = "p")]
-    pub provider: String,
-    #[serde(rename = "m")]
-    pub model: String,
-    #[serde(rename = "g", default, skip_serializing_if = "Granularity::is_hour")]
-    pub granularity: Granularity,
-    #[serde(flatten)]
-    pub tokens: TokenCounts,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DeviceRecord {
-    pub id: String,
-    pub hostname: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub label: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub os: String,
-}
-
-impl DeviceRecord {
-    pub fn new(identity: &DeviceIdentity, label: &str) -> Self {
-        Self {
-            id: identity.machine_id.clone(),
-            hostname: identity.hostname.clone(),
-            label: label.trim().to_string(),
-            os: std::env::consts::OS.to_string(),
-        }
-    }
-
-    pub fn display(&self) -> &str {
-        if self.label.is_empty() {
-            &self.hostname
-        } else {
-            &self.label
-        }
-    }
-}
-
-/// A day's fingerprint, in **UTC** so two devices in different timezones still
-/// compare. Its only job is catching a transcript tree that is itself synced,
-/// which would otherwise double the fleet total in silence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DayDigest {
-    #[serde(rename = "d")]
-    pub date: NaiveDate,
-    #[serde(rename = "n")]
-    pub events: u64,
-    #[serde(rename = "x")]
-    pub digest: String,
-}
-
-/// The document one device publishes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Contribution {
-    pub schema_version: u32,
-    pub device: DeviceRecord,
-    pub written_at_ms: i64,
-    pub tz_offset_minutes: i32,
-    pub covers_from: Hour,
-    pub providers: Vec<String>,
-    pub buckets: Vec<Bucket>,
-    #[serde(default)]
-    pub days: Vec<DayDigest>,
-}
 
 /// What one device has contributed, as this machine holds it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -233,95 +61,6 @@ pub struct DeviceCost {
     /// what that machine really spent.
     pub partial: bool,
     pub is_local: bool,
-}
-
-/// Fold events into `(hour, provider, model)` buckets, sorted so the serialised
-/// form is stable and [`content_hash`] can tell a real change from a rewrite.
-pub fn bucketize(events: &[UsageEvent]) -> Vec<Bucket> {
-    let mut folded: BTreeMap<BucketKey, TokenCounts> = BTreeMap::new();
-    for event in events {
-        let key = BucketKey {
-            hour: Hour::containing(event.at),
-            provider: event.provider.to_string(),
-            model: event.model.clone(),
-        };
-        folded.entry(key).or_default().add(&event.tokens);
-    }
-    folded
-        .into_iter()
-        .map(|(key, tokens)| Bucket {
-            hour: key.hour,
-            provider: key.provider,
-            model: key.model,
-            granularity: Granularity::Hour,
-            tokens,
-        })
-        .collect()
-}
-
-/// Fingerprint every UTC day a read touched.
-pub fn day_digests(events: &[UsageEvent]) -> Vec<DayDigest> {
-    let mut folded: BTreeMap<NaiveDate, (u64, u64)> = BTreeMap::new();
-    for event in events {
-        let entry = folded.entry(event.at.date_naive()).or_default();
-        entry.0 += 1;
-        if let Some(key) = event.key {
-            entry.1 ^= key;
-        }
-    }
-    folded
-        .into_iter()
-        .map(|(date, (events, digest))| DayDigest {
-            date,
-            events,
-            digest: format!("{digest:016x}"),
-        })
-        .collect()
-}
-
-/// Stable over `written_at_ms`, so a device republishes only when its data
-/// actually moved. Persisted and compared on the next cycle, which is why the
-/// algorithm has to be a specified one - see [`digest_u64`].
-pub fn content_hash(contribution: &Contribution) -> u64 {
-    fn feed(buf: &mut Vec<u8>, bytes: &[u8]) {
-        buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-        buf.extend_from_slice(bytes);
-    }
-
-    let mut buf = Vec::new();
-    feed(&mut buf, contribution.device.id.as_bytes());
-    feed(&mut buf, contribution.covers_from.to_string().as_bytes());
-    for provider in &contribution.providers {
-        feed(&mut buf, provider.as_bytes());
-    }
-    for bucket in &contribution.buckets {
-        feed(&mut buf, bucket.hour.to_string().as_bytes());
-        feed(&mut buf, bucket.provider.as_bytes());
-        feed(&mut buf, bucket.model.as_bytes());
-        feed(
-            &mut buf,
-            &[match bucket.granularity {
-                Granularity::Hour => 0u8,
-                Granularity::Day => 1u8,
-            }],
-        );
-        let t = &bucket.tokens;
-        for field in [
-            t.input,
-            t.output,
-            t.cache_write_5m,
-            t.cache_write_1h,
-            t.cache_read,
-        ] {
-            feed(&mut buf, &field.to_le_bytes());
-        }
-    }
-    for day in &contribution.days {
-        feed(&mut buf, day.date.to_string().as_bytes());
-        feed(&mut buf, &day.events.to_le_bytes());
-        feed(&mut buf, day.digest.as_bytes());
-    }
-    digest_u64(&[&buf])
 }
 
 impl Default for FleetStore {
@@ -643,6 +382,28 @@ impl FleetStore {
         events
     }
 
+    /// Providers held in the store that this build cannot rate.
+    ///
+    /// `synthetic_events` has to skip them: a `UsageEvent` carries a
+    /// `&'static str`, so a name this binary does not know cannot become one. A
+    /// peer on a newer TokenGauge syncing a provider added since would
+    /// otherwise have its tokens vanish from the fleet total with nothing said,
+    /// which is the failure this whole design treats as worse than breaking.
+    pub fn unreadable_providers(&self, local_id: &str) -> Vec<String> {
+        let mut unknown: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for (id, slice) in &self.devices {
+            if id == local_id {
+                continue;
+            }
+            for bucket in &slice.buckets {
+                if intern_provider(&bucket.provider).is_none() {
+                    unknown.insert(bucket.provider.clone());
+                }
+            }
+        }
+        unknown.into_iter().collect()
+    }
+
     /// Per-device share of one provider's spend over a local-calendar range.
     pub fn device_totals(
         &self,
@@ -692,17 +453,12 @@ impl FleetStore {
     }
 }
 
-fn sort_key(a: &Bucket, b: &Bucket) -> std::cmp::Ordering {
-    a.hour
-        .cmp(&b.hour)
-        .then_with(|| a.provider.cmp(&b.provider))
-        .then_with(|| a.model.cmp(&b.model))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cost::TokenCounts;
     use crate::cost::build_report;
+    use crate::sync::contribution::{WIRE_RETENTION_DAYS, content_hash};
     use chrono::Local;
 
     fn hour(text: &str) -> Hour {
@@ -1053,7 +809,7 @@ mod tests {
                 event(
                     "claude",
                     "opus",
-                    Hour(base.0 - n * 5),
+                    base.minus_hours(n * 5),
                     10 * n as u64,
                     Some(n as u64),
                 )
@@ -1063,7 +819,7 @@ mod tests {
         let prices = PriceTable::default();
 
         let mut store = FleetStore::new();
-        store.upsert_local(&device("a"), Hour(base.0 - 24 * 30), &events, 1);
+        store.upsert_local(&device("a"), base.minus_days(30), &events, 1);
         let synthetic = store.synthetic_events("nobody", base);
 
         let direct = build_report(&events, &prices, today);

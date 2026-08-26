@@ -12,7 +12,7 @@ use tokengauge_core::{
     window_labels,
 };
 
-use crate::app::AppState;
+use crate::app::{AppState, Overlay};
 use crate::theme::{color_for, dim, green, hex_to_color, provider_icon_color};
 
 // Width breakpoints: hide sidebar on narrow terminals.
@@ -41,13 +41,12 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, is_refreshing: bool) {
     render_body(frame, layout[1], state);
     render_footer(frame, layout[2], state, is_refreshing);
 
-    if let Some(sync) = state.sync.as_ref() {
-        sync.render(frame, area);
-        return;
-    }
-
-    if state.show_help {
-        render_help_popup(frame, area);
+    match &state.overlay {
+        // Full screen: the panel underneath is drawn and then covered, which is
+        // wasteful but keeps the layout code in one place.
+        Overlay::Sync(sync) => sync.render(frame, area),
+        Overlay::Help => render_help_popup(frame, area),
+        Overlay::None => {}
     }
 }
 

@@ -636,7 +636,11 @@ impl ProviderFetchError {
 /// concise, purpose-written messages, so this only guards against runaway
 /// length (e.g. a raw provider error body) and normalizes timeouts.
 fn clean_error_message(raw: &str) -> String {
-    if raw.contains("timeout") {
+    // reqwest phrases its own timeout "operation timed out". Matching a bare
+    // "timeout" rewrote any provider error body that merely mentioned the word -
+    // including one telling the user to raise their own timeout setting, which
+    // then read as the request having timed out.
+    if raw.contains("timed out") {
         return "Request timed out".to_string();
     }
     // Char-boundary-safe truncation: `raw` may be an HTTP body with multi-byte
@@ -779,7 +783,7 @@ impl CachedData {
 }
 
 /// Cost info for a provider (sourced from ccusage).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CostInfo {
     pub today_usd: f64,
     pub today_tokens: u64,
@@ -1274,9 +1278,20 @@ fn lookup_cost(provider: &str, costs: &HashMap<String, CostInfo>) -> Option<Cost
     if let Some(cost) = costs.get(&key) {
         return Some(cost.clone());
     }
+    // A row's provider can be a longer spelling of the cost key ("claude-code"
+    // against "claude") or the other way round. Only at a separator, and the
+    // longest wins: a bare `starts_with` would let a future "claude-max"
+    // answer for "claude", and since this walks a HashMap the money would land
+    // on a different row from one run to the next.
+    let extends = |long: &str, short: &str| {
+        long.len() > short.len()
+            && long.starts_with(short)
+            && !long.as_bytes()[short.len()].is_ascii_alphanumeric()
+    };
     costs
         .iter()
-        .find(|(k, _)| key.starts_with(k.as_str()) || k.starts_with(&key))
+        .filter(|(k, _)| extends(&key, k) || extends(k, &key))
+        .max_by_key(|(k, _)| k.len())
         .map(|(_, v)| v.clone())
 }
 
@@ -3939,11 +3954,24 @@ mod tests {
     // Error message cleaning tests
     // ------------------------------------------------------------------------
 
+    /// The shape `{e:#}` actually produces for a reqwest timeout - the whole
+    /// anyhow chain, ending in the transport's own words.
     #[test]
-    fn provider_fetch_error_timeout() {
-        let error = ProviderFetchError::new("codex".to_string(), "timeout after 2s");
+    fn a_transport_timeout_is_said_in_one_line() {
+        let raw = "Codex usage request failed: error sending request: operation timed out";
+        let error = ProviderFetchError::new("codex".to_string(), raw);
         assert_eq!(error.message, "Request timed out");
-        assert_eq!(error.raw, "timeout after 2s");
+        assert_eq!(error.raw, raw);
+    }
+
+    /// A provider error body that mentions the word is not a timeout. Matching
+    /// a bare "timeout" turned advice about raising one into a report that the
+    /// request had timed out.
+    #[test]
+    fn an_error_body_about_timeouts_is_not_rewritten_as_one() {
+        let error =
+            ProviderFetchError::new("glm".to_string(), "z.ai error: raise your request timeout");
+        assert_eq!(error.message, "z.ai error: raise your request timeout");
     }
 
     #[test]
@@ -4301,6 +4329,27 @@ mod tests {
         assert!(lookup_cost("claude-code", &costs).is_some());
         assert!(lookup_cost("CLAUDE", &costs).is_some());
         assert!(lookup_cost("zai", &costs).is_none());
+    }
+
+    /// Two providers sharing a prefix used to answer for each other, and which
+    /// one won depended on HashMap order - so the same snapshot could put the
+    /// money on a different row from one run to the next.
+    #[test]
+    fn a_provider_never_answers_for_one_whose_name_merely_starts_the_same() {
+        let cost = |usd: f64| CostInfo {
+            today_usd: usd,
+            ..CostInfo::default()
+        };
+        let mut costs = HashMap::new();
+        costs.insert("claude".to_string(), cost(1.0));
+        costs.insert("claudex".to_string(), cost(2.0));
+
+        // Exact wins outright, either way round.
+        assert_eq!(lookup_cost("claude", &costs).unwrap().today_usd, 1.0);
+        assert_eq!(lookup_cost("claudex", &costs).unwrap().today_usd, 2.0);
+        // And a longer spelling only matches across a separator.
+        assert_eq!(lookup_cost("claude-code", &costs).unwrap().today_usd, 1.0);
+        assert!(lookup_cost("claudexyz", &costs).is_none());
     }
 
     #[test]

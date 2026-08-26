@@ -489,7 +489,7 @@ mod win {
                     {
                         let active = choice == current;
                         let chip = egui::Button::new(
-                            RichText::new(cap(choice)).strong().color(if active {
+                            RichText::new(pin_label(choice)).strong().color(if active {
                                 DARK
                             } else {
                                 SUB
@@ -650,6 +650,20 @@ mod win {
             Tone::Critical if p < 95 => PEACH,
             _ => RED,
         }
+    }
+
+    /// The pin picker's label for a choice. "highest" is the absence of a pin,
+    /// and the four frontends called it four things - "Auto", "Highest",
+    /// "Highest usage" and the raw id - for one setting.
+    fn pin_label(choice: &str) -> String {
+        if choice == "highest" {
+            return "Highest usage".to_string();
+        }
+        PROVIDERS
+            .iter()
+            .find(|p| **p == choice)
+            .map(|p| tokengauge_core::provider_label(p).to_string())
+            .unwrap_or_else(|| cap(choice))
     }
 
     fn cap(s: &str) -> String {

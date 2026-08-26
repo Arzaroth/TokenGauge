@@ -9,20 +9,34 @@ PlasmoidItem {
     property var snapshot: ({ rows: [], errors: [], enabled: [], primary: null, window: "daily", theme: {} })
     property var rows: snapshot.rows || []
     property string lastError: ""
-    property int selectedIndex: 0
-    // Once the user picks a tab / scrolls, stop snapping the selection back to
-    // the pinned provider on refresh.
-    property bool userSelected: false
 
-    // Row index of the pinned primary provider, or 0 (highest / first).
-    function primaryIndex(snap) {
-        var rows = snap.rows || []
-        if (snap.primary) {
-            for (var i = 0; i < rows.length; i++)
-                if ((rows[i].provider || "").toLowerCase() === snap.primary)
-                    return i
-        }
+    // The selection follows the provider id, not the slot it sits in: a row
+    // that appears or drops out on a refresh would otherwise slide a different
+    // provider's numbers under whatever the user was reading. Empty means the
+    // user has not picked one, so the pin still leads.
+    property string selectedProviderId: ""
+
+    readonly property int selectedIndex: {
+        for (var i = 0; i < rows.length; i++)
+            if (String(rows[i].provider) === selectedProviderId)
+                return i
+        // Nothing chosen, or the chosen provider has gone: follow the pin. The
+        // compact view reports its percentage, and opening the panel on a
+        // different provider reads as a bug.
+        var pinned = String(snapshot.primary || "").toLowerCase()
+        if (pinned !== "")
+            for (var j = 0; j < rows.length; j++)
+                if (String(rows[j].provider).toLowerCase() === pinned)
+                    return j
         return 0
+    }
+
+    // Step the selection by one row, wrapping. Used by the compact view's wheel.
+    function stepSelection(delta) {
+        var n = rows.length
+        if (n === 0) return
+        var next = ((selectedIndex + delta) % n + n) % n
+        root.selectedProviderId = String(rows[next].provider)
     }
 
     readonly property string waybarBin: Plasmoid.configuration.waybarBinary || "tokengauge-waybar"
@@ -39,9 +53,7 @@ PlasmoidItem {
     property string updateSource: ""
 
     // Row shown in the panel / hovered.
-    readonly property var selRow: rows.length > 0
-        ? rows[Math.min(selectedIndex, rows.length - 1)]
-        : null
+    readonly property var selRow: rows.length > 0 ? rows[selectedIndex] : null
 
     Plasmoid.icon: "utilities-system-monitor"
     toolTipMainText: selRow ? (selRow.label || selRow.provider) : "TokenGauge"
@@ -109,11 +121,6 @@ PlasmoidItem {
                 try {
                     var parsed = JSON.parse(data.stdout)
                     root.snapshot = parsed
-                    var n = (parsed.rows || []).length
-                    if (!root.userSelected)
-                        root.selectedIndex = root.primaryIndex(parsed)
-                    else if (root.selectedIndex >= n)
-                        root.selectedIndex = 0
                     root.lastError = ""
                 } catch (e) {
                     root.lastError = "parse error: " + e

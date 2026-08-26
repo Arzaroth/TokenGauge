@@ -494,8 +494,10 @@ pub struct SyncConfig {
     /// Days of buckets a contribution carries. The local store keeps far more,
     /// because it is the only record left once a CLI rotates a transcript away.
     pub retention_days: u32,
-    /// A device silent this long drops out of the by-device section. Its past
-    /// days keep counting: they really did happen.
+    /// A device silent this long is reported as quiet by `--sync-status` and
+    /// `--doctor`. It does not stop counting: its past days really did happen,
+    /// and a machine with no tokens in the period shown is already absent from
+    /// the by-device rows without needing a rule.
     pub peer_max_age_days: u32,
     pub providers: SyncProvidersConfig,
     pub dir: SyncDirConfig,

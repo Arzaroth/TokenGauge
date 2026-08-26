@@ -674,10 +674,18 @@ Panel {
                   }
 
                   Row {
+                    id: rowValues
                     anchors.right: parent.right
                     spacing: Style.space(6)
 
+                    // Anchored right against a label anchored left, so nothing
+                    // but this stops a long suffix from being drawn over it.
+                    readonly property real room: parent.width - rowLabelText.implicitWidth
+                      - spacing - rowValueText.width
+                      - (rowBadgeText.visible ? rowBadgeText.width + spacing : 0)
+
                     Text {
+                      id: rowValueText
                       text: modelData.value
                       color: root.foreground
                       font.family: root.fontFamily
@@ -685,6 +693,7 @@ Panel {
                     }
 
                     Text {
+                      id: rowBadgeText
                       visible: text !== ""
                       text: root.present(modelData.badge)
                       color: root.toneColor(modelData.badge_tone)
@@ -693,7 +702,9 @@ Panel {
                     }
 
                     Text {
-                      visible: root.present(modelData.suffix) !== ""
+                      visible: root.present(modelData.suffix) !== "" && width > 0
+                      width: Math.max(0, Math.min(implicitWidth, rowValues.room))
+                      elide: Text.ElideRight
                       text: "\u00b7  " + root.present(modelData.suffix)
                       color: root.dim
                       font.family: root.fontFamily

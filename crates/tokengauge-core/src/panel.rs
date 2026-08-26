@@ -238,20 +238,26 @@ fn device_rows(cost: &CostInfo) -> Vec<PanelRow> {
         .iter()
         .map(|device| {
             let mut r = PanelRow::new(device.label.clone(), format_tokens(device.tokens));
-            r.suffix = money(device.usd);
+            // A `Bars` row draws label, bar, value and suffix - never a badge,
+            // and on waybar and GNOME never a tooltip either. A marker put
+            // anywhere else is invisible on every surface, so it rides here.
+            r.suffix = match () {
+                _ if device.partial => format!("{} · partial", money(device.usd)),
+                _ if !device.is_local => {
+                    format!(
+                        "{} · {}",
+                        money(device.usd),
+                        ago(device.updated_at_ms, now_ms)
+                    )
+                }
+                _ => money(device.usd),
+            };
             r.fraction = Some(if max > 0 {
                 device.tokens as f64 / max as f64
             } else {
                 0.0
             });
             r.emphasized = device.is_local;
-            if device.partial {
-                r.badge = "partial".to_string();
-                r.badge_tone = Tone::Dim;
-            } else if !device.is_local {
-                r.badge = ago(device.updated_at_ms, now_ms);
-                r.badge_tone = Tone::Dim;
-            }
             r.tooltip = device_tooltip(device, now_ms);
             r
         })
@@ -729,7 +735,11 @@ mod tests {
         assert_eq!(devices[0].label, "desktop");
         assert!(devices[0].emphasized, "this machine is emphasized");
         assert_eq!(devices[0].fraction, Some(1.0));
-        assert_eq!(devices[1].badge, "partial");
+        assert!(
+            devices[1].suffix.ends_with("· partial"),
+            "the marker has to be somewhere Bars draws: {:?}",
+            devices[1].suffix
+        );
         assert!(devices[1].tooltip.contains("part-way through the month"));
 
         let sync = spec
@@ -742,6 +752,30 @@ mod tests {
             .expect("the cost section carries the sync state");
         assert_eq!(sync.value, "2 devices");
         assert_eq!(sync.badge, "ok");
+    }
+
+    /// `every_panel_frontend_handles_every_section_kind` checks *kinds*, so it
+    /// cannot see a row putting content in a field its kind never draws. Bars
+    /// renderers read label, bar, value and suffix; a badge set here is
+    /// invisible on all five surfaces.
+    #[test]
+    fn a_bars_row_never_hides_content_in_a_field_bars_does_not_draw() {
+        let mut r = row();
+        r.cost = Some(cost());
+        for section in panel_spec(&r)
+            .iter()
+            .filter(|s| s.kind == SectionKind::Bars)
+        {
+            for row in &section.rows {
+                assert!(
+                    row.badge.is_empty(),
+                    "{}: `{}` puts \"{}\" in a badge no Bars renderer draws",
+                    section.id,
+                    row.label,
+                    row.badge
+                );
+            }
+        }
     }
 
     #[test]

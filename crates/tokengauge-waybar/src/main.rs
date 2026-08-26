@@ -222,7 +222,9 @@ fn main() -> Result<()> {
         let path = tokengauge_core::sync::store_key(&config.cache_file, &key, args.sync_force)?;
         println!("{}", key.display());
         eprintln!("Fleet key written to {}", path.display());
-        eprintln!("Run `tokengauge --sync-join <key>` on every other machine.");
+        eprintln!(
+            "On every other machine: `tokengauge --sync-join -` and paste it, which keeps the key out of shell history."
+        );
         return Ok(());
     }
 

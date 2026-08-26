@@ -17,8 +17,9 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// the store holds the only record of that day, and a bucket is small.
 pub const STORE_RETENTION_DAYS: i64 = 400;
 
-/// Days of buckets a contribution carries. Tighter than the store's, because a
-/// contribution is re-uploaded whenever it changes.
+/// Default days of buckets a contribution carries, when `[sync] retention_days`
+/// says nothing. Tighter than the store's, because a contribution is
+/// re-uploaded whenever it changes.
 pub const WIRE_RETENTION_DAYS: i64 = 35;
 
 const SECONDS_PER_HOUR: i64 = 3600;
@@ -524,9 +525,10 @@ impl FleetStore {
         device_id: &str,
         now: DateTime<Utc>,
         providers: &[String],
+        retention_days: i64,
     ) -> Option<Contribution> {
         let slice = self.devices.get(device_id)?;
-        let floor = Hour::containing(now).minus_days(WIRE_RETENTION_DAYS);
+        let floor = Hour::containing(now).minus_days(retention_days.max(1));
         let taking_part =
             |name: &str| syncable(name) && providers.iter().any(|p| p.eq_ignore_ascii_case(name));
 
@@ -900,13 +902,50 @@ mod tests {
         let now = hour("2026-08-25T15").start();
         let providers = vec!["claude".to_string()];
 
-        let first = store.contribution("a", now, &providers).expect("slice");
+        let first = store
+            .contribution("a", now, &providers, WIRE_RETENTION_DAYS)
+            .expect("slice");
         let mut later = first.clone();
         later.written_at_ms += 60_000;
         assert_eq!(content_hash(&first), content_hash(&later));
 
         later.buckets[0].tokens.output += 1;
         assert_ne!(content_hash(&first), content_hash(&later));
+    }
+
+    /// The knob was declared, documented, defaulted and never read: a user
+    /// setting 90 silently got 35.
+    #[test]
+    fn the_configured_retention_is_what_reaches_the_wire() {
+        let now = hour("2026-08-25T12").start();
+        let mut store = FleetStore::new();
+        store.upsert_local(
+            &device("a"),
+            hour("2026-01-01T00"),
+            &[
+                event("claude", "opus", hour("2026-08-25T11"), 10, Some(1)),
+                event("claude", "opus", hour("2026-08-24T09"), 20, Some(2)),
+                event("claude", "opus", hour("2026-07-01T09"), 30, Some(3)),
+            ],
+            1,
+        );
+        let providers = vec!["claude".to_string()];
+        let published = |days: i64| {
+            store
+                .contribution("a", now, &providers, days)
+                .expect("slice")
+                .buckets
+                .len()
+        };
+
+        assert_eq!(published(1), 1, "an hour ago only");
+        assert_eq!(published(2), 2, "yesterday too");
+        assert_eq!(published(90), 3, "a long retention reaches July");
+        assert_eq!(
+            published(0),
+            published(1),
+            "a nonsense retention clamps to a day rather than publishing nothing"
+        );
     }
 
     #[test]
@@ -930,6 +969,7 @@ mod tests {
                 "a",
                 hour("2026-08-25T15").start(),
                 &["claude".to_string(), "kimi".to_string()],
+                WIRE_RETENTION_DAYS,
             )
             .expect("slice");
 

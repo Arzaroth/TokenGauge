@@ -219,7 +219,8 @@ enabled = true
 transport = "dir"          # "dir" | "s3"
 label = "desktop"          # optional, defaults to hostname
 retention_days = 35        # month-to-date plus the weekly panel
-peer_max_age_days = 30     # silent this long, drops out of the by-device section
+retention_days = 35        # days of buckets a contribution carries
+peer_max_age_days = 30     # silent this long, reported as quiet
 
 # Which providers take part. Default: every enabled provider. Turn one off when
 # that provider's transcript tree is itself synced between machines - hazard 1.
@@ -393,9 +394,10 @@ later wants a header icon rather than a panel row.
    reported, and the object this device published under the old key is deleted
    rather than left as litter nobody can read. Peers republish on their next
    cycle, so the real cost is peer history older than `retention_days`.
-6. **A retired machine** leaves the by-device section after `peer_max_age_days`
-   but keeps contributing to historical days, because those days really did
-   happen. `--sync-forget <device>` deletes the object and pins it out.
+6. **A retired machine** is reported as quiet after `peer_max_age_days` and
+   keeps contributing to historical days, because those days really did happen.
+   It leaves the by-device rows on its own once it has no tokens in the period
+   shown, which needs no rule. `--sync-forget <device>` deletes the object.
 7. **A cloned machine id** (VM template, restored image) shows up as one device
    id publishing under two hostnames. `--doctor` warns, `--sync-reset-id`
    regenerates.

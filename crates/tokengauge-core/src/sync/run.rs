@@ -264,7 +264,12 @@ fn cycle(
         .resolve(&config.providers.enabled_providers());
     let own_name = key.object_name(&device.id);
 
-    if let Some(contribution) = store.contribution(&device.id, now, &providers) {
+    if let Some(contribution) = store.contribution(
+        &device.id,
+        now,
+        &providers,
+        i64::from(config.sync.retention_days),
+    ) {
         let hash = publish_stamp(&contribution, &transport.describe(), &own_name);
         if store.published_hash != Some(hash) {
             let body =

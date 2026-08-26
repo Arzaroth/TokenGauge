@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use tokengauge_core::sync::SyncStatus;
@@ -138,21 +138,6 @@ impl SyncView {
             .and_then(|cached| cached.sync().cloned());
     }
 
-    /// True when the config did not load, having said so. Every action that
-    /// reads or writes the fleet key, the store or the transport goes through
-    /// here: acting on a default config would put the key in a different
-    /// machine's state directory and report a fleet that is not the user's.
-    fn config_is_broken(&mut self) -> bool {
-        let Some(error) = self.config_error.clone() else {
-            return false;
-        };
-        self.message = Some(Message {
-            text: format!("Fix the config first: {error}"),
-            failed: true,
-        });
-        true
-    }
-
     fn report(&mut self, result: anyhow::Result<String>) {
         self.message = Some(match result {
             Ok(text) => Message {
@@ -169,6 +154,13 @@ impl SyncView {
 
     /// `false` closes the screen.
     pub fn on_key(&mut self, key: KeyEvent) -> bool {
+        // Ctrl+C reaches here as `Char('c')`. Without this it lands on the
+        // reveal binding and prints the fleet key on screen, which is the one
+        // thing this module exists to avoid.
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return !matches!(key.code, KeyCode::Char('c'));
+        }
+
         if let Some(input) = self.input.as_mut() {
             match key.code {
                 KeyCode::Esc => self.input = None,
@@ -181,6 +173,27 @@ impl SyncView {
                     self.commit(field, buffer.trim());
                 }
                 _ => {}
+            }
+            return true;
+        }
+
+        // One gate, not a guard at each call site. `self.config` is a default
+        // when the real one would not load, so *every* action reads or writes
+        // another machine's paths - including `e`, which would compute
+        // `!default.enabled` and write it into the user's actual config.
+        if let Some(error) = self.config_error.clone() {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => return false,
+                KeyCode::Char('r') => {
+                    self.reload();
+                    self.message = None;
+                }
+                _ => {
+                    self.message = Some(Message {
+                        text: format!("Fix the config first: {error}"),
+                        failed: true,
+                    });
+                }
             }
             return true;
         }
@@ -209,7 +222,7 @@ impl SyncView {
             KeyCode::Char('3') if !self.is_dir() => self.prompt(Field::Region),
             KeyCode::Char('4') if !self.is_dir() => self.prompt(Field::Prefix),
             KeyCode::Char('n') => self.prompt(Field::Label),
-            KeyCode::Char('t') if !self.config_is_broken() => {
+            KeyCode::Char('t') => {
                 let result = tokengauge_core::sync::test_round_trip(&self.config)
                     .map(|steps| format!("Round trip ok: {}", steps.join(", ")));
                 self.report(result);
@@ -249,9 +262,6 @@ impl SyncView {
     }
 
     fn commit(&mut self, field: Field, value: &str) {
-        if matches!(field, Field::Join) && self.config_is_broken() {
-            return;
-        }
         let result = match field {
             Field::Join => tokengauge_core::sync::FleetKey::parse(value).and_then(|key| {
                 tokengauge_core::sync::store_key(&self.config.cache_file, &key, false)
@@ -275,9 +285,6 @@ impl SyncView {
     /// `--sync-force` makes the intent explicit - including after `c`, which
     /// used to clear the guard and let a second `g` replace the key silently.
     fn generate_key(&mut self) {
-        if self.config_is_broken() {
-            return;
-        }
         let key = tokengauge_core::sync::FleetKey::generate();
         match tokengauge_core::sync::store_key(&self.config.cache_file, &key, false) {
             Ok(_) => {
@@ -291,9 +298,6 @@ impl SyncView {
     }
 
     fn reveal_key(&mut self) {
-        if self.config_is_broken() {
-            return;
-        }
         match tokengauge_core::sync::load_key(&self.config.cache_file) {
             Ok(Some(key)) => {
                 self.revealed_key = Some(key.display());
@@ -652,6 +656,57 @@ mod tests {
 
         press(&mut view, 't');
         assert!(screen(&view).contains("Fix the config first"));
+
+        // Every action, not just the ones that were remembered individually:
+        // `e` would compute `!default.enabled` and write it to the real config.
+        for gated in ['e', 'x', 'n', 'd', 'j', 'c'] {
+            press(&mut view, gated);
+            assert!(
+                screen(&view).contains("Fix the config first"),
+                "`{gated}` acted on a default config"
+            );
+            assert!(view.input.is_none(), "`{gated}` opened a field anyway");
+        }
+
+        // Reload and leave still work, or the screen is a trap.
+        assert!(press(&mut view, 'r'));
+        assert!(!press(&mut view, 'q'));
+    }
+
+    #[test]
+    fn ctrl_c_leaves_instead_of_revealing_the_fleet_key() {
+        let mut view = open_scratch("ctrl-c");
+        press(&mut view, 'g');
+        let shown = view.revealed_key.clone().expect("generated");
+
+        let mut fresh = open_scratch("ctrl-c-2");
+        std::fs::copy(
+            tokengauge_core::sync::key_path(&view.config.cache_file),
+            tokengauge_core::sync::key_path(&fresh.config.cache_file),
+        )
+        .expect("copy key");
+
+        // Crossterm delivers Ctrl+C as Char('c') with a modifier, which used to
+        // land on the reveal binding.
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(!fresh.on_key(ctrl_c), "Ctrl+C should leave the screen");
+        assert!(
+            fresh.revealed_key.is_none(),
+            "Ctrl+C revealed the fleet key"
+        );
+        assert!(!screen(&fresh).contains(&shown));
+
+        // And it must not type itself into a field either.
+        fresh.input = Some(Input {
+            field: Field::Label,
+            buffer: String::new(),
+        });
+        fresh.on_key(ctrl_c);
+        assert_eq!(
+            fresh.input.as_ref().map(|i| i.buffer.as_str()),
+            Some(""),
+            "Ctrl+C typed a `c` into the field"
+        );
     }
 
     #[test]

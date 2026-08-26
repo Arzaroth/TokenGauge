@@ -52,6 +52,20 @@ Panel {
   property bool settingsOpen: false
   property real wheelAccumulator: 0
 
+  // The frontend's own read failure and the snapshot's per-provider fetch
+  // errors, in one string. Both have to reach the panel once data exists: a
+  // binary that vanished leaves the last good numbers on screen aging quietly,
+  // which is the one state that looks exactly like a working panel.
+  readonly property string errorText: {
+    if (present(usage.lastError) !== "") return String(usage.lastError)
+    var parts = []
+    for (var i = 0; i < usage.errors.length; i++) {
+      var e = usage.errors[i]
+      parts.push(String(e.provider || "?") + ": " + String(e.message || e.raw || "error"))
+    }
+    return parts.join("\n")
+  }
+
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
   function alpha(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
@@ -113,15 +127,6 @@ Panel {
     }
   }
 
-  function joinFootnote(row) {
-    var parts = []
-    var note = present(row.footnote)
-    var badge = present(row.badge)
-    if (note !== "") parts.push(note)
-    if (badge !== "") parts.push(badge)
-    return parts.join("  \u00b7  ")
-  }
-
   function joinValue(row) {
     var value = present(row.value)
     var suffix = present(row.suffix)
@@ -166,6 +171,8 @@ Panel {
     property string value: ""
     property real fraction: 0
     property string footnote: ""
+    property string badge: ""
+    property color badgeColor: root.dim
     property string tooltip: ""
     property bool emphasized: false
     property color fill: root.foreground
@@ -229,12 +236,28 @@ Panel {
       }
     }
 
-    Text {
-      text: meterRow.footnote
-      visible: text !== ""
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
+    // The badge keeps its own colour rather than joining the footnote string:
+    // it carries the pace projection, and "ends ~120%" painted dim reads as a
+    // caption instead of the warning it is.
+    Row {
+      visible: meterRow.footnote !== "" || meterRow.badge !== ""
+      spacing: Style.space(6)
+
+      Text {
+        text: meterRow.footnote
+        visible: text !== ""
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      Text {
+        text: meterRow.badge
+        visible: text !== ""
+        color: meterRow.badgeColor
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
     }
   }
 
@@ -399,6 +422,7 @@ Panel {
         if (t === "r" || t === "R") usage.refreshNow()
         else if (t === ",") root.settingsOpen = !root.settingsOpen
         else if (root.settingsOpen && (t === "p" || t === "P")) root.cyclePin()
+        else if (root.settingsOpen && (t === "y" || t === "Y")) usage.openSyncSetup()
         else if (root.settingsOpen && /^[1-9]$/.test(t)) root.toggleProviderAt(Number(t) - 1)
         else if (t === "u" || t === "U") root.openProviderUrl("dashboard_url")
         else if (t === "s" || t === "S") root.openProviderUrl("status_url")
@@ -531,12 +555,34 @@ Panel {
             }
           }
 
+          // ---------- Error banner ----------
           Text {
-            visible: !root.provider
+            visible: root.errorText !== ""
+            width: parent.width
+            text: root.errorText
+            color: root.urgent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+
+          // The provider is serving its last good numbers. Urgent rather than
+          // dim for the same reason the banner is: the panel otherwise reads as
+          // current.
+          Text {
+            visible: !!root.provider && root.provider.stale === true
+            width: parent.width
+            text: "Showing last known values"
+            color: root.urgent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Text {
+            visible: !root.provider && root.errorText === ""
             width: parent.width
             topPadding: Style.space(24)
-            text: usage.lastError !== "" ? usage.lastError
-                                         : "No provider usage yet.\nEnable one in the settings below."
+            text: "No provider usage yet.\nEnable one in the settings below."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -595,7 +641,10 @@ Panel {
                   value: modelData.value
                   fraction: Number(modelData.fraction) || 0
                   fill: root.toneColor(modelData.tone)
-                  footnote: root.joinFootnote(modelData)
+                  footnote: root.present(modelData.footnote)
+                  badge: root.present(modelData.badge)
+                  badgeColor: root.toneColor(modelData.badge_tone)
+                  tooltip: root.present(modelData.tooltip)
                 }
               }
 
@@ -655,6 +704,21 @@ Panel {
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.body
                     }
+                  }
+
+                  // The suffix is the spec's ellipsized copy for surfaces that
+                  // cannot wrap; the tooltip carries the whole sentence.
+                  MouseArea {
+                    id: keyHover
+                    anchors.fill: parent
+                    hoverEnabled: root.present(modelData.tooltip) !== ""
+                    acceptedButtons: Qt.NoButton
+                  }
+
+                  PanelToolTip {
+                    visible: keyHover.containsMouse && root.present(modelData.tooltip) !== ""
+                    text: root.present(modelData.tooltip)
+                    fontFamily: root.fontFamily
                   }
                 }
               }
@@ -724,7 +788,7 @@ Panel {
             accent: Color.accent
             fontFamily: root.fontFamily
             options: {
-              var out = [{ value: "highest", label: "Highest" }]
+              var out = [{ value: "highest", label: "Highest usage" }]
               for (var i = 0; i < usage.enabled.length; i++) {
                 var id = String(usage.enabled[i])
                 out.push({ value: id, label: root.providerLabel(id) })
@@ -732,7 +796,7 @@ Panel {
               return out
             }
             // The config spells "no pin" as an empty primary; the chip row
-            // needs a value to select, so it shows as "Highest".
+            // needs a value to select, so it shows as "Highest usage".
             value: root.present(usage.primary) === "" ? "highest" : String(usage.primary).toLowerCase()
             onChanged: function(value) { usage.setPrimary(value) }
           }
@@ -741,7 +805,7 @@ Panel {
             visible: root.settingsOpen
             width: parent.width
             topPadding: Style.space(4)
-            text: "A number toggles a provider, p walks the pin, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml."
+            text: "A number toggles a provider, p walks the pin, y sets up fleet sync so tokens and cost add up across your machines, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

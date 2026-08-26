@@ -18,11 +18,12 @@
 
 use serde::Serialize;
 
+use crate::sync::DeviceCost;
 use crate::{CostInfo, ModelCost, ProviderRow, format_tokens};
 
 /// Colour tier for a row, resolved from the value rather than from a palette -
 /// each frontend maps these onto its own theme.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tone {
     Normal,
@@ -140,7 +141,29 @@ pub struct Section {
 
 /// Section ids in canonical order. A frontend that renders the panel renders
 /// these, in this order, skipping the ones the spec omits for lack of data.
-pub const SECTION_IDS: &[&str] = &["limits", "cost", "tokens_by_day", "tokens_by_model"];
+pub const SECTION_IDS: &[&str] = &[
+    "limits",
+    "cost",
+    "tokens_by_day",
+    "tokens_by_model",
+    "tokens_by_device",
+];
+
+/// What the panel has to say about fleet sync, resolved in the core so the
+/// wording is the same on every frontend.
+///
+/// Error-first by construction: configured-but-not-working is the dangerous
+/// state, because it under-reports silently instead of breaking, and a total
+/// that is quietly too low is worse than one that is visibly missing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncNote {
+    pub devices: usize,
+    pub tone: Tone,
+    /// One word for the badge.
+    pub headline: String,
+    pub detail: String,
+}
 
 /// Build the panel for one provider. Sections with nothing to show are omitted
 /// rather than emitted empty, so a frontend can render the list blindly.
@@ -187,9 +210,88 @@ pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
                 rows: models,
             });
         }
+
+        let devices = device_rows(cost);
+        if !devices.is_empty() {
+            out.push(Section {
+                id: "tokens_by_device",
+                title: "TOKENS BY DEVICE · THIS MONTH",
+                kind: SectionKind::Bars,
+                rows: devices,
+            });
+        }
     }
 
     out
+}
+
+// ---------------------------------------------------------------------------
+// Tokens by device
+// ---------------------------------------------------------------------------
+
+/// Present exactly when this provider is fleet-merged, which is what makes a
+/// mixed per-provider setup readable without inventing a marker for it.
+fn device_rows(cost: &CostInfo) -> Vec<PanelRow> {
+    let max = cost.by_device.first().map(|d| d.tokens).unwrap_or(0);
+    let now_ms = crate::now_ms();
+    cost.by_device
+        .iter()
+        .map(|device| {
+            let mut r = PanelRow::new(device.label.clone(), format_tokens(device.tokens));
+            // A `Bars` row draws label, bar, value and suffix - never a badge,
+            // and on waybar and GNOME never a tooltip either. A marker put
+            // anywhere else is invisible on every surface, so it rides here.
+            r.suffix = match () {
+                _ if device.partial => format!("{} · partial", money(device.usd)),
+                _ if !device.is_local => {
+                    format!(
+                        "{} · {}",
+                        money(device.usd),
+                        ago(device.updated_at_ms, now_ms)
+                    )
+                }
+                _ => money(device.usd),
+            };
+            r.fraction = Some(if max > 0 {
+                device.tokens as f64 / max as f64
+            } else {
+                0.0
+            });
+            r.emphasized = device.is_local;
+            r.tooltip = device_tooltip(device, now_ms);
+            r
+        })
+        .collect()
+}
+
+fn device_tooltip(device: &DeviceCost, now_ms: i64) -> String {
+    let mut lines = vec![device.label.clone()];
+    if device.is_local {
+        lines.push("This machine".to_string());
+    }
+    lines.push(format!(
+        "Last published  {}",
+        ago(device.updated_at_ms, now_ms)
+    ));
+    lines.push(format!("Tokens  {}", exact_tokens(device.tokens)));
+    if device.partial {
+        lines.push(
+            "Joined the fleet part-way through the month, so its share is only what it has covered"
+                .to_string(),
+        );
+    }
+    lines.join("\n")
+}
+
+/// Relative time for a device row, for `--sync-status` and for the TUI.
+pub fn ago(then_ms: i64, now_ms: i64) -> String {
+    let seconds = ((now_ms - then_ms) / 1000).max(0);
+    match seconds {
+        0..=89 => "just now".to_string(),
+        90..=5399 => format!("{}m ago", seconds / 60),
+        5400..=172_799 => format!("{}h ago", seconds / 3600),
+        _ => format!("{}d ago", seconds / 86_400),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +387,28 @@ fn cost_rows(cost: &CostInfo) -> Vec<PanelRow> {
             "Burn rate",
             format!("{}/hr", money(burn.cost_per_hour)),
         ));
+    }
+
+    if let Some(note) = cost.sync_note.as_ref() {
+        let mut r = PanelRow::new(
+            "Sync",
+            match note.devices {
+                1 => "1 device".to_string(),
+                n => format!("{n} devices"),
+            },
+        );
+        r.badge = note.headline.clone();
+        r.badge_tone = note.tone;
+        // A transport error can be a paragraph. Rows renderers print the suffix
+        // inline on surfaces with no wrapping, so the line is capped and the
+        // whole sentence kept for the tooltip.
+        r.suffix = ellipsize(&note.detail, 72);
+        r.tooltip = if note.detail.is_empty() {
+            "Cost and token figures cover every machine in the fleet".to_string()
+        } else {
+            note.detail.clone()
+        };
+        out.push(r);
     }
 
     out
@@ -393,6 +517,19 @@ fn model_tooltip(m: &ModelCost) -> String {
 /// `$1.23` under a hundred, `$312` above it - cents stop carrying information
 /// once the figure is that large, and the extra digits push the value column
 /// wide on a narrow panel.
+/// Cut to `max` characters on a word boundary where there is one.
+fn ellipsize(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(max - 1).collect();
+    let trimmed = match cut.rsplit_once(' ') {
+        Some((head, _)) if head.chars().count() >= max / 2 => head,
+        _ => cut.trim_end(),
+    };
+    format!("{trimmed}…")
+}
+
 pub fn money(value: f64) -> String {
     if !value.is_finite() {
         return "-".to_string();
@@ -545,6 +682,32 @@ mod tests {
             }),
             session_usd: 172.92,
             weekly_usd: 1050.91,
+            by_device: vec![
+                DeviceCost {
+                    device_id: "aaaa".into(),
+                    label: "desktop".into(),
+                    tokens: 900_000_000,
+                    usd: 700.0,
+                    updated_at_ms: crate::now_ms(),
+                    partial: false,
+                    is_local: true,
+                },
+                DeviceCost {
+                    device_id: "bbbb".into(),
+                    label: "laptop".into(),
+                    tokens: 500_000_000,
+                    usd: 350.91,
+                    updated_at_ms: crate::now_ms() - 7_200_000,
+                    partial: true,
+                    is_local: false,
+                },
+            ],
+            sync_note: Some(SyncNote {
+                devices: 2,
+                tone: Tone::Good,
+                headline: "ok".into(),
+                detail: String::new(),
+            }),
             weekly_cost_history: vec![1.0, 2.0],
             weekly_history: vec![
                 DayCost {
@@ -567,6 +730,96 @@ mod tests {
         r.cost = Some(cost());
         let ids: Vec<&str> = panel_spec(&r).iter().map(|s| s.id).collect();
         assert_eq!(ids, SECTION_IDS);
+    }
+
+    #[test]
+    fn the_device_section_reports_shares_and_flags_a_partial_machine() {
+        let mut r = row();
+        r.cost = Some(cost());
+        let spec = panel_spec(&r);
+        let devices = &spec
+            .iter()
+            .find(|s| s.id == "tokens_by_device")
+            .unwrap()
+            .rows;
+
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].label, "desktop");
+        assert!(devices[0].emphasized, "this machine is emphasized");
+        assert_eq!(devices[0].fraction, Some(1.0));
+        assert!(
+            devices[1].suffix.ends_with("· partial"),
+            "the marker has to be somewhere Bars draws: {:?}",
+            devices[1].suffix
+        );
+        assert!(devices[1].tooltip.contains("part-way through the month"));
+
+        let sync = spec
+            .iter()
+            .find(|s| s.id == "cost")
+            .unwrap()
+            .rows
+            .iter()
+            .find(|r| r.label == "Sync")
+            .expect("the cost section carries the sync state");
+        assert_eq!(sync.value, "2 devices");
+        assert_eq!(sync.badge, "ok");
+    }
+
+    /// `every_panel_frontend_handles_every_section_kind` checks *kinds*, so it
+    /// cannot see a row putting content in a field its kind never draws. Bars
+    /// renderers read label, bar, value and suffix; a badge set here is
+    /// invisible on all five surfaces.
+    #[test]
+    fn a_row_never_hides_content_in_a_field_its_kind_does_not_draw() {
+        let mut r = row();
+        r.cost = Some(cost());
+        for section in panel_spec(&r).iter() {
+            for row in &section.rows {
+                // Per kind: the fields no frontend's delegate for that kind
+                // reads. Filling one is content the user never sees.
+                let undrawn: &[(&str, bool)] = match section.kind {
+                    SectionKind::Meters => &[("suffix", !row.suffix.is_empty())],
+                    SectionKind::Bars => &[
+                        ("badge", !row.badge.is_empty()),
+                        ("footnote", !row.footnote.is_empty()),
+                    ],
+                    SectionKind::Rows => &[
+                        ("fraction", row.fraction.is_some()),
+                        ("footnote", !row.footnote.is_empty()),
+                    ],
+                };
+                for (field, filled) in undrawn {
+                    assert!(
+                        !filled,
+                        "{}: `{}` fills `{field}`, which no {:?} renderer draws",
+                        section.id, row.label, section.kind
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_provider_that_does_not_sync_looks_exactly_as_it_did() {
+        let mut r = row();
+        let mut cost = cost();
+        cost.by_device.clear();
+        cost.sync_note = None;
+        r.cost = Some(cost);
+        let spec = panel_spec(&r);
+
+        let ids: Vec<&str> = spec.iter().map(|s| s.id).collect();
+        assert_eq!(
+            ids,
+            vec!["limits", "cost", "tokens_by_day", "tokens_by_model"]
+        );
+        assert!(
+            !spec
+                .iter()
+                .flat_map(|s| s.rows.iter())
+                .any(|r| r.label == "Sync")
+        );
     }
 
     #[test]
@@ -692,33 +945,57 @@ mod tests {
             .parent()
             .and_then(std::path::Path::parent)
             .expect("workspace root");
+        // Each frontend is named by its *directory* and the extensions its
+        // sources use, not by one file. A hardcoded path stops proving
+        // anything the moment the code moves to a sibling module - which it
+        // did, and this test went red rather than silently green only because
+        // the file it named stopped existing at that path.
         let frontends = [
             (
                 "waybar",
-                "crates/tokengauge-waybar/src/main.rs",
+                "crates/tokengauge-waybar/src",
+                "rs",
                 "SectionKind::",
             ),
-            (
-                "tray",
-                "crates/tokengauge-tray/src/main.rs",
-                "SectionKind::",
-            ),
+            ("tray", "crates/tokengauge-tray/src", "rs", "SectionKind::"),
+            // The TUI is exempt from *layout* parity, not content parity: it
+            // draws the day section as a chart and keeps its own chrome, but
+            // every string in a section comes from here.
+            ("tui", "crates/tokengauge-tui/src", "rs", "SectionKind::"),
             (
                 "plasma",
-                "plasma/org.tokengauge.plasmoid/contents/ui/FullRep.qml",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
                 "\"",
             ),
-            (
-                "gnome",
-                "gnome/tokengauge@arzaroth.github.io/extension.js",
-                "'",
-            ),
-            ("quickshell", "omarchy/arzaroth.tokengauge/Panel.qml", "\""),
+            ("gnome", "gnome/tokengauge@arzaroth.github.io", "js", "'"),
+            ("quickshell", "omarchy/arzaroth.tokengauge", "qml", "\""),
         ];
 
-        for (id, path, prefix) in frontends {
-            let src = std::fs::read_to_string(repo.join(path))
-                .unwrap_or_else(|e| panic!("{id}: cannot read {path}: {e}"));
+        for (id, dir, extension, prefix) in frontends {
+            let root = repo.join(dir);
+            let mut sources = Vec::new();
+            let mut stack = vec![root.clone()];
+            while let Some(next) = stack.pop() {
+                let entries = std::fs::read_dir(&next)
+                    .unwrap_or_else(|e| panic!("{id}: cannot read {}: {e}", next.display()));
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if path.extension().is_some_and(|e| e == extension) {
+                        sources.push(std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                            panic!("{id}: cannot read {}: {e}", path.display())
+                        }));
+                    }
+                }
+            }
+            assert!(
+                !sources.is_empty(),
+                "{id}: no .{extension} sources under {} - the path has gone stale",
+                root.display()
+            );
+
             for kind in ["meters", "bars", "rows"] {
                 let needle = if prefix == "SectionKind::" {
                     let mut c = kind.chars();
@@ -731,12 +1008,23 @@ mod tests {
                     format!("{prefix}{kind}{prefix}")
                 };
                 assert!(
-                    src.contains(&needle),
-                    "{id} ({path}) never handles the `{kind}` section kind - \
+                    sources.iter().any(|src| src.contains(&needle)),
+                    "{id} ({dir}) never handles the `{kind}` section kind - \
                      looked for {needle}"
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_long_problem_does_not_run_off_the_row() {
+        let long = "could not list: AccessDenied (403) the request signature we \
+                    calculated does not match the signature you provided";
+        let cut = ellipsize(long, 72);
+        assert!(cut.chars().count() <= 72, "{cut}");
+        assert!(cut.ends_with('…'));
+        assert!(!cut.contains("  "), "cut on a word boundary: {cut}");
+        assert_eq!(ellipsize("short enough", 72), "short enough");
     }
 
     #[test]

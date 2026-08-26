@@ -135,15 +135,11 @@ impl UsagePace {
     }
 }
 
+/// A projection is a guess; two components is as much precision as it earns.
+/// The reset time beside it shows three, because that one is the provider's
+/// own number.
 fn format_eta(seconds: i64) -> String {
-    let minutes = seconds.max(0) / 60;
-    if minutes >= 1440 {
-        format!("{}d {}h", minutes / 1440, (minutes % 1440) / 60)
-    } else if minutes >= 60 {
-        format!("{}h {}m", minutes / 60, minutes % 60)
-    } else {
-        format!("{minutes}m")
-    }
+    crate::fmt::format_duration(seconds.max(0) / 60, 2)
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::provider::check_status;
 use crate::{ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
 const DEFAULT_BASE_URL: &str = "https://api.kimi.com";
@@ -306,22 +307,17 @@ fn to_payload(
         return Err(anyhow!("Kimi returned no usage windows"));
     }
 
-    Ok(ProviderPayload {
-        provider: "kimi".to_string(),
-        version: None,
-        source: Some(source.to_string()),
-        usage: Some(UsageSnapshot {
+    Ok(ProviderPayload::live(
+        "kimi",
+        source,
+        UsageSnapshot {
             primary,
             secondary,
-            tertiary: None,
-            updated_at: Some(now.to_rfc3339()),
             login_method: Some(login_method.to_string()),
             extra_rate_windows,
-        }),
-        credits: None,
-        error: None,
-        stale: false,
-    })
+            ..UsageSnapshot::at(now)
+        },
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -388,9 +384,10 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         }
         return Err(anyhow!("Kimi rate-limited - try again shortly"));
     }
-    if !status.is_success() {
-        return Err(anyhow!("Kimi usage HTTP {}", status.as_u16()));
-    }
+    // Everything above is Kimi-specific: the hint depends on which source
+    // supplied the token, 403 is its own state, and a 429 can mean either a
+    // rate limit or a spent quota. What is left is the shared ladder.
+    check_status(status, "Kimi", "run `kimi` to log in")?;
 
     let body: UsageResponse = resp.json().context("Kimi usage JSON was invalid")?;
     Ok(vec![to_payload(body, auth.source, auth.login_method, now)?])

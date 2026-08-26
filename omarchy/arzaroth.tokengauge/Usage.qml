@@ -150,6 +150,16 @@ Item {
     action("--set-primary " + shellQuote(name))
   }
 
+  // `--sync-setup` returns as soon as it has spawned a terminal, so the
+  // snapshot read chained behind it is not waiting on the user. `&&` and a kept
+  // stderr, exactly as applyUpdate does it: with `;` the compound command exits
+  // 0 whatever setup did, and "no terminal found" would be dropped along with
+  // the exit status. Nothing needs refreshing after a failure anyway.
+  function openSyncSetup() {
+    run(shellQuote(binary) + " --sync-setup >/dev/null && "
+        + shellQuote(binary) + " --json")
+  }
+
   function applyUpdate() {
     // --update's human-readable stdout would break JSON.parse; its stderr is
     // kept so a failed update still surfaces. The flag is armed only once the

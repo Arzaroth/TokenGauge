@@ -12,7 +12,7 @@ on all of them, or it is not done.**
 | GNOME      | `gnome/tokengauge@arzaroth.github.io`         | yes |
 | Quickshell | `omarchy/arzaroth.tokengauge`                 | yes |
 | Tray (Windows) | `crates/tokengauge-tray`                  | yes |
-| TUI        | `crates/tokengauge-tui`                       | no - exempt from layout parity only |
+| TUI        | `crates/tokengauge-tui`                       | yes - exempt from layout parity only |
 
 Shipping a feature on one frontend and leaving the rest "for later" is the
 failure mode to avoid: the desktop frontends install separately from the binary,
@@ -40,12 +40,19 @@ frontend implements exactly three primitives and loops:
 | `Rows` | label, value, tinted `badge`, dim `suffix` on one line, no bar. The cost figures. |
 
 Canonical sections, in order (`panel::SECTION_IDS`), each dropped when it has no
-data: `limits`, `cost`, `tokens_by_day`, `tokens_by_model`.
+data: `limits`, `cost`, `tokens_by_day`, `tokens_by_model`, `tokens_by_device`.
 
 Adding a section means editing `panel.rs` and nothing else. Adding a *kind*
-means touching all five frontends - `panel::tests::every_panel_frontend_handles_every_section_kind`
+means touching all six frontends - `panel::tests::every_panel_frontend_handles_every_section_kind`
 reads each frontend's source and fails when one of them never mentions a kind,
 which is the backstop for the QML and JS frontends the compiler cannot check.
+
+The TUI's exemption is *layout*, not content: it draws `tokens_by_day` as a bar
+chart rather than a row list, and keeps its sidebar, gauges and keybindings, but
+every string a user reads there is the spec's. It used to carry its own copies
+of `Tone::for_pace` and `Tone::for_trend`, its own section labels and its own
+money formatter, and all four had drifted from the spec by the time anyone
+noticed.
 
 What stays per-frontend is **chrome**, not content: the header, the update
 banner, the provider selector, the settings pane and the input hints are
@@ -162,13 +169,16 @@ daemon started before the rename is the same process to reload.
   `-R Arzaroth/TokenGauge`.
 - Before finishing: `cargo fmt --all`, `cargo clippy --workspace --all-targets`,
   `cargo test --workspace`. For QML run `qmllint`, for the GNOME extension
-  `node --input-type=module --check`.
+  `node --input-type=module --check`. CI's `frontends` job runs the last two, so
+  they are enforced rather than remembered.
 - `tokengauge-tray` is `cfg(windows)`-gated with Windows-only GUI deps, so it
-  does not type-check on Linux. To verify a change to it, temporarily lift the
-  `[target.'cfg(windows)'.dependencies]` header in its `Cargo.toml` and swap the
-  three `#[cfg(windows)]` / `#[cfg(not(windows))]` attributes in `main.rs` for
-  `#[cfg(all())]` / `#[cfg(any())]`, run `cargo clippy -p tokengauge-tray`, then
-  revert both. eframe and tray-icon do build on Linux.
+  does not type-check on Linux. CI's Windows job runs `cargo clippy -p
+  tokengauge-tray` and is the authority. To check a change locally before
+  pushing, temporarily lift the `[target.'cfg(windows)'.dependencies]` header in
+  its `Cargo.toml` and swap the three `#[cfg(windows)]` / `#[cfg(not(windows))]`
+  attributes in `main.rs` for `#[cfg(all())]` / `#[cfg(any())]`, run
+  `cargo clippy -p tokengauge-tray`, then revert both. eframe and tray-icon do
+  build on Linux.
 - A running `tokengauge --daemon` (the installed binary in
   `~/.local/bin`) serves the bar and tooltip over
   `<cache_file parent>/tokengauge.sock`, so a freshly built binary invoked with

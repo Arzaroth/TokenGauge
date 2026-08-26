@@ -9,12 +9,12 @@
 //! aggregation, so a new CLI means one more reader and nothing else.
 
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 use chrono::{DateTime, Days, Duration as ChronoDuration, Local, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
     BurnRate, CostInfo, DayCost, ModelCost, ProviderPayload, WEEKLY_HISTORY_DAYS, recent_periods,
@@ -41,13 +41,24 @@ pub enum CostSource {
 /// Tokens billed at each rate. Every reader normalises onto this, which is why
 /// `input` here means *fresh* input: Codex reports cached tokens inside its
 /// input count and Anthropic reports them beside it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Field names are the sync wire format: a contribution is re-uploaded on every
+/// change, and these five keys repeat once per bucket.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenCounts {
+    #[serde(rename = "i", default, skip_serializing_if = "is_zero")]
     pub input: u64,
+    #[serde(rename = "o", default, skip_serializing_if = "is_zero")]
     pub output: u64,
+    #[serde(rename = "cw5", default, skip_serializing_if = "is_zero")]
     pub cache_write_5m: u64,
+    #[serde(rename = "cw1h", default, skip_serializing_if = "is_zero")]
     pub cache_write_1h: u64,
+    #[serde(rename = "cr", default, skip_serializing_if = "is_zero")]
     pub cache_read: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl TokenCounts {
@@ -59,7 +70,7 @@ impl TokenCounts {
         self.cache_write_5m + self.cache_write_1h
     }
 
-    fn add(&mut self, other: &TokenCounts) {
+    pub(crate) fn add(&mut self, other: &TokenCounts) {
         self.input += other.input;
         self.output += other.output;
         self.cache_write_5m += other.cache_write_5m;
@@ -79,6 +90,10 @@ pub struct UsageEvent {
     /// instant itself is what the session window is measured against.
     pub at: DateTime<Utc>,
     pub tokens: TokenCounts,
+    /// The reader's dedup key, kept so a day can be fingerprinted without
+    /// re-reading the transcripts. `None` where a record carried no identifier
+    /// to build one from.
+    pub key: Option<u64>,
 }
 
 /// A rated event, kept only long enough to measure the current session window.
@@ -89,15 +104,30 @@ pub struct RecentEvent {
     pub tokens: u64,
 }
 
+/// A 64-bit digest with a **specified** algorithm.
+///
+/// `DefaultHasher` is explicitly not stable across Rust releases, and both of
+/// this crate's 64-bit keys outlive the run that produced them: a day
+/// fingerprint that two machines have to agree on, and the hash of the last
+/// published contribution. Two machines on different toolchains would never
+/// agree, which would silently disable the double-counting check.
+///
+/// Each part is length-prefixed so `("ab", "c")` and `("a", "bc")` differ.
+pub(crate) fn digest_u64(parts: &[&[u8]]) -> u64 {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part);
+    }
+    let digest = hasher.finalize();
+    u64::from_be_bytes(digest[..8].try_into().expect("sha256 is 32 bytes"))
+}
+
 /// Stable 64-bit key for a pair of identifiers, used to drop transcript records
 /// a resumed session copied forward. Hashed rather than stored whole so the
 /// set stays small enough to persist between runs.
-pub(crate) fn dedup_key(a: &str, b: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    a.hash(&mut hasher);
-    0xffu8.hash(&mut hasher);
-    b.hash(&mut hasher);
-    hasher.finish()
+pub fn dedup_key(a: &str, b: &str) -> u64 {
+    digest_u64(&[a.as_bytes(), b.as_bytes()])
 }
 
 /// Every `.jsonl` under `root` that could hold an event dated `since` or later.
@@ -155,6 +185,8 @@ pub struct NativeCostReport {
     /// `--doctor`: an unpriced model must read as a gap, never as $0 spent.
     pub unpriced: Vec<String>,
     pub events: usize,
+    /// What the last fleet-sync cycle did, when sync is on.
+    pub sync: crate::sync::SyncStatus,
 }
 
 impl NativeCostReport {
@@ -166,11 +198,7 @@ impl NativeCostReport {
 /// The window one read has to cover: month-to-date and the rolling week, which
 /// reaches back past the 1st for the first six days of a month.
 fn window_start(today: NaiveDate) -> NaiveDate {
-    let month_start = today
-        .format("%Y-%m-01")
-        .to_string()
-        .parse::<NaiveDate>()
-        .unwrap_or(today);
+    let month_start = crate::month_start(today);
     let week_start = today
         .checked_sub_days(Days::new(WEEKLY_HISTORY_DAYS as u64 - 1))
         .unwrap_or(today);
@@ -179,13 +207,35 @@ fn window_start(today: NaiveDate) -> NaiveDate {
 
 /// Read every transcript in the window and rate it.
 pub fn fetch_native(cache_file: &Path, timeout: Duration, today: NaiveDate) -> NativeCostReport {
+    let (events, _) = read_window(today);
+    rate(&events, cache_file, timeout, today)
+}
+
+/// Read every transcript in the window, returning the window with them.
+///
+/// The bound is part of the answer: it is the slice of history this read is
+/// authoritative for, and the fleet store replaces exactly that much of its own
+/// device's data and no more.
+pub fn read_window(today: NaiveDate) -> (Vec<UsageEvent>, NaiveDate) {
     let since = window_start(today);
-    let events = read_events_from(&claude_code::roots(), &codex_cli::roots(), since);
+    (
+        read_events_from(&claude_code::roots(), &codex_cli::roots(), since),
+        since,
+    )
+}
+
+/// Rate a set of events, wherever they were read.
+pub fn rate(
+    events: &[UsageEvent],
+    cache_file: &Path,
+    timeout: Duration,
+    today: NaiveDate,
+) -> NativeCostReport {
     if events.is_empty() {
         return NativeCostReport::default();
     }
     let prices = pricing::load(cache_file, timeout, true);
-    build_report(&events, &prices, today)
+    build_report(events, &prices, today)
 }
 
 /// Read both transcript shapes from explicit roots, oldest window bound first.
@@ -233,7 +283,17 @@ pub fn build_report(
     let mut recent: HashMap<String, Vec<RecentEvent>> = HashMap::new();
     // A week back covers the longest window any provider reports, so a session
     // figure never has to re-read the transcripts to find its own start.
-    let recent_cutoff = Utc::now() - ChronoDuration::days(WEEKLY_HISTORY_DAYS as i64);
+    //
+    // Anchored on the caller's `today`, not the wall clock. The two disagree
+    // whenever a date is injected - a fixture, or a fleet replay of another
+    // machine's history - and a cutoff measured from `now` silently drops the
+    // whole replay. UTC midnight of that date is up to half a day more
+    // generous than the local one, which this window can afford.
+    let recent_cutoff = today
+        .checked_sub_days(chrono::Days::new(WEEKLY_HISTORY_DAYS as u64))
+        .and_then(|day| day.and_hms_opt(0, 0, 0))
+        .map(|at| at.and_utc())
+        .unwrap_or_else(|| Utc::now() - ChronoDuration::days(WEEKLY_HISTORY_DAYS as i64));
 
     for event in events {
         let usd = match prices.get(&event.model) {
@@ -266,11 +326,7 @@ pub fn build_report(
     }
 
     let periods = recent_periods(today, WEEKLY_HISTORY_DAYS);
-    let month_start = today
-        .format("%Y-%m-01")
-        .to_string()
-        .parse::<NaiveDate>()
-        .unwrap_or(today);
+    let month_start = crate::month_start(today);
 
     let mut costs = HashMap::new();
     for (provider, days) in buckets {
@@ -331,6 +387,8 @@ pub fn build_report(
                 weekly_usd: weekly_history.iter().map(|d| d.usd).sum(),
                 weekly_cost_history: weekly_history.iter().map(|d| d.usd).collect(),
                 weekly_history,
+                by_device: Vec::new(),
+                sync_note: None,
             },
         );
     }
@@ -345,6 +403,7 @@ pub fn build_report(
         recent,
         unpriced,
         events: events.len(),
+        sync: crate::sync::SyncStatus::default(),
     }
 }
 
@@ -463,6 +522,21 @@ pub fn transcript_roots() -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
+    /// Two machines on different builds have to produce the same day
+    /// fingerprint, or the double-counting check goes quietly dead. A literal
+    /// pins that: refactoring the length-prefixing would otherwise pass every
+    /// other test while breaking mixed-version fleets.
+    #[test]
+    fn the_dedup_key_is_a_fixed_value_not_whatever_this_build_hashes_to() {
+        assert_eq!(dedup_key("msg_01ABC", "req_99"), 5_941_904_215_720_101_304);
+        assert_eq!(digest_u64(&[b"", b""]), 3_983_162_290_893_594_069);
+        assert_ne!(
+            dedup_key("ab", "c"),
+            dedup_key("a", "bc"),
+            "length prefixing must keep the parts distinct"
+        );
+    }
+
     fn day(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).expect("valid date")
     }
@@ -481,6 +555,7 @@ mod tests {
                 output: out,
                 ..Default::default()
             },
+            key: None,
         }
     }
 

@@ -10,10 +10,11 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::provider::{check_status, epoch_to_rfc3339, json_num};
 use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
 const DEFAULT_QUOTA_URL: &str = "https://api.z.ai/api/monitor/usage/quota/limit";
@@ -106,14 +107,6 @@ struct Limit {
     next_reset_time: Option<Value>,
 }
 
-fn value_as_f64(v: &Value) -> Option<f64> {
-    match v {
-        Value::Number(n) => n.as_f64(),
-        Value::String(s) => s.trim().parse::<f64>().ok(),
-        _ => None,
-    }
-}
-
 /// A consumption quota, as opposed to the time-based limit. Credit-based Coding
 /// Plans (lite / standard / pro) spend `CREDIT_LIMIT` entries where token plans
 /// spend `TOKENS_LIMIT`; both are the same kind of gauge and share the slots.
@@ -130,7 +123,7 @@ fn is_quota_limit(l: &Limit) -> bool {
 /// Window length in minutes from the `unit`/`number` pair (1=days, 3=hours,
 /// 5=minutes, 6=weeks).
 fn window_minutes(l: &Limit) -> Option<u32> {
-    let unit = l.unit.as_ref().and_then(value_as_f64)? as i64;
+    let unit = l.unit.as_ref().and_then(json_num)? as i64;
     let per = match unit {
         1 => 1440.0,
         3 => 60.0,
@@ -141,7 +134,7 @@ fn window_minutes(l: &Limit) -> Option<u32> {
     let number = l
         .number
         .as_ref()
-        .and_then(value_as_f64)
+        .and_then(json_num)
         .filter(|n| *n > 0.0)
         .unwrap_or(1.0);
     let minutes = per * number;
@@ -152,19 +145,19 @@ fn window_minutes(l: &Limit) -> Option<u32> {
 /// used/remaining/currentValue. z.ai omits fields rather than sending zeros, so
 /// a missing basis yields None (never a false 100%).
 fn used_percent(l: &Limit) -> Option<u8> {
-    if let Some(percent) = l.percentage.as_ref().and_then(value_as_f64) {
+    if let Some(percent) = l.percentage.as_ref().and_then(json_num) {
         return Some(pct_u8(percent));
     }
     let total = l
         .limit
         .as_ref()
-        .and_then(value_as_f64)
-        .or_else(|| l.usage.as_ref().and_then(value_as_f64))
+        .and_then(json_num)
+        .or_else(|| l.usage.as_ref().and_then(json_num))
         .filter(|t| *t > 0.0)?;
     let used = match (
-        l.used.as_ref().and_then(value_as_f64),
-        l.remaining.as_ref().and_then(value_as_f64),
-        l.current_value.as_ref().and_then(value_as_f64),
+        l.used.as_ref().and_then(json_num),
+        l.remaining.as_ref().and_then(json_num),
+        l.current_value.as_ref().and_then(json_num),
     ) {
         (Some(used), _, _) => used,
         (None, Some(remaining), current) => (total - remaining).max(current.unwrap_or(0.0)),
@@ -174,24 +167,12 @@ fn used_percent(l: &Limit) -> Option<u8> {
     Some(pct_u8(used / total * 100.0))
 }
 
-fn epoch_to_rfc3339(ms: f64) -> Option<String> {
-    // Accept both millisecond and second epochs.
-    let secs = if ms > 10_000_000_000.0 {
-        ms / 1000.0
-    } else {
-        ms
-    };
-    Utc.timestamp_opt(secs as i64, 0)
-        .single()
-        .map(|dt| dt.to_rfc3339())
-}
-
 fn to_window(l: &Limit) -> Option<UsageWindow> {
     let used_percent = used_percent(l)?;
     let resets_at = l.reset_at.clone().or_else(|| {
         l.next_reset_time
             .as_ref()
-            .and_then(value_as_f64)
+            .and_then(json_num)
             .and_then(epoch_to_rfc3339)
     });
     Some(UsageWindow {
@@ -254,22 +235,17 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         return Err(anyhow!("z.ai returned no usage - check region/token"));
     }
 
-    Ok(ProviderPayload {
-        provider: "glm".to_string(),
-        version: None,
-        source: Some("z.ai".to_string()),
-        usage: Some(UsageSnapshot {
+    Ok(ProviderPayload::live(
+        "glm",
+        "z.ai",
+        UsageSnapshot {
             primary,
             secondary,
             tertiary,
-            updated_at: Some(now.to_rfc3339()),
             login_method: plan,
-            extra_rate_windows: Vec::new(),
-        }),
-        credits: None,
-        error: None,
-        stale: false,
-    })
+            ..UsageSnapshot::at(now)
+        },
+    ))
 }
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
@@ -288,15 +264,11 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         .send()
         .context("z.ai usage request failed")?;
 
-    let status = resp.status();
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Err(anyhow!(
-            "z.ai unauthorized - check Z_AI_API_KEY (legacy ZAI_API_TOKEN)"
-        ));
-    }
-    if !status.is_success() {
-        return Err(anyhow!("z.ai usage HTTP {}", status.as_u16()));
-    }
+    check_status(
+        resp.status(),
+        "z.ai",
+        "check Z_AI_API_KEY (legacy ZAI_API_TOKEN)",
+    )?;
 
     // A wrong region often answers 200 with an empty body.
     let text = resp.text().context("z.ai usage read failed")?;

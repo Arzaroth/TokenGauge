@@ -6,12 +6,12 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
 use self_update::backends::github::ReleaseList;
 
 use crate::frontend::{self, Frontend};
+use crate::now_ms;
 use crate::{UpdateStatus, read_update_status, write_update_status};
 
 /// What an update did to a non-binary frontend, for the caller to report.
@@ -225,13 +225,6 @@ impl Drop for UpdateLock {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }
-}
-
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 /// `owner/repo` to pull releases from. Mirrors the install scripts'

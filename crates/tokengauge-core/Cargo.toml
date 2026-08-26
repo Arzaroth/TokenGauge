@@ -1,6 +1,6 @@
 [package]
 name = "tokengauge-core"
-version = "0.23.0"
+version = "0.24.0"
 edition = "2024"
 rust-version.workspace = true
 
@@ -14,6 +14,11 @@ toml_edit = "0.22"
 dirs = "5.0"
 # Device id derivation. Already in the tree via rustls, so no new crate.
 sha2 = "0.10"
+# Fleet sync envelope. Pure Rust, no C, no async runtime; `hmac` also signs the
+# S3 requests the object-store transport makes.
+chacha20poly1305 = "0.10"
+hmac = "0.12"
+flate2 = "1"
 # ponytail: blocking+json+rustls are already compiled via self_update, so this
 # adds zero new crates. Not feature-gated - tray needs it and popover already
 # links GTK4, so the weight is noise; gate later only if popover build bites.

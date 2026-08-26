@@ -8,10 +8,8 @@ import org.kde.kirigami as Kirigami
 MouseArea {
     id: compact
 
-    readonly property var row: root.rows.length > 0
-        ? root.rows[Math.min(root.selectedIndex, root.rows.length - 1)]
-        : null
-    readonly property var pct: root.windowPercent(row)
+    readonly property var row: root.rows.length > 0 ? root.rows[root.selectedIndex] : null
+    readonly property var bar: root.bar(row)
     readonly property bool vertical: Plasmoid.formFactor === PlasmaCore.Types.Vertical
 
     Layout.minimumWidth: layout.implicitWidth + Kirigami.Units.smallSpacing * 2
@@ -33,13 +31,8 @@ MouseArea {
     }
 
     onWheel: (wheel) => {
-        var n = root.rows.length
-        if (n < 2) return
-        root.userSelected = true
-        if (wheel.angleDelta.y > 0)
-            root.selectedIndex = (root.selectedIndex - 1 + n) % n
-        else
-            root.selectedIndex = (root.selectedIndex + 1) % n
+        if (root.rows.length < 2) return
+        root.stepSelection(wheel.angleDelta.y > 0 ? -1 : 1)
     }
 
     // Icon beside the percent on a horizontal panel; stacked above it on a
@@ -77,8 +70,9 @@ MouseArea {
 
         PlasmaComponents.Label {
             visible: Plasmoid.configuration.showPercentInPanel
-            text: compact.pct === null || compact.pct === undefined ? "—" : compact.pct + "%"
-            color: root.tierColor(compact.pct)
+            text: compact.bar.percent === null || compact.bar.percent === undefined
+                ? "—" : compact.bar.percent + "%"
+            color: root.toneColor(compact.bar.tone)
             font.bold: true
             Layout.alignment: Qt.AlignCenter
         }

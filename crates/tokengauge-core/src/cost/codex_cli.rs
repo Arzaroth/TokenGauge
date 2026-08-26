@@ -252,6 +252,10 @@ mod tests {
     }
 
     fn read(lines: &str) -> Vec<UsageEvent> {
+        read_since(lines, day(2026, 1, 1))
+    }
+
+    fn read_since(lines: &str, since: NaiveDate) -> Vec<UsageEvent> {
         // Unique per call: these tests run in parallel and two of them may
         // hand this helper the same fixture text.
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -266,7 +270,7 @@ mod tests {
         let mut seen = HashSet::new();
         let mut totals = HashMap::new();
         let mut events = Vec::new();
-        read_file(&path, day(2026, 1, 1), &mut seen, &mut totals, &mut events);
+        read_file(&path, since, &mut seen, &mut totals, &mut events);
         let _ = std::fs::remove_dir_all(&dir);
         events
     }
@@ -295,6 +299,27 @@ mod tests {
         // The second reading is a running total, not a second bill.
         assert_eq!(events[1].tokens.input, 1500);
         assert_eq!(events[1].tokens.output, 200);
+    }
+
+    /// The since filter has to run *after* the running total is advanced, or a
+    /// session that started before the window absorbs all of its own history
+    /// into the first reading inside it. Every other test here uses a `since`
+    /// old enough to include the whole fixture, so nothing else would notice
+    /// the two lines being swapped.
+    #[test]
+    fn history_before_the_window_is_not_billed_to_the_first_day_inside_it() {
+        let lines = format!(
+            "{CONTEXT}\n{}\n{}\n",
+            // Well before the window: 900k tokens this session already spent.
+            token_count("2026-05-01T06:18:00.000Z", 900_000, 0, 90_000),
+            // The first reading inside it. Its delta is 1,000 in and 100 out.
+            token_count("2026-05-11T06:19:00.000Z", 901_000, 0, 90_100),
+        );
+        let events = read_since(&lines, day(2026, 5, 10));
+
+        assert_eq!(events.len(), 1, "only the in-window reading is billed");
+        assert_eq!(events[0].tokens.input, 1_000);
+        assert_eq!(events[0].tokens.output, 100);
     }
 
     #[test]

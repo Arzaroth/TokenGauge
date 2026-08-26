@@ -127,6 +127,75 @@ fn synthetic_models_are_not_billed() {
     }
 }
 
+/// Everything the fixture tree itself says about the traps, recounted here
+/// rather than read off the golden's `traps` field. The generator wrote that
+/// field, so trusting it means a generator whose own counting broke - or a
+/// hand-edited golden - leaves this suite green over a fixture that no longer
+/// covers anything.
+struct TrapCounts {
+    growing_streamed_groups: u64,
+    synthetic_records: u64,
+}
+
+fn count_traps() -> TrapCounts {
+    // Output tokens per (message.id, requestId) group, in file order. A group
+    // that grows is the whole point of the fixture: first-wins and max-wins
+    // agree everywhere else, and disagree by 46% of some models' output here.
+    let mut groups: HashMap<(String, String), Vec<u64>> = HashMap::new();
+    let mut synthetic_records = 0;
+
+    let mut stack = vec![fixture(".claude/projects")];
+    let mut files = Vec::new();
+    while let Some(dir) = stack.pop() {
+        let entries =
+            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "jsonl") {
+                files.push(path);
+            }
+        }
+    }
+    assert!(!files.is_empty(), "the fixture tree holds no transcripts");
+
+    for path in &files {
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        for line in raw.lines() {
+            let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let message = &record["message"];
+            if message["model"].as_str() == Some("<synthetic>") {
+                synthetic_records += 1;
+            }
+            let (Some(id), Some(request)) = (
+                message["id"].as_str().filter(|s| !s.is_empty()),
+                record["requestId"].as_str().filter(|s| !s.is_empty()),
+            ) else {
+                continue;
+            };
+            let Some(output) = message["usage"]["output_tokens"].as_u64() else {
+                continue;
+            };
+            groups
+                .entry((id.to_string(), request.to_string()))
+                .or_default()
+                .push(output);
+        }
+    }
+
+    TrapCounts {
+        growing_streamed_groups: groups
+            .values()
+            .filter(|outputs| outputs.len() > 1 && outputs.iter().max() > outputs.first())
+            .count() as u64,
+        synthetic_records,
+    }
+}
+
 /// Guards the fixture itself: if a regeneration drops the streamed duplicates,
 /// the suite would keep passing while no longer covering the bug that made the
 /// readers disagree with ccusage in the first place.
@@ -143,21 +212,32 @@ fn the_fixture_still_covers_the_traps() {
         codex.as_object().expect("codex models").len() >= 2,
         "fixture should span several Codex models"
     );
+
+    let counted = count_traps();
+
     // The growing-output duplicates are the trap. Without them the suite would
     // pass just as happily against a reader that keeps the first record of a
     // streamed group, which is the bug this whole fixture exists to catch.
     assert!(
-        golden["traps"]["growing_streamed_groups"]
-            .as_u64()
-            .expect("trap count")
-            >= 50,
-        "fixture no longer covers growing streamed duplicates"
+        counted.growing_streamed_groups >= 50,
+        "fixture no longer covers growing streamed duplicates: {} groups",
+        counted.growing_streamed_groups
     );
     assert!(
-        golden["traps"]["synthetic_records"]
-            .as_u64()
-            .expect("synthetic count")
-            > 0,
+        counted.synthetic_records > 0,
         "fixture no longer carries a <synthetic> record"
+    );
+
+    // And the golden agrees with the tree beside it. A mismatch means one of
+    // the two was regenerated without the other, or edited by hand.
+    assert_eq!(
+        golden["traps"]["growing_streamed_groups"].as_u64(),
+        Some(counted.growing_streamed_groups),
+        "the golden's trap count and the fixture tree disagree"
+    );
+    assert_eq!(
+        golden["traps"]["synthetic_records"].as_u64(),
+        Some(counted.synthetic_records),
+        "the golden's synthetic count and the fixture tree disagree"
     );
 }

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The one-line installer and updater in the README pointed at a `main` branch that no longer exists, so both would have started 404ing once GitHub's CDN cache expired. They point at `master`, which is and was the default branch.
+
 ## [0.24.1] - 2026-08-26
 
 ### Fixed

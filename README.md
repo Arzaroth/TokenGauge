@@ -45,7 +45,7 @@ All providers are read-only: TokenGauge never refreshes a token. Codex refreshes
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/master/scripts/install.sh | bash
 omarchy-restart-waybar
 ```
 
@@ -56,7 +56,7 @@ The installer detects `systemd --user`, drops in a `tokengauge-daemon.service`, 
 By default the module is added to `modules-right` (before the tray on Omarchy). To put it on the left instead (right after `hyprland/workspaces`), run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/install.sh | bash -s -- --placement=left
+curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/master/scripts/install.sh | bash -s -- --placement=left
 ```
 
 `TOKENGAUGE_PLACEMENT=left` also works. The choice is persisted in `~/.config/tokengauge/config.toml` under `[waybar] placement`; re-running the installer with a different `--placement` migrates the module to the other side.
@@ -390,7 +390,7 @@ The shell installers still work if you prefer them:
 
 ```bash
 # Update TokenGauge
-curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/main/scripts/update.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/master/scripts/update.sh | bash
 ```
 
 ## Manual waybar wiring

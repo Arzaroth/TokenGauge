@@ -520,6 +520,21 @@ pub fn transcript_roots() -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
+    /// Two machines on different builds have to produce the same day
+    /// fingerprint, or the double-counting check goes quietly dead. A literal
+    /// pins that: refactoring the length-prefixing would otherwise pass every
+    /// other test while breaking mixed-version fleets.
+    #[test]
+    fn the_dedup_key_is_a_fixed_value_not_whatever_this_build_hashes_to() {
+        assert_eq!(dedup_key("msg_01ABC", "req_99"), 5_941_904_215_720_101_304);
+        assert_eq!(digest_u64(&[b"", b""]), 3_983_162_290_893_594_069);
+        assert_ne!(
+            dedup_key("ab", "c"),
+            dedup_key("a", "bc"),
+            "length prefixing must keep the parts distinct"
+        );
+    }
+
     fn day(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).expect("valid date")
     }

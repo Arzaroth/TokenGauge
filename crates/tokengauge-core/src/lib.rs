@@ -136,6 +136,7 @@ mod kimi;
 pub mod launch;
 pub mod pace;
 pub mod panel;
+mod provider;
 pub mod sync;
 
 pub use cost::{CostSource, NativeCostReport};

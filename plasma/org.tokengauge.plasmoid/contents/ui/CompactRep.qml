@@ -11,7 +11,7 @@ MouseArea {
     readonly property var row: root.rows.length > 0
         ? root.rows[Math.min(root.selectedIndex, root.rows.length - 1)]
         : null
-    readonly property var pct: root.windowPercent(row)
+    readonly property var bar: root.bar(row)
     readonly property bool vertical: Plasmoid.formFactor === PlasmaCore.Types.Vertical
 
     Layout.minimumWidth: layout.implicitWidth + Kirigami.Units.smallSpacing * 2
@@ -77,8 +77,9 @@ MouseArea {
 
         PlasmaComponents.Label {
             visible: Plasmoid.configuration.showPercentInPanel
-            text: compact.pct === null || compact.pct === undefined ? "—" : compact.pct + "%"
-            color: root.tierColor(compact.pct)
+            text: compact.bar.percent === null || compact.bar.percent === undefined
+                ? "—" : compact.bar.percent + "%"
+            color: root.toneColor(compact.bar.tone)
             font.bold: true
             Layout.alignment: Qt.AlignCenter
         }

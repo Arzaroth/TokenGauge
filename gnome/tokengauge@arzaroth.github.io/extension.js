@@ -321,21 +321,11 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return {...FALLBACK_THEME, ...(this._snapshot.theme || {})};
     }
 
-    _tierColor(pct) {
-        const t = this._theme();
-        if (pct === null || pct === undefined)
-            return t.dim;
-        if (pct >= 80)
-            return t.red;
-        if (pct >= 50)
-            return t.yellow;
-        return t.green;
-    }
-
-    _windowPercent(row) {
-        if (!row)
-            return null;
-        return this._snapshot.window === 'weekly' ? row.weekly_used : row.session_used;
+    // The headline number and its tier come off the row's `bar`, resolved by
+    // the core under the configured window. This used to pick the window here
+    // and carry its own copy of the 50/80 boundaries to tint it with.
+    _bar(row) {
+        return row?.bar ?? {percent: null, tone: 'dim'};
     }
 
     _providerGicon(row) {
@@ -366,7 +356,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
     _renderPanel() {
         const row = this._row;
-        const pct = this._windowPercent(row);
+        const bar = this._bar(row);
         const gicon = this._providerGicon(row);
 
         this._panelIcon.visible = gicon !== null;
@@ -383,8 +373,9 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         }
 
         this._panelPercent.visible = this._settings.get_boolean('show-percent');
-        this._panelPercent.text = pct === null || pct === undefined ? '—' : `${pct}%`;
-        this._panelPercent.style = `color: ${this._tierColor(pct)};`;
+        this._panelPercent.text =
+            bar.percent === null || bar.percent === undefined ? '—' : `${bar.percent}%`;
+        this._panelPercent.style = `color: ${this._toneColor(bar.tone)};`;
     }
 
     _renderMenu() {

@@ -639,11 +639,15 @@ mod win {
             .show(ui, add);
     }
 
+    /// Tray-icon palette for a usage percentage. `Tone::for_percent` owns where
+    /// the tiers fall; the split inside critical is this icon's own, because a
+    /// number on a 16px glyph needs the last stretch to read differently from
+    /// the rest of the red band.
     fn usage_color(p: u8) -> Color32 {
-        match p {
-            0..=49 => GREEN,
-            50..=79 => YELLOW,
-            80..=94 => PEACH,
+        match Tone::for_percent(p) {
+            Tone::Good => GREEN,
+            Tone::Warn => YELLOW,
+            Tone::Critical if p < 95 => PEACH,
             _ => RED,
         }
     }

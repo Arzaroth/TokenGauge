@@ -1,8 +1,15 @@
 //! `--doctor`: what this machine looks like to TokenGauge.
 //!
-//! Every check is a [`DoctorCheck`] rather than a `println!`, so the section
-//! that decides *what* is wrong is separate from the one that decides how to
-//! say it - and so a check can be asserted in a test.
+//! [`doctor_lines`] decides *what* is wrong and [`render`] decides how to say
+//! it. They used to be one function that computed and printed in the same
+//! breath, which meant nothing could ask the doctor a question without also
+//! producing a page of output - so nothing ever did, and a 500-line report had
+//! no test behind it.
+//!
+//! A heading is a line in the list rather than a `println!` between two of
+//! them, so the report stays one ordered document that a caller can walk. That
+//! also retires the magic label string the sync section used to smuggle its own
+//! heading through the same list.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -18,37 +25,98 @@ pub struct DoctorCheck {
     pub detail: String,
 }
 
+/// One line of the report. A heading is part of the list rather than something
+/// printed between two lists, which is what lets the whole report be a value.
+pub enum DoctorLine {
+    Heading(&'static str),
+    Check(DoctorCheck),
+}
+
+/// Print the report and return the exit code: non-zero when any check failed,
+/// so a script can act on it.
 pub(crate) fn handle_doctor(config_path: &Path) -> i32 {
+    render(&doctor_lines(config_path))
+}
+
+pub(crate) fn render(lines: &[DoctorLine]) -> i32 {
     let isatty = std::io::IsTerminal::is_terminal(&std::io::stdout());
     let (green, red, dim, reset) = if isatty {
         ("\x1b[32m", "\x1b[31m", "\x1b[2m", "\x1b[0m")
     } else {
         ("", "", "", "")
     };
-    let section = |title: &str| {
-        println!("\n{title}");
-        println!("{}", "─".repeat(title.chars().count()));
-    };
-    let print_check = |c: &DoctorCheck| {
-        let icon = if c.ok {
-            format!("{green}✓{reset}")
-        } else {
-            format!("{red}✗{reset}")
-        };
-        if c.detail.is_empty() {
-            println!("  {icon}  {}", c.label);
-        } else {
-            println!("  {icon}  {}  {dim}- {}{reset}", c.label, c.detail);
-        }
-    };
-
-    let checks: std::cell::RefCell<Vec<DoctorCheck>> = std::cell::RefCell::new(Vec::new());
-    let record = |c: DoctorCheck| {
-        print_check(&c);
-        checks.borrow_mut().push(c);
-    };
 
     println!("TokenGauge doctor");
+    for line in visible(lines) {
+        match line {
+            DoctorLine::Heading(title) => {
+                println!("\n{title}");
+                println!("{}", "─".repeat(title.chars().count()));
+            }
+            DoctorLine::Check(c) => {
+                let icon = if c.ok {
+                    format!("{green}✓{reset}")
+                } else {
+                    format!("{red}✗{reset}")
+                };
+                if c.detail.is_empty() {
+                    println!("  {icon}  {}", c.label);
+                } else {
+                    println!("  {icon}  {}  {dim}- {}{reset}", c.label, c.detail);
+                }
+            }
+        }
+    }
+
+    println!();
+    let failed = failures(lines);
+    if failed == 0 {
+        println!("{green}All checks passed.{reset}");
+        0
+    } else {
+        println!("{red}{failed} check(s) failed.{reset}");
+        1
+    }
+}
+
+/// The report minus any heading with no checks under it.
+///
+/// A section can legitimately come out empty - "Credentials" on a machine with
+/// no provider enabled - and a heading with nothing beneath it reads as a
+/// section that failed to run. Dropping it is the renderer's call, not the
+/// checks': `doctor_lines` should not have to know whether a section it built
+/// turned out to have anything in it.
+pub(crate) fn visible(lines: &[DoctorLine]) -> Vec<&DoctorLine> {
+    let mut out: Vec<&DoctorLine> = Vec::new();
+    for line in lines {
+        if matches!(line, DoctorLine::Heading(_))
+            && matches!(out.last(), Some(DoctorLine::Heading(_)))
+        {
+            out.pop();
+        }
+        out.push(line);
+    }
+    if matches!(out.last(), Some(DoctorLine::Heading(_))) {
+        out.pop();
+    }
+    out
+}
+
+/// How many checks failed. The exit code, and what a test asserts on.
+pub(crate) fn failures(lines: &[DoctorLine]) -> usize {
+    lines
+        .iter()
+        .filter(|line| matches!(line, DoctorLine::Check(c) if !c.ok))
+        .count()
+}
+
+/// Everything the doctor found, in report order. No output: a caller that only
+/// wants to know whether something is wrong should not have to print a page to
+/// find out.
+pub(crate) fn doctor_lines(config_path: &Path) -> Vec<DoctorLine> {
+    let lines: std::cell::RefCell<Vec<DoctorLine>> = std::cell::RefCell::new(Vec::new());
+    let section = |title: &'static str| lines.borrow_mut().push(DoctorLine::Heading(title));
+    let record = |c: DoctorCheck| lines.borrow_mut().push(DoctorLine::Check(c));
 
     // Config
     section("Config");
@@ -415,12 +483,8 @@ pub(crate) fn handle_doctor(config_path: &Path) -> i32 {
     };
     record(DoctorCheck { label, ok, detail });
 
-    for check in sync_cli::doctor_checks(&cfg) {
-        if check.label == sync_cli::SECTION_MARKER {
-            section("Fleet sync");
-        } else {
-            record(check);
-        }
+    for line in sync_cli::doctor_checks(&cfg) {
+        lines.borrow_mut().push(line);
     }
 
     section("Updates");
@@ -489,15 +553,7 @@ pub(crate) fn handle_doctor(config_path: &Path) -> i32 {
         }
     }
 
-    println!();
-    let failed = checks.borrow().iter().filter(|c| !c.ok).count();
-    if failed == 0 {
-        println!("{green}All checks passed.{reset}");
-        0
-    } else {
-        println!("{red}{failed} check(s) failed.{reset}");
-        1
-    }
+    lines.into_inner()
 }
 
 pub(crate) fn check_binary(name: &str, purpose: &str, hint: &str) -> DoctorCheck {
@@ -512,5 +568,87 @@ pub(crate) fn check_binary(name: &str, purpose: &str, hint: &str) -> DoctorCheck
         label: format!("{name} on PATH ({purpose})"),
         ok: found,
         detail: if found { String::new() } else { hint.into() },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The doctor reports on a machine whose config may be broken, so it must
+    /// not write a default one on the way past - that would replace the fault
+    /// with a working file and report success. This is the first thing anyone
+    /// could ask it, and until the checks were separable from the printing,
+    /// asking meant printing a page.
+    #[test]
+    fn a_config_that_will_not_parse_is_reported_and_not_replaced() {
+        let dir = std::env::temp_dir().join(format!(
+            "tg-doctor-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "refresh_secs = \"not a number\"\n").expect("write");
+
+        let lines = doctor_lines(&path);
+        assert!(
+            failures(&lines) > 0,
+            "a config that will not parse is a fault"
+        );
+        assert!(
+            lines.iter().any(|line| matches!(
+                line,
+                DoctorLine::Check(c) if !c.ok && c.label.starts_with("config loads")
+            )),
+            "the report has to name which check failed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("still there"),
+            "refresh_secs = \"not a number\"\n",
+            "diagnosing a config must not rewrite it"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A heading is never printed above an empty list. "Credentials" comes out
+    /// empty on a machine with no provider enabled, and a heading with nothing
+    /// under it reads as a section that failed to run.
+    #[test]
+    fn the_report_is_headings_and_checks_in_order() {
+        let dir = std::env::temp_dir().join(format!(
+            "tg-doctor-shape-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "refresh_secs = 600\ncache_file = \"{}\"\n[providers]\n",
+                dir.join("usage.json").display()
+            ),
+        )
+        .expect("write");
+
+        let lines = doctor_lines(&path);
+        let shown = visible(&lines);
+        assert!(matches!(shown.first(), Some(DoctorLine::Heading(_))));
+        assert!(
+            matches!(shown.last(), Some(DoctorLine::Check(_))),
+            "the report ends on a heading with nothing under it"
+        );
+        for pair in shown.windows(2) {
+            if let [DoctorLine::Heading(a), DoctorLine::Heading(b)] = pair {
+                panic!("`{a}` has no checks under it, only `{b}`");
+            }
+        }
+        // And a section that really is empty is not silently swallowed along
+        // with its checks: only the bare heading goes.
+        assert!(shown.len() < lines.len(), "nothing was dropped at all");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

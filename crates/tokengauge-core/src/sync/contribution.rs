@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::hour::Hour;
 use crate::DeviceIdentity;
 use crate::cost::{TokenCounts, UsageEvent, digest_u64};
-use crate::{NATIVELY_READ, PROVIDERS};
+use crate::{PROVIDERS, natively_read};
 
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -25,7 +25,7 @@ pub const WIRE_RETENTION_DAYS: i64 = 35;
 /// ccusage has a `CostInfo` and no usage events under it, so it has nothing to
 /// bucket.
 pub fn syncable(provider: &str) -> bool {
-    NATIVELY_READ
+    natively_read()
         .iter()
         .any(|p| p.eq_ignore_ascii_case(provider))
 }

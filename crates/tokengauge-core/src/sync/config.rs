@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-use crate::{NATIVELY_READ, edit_config_file, ensure_table, sync};
+use crate::{edit_config_file, ensure_table, natively_read, sync};
 
 /// Which providers take part in fleet sync. The default is every enabled
 /// provider that *can*: a provider read through ccusage has a `CostInfo` and no
@@ -188,7 +188,7 @@ pub fn config_set_sync_provider(path: &Path, name: &str, enabled: bool) -> Resul
     if !sync::syncable(name) {
         return Err(anyhow!(
             "'{name}' has no transcript reader, so it cannot sync (it can be one of: {})",
-            NATIVELY_READ.join(", ")
+            natively_read().join(", ")
         ));
     }
     let name = name.to_lowercase();

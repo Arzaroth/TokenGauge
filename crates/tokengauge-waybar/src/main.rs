@@ -1,3 +1,5 @@
+mod sync_cli;
+
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -51,7 +53,7 @@ fn theme_palette() -> (
     version,
     about = "TokenGauge: usage, limits and costs for AI coding assistants"
 )]
-struct Args {
+pub struct Args {
     #[arg(long, env = "TOKENGAUGE_CONFIG")]
     config: Option<PathBuf>,
     /// Rotate the provider shown in the waybar text and exit (no JSON output).
@@ -217,60 +219,8 @@ fn main() -> Result<()> {
     ensure_cache_dir(&config.cache_file)?;
     tokengauge_core::ensure_revision(&config.cache_file);
 
-    if args.sync_init {
-        let key = tokengauge_core::sync::FleetKey::generate();
-        let path = tokengauge_core::sync::store_key(&config.cache_file, &key, args.sync_force)?;
-        println!("{}", key.display());
-        eprintln!("Fleet key written to {}", path.display());
-        eprintln!(
-            "On every other machine: `tokengauge --sync-join -` and paste it, which keeps the key out of shell history."
-        );
-        return Ok(());
-    }
-
-    if let Some(raw) = args.sync_join.as_deref() {
-        let raw = if raw.trim() == "-" {
-            let mut typed = String::new();
-            if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                eprint!("Fleet key: ");
-            }
-            std::io::Read::read_to_string(&mut std::io::stdin(), &mut typed)
-                .context("could not read the fleet key from stdin")?;
-            typed
-        } else {
-            raw.to_string()
-        };
-        let key = tokengauge_core::sync::FleetKey::parse(&raw)?;
-        let path = tokengauge_core::sync::store_key(&config.cache_file, &key, args.sync_force)?;
-        eprintln!("Joined fleet {} (key at {})", key.id_hex(), path.display());
-        return Ok(());
-    }
-
-    if args.sync_status {
-        return handle_sync_status(&config, args.json);
-    }
-
-    if args.sync_test {
-        for step in tokengauge_core::sync::test_round_trip(&config)? {
-            println!("ok  {step}");
-        }
-        return Ok(());
-    }
-
-    if let Some(device) = args.sync_forget.as_deref() {
-        let label = tokengauge_core::sync::forget(&config, device)?;
-        eprintln!("Dropped {label} from the fleet.");
-        return Ok(());
-    }
-
-    if args.sync_setup {
-        let command = tokengauge_core::launch::tui_sync_command(&config);
-        if !tokengauge_core::launch::spawn_shell(&command) {
-            anyhow::bail!(
-                "no terminal found to open the TUI in; set [waybar] tui_command, or run `tokengauge-tui --sync` yourself"
-            );
-        }
-        return Ok(());
+    if let Some(command) = sync_cli::from_args(&args) {
+        return sync_cli::run(command, &config);
     }
 
     if args.internal_refresh_worker {
@@ -531,11 +481,6 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
         WaybarWindow::Weekly => "weekly",
     };
     let update_status = tokengauge_core::read_update_status(&config.cache_file);
-    // Read back rather than threaded through: `maybe_refresh` either just wrote
-    // this or served the snapshot that holds it, so both paths agree.
-    let sync_status = read_cache_full(&config.cache_file)
-        .ok()
-        .and_then(|cached| cached.sync().cloned());
     let out = serde_json::json!({
         // Frontends show this in their settings pane; `update` only carries a
         // version once a release check has run, and is null until then.
@@ -555,9 +500,6 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
             "neutral": t.neutral,
         },
         "update": update_status,
-        // Null when fleet sync has never run. Frontends read the by-device rows
-        // out of `panel`; this is for sync state as chrome.
-        "sync": sync_status,
         // Frontends watch this file and re-read the snapshot when it changes,
         // so a fetch by the daemon or by another frontend lands immediately
         // instead of on the next poll. It holds no provider data.
@@ -1099,10 +1041,10 @@ fn worker_do_refresh(config: &TokenGaugeConfig) {
     signal_waybar();
 }
 
-struct DoctorCheck {
-    label: String,
-    ok: bool,
-    detail: String,
+pub struct DoctorCheck {
+    pub label: String,
+    pub ok: bool,
+    pub detail: String,
 }
 
 fn handle_doctor(config_path: &Path) -> i32 {
@@ -1487,105 +1429,11 @@ fn handle_doctor(config_path: &Path) -> i32 {
     };
     record(DoctorCheck { label, ok, detail });
 
-    if cfg.sync.enabled {
-        section("Fleet sync");
-        let status = read_cache_full(&cfg.cache_file)
-            .ok()
-            .and_then(|cached| cached.sync().cloned());
-
-        record(match tokengauge_core::sync::load_key(&cfg.cache_file) {
-            Ok(Some(key)) => DoctorCheck {
-                label: format!("fleet key {}", key.id_hex()),
-                ok: true,
-                detail: tokengauge_core::sync::key_path(&cfg.cache_file)
-                    .display()
-                    .to_string(),
-            },
-            _ => DoctorCheck {
-                label: "no fleet key".into(),
-                ok: false,
-                detail: "run: tokengauge --sync-init, or --sync-join <key>".into(),
-            },
-        });
-
-        let syncing = cfg
-            .sync
-            .providers
-            .resolve(&cfg.providers.enabled_providers());
-        record(DoctorCheck {
-            label: format!("providers syncing: {}", syncing.join(", ")),
-            ok: !syncing.is_empty(),
-            detail: if syncing.is_empty() {
-                "no enabled provider can sync; only claude and codex have transcript readers".into()
-            } else {
-                String::new()
-            },
-        });
-
-        match &status {
-            None => record(DoctorCheck {
-                label: "no cycle has run yet".into(),
-                ok: false,
-                detail: "run: tokengauge --sync-test".into(),
-            }),
-            Some(status) => {
-                record(match &status.error {
-                    Some(error) => DoctorCheck {
-                        label: "last cycle failed".into(),
-                        ok: false,
-                        detail: error.clone(),
-                    },
-                    None => DoctorCheck {
-                        label: format!("{} device(s) in the fleet", status.devices.len()),
-                        ok: true,
-                        detail: status.transport.clone(),
-                    },
-                });
-                for skipped in &status.skipped {
-                    record(DoctorCheck {
-                        label: "object skipped".into(),
-                        ok: false,
-                        detail: format!("{} - {}", skipped.name, skipped.reason),
-                    });
-                }
-                for overlap in &status.overlaps {
-                    record(DoctorCheck {
-                        label: "the same transcripts were read twice".into(),
-                        ok: false,
-                        detail: format!(
-                            "{} on {}; counted once. Turn that provider off under [sync.providers] on one of them.",
-                            overlap.devices.join(" and "),
-                            overlap.date
-                        ),
-                    });
-                }
-                // A device id is derived from the machine, so one id under two
-                // hostnames means a cloned image rather than two machines.
-                let mut seen: std::collections::HashMap<&str, &str> =
-                    std::collections::HashMap::new();
-                for device in &status.devices {
-                    if let Some(previous) =
-                        seen.insert(device.device_id.as_str(), device.hostname.as_str())
-                        && previous != device.hostname
-                    {
-                        record(DoctorCheck {
-                            label: "two machines share one device id".into(),
-                            ok: false,
-                            detail: format!(
-                                "{previous} and {} - a cloned image or restored disk",
-                                device.hostname
-                            ),
-                        });
-                    }
-                }
-                for device in status.devices.iter().filter(|d| d.stale) {
-                    record(DoctorCheck {
-                        label: format!("{} has gone quiet", device.label),
-                        ok: true,
-                        detail: "its past days still count; --sync-forget drops it".into(),
-                    });
-                }
-            }
+    for check in sync_cli::doctor_checks(&cfg) {
+        if check.label == sync_cli::SECTION_MARKER {
+            section("Fleet sync");
+        } else {
+            record(check);
         }
     }
 
@@ -2348,52 +2196,6 @@ fn open_url_for_provider(provider: &str, target: OpenTarget) {
             .stderr(Stdio::null())
             .spawn();
     }
-}
-
-fn handle_sync_status(config: &TokenGaugeConfig, as_json: bool) -> Result<()> {
-    let status = read_cache_full(&config.cache_file)
-        .ok()
-        .and_then(|cached| cached.sync().cloned());
-
-    if as_json {
-        println!("{}", serde_json::to_string_pretty(&status)?);
-        return Ok(());
-    }
-
-    let Some(status) = status else {
-        println!("Sync has not run yet.");
-        if !config.sync.enabled {
-            println!("It is off; set `enabled = true` under [sync] to turn it on.");
-        }
-        return Ok(());
-    };
-
-    let report = tokengauge_core::sync::describe(&status, chrono::Utc::now().timestamp_millis());
-
-    println!("Sync       {}", if report.enabled { "on" } else { "off" });
-    if !report.transport.is_empty() {
-        println!("Transport  {}", report.transport);
-    }
-    if !report.key_id.is_empty() {
-        println!("Fleet key  {}", report.key_id);
-    }
-    if let Some(last) = &report.last_pull {
-        println!("Last pull  {last}");
-    }
-
-    if !report.devices.is_empty() {
-        println!("\nDevices");
-        for device in &report.devices {
-            println!("  {:<20} {}", device.label, device.detail);
-        }
-    }
-    if !report.problems.is_empty() {
-        println!("\nProblems");
-        for problem in &report.problems {
-            println!("  {problem}");
-        }
-    }
-    Ok(())
 }
 
 fn handle_click(config: &TokenGaugeConfig) {

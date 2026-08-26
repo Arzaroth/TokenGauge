@@ -2368,56 +2368,29 @@ fn handle_sync_status(config: &TokenGaugeConfig, as_json: bool) -> Result<()> {
         return Ok(());
     };
 
-    println!("Sync       {}", if status.enabled { "on" } else { "off" });
-    if !status.transport.is_empty() {
-        println!("Transport  {}", status.transport);
+    let report = tokengauge_core::sync::describe(&status, chrono::Utc::now().timestamp_millis());
+
+    println!("Sync       {}", if report.enabled { "on" } else { "off" });
+    if !report.transport.is_empty() {
+        println!("Transport  {}", report.transport);
     }
-    if !status.key_id.is_empty() {
-        println!("Fleet key  {}", status.key_id);
+    if !report.key_id.is_empty() {
+        println!("Fleet key  {}", report.key_id);
     }
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    if let Some(last) = status.last_pull_ms {
-        println!(
-            "Last pull  {}",
-            tokengauge_core::panel::ago_public(last, now_ms)
-        );
+    if let Some(last) = &report.last_pull {
+        println!("Last pull  {last}");
     }
 
-    if !status.devices.is_empty() {
+    if !report.devices.is_empty() {
         println!("\nDevices");
-        for device in &status.devices {
-            let mut notes = Vec::new();
-            if device.is_local {
-                notes.push("this machine".to_string());
-            }
-            if device.stale {
-                notes.push("silent".to_string());
-            }
-            notes.push(tokengauge_core::panel::ago_public(
-                device.updated_at_ms,
-                now_ms,
-            ));
-            println!("  {:<20} {}", device.label, notes.join(", "));
+        for device in &report.devices {
+            println!("  {:<20} {}", device.label, device.detail);
         }
     }
-
-    let problems =
-        status.error.is_some() || !status.skipped.is_empty() || !status.overlaps.is_empty();
-    if problems {
+    if !report.problems.is_empty() {
         println!("\nProblems");
-        if let Some(error) = &status.error {
-            println!("  {error}");
-        }
-        for skipped in &status.skipped {
-            println!("  {} - {}", skipped.name, skipped.reason);
-        }
-        for overlap in &status.overlaps {
-            println!(
-                "  {} read the same transcripts on {}; counted once, from {}",
-                overlap.devices.join(" and "),
-                overlap.date,
-                overlap.kept
-            );
+        for problem in &report.problems {
+            println!("  {problem}");
         }
     }
     Ok(())

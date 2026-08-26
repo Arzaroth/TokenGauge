@@ -22,7 +22,7 @@ pub use model::{
     content_hash, syncable,
 };
 pub use run::{
-    DeviceStatus, OverlapNote, SkippedObject, SyncOutcome, SyncStatus, forget, local_device_id,
-    note, refresh, test_round_trip,
+    DeviceLine, DeviceStatus, OverlapNote, SkippedObject, SyncOutcome, SyncReport, SyncStatus,
+    describe, forget, local_device_id, note, refresh, test_round_trip,
 };
 pub use transport::{PeerEntry, Transport};

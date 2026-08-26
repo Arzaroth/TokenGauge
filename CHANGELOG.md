@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--doctor` names where the price table came from: downloaded, cached, cached-past-its-window, or compiled into the binary. A machine that has never reached LiteLLM rates everything against the copy from release day, which is the intended fallback and was invisible - it showed up only as a model priced since then reading as unpriced, which looks like a reader bug.
 - Every surface tiers a usage percentage the same way. The 50/80 boundaries were written out five times - in the panel spec, twice in the theme, in waybar's CSS class picker, in the tray icon, and again in the GNOME and Plasma frontends, each of which also decided for itself which window the headline number came from. `--json` rows now carry a resolved `bar` with the percentage and its tone, and everything else maps a tone to a colour.
 - A rate limit reads as one on every provider. z.ai, Grok and Codex reported a 429 as a bare `HTTP 429`, which looks like a bug rather than "wait a moment"; they now say what Claude and Kimi already did.
+- The GNOME popup and the Plasma applet tracked the selected provider by its position in the list, so a row that appeared or dropped out on a refresh slid a different provider's numbers under what you were reading. Both follow the provider id now, as the Omarchy widget already did.
+- The Plasma settings pane listed a hardcoded `codex, claude` when the snapshot had no provider list, hiding every provider added since that line was written.
+- A refresh finishing mid-update put the GNOME "Updating…" button back to "Update" while the update was still running.
+- The pin-to-bar setting was called four things across four frontends - "Auto", "Highest", "Highest usage" and the raw id. It is "Highest usage" everywhere.
+- A provider error body that merely mentioned the word "timeout" was reported as the request having timed out - including one advising you to raise your own timeout.
+- Two providers whose names share a prefix could answer for each other's costs, and which one won depended on hash order, so the same snapshot could put the money on a different row from one run to the next.
 - Installing a frontend no longer risks leaving nothing behind: the old copy is moved aside and put back if the replacement fails, rather than deleted before the new one is in place.
 - `--set-provider` and a frontend's settings pane writing the config at the same moment could clobber each other's staging file and rename the result over the config.
 

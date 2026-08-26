@@ -788,7 +788,7 @@ Panel {
             accent: Color.accent
             fontFamily: root.fontFamily
             options: {
-              var out = [{ value: "highest", label: "Highest" }]
+              var out = [{ value: "highest", label: "Highest usage" }]
               for (var i = 0; i < usage.enabled.length; i++) {
                 var id = String(usage.enabled[i])
                 out.push({ value: id, label: root.providerLabel(id) })
@@ -796,7 +796,7 @@ Panel {
               return out
             }
             // The config spells "no pin" as an empty primary; the chip row
-            // needs a value to select, so it shows as "Highest".
+            // needs a value to select, so it shows as "Highest usage".
             value: root.present(usage.primary) === "" ? "highest" : String(usage.primary).toLowerCase()
             onChanged: function(value) { usage.setPrimary(value) }
           }

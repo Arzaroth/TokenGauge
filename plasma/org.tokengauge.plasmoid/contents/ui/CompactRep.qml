@@ -8,9 +8,7 @@ import org.kde.kirigami as Kirigami
 MouseArea {
     id: compact
 
-    readonly property var row: root.rows.length > 0
-        ? root.rows[Math.min(root.selectedIndex, root.rows.length - 1)]
-        : null
+    readonly property var row: root.rows.length > 0 ? root.rows[root.selectedIndex] : null
     readonly property var bar: root.bar(row)
     readonly property bool vertical: Plasmoid.formFactor === PlasmaCore.Types.Vertical
 
@@ -33,13 +31,8 @@ MouseArea {
     }
 
     onWheel: (wheel) => {
-        var n = root.rows.length
-        if (n < 2) return
-        root.userSelected = true
-        if (wheel.angleDelta.y > 0)
-            root.selectedIndex = (root.selectedIndex - 1 + n) % n
-        else
-            root.selectedIndex = (root.selectedIndex + 1) % n
+        if (root.rows.length < 2) return
+        root.stepSelection(wheel.angleDelta.y > 0 ? -1 : 1)
     }
 
     // Icon beside the percent on a horizontal panel; stacked above it on a

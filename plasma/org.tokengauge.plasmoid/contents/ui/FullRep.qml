@@ -15,10 +15,10 @@ Item {
     Layout.preferredHeight: Kirigami.Units.gridUnit * 32
 
     property bool settingsOpen: false
-    readonly property var row: root.rows.length > 0
-        ? root.rows[Math.min(root.selectedIndex, root.rows.length - 1)]
-        : null
-    readonly property var oauthProviders: root.snapshot.providers || ["codex", "claude"]
+    readonly property var row: root.rows.length > 0 ? root.rows[root.selectedIndex] : null
+    // The core's own list, never a guess: a hardcoded fallback here silently
+    // hid every provider added since it was written.
+    readonly property var oauthProviders: root.snapshot.providers || []
 
     // ---- reusable pieces -----------------------------------------------------
 
@@ -234,7 +234,7 @@ Item {
                     QQC2.ButtonGroup.group: tabGroup
                     checked: index === root.selectedIndex
                     highlighted: checked
-                    onClicked: { root.userSelected = true; root.selectedIndex = index }
+                    onClicked: root.selectedProviderId = String(modelData.provider)
                 }
             }
         }

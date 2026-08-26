@@ -287,7 +287,17 @@ pub fn build_report(
     let mut recent: HashMap<String, Vec<RecentEvent>> = HashMap::new();
     // A week back covers the longest window any provider reports, so a session
     // figure never has to re-read the transcripts to find its own start.
-    let recent_cutoff = Utc::now() - ChronoDuration::days(WEEKLY_HISTORY_DAYS as i64);
+    //
+    // Anchored on the caller's `today`, not the wall clock. The two disagree
+    // whenever a date is injected - a fixture, or a fleet replay of another
+    // machine's history - and a cutoff measured from `now` silently drops the
+    // whole replay. UTC midnight of that date is up to half a day more
+    // generous than the local one, which this window can afford.
+    let recent_cutoff = today
+        .checked_sub_days(chrono::Days::new(WEEKLY_HISTORY_DAYS as u64))
+        .and_then(|day| day.and_hms_opt(0, 0, 0))
+        .map(|at| at.and_utc())
+        .unwrap_or_else(|| Utc::now() - ChronoDuration::days(WEEKLY_HISTORY_DAYS as i64));
 
     for event in events {
         let usd = match prices.get(&event.model) {

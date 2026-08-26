@@ -45,12 +45,6 @@ function spacer() {
     return new St.Widget({x_expand: true});
 }
 
-function fmtUsd(v) {
-    if (v === null || v === undefined)
-        return '—';
-    return `$${Number(v).toFixed(2)}`;
-}
-
 const Indicator = GObject.registerClass(
 class TokenGaugeIndicator extends PanelMenu.Button {
     _init(extension) {
@@ -60,8 +54,11 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         this._settings = extension.getSettings();
         this._snapshot = {rows: [], errors: [], enabled: [], providers: []};
         this._lastError = '';
-        this._selectedIndex = 0;
-        this._userSelected = false;
+        // The selection follows the provider id, not the slot it sits in: a
+        // row that appears or drops out on a refresh would otherwise slide a
+        // different provider's numbers under whatever the user was reading.
+        // Empty means nothing chosen, so the pin still leads.
+        this._selectedProviderId = '';
         this._updating = false;
         this._cancellable = null;
         this._requestId = 0;
@@ -119,13 +116,15 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         if (rows.length < 2)
             return Clutter.EVENT_PROPAGATE;
         const direction = event.get_scroll_direction();
+        let delta;
         if (direction === Clutter.ScrollDirection.UP)
-            this._selectedIndex = (this._selectedIndex - 1 + rows.length) % rows.length;
+            delta = -1;
         else if (direction === Clutter.ScrollDirection.DOWN)
-            this._selectedIndex = (this._selectedIndex + 1) % rows.length;
+            delta = 1;
         else
             return Clutter.EVENT_PROPAGATE;
-        this._userSelected = true;
+        const next = (this._selectedIndex + delta + rows.length) % rows.length;
+        this._selectedProviderId = String(rows[next].provider);
         this._render();
         return Clutter.EVENT_STOP;
     }
@@ -140,7 +139,12 @@ class TokenGaugeIndicator extends PanelMenu.Button {
     // the installer drops the binaries into.
     // A superseded request must not touch shared state: its cancellation lands
     // after the newer request has already set it up.
-    _run(command, onDone) {
+    //
+    // `onSettled` fires when *this* request ends, superseded or not. Anything
+    // that owns a flag for the duration of its command has to clear it there:
+    // clearing it in the shared completion path let an unrelated refresh
+    // finishing mid-update put the Update button back to "Update".
+    _run(command, onDone, onSettled = null) {
         this._cancel();
         const requestId = this._requestId;
         const isCurrent = () => requestId === this._requestId;
@@ -152,7 +156,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
                 ['sh', '-c', wrapped],
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
         } catch (e) {
-            this._updating = false;
+            onSettled?.();
             this._lastError = `${e}`;
             this._render();
             return;
@@ -162,24 +166,24 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             try {
                 [, stdout, stderr] = source.communicate_utf8_finish(result);
             } catch (e) {
+                onSettled?.();
                 if (!isCurrent())
                     return;
-                this._updating = false;
                 if (!e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) {
                     this._lastError = `${e}`;
                     this._render();
                 }
                 return;
             }
+            onSettled?.();
             if (!isCurrent())
                 return;
             onDone(source.get_successful(), stdout ?? '', stderr ?? '');
         });
     }
 
-    _refreshSnapshot(command) {
+    _refreshSnapshot(command, onSettled = null) {
         this._run(command, (successful, stdout, stderr) => {
-            this._updating = false;
             if (!successful) {
                 this._lastError = (stderr || '').trim() || _('snapshot command failed');
                 this._render();
@@ -188,18 +192,13 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             try {
                 const parsed = JSON.parse(stdout);
                 this._snapshot = parsed;
-                const n = (parsed.rows || []).length;
-                if (!this._userSelected)
-                    this._selectedIndex = this._primaryIndex(parsed);
-                else if (this._selectedIndex >= n)
-                    this._selectedIndex = 0;
                 this._lastError = '';
             } catch (e) {
                 this._lastError = `parse error: ${e}`;
             }
             this._watchRevision();
             this._render();
-        });
+        }, onSettled);
     }
 
     // Watch the few bytes the binary rewrites after every fetch, so a fetch by
@@ -255,22 +254,42 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         this._refreshSnapshot(`${bin} ${flag}${suffix} && ${bin} --json`);
     }
 
+    // `--sync-setup` returns as soon as it has spawned a terminal, so the
+    // snapshot read chained behind it is not waiting on the user. `&&` and a
+    // kept stderr, exactly as `_applyUpdate` does it: with `;` the compound
+    // command exits 0 whatever setup did, and "no terminal found" would be
+    // dropped along with the exit status. Nothing needs refreshing after a
+    // failure anyway - setup changes nothing until the user acts in the TUI.
+    _openSyncSetup() {
+        const bin = shellQuote(this._binary());
+        this._refreshSnapshot(`${bin} --sync-setup >/dev/null && ${bin} --json`);
+    }
+
     // --update's human-readable stdout is discarded so only the JSON payload
     // reaches JSON.parse; stderr still surfaces a failed update.
     _applyUpdate() {
         this._updating = true;
         this._render();
         const bin = shellQuote(this._binary());
-        this._refreshSnapshot(`${bin} --update >/dev/null && ${bin} --json`);
+        this._refreshSnapshot(`${bin} --update >/dev/null && ${bin} --json`, () => {
+            this._updating = false;
+            this._render();
+        });
     }
 
-    _primaryIndex(snapshot) {
-        const rows = snapshot.rows || [];
-        if (snapshot.primary) {
-            for (let i = 0; i < rows.length; i++) {
-                if ((rows[i].provider || '').toLowerCase() === snapshot.primary)
-                    return i;
-            }
+    get _selectedIndex() {
+        const rows = this._rows;
+        const chosen = rows.findIndex(row => String(row.provider) === this._selectedProviderId);
+        if (chosen >= 0)
+            return chosen;
+        // Nothing chosen, or the chosen provider has gone: follow the pin. The
+        // panel reports its percentage, and opening the menu on a different
+        // provider reads as a bug.
+        const pinned = String(this._snapshot.primary || '').toLowerCase();
+        if (pinned !== '') {
+            const pin = rows.findIndex(row => String(row.provider).toLowerCase() === pinned);
+            if (pin >= 0)
+                return pin;
         }
         return 0;
     }
@@ -291,6 +310,11 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
     // Also invalidates the in-flight request, so a queued callback cannot render
     // through a destroyed indicator.
+    //
+    // The subprocess is deliberately left to finish. The only long command here
+    // is `--update`, which stages a download and renames it into place; killing
+    // it halfway is worse than letting a process we stopped listening to run to
+    // completion, and the binary is the one that knows how to do that safely.
     _cancel() {
         this._requestId++;
         if (this._cancellable) {
@@ -309,28 +333,18 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         const rows = this._rows;
         if (rows.length === 0)
             return null;
-        return rows[Math.min(this._selectedIndex, rows.length - 1)];
+        return rows[this._selectedIndex];
     }
 
     _theme() {
         return {...FALLBACK_THEME, ...(this._snapshot.theme || {})};
     }
 
-    _tierColor(pct) {
-        const t = this._theme();
-        if (pct === null || pct === undefined)
-            return t.dim;
-        if (pct >= 80)
-            return t.red;
-        if (pct >= 50)
-            return t.yellow;
-        return t.green;
-    }
-
-    _windowPercent(row) {
-        if (!row)
-            return null;
-        return this._snapshot.window === 'weekly' ? row.weekly_used : row.session_used;
+    // The headline number and its tier come off the row's `bar`, resolved by
+    // the core under the configured window. This used to pick the window here
+    // and carry its own copy of the 50/80 boundaries to tint it with.
+    _bar(row) {
+        return row?.bar ?? {percent: null, tone: 'dim'};
     }
 
     _providerGicon(row) {
@@ -361,7 +375,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
     _renderPanel() {
         const row = this._row;
-        const pct = this._windowPercent(row);
+        const bar = this._bar(row);
         const gicon = this._providerGicon(row);
 
         this._panelIcon.visible = gicon !== null;
@@ -378,8 +392,9 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         }
 
         this._panelPercent.visible = this._settings.get_boolean('show-percent');
-        this._panelPercent.text = pct === null || pct === undefined ? '—' : `${pct}%`;
-        this._panelPercent.style = `color: ${this._tierColor(pct)};`;
+        this._panelPercent.text =
+            bar.percent === null || bar.percent === undefined ? '—' : `${bar.percent}%`;
+        this._panelPercent.style = `color: ${this._toneColor(bar.tone)};`;
     }
 
     _renderMenu() {
@@ -441,6 +456,11 @@ class TokenGaugeIndicator extends PanelMenu.Button {
                 this.menu.close();
                 this._action('--open=dashboard');
             }));
+        header.add_child(this._iconButton('folder-remote-symbolic', _('Set up fleet sync'),
+            () => {
+                this.menu.close();
+                this._openSyncSetup();
+            }));
         header.add_child(this._iconButton('emblem-system-symbolic', _('Settings'),
             () => {
                 this.menu.close();
@@ -477,15 +497,14 @@ class TokenGaugeIndicator extends PanelMenu.Button {
                 text: row.label || row.provider,
                 y_align: Clutter.ActorAlign.CENTER,
             }));
-            const selected = index === Math.min(this._selectedIndex, this._rows.length - 1);
+            const selected = index === this._selectedIndex;
             const button = new St.Button({
                 style_class: selected ? 'tokengauge-tab tokengauge-tab-active' : 'tokengauge-tab',
                 child: content,
                 can_focus: true,
             });
             button.connect('clicked', () => {
-                this._userSelected = true;
-                this._selectedIndex = index;
+                this._selectedProviderId = String(row.provider);
                 this._render();
             });
             strip.add_child(button);
@@ -626,7 +645,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         const strip = box(false, {style_class: 'tokengauge-tabs', x_expand: true});
         // `--set-primary highest` clears the pin; the bar then shows the first
         // enabled provider, not the busiest one.
-        const choices = [{name: 'highest', text: _('Auto')}].concat(
+        const choices = [{name: 'highest', text: _('Highest usage')}].concat(
             this._rows.map(row => ({
                 name: (row.provider || '').toLowerCase(),
                 text: row.label || row.provider,

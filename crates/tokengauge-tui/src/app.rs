@@ -23,12 +23,24 @@ pub struct AppState {
     pub last_error: Option<String>,
     pub status_message: Option<String>,
     pub spinner_index: usize,
-    pub scroll: u16,
-    pub content_height: u16,
-    pub viewport_height: u16,
     pub active_tab: usize,
     pub initial_provider: Option<String>,
-    pub show_help: bool,
+    pub overlay: Overlay,
+}
+
+/// What is drawn over the panel, and what owns the keyboard while it is.
+///
+/// One state rather than a flag plus an option: each overlay used to need its
+/// own carve-out in both the key handler and the renderer, so a third would
+/// have cost four.
+#[derive(Debug, Default)]
+pub enum Overlay {
+    #[default]
+    None,
+    Help,
+    /// Boxed: a `SyncView` carries a whole config, and `AppState` is cloned
+    /// around the draw loop.
+    Sync(Box<crate::sync_view::SyncView>),
 }
 
 impl AppState {
@@ -41,28 +53,15 @@ impl AppState {
             last_error: None,
             status_message: None,
             spinner_index: 0,
-            scroll: 0,
-            content_height: 0,
-            viewport_height: 0,
             active_tab: 0,
             initial_provider: None,
-            show_help: false,
+            overlay: Overlay::default(),
         }
-    }
-
-    pub fn max_scroll(&self) -> u16 {
-        self.content_height.saturating_sub(self.viewport_height)
-    }
-
-    fn scroll_by(&mut self, delta: i32) {
-        let new = (self.scroll as i32 + delta).max(0) as u16;
-        self.scroll = new.min(self.max_scroll());
     }
 
     fn next_tab(&mut self) {
         if !self.rows.is_empty() {
             self.active_tab = (self.active_tab + 1) % self.rows.len();
-            self.scroll = 0;
         }
     }
 
@@ -73,7 +72,6 @@ impl AppState {
             } else {
                 self.active_tab - 1
             };
-            self.scroll = 0;
         }
     }
 
@@ -133,6 +131,12 @@ impl App {
             last_cache_poll: Instant::now(),
             should_quit: false,
         }
+    }
+
+    pub fn open_sync(&mut self) {
+        self.state.overlay = Overlay::Sync(Box::new(crate::sync_view::SyncView::open(
+            self.config_override.clone(),
+        )));
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -207,15 +211,26 @@ impl App {
         let Event::Key(key) = event::read()? else {
             return Ok(());
         };
-        // If help popup is open, any key closes it (except quit).
-        if self.state.show_help {
-            if should_exit(key) {
-                self.should_quit = true;
-            } else {
-                self.state.show_help = false;
+        // An overlay owns the keyboard while it is up. The sync screen includes
+        // `q`, because it has text fields and a typed `q` must not quit.
+        match &mut self.state.overlay {
+            Overlay::Sync(sync) => {
+                if !sync.on_key(key) {
+                    self.state.overlay = Overlay::None;
+                }
+                return Ok(());
             }
-            return Ok(());
+            Overlay::Help => {
+                if should_exit(key) {
+                    self.should_quit = true;
+                } else {
+                    self.state.overlay = Overlay::None;
+                }
+                return Ok(());
+            }
+            Overlay::None => {}
         }
+
         if should_exit(key) {
             self.should_quit = true;
             return Ok(());
@@ -225,13 +240,11 @@ impl App {
             self.pending_refresh = Some(spawn_refresh(self.config_override.clone(), true));
         }
         match key.code {
-            KeyCode::Char('?') => self.state.show_help = true,
+            KeyCode::Char('?') => self.state.overlay = Overlay::Help,
             KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => self.state.next_tab(),
             KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => self.state.prev_tab(),
             KeyCode::Char('l') | KeyCode::Right => self.state.next_tab(),
             KeyCode::Char('h') | KeyCode::Left => self.state.prev_tab(),
-            KeyCode::PageDown => self.state.scroll_by(self.state.viewport_height as i32),
-            KeyCode::PageUp => self.state.scroll_by(-(self.state.viewport_height as i32)),
             KeyCode::Char('g') | KeyCode::Home if !self.state.rows.is_empty() => {
                 self.state.active_tab = 0;
             }
@@ -240,6 +253,7 @@ impl App {
             }
             KeyCode::Char('u') => self.open_active_url(OpenWhich::Dashboard),
             KeyCode::Char('s') => self.open_active_url(OpenWhich::Status),
+            KeyCode::Char('S') => self.open_sync(),
             _ => {}
         }
         Ok(())
@@ -257,6 +271,12 @@ impl App {
                 self.state.errors.clear();
                 self.state.last_error = Some(error.to_string());
             }
+        }
+        // A refresh writes a newer sync status; an open sync screen read its
+        // copy once and would otherwise sit on the old device list until the
+        // user pressed `r`.
+        if let Overlay::Sync(sync) = &mut self.state.overlay {
+            sync.reload();
         }
         if let Some(provider) = self.state.initial_provider.take() {
             let lower = provider.to_lowercase();

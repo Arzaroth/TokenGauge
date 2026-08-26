@@ -15,10 +15,10 @@ Item {
     Layout.preferredHeight: Kirigami.Units.gridUnit * 32
 
     property bool settingsOpen: false
-    readonly property var row: root.rows.length > 0
-        ? root.rows[Math.min(root.selectedIndex, root.rows.length - 1)]
-        : null
-    readonly property var oauthProviders: root.snapshot.providers || ["codex", "claude"]
+    readonly property var row: root.rows.length > 0 ? root.rows[root.selectedIndex] : null
+    // The core's own list, never a guess: a hardcoded fallback here silently
+    // hid every provider added since it was written.
+    readonly property var oauthProviders: root.snapshot.providers || []
 
     // ---- reusable pieces -----------------------------------------------------
 
@@ -145,6 +145,12 @@ Item {
             font: Kirigami.Theme.smallFont
         }
         PlasmaComponents.Label { text: modelData.value; font.family: "monospace" }
+
+        // The suffix is the spec's ellipsized copy for surfaces that cannot
+        // wrap; the tooltip carries the whole sentence.
+        HoverHandler { id: keyHover }
+        PlasmaComponents.ToolTip.text: modelData.tooltip || ""
+        PlasmaComponents.ToolTip.visible: String(modelData.tooltip || "") !== "" && keyHover.hovered
     }
 
     QQC2.ButtonGroup { id: tabGroup }
@@ -228,7 +234,7 @@ Item {
                     QQC2.ButtonGroup.group: tabGroup
                     checked: index === root.selectedIndex
                     highlighted: checked
-                    onClicked: { root.userSelected = true; root.selectedIndex = index }
+                    onClicked: root.selectedProviderId = String(modelData.provider)
                 }
             }
         }
@@ -339,6 +345,28 @@ Item {
                         checked: (root.snapshot.enabled || []).indexOf(modelData) !== -1
                         onToggled: root.action("--set-provider " + modelData + "=" + (checked ? "true" : "false"))
                     }
+                }
+                Kirigami.Separator {
+                    Layout.fillWidth: true
+                    visible: full.settingsOpen
+                }
+                PlasmaComponents.Label {
+                    visible: full.settingsOpen
+                    text: i18n("Fleet sync")
+                    font.bold: true
+                }
+                PlasmaComponents.Button {
+                    visible: full.settingsOpen
+                    icon.name: "folder-sync"
+                    text: i18n("Set up sync…")
+                    onClicked: root.openSyncSetup()
+                }
+                PlasmaComponents.Label {
+                    Layout.fillWidth: true
+                    visible: full.settingsOpen
+                    wrapMode: Text.WordWrap
+                    opacity: 0.7
+                    text: i18n("Adds up tokens and cost across your machines. Opens in a terminal.")
                 }
                 Kirigami.Separator {
                     Layout.fillWidth: true

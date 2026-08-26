@@ -196,6 +196,7 @@ fn event_from(record: &Record, since: NaiveDate) -> Option<(Option<u64>, UsageEv
             model: message.model.clone(),
             date,
             at,
+            key,
             tokens: TokenCounts {
                 input: usage.input_tokens,
                 output: usage.output_tokens,

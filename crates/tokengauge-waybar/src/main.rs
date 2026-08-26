@@ -1,46 +1,27 @@
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+mod daemon;
+mod doctor;
+mod render;
+mod snapshot;
+mod sync_cli;
+
+use daemon::*;
+use doctor::*;
+use render::*;
+use snapshot::*;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
-use serde::Serialize;
+use tokengauge_core::now_ms;
 use tokengauge_core::update;
 use tokengauge_core::{
-    CostInfo, FetchResult, PanelRow, ProviderFetchError, ProviderPayload, ProviderRow, Section,
-    SectionKind, Theme, TokenGaugeConfig, Tone, UsagePace, WaybarState, WaybarWindow,
-    cache_is_stale, config_set_oauth_provider, config_set_primary, ensure_cache_dir,
-    fetch_all_providers, format_updated_relative, load_config, notify_state_path,
-    payload_to_rows_with_costs, provider_icon, provider_icon_svg_path, provider_label,
-    read_cache_full, read_notify_state, read_waybar_state, refresh_in_progress,
-    refresh_sentinel_deadline_ms, refresh_sentinel_path, retain_enabled, signal_daemon_reload,
-    theme, thresholds_to_fire, waybar_state_path, window_labels, write_cache_full,
-    write_default_config, write_notify_state, write_waybar_state,
+    TokenGaugeConfig, WaybarState, cache_is_stale, config_set_oauth_provider, config_set_primary,
+    ensure_cache_dir, load_config, payload_to_rows_with_costs, read_waybar_state,
+    refresh_in_progress, refresh_sentinel_path, signal_daemon_reload, waybar_state_path,
+    write_default_config, write_waybar_state,
 };
-
-fn theme_palette() -> (
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-) {
-    let t: &Theme = theme();
-    (
-        t.dim.as_str(),
-        t.separator.as_str(),
-        t.green.as_str(),
-        t.yellow.as_str(),
-        t.red.as_str(),
-        t.neutral.as_str(),
-    )
-}
 
 #[derive(Parser, Debug)]
 // The package is still named for the Waybar module it grew out of, and clap
@@ -51,7 +32,7 @@ fn theme_palette() -> (
     version,
     about = "TokenGauge: usage, limits and costs for AI coding assistants"
 )]
-struct Args {
+pub struct Args {
     #[arg(long, env = "TOKENGAUGE_CONFIG")]
     config: Option<PathBuf>,
     /// Rotate the provider shown in the waybar text and exit (no JSON output).
@@ -120,6 +101,34 @@ struct Args {
     /// `--update` already refreshes whichever are present.
     #[arg(long, value_name = "NAME")]
     install_frontend: Option<String>,
+    /// Start a sync fleet: generate this machine's key and print it. Copy it to
+    /// every other machine with `--sync-join`.
+    #[arg(long)]
+    sync_init: bool,
+    /// Join the fleet a `--sync-init` key belongs to. Prefer `--sync-join -`,
+    /// which reads the key from stdin: an argument lands in shell history and
+    /// in `/proc/<pid>/cmdline`, and possession of the key is the only
+    /// authentication there is.
+    #[arg(long, value_name = "KEY")]
+    sync_join: Option<String>,
+    /// Replace an existing fleet key. Every machine has to be re-keyed
+    /// together: devices holding the old key stop being readable.
+    #[arg(long)]
+    sync_force: bool,
+    /// Print what the last sync cycle did. Add `--json` for the raw object.
+    #[arg(long)]
+    sync_status: bool,
+    /// Write a probe object, read it back and remove it, to check the transport
+    /// and the key before trusting the figures.
+    #[arg(long)]
+    sync_test: bool,
+    /// Drop a device from the fleet by label or id: deletes its object and
+    /// forgets its buckets.
+    #[arg(long, value_name = "DEVICE")]
+    sync_forget: Option<String>,
+    /// Open the TUI on its sync screen, in a terminal.
+    #[arg(long)]
+    sync_setup: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -134,38 +143,111 @@ enum RotateDir {
     Prev,
 }
 
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
-struct WaybarOutput {
-    text: String,
-    tooltip: String,
-    class: String,
+/// What one invocation does.
+///
+/// The flags are mutually exclusive, and clap cannot say so across this many of
+/// them. Resolving them here rather than in a chain of early returns makes the
+/// precedence a list you can read, and turns a combination nobody meant into an
+/// error: `--set-provider x=true --json` used to emit the JSON and drop the
+/// toggle on the floor, because `--json` happened to be tested first.
+///
+/// `--json` is a *modifier* on `--sync-status`, not an action, which is why the
+/// sync commands are resolved before it.
+enum Action {
+    Doctor,
+    Sync(sync_cli::SyncCommand),
+    InternalRefreshWorker,
+    Daemon,
+    ClientTail,
+    Click,
+    WaitChange,
+    Json,
+    SetProvider(String),
+    SetPrimary(String),
+    CheckUpdate,
+    InstallFrontend(String),
+    Update,
+    Refresh,
+    Rotate(RotateDir),
+    Open(OpenTarget),
+    /// No action flag: emit one waybar payload and exit. The default because
+    /// this is what waybar itself runs, on a timer, with no arguments.
+    Bar,
 }
 
-fn format_bar(label: &str, value: Option<u8>) -> String {
-    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
-    let icon = icon_markup(label);
-    let escaped_label = pango_escape(label);
-    match value {
-        Some(percent) => {
-            let bar_inner = bar_blocks(percent);
-            let color = theme().color_for_percent(percent);
-            format!(
-                "{icon} {escaped_label} [<span foreground=\"{color}\">{bar_inner}</span>] <span foreground=\"{color}\">{percent}%</span>"
-            )
+impl Action {
+    fn from_args(args: &Args) -> Result<Self> {
+        // (what was asked for, how the user spelled it). Order is precedence,
+        // and every entry is named so a second one can be reported rather than
+        // silently losing to whichever came first.
+        let mut asked: Vec<(&str, Action)> = Vec::new();
+        macro_rules! add {
+            ($flag:expr, $action:expr) => {
+                asked.push(($flag, $action))
+            };
         }
-        None => format!(
-            "{icon} {escaped_label} [<span foreground=\"{dim}\">─────</span>] <span foreground=\"{dim}\">—</span>"
-        ),
+
+        if args.doctor {
+            add!("--doctor", Action::Doctor);
+        }
+        let syncing = sync_cli::from_args(args);
+        let has_sync = syncing.is_some();
+        if let Some(command) = syncing {
+            add!("--sync-*", Action::Sync(command));
+        }
+        if args.internal_refresh_worker {
+            add!("--internal-refresh-worker", Action::InternalRefreshWorker);
+        }
+        if args.daemon {
+            add!("--daemon", Action::Daemon);
+        }
+        if args.client_tail {
+            add!("--client-tail", Action::ClientTail);
+        }
+        if args.click {
+            add!("--click", Action::Click);
+        }
+        if args.wait_change {
+            add!("--wait-change", Action::WaitChange);
+        }
+        // Only an action of its own when no sync command claimed it.
+        if args.json && !has_sync {
+            add!("--json", Action::Json);
+        }
+        if let Some(spec) = &args.set_provider {
+            add!("--set-provider", Action::SetProvider(spec.clone()));
+        }
+        if let Some(name) = &args.set_primary {
+            add!("--set-primary", Action::SetPrimary(name.clone()));
+        }
+        if args.check_update {
+            add!("--check-update", Action::CheckUpdate);
+        }
+        if let Some(spec) = &args.install_frontend {
+            add!("--install-frontend", Action::InstallFrontend(spec.clone()));
+        }
+        if args.update {
+            add!("--update", Action::Update);
+        }
+        if args.refresh {
+            add!("--refresh", Action::Refresh);
+        }
+        if let Some(dir) = args.rotate {
+            add!("--rotate", Action::Rotate(dir));
+        }
+        if let Some(target) = args.open {
+            add!("--open", Action::Open(target));
+        }
+
+        if asked.len() > 1 {
+            let flags: Vec<&str> = asked.iter().map(|(flag, _)| *flag).collect();
+            anyhow::bail!(
+                "{} each ask for a different thing; run them one at a time",
+                flags.join(", ")
+            );
+        }
+        Ok(asked.pop().map(|(_, action)| action).unwrap_or(Action::Bar))
     }
-}
-
-const MINI_BAR_WIDTH: usize = 5;
-
-fn bar_blocks(percent: u8) -> String {
-    let pct = percent.min(100) as usize;
-    let filled = (pct * MINI_BAR_WIDTH).div_ceil(100);
-    let empty = MINI_BAR_WIDTH.saturating_sub(filled);
-    format!("{}{}", "━".repeat(filled), "─".repeat(empty))
 }
 
 fn main() -> Result<()> {
@@ -174,10 +256,13 @@ fn main() -> Result<()> {
         .config
         .clone()
         .unwrap_or_else(tokengauge_core::default_config_path);
+    let action = Action::from_args(&args)?;
 
-    if args.doctor {
-        let exit = handle_doctor(&config_path);
-        std::process::exit(exit);
+    // --doctor runs before any of the setup below. It reports on a machine
+    // whose config may be missing or unparseable, and writing a default one as
+    // a side effect of diagnosing it would hide the very fault being reported.
+    if matches!(action, Action::Doctor) {
+        std::process::exit(handle_doctor(&config_path));
     }
 
     if !config_path.exists() {
@@ -189,134 +274,84 @@ fn main() -> Result<()> {
     ensure_cache_dir(&config.cache_file)?;
     tokengauge_core::ensure_revision(&config.cache_file);
 
-    if args.internal_refresh_worker {
-        worker_do_refresh(&config);
-        return Ok(());
-    }
-
-    if args.daemon {
-        return run_daemon(config, config_path);
-    }
-
-    if args.client_tail {
-        return run_client_tail(&config);
-    }
-
-    if args.click {
-        handle_click(&config);
-        return Ok(());
-    }
-
-    if args.wait_change {
-        wait_for_change(&config, args.wait_timeout);
-        return Ok(());
-    }
-
-    if args.json {
-        return emit_json(&config);
-    }
-
-    if let Some(spec) = &args.set_provider {
-        return handle_set_provider(&config_path, spec);
-    }
-
-    if let Some(name) = &args.set_primary {
-        return handle_set_primary(&config, &config_path, name);
-    }
-
-    if args.check_update {
-        return handle_check_update(&config);
-    }
-
-    if let Some(spec) = &args.install_frontend {
-        return handle_install_frontend(spec);
-    }
-
-    if args.update {
-        return handle_update(&config);
-    }
-
-    if args.refresh {
-        if try_send_command(&config, &SocketCommand::Refresh).is_ok() {
-            return Ok(());
+    match action {
+        Action::Doctor => unreachable!("handled before the config is touched"),
+        Action::Sync(command) => sync_cli::run(command, &config, &config_path),
+        Action::InternalRefreshWorker => {
+            worker_do_refresh(&config);
+            Ok(())
         }
-        handle_refresh_quick(&config);
-        return Ok(());
-    }
-
-    if let Some(dir) = args.rotate {
-        let cmd = SocketCommand::Rotate {
-            direction: match dir {
-                RotateDir::Next => "next".into(),
-                RotateDir::Prev => "prev".into(),
-            },
-        };
-        if try_send_command(&config, &cmd).is_ok() {
-            return Ok(());
+        Action::Daemon => run_daemon(config, config_path),
+        Action::ClientTail => run_client_tail(&config),
+        Action::Click => {
+            handle_click(&config);
+            Ok(())
         }
-        handle_rotate(&config, dir)?;
-        return Ok(());
-    }
-
-    if let Some(target) = args.open {
+        Action::WaitChange => {
+            wait_for_change(&config, args.wait_timeout);
+            Ok(())
+        }
+        Action::Json => emit_json(&config),
+        Action::SetProvider(spec) => handle_set_provider(&config_path, &spec),
+        Action::SetPrimary(name) => handle_set_primary(&config, &config_path, &name),
+        Action::CheckUpdate => handle_check_update(&config),
+        Action::InstallFrontend(spec) => handle_install_frontend(&spec),
+        Action::Update => handle_update(&config),
+        Action::Refresh => {
+            // The daemon owns the sentinel while it is up, so ask it first and
+            // only fork a worker when nothing answers.
+            if try_send_command(&config, &SocketCommand::Refresh).is_err() {
+                handle_refresh_quick(&config);
+            }
+            Ok(())
+        }
+        Action::Rotate(dir) => {
+            let cmd = SocketCommand::Rotate {
+                direction: match dir {
+                    RotateDir::Next => "next".into(),
+                    RotateDir::Prev => "prev".into(),
+                },
+            };
+            if try_send_command(&config, &cmd).is_err() {
+                handle_rotate(&config, dir)?;
+            }
+            Ok(())
+        }
         // Open in *this* process, never via the daemon socket. waybar invokes
         // us with the full graphical session env (DISPLAY/WAYLAND_DISPLAY/
         // DBUS/BROWSER); the daemon is started from a stripped systemd env, so
         // a browser it spawns can't reach the running instance and silently
         // opens nothing. handle_open reads the cache directly - no daemon
         // needed to resolve the selected provider's URL.
-        handle_open(&config, target);
-        return Ok(());
+        Action::Open(target) => {
+            handle_open(&config, target);
+            Ok(())
+        }
+        Action::Bar => emit_bar(&config),
     }
+}
 
-    // One-shot snapshot mode: try daemon first
-    if let Ok(snapshot) = try_get_snapshot(&config) {
+/// One waybar payload on stdout. The daemon answers if it is up; otherwise this
+/// process does the work itself, because a user who never installed the unit
+/// still has to get a bar.
+fn emit_bar(config: &TokenGaugeConfig) -> Result<()> {
+    if let Ok(snapshot) = try_get_snapshot(config) {
         println!("{snapshot}");
         return Ok(());
     }
 
-    let sentinel = refresh_sentinel_path(&config.cache_file);
-    let refreshing = refresh_in_progress(&sentinel);
-
-    if refreshing {
-        let yellow = theme().yellow.as_str();
-        let cached = read_cache_full(&config.cache_file).ok();
-        let (rows, errors) = match cached {
-            Some(c) => {
-                let (mut payloads, mut errors, costs) = c.into_parts();
-                retain_enabled(&mut payloads, &mut errors, &config.providers);
-                (payload_to_rows_with_costs(payloads, &costs), errors)
-            }
-            None => (Vec::new(), Vec::new()),
-        };
-        let selected = selected_provider_for_tooltip(&config, &rows);
-        let tooltip_refs: Vec<&ProviderRow> = match selected {
-            Some(idx) => vec![&rows[idx]],
-            None => rows.iter().collect(),
-        };
-        let tooltip = format_tooltip_with_errors(&tooltip_refs, &errors, true, "open");
-        let text = if rows.is_empty() && errors.is_empty() {
-            format!("   <span foreground=\"{yellow}\">⟳ Refreshing...</span>")
-        } else {
-            format!(
-                "   <span foreground=\"{yellow}\">⟳</span> {}",
-                build_text_for_rows_with_errors(&rows, &errors, &config)
-            )
-        };
-        let output = WaybarOutput {
-            text,
-            tooltip,
-            class: "tokengauge tokengauge-refreshing".into(),
-        };
+    if refresh_in_progress(&refresh_sentinel_path(&config.cache_file)) {
+        let (rows, errors) = rows_from_cache(config);
+        let output = render_output(config, &rows, &errors, true);
         println!("{}", serde_json::to_string(&output)?);
         return Ok(());
     }
 
-    let (payloads, errors, costs) = match maybe_refresh(&config) {
+    let (payloads, errors, costs) = match maybe_refresh(config) {
         Ok(triple) => triple,
         Err(error) => {
             let output = WaybarOutput {
-                text: "⟂".into(),
+                text: "\u{27c2}".into(),
                 tooltip: format!("<tt>TokenGauge: {}</tt>", pango_escape(&error.to_string())),
                 class: "tokengauge-error".into(),
             };
@@ -326,152 +361,8 @@ fn main() -> Result<()> {
     };
 
     let rows = payload_to_rows_with_costs(payloads, &costs);
-    if rows.is_empty() && errors.is_empty() {
-        let output = WaybarOutput {
-            text: "—".into(),
-            tooltip: "<tt>TokenGauge: no providers</tt>".into(),
-            class: "tokengauge-empty".into(),
-        };
-        println!("{}", serde_json::to_string(&output)?);
-        return Ok(());
-    }
-
-    let text = format!(
-        "   {}",
-        build_text_for_rows_with_errors(&rows, &errors, &config)
-    );
-    let selected = selected_provider_for_tooltip(&config, &rows);
-    let tooltip_rows: Vec<&ProviderRow> = match selected {
-        Some(idx) => vec![&rows[idx]],
-        None => rows.iter().collect(),
-    };
-    let tooltip =
-        format_tooltip_with_errors(&tooltip_rows, &errors, false, &left_click_label(&config));
-
-    let class = compute_class(&rows, &errors, false, config.waybar.window.clone());
-
-    let output = WaybarOutput {
-        text,
-        tooltip,
-        class,
-    };
-
+    let output = render_output(config, &rows, &errors, false);
     println!("{}", serde_json::to_string(&output)?);
-    Ok(())
-}
-
-/// Emit the full snapshot as one JSON object for non-waybar frontends (KDE
-/// Plasma applet, etc.). Uses maybe_refresh so a standalone plasmoid (no daemon
-/// or waybar keeping the cache warm) still refetches when the cache is stale
-/// instead of serving it forever. Each row is enriched with the display label,
-/// brand SVG path, glyph, and brand colour so the QML frontend needs no
-/// provider knowledge.
-fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
-    let (payloads, errors, costs) = maybe_refresh(config)?;
-    let rows = payload_to_rows_with_costs(payloads, &costs);
-
-    let enabled: Vec<String> = config
-        .providers
-        .enabled_providers()
-        .into_iter()
-        .map(|p| p.to_string())
-        .collect();
-
-    let row_values: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|r| {
-            let mut v = serde_json::to_value(r).unwrap_or_default();
-            if let serde_json::Value::Object(map) = &mut v {
-                let icon = provider_icon(&r.provider);
-                let (wl_s, wl_w, wl_t) = window_labels(&r.provider);
-                map.insert(
-                    "window_labels".into(),
-                    serde_json::json!([wl_s, wl_w, wl_t]),
-                );
-                map.insert("label".into(), provider_label(&r.provider).into());
-                map.insert(
-                    "icon_svg".into(),
-                    provider_icon_svg_path(&r.provider)
-                        .map(|p| serde_json::Value::from(p.to_string_lossy().into_owned()))
-                        .unwrap_or(serde_json::Value::Null),
-                );
-                map.insert("glyph".into(), icon.glyph.into());
-                map.insert("color".into(), icon.color_hex.into());
-                let pace_badge = |pace: Option<UsagePace>| {
-                    pace.map(|p| serde_json::Value::from(p.badge()))
-                        .unwrap_or(serde_json::Value::Null)
-                };
-                map.insert("session_pace".into(), pace_badge(r.session_pace));
-                map.insert("weekly_pace".into(), pace_badge(r.weekly_pace));
-                // The panel layout, resolved once in the core. Every frontend
-                // that draws a panel walks this list rather than deciding its
-                // own section order, labels and number formatting.
-                map.insert(
-                    "panel".into(),
-                    serde_json::to_value(tokengauge_core::panel_spec(r)).unwrap_or_default(),
-                );
-                // Extra windows get the same badge-string treatment, so a
-                // frontend renders every gauge's projection the same way.
-                if let Some(serde_json::Value::Array(extras)) = map.get_mut("extra_windows") {
-                    for (value, extra) in extras.iter_mut().zip(r.extra_windows.iter()) {
-                        if let serde_json::Value::Object(entry) = value {
-                            entry.insert("pace".into(), pace_badge(extra.pace));
-                        }
-                    }
-                }
-                // Frontends that keep their own provider selection cannot use
-                // `--open`, which resolves the provider from the config rather
-                // than from the caller. Carrying the URLs on the row lets them
-                // open exactly the provider they are displaying.
-                let urls = tokengauge_core::provider_urls(&r.provider);
-                map.insert(
-                    "dashboard_url".into(),
-                    urls.dashboard
-                        .map(serde_json::Value::from)
-                        .unwrap_or(serde_json::Value::Null),
-                );
-                map.insert(
-                    "status_url".into(),
-                    urls.status
-                        .map(serde_json::Value::from)
-                        .unwrap_or(serde_json::Value::Null),
-                );
-            }
-            v
-        })
-        .collect();
-
-    let t = theme();
-    let window = match config.waybar.window {
-        WaybarWindow::Daily => "daily",
-        WaybarWindow::Weekly => "weekly",
-    };
-    let update_status = tokengauge_core::read_update_status(&config.cache_file);
-    let out = serde_json::json!({
-        // Frontends show this in their settings pane; `update` only carries a
-        // version once a release check has run, and is null until then.
-        "version": env!("CARGO_PKG_VERSION"),
-        "rows": row_values,
-        "errors": errors,
-        "enabled": enabled,
-        "providers": tokengauge_core::PROVIDERS,
-        "primary": config.waybar.primary,
-        "window": window,
-        "theme": {
-            "dim": t.dim,
-            "separator": t.separator,
-            "green": t.green,
-            "yellow": t.yellow,
-            "red": t.red,
-            "neutral": t.neutral,
-        },
-        "update": update_status,
-        // Frontends watch this file and re-read the snapshot when it changes,
-        // so a fetch by the daemon or by another frontend lands immediately
-        // instead of on the next poll. It holds no provider data.
-        "revision_file": tokengauge_core::revision_path(&config.cache_file),
-    });
-    println!("{}", serde_json::to_string(&out)?);
     Ok(())
 }
 
@@ -507,46 +398,6 @@ fn handle_set_provider(config_path: &Path, spec: &str) -> Result<()> {
     Ok(())
 }
 
-/// Fetch in this process and wait for it, with the sentinel raised so every
-/// bar renders the refreshing state meanwhile. Unlike `--refresh` this does not
-/// fork: the caller is a frontend that chains `--json` behind it and needs the
-/// snapshot to be current by the time this returns.
-fn refresh_inline(config: &TokenGaugeConfig) {
-    let sentinel = refresh_sentinel_path(&config.cache_file);
-    let _ = std::fs::write(&sentinel, refresh_sentinel_deadline_ms(config).to_string());
-    signal_waybar();
-    let FetchResult {
-        payloads,
-        errors,
-        costs,
-    } = fetch_all_providers(config);
-    let _ = write_cache_full(
-        &config.cache_file,
-        &payloads,
-        &errors,
-        &costs,
-        &config.providers,
-    );
-    let _ = std::fs::remove_file(&sentinel);
-    check_and_notify(config, &payloads, &costs);
-    signal_waybar();
-}
-
-/// Block until the snapshot is rewritten, or the timeout runs out. Polls the
-/// revision file rather than the snapshot: it is a few bytes, and it is written
-/// last, so a change to it means the snapshot beside it is already complete.
-fn wait_for_change(config: &TokenGaugeConfig, timeout_secs: u64) {
-    const POLL: Duration = Duration::from_secs(1);
-    let initial = tokengauge_core::read_revision(&config.cache_file);
-    let deadline = timeout_secs.clamp(5, 3600);
-    for _ in 0..deadline {
-        thread::sleep(POLL);
-        if tokengauge_core::read_revision(&config.cache_file) != initial {
-            return;
-        }
-    }
-}
-
 /// `--set-primary NAME|highest`: pin the bar to a provider (or clear the pin),
 /// then signal the daemon to reload.
 fn handle_set_primary(config: &TokenGaugeConfig, config_path: &Path, name: &str) -> Result<()> {
@@ -559,147 +410,6 @@ fn handle_set_primary(config: &TokenGaugeConfig, config_path: &Path, name: &str)
     tokengauge_core::bump_revision(&config.cache_file);
     signal_daemon_reload();
     Ok(())
-}
-
-fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
-/// Resolve which provider key the waybar text + tooltip should show.
-/// Priority: persisted scroll selection > config primary > first row's
-/// provider > first error's provider. Always returns Some unless both
-/// rows and errors are empty - so the bar is single-provider by default
-/// instead of stacking everything on first boot.
-fn resolved_selection_key(
-    config: &TokenGaugeConfig,
-    rows: &[ProviderRow],
-    errors: &[ProviderFetchError],
-) -> Option<String> {
-    let state = read_waybar_state(&waybar_state_path(&config.cache_file));
-    state
-        .selected
-        .clone()
-        .or_else(|| config.waybar.primary.clone())
-        .or_else(|| rows.first().map(|r| r.provider.clone()))
-        .or_else(|| errors.first().map(|e| e.provider.clone()))
-        .map(|s| s.to_lowercase())
-}
-
-fn selected_provider_for_tooltip(config: &TokenGaugeConfig, rows: &[ProviderRow]) -> Option<usize> {
-    let key = resolved_selection_key(config, rows, &[])?;
-    rows.iter().position(|r| r.provider.to_lowercase() == key)
-}
-
-fn build_text_for_rows_with_errors(
-    rows: &[ProviderRow],
-    errors: &[ProviderFetchError],
-    config: &TokenGaugeConfig,
-) -> String {
-    let selected_key = resolved_selection_key(config, rows, errors);
-
-    let used_for = |row: &ProviderRow| match config.waybar.window {
-        WaybarWindow::Daily => row.session_used,
-        WaybarWindow::Weekly => row.weekly_used,
-    };
-    let matches_key = |provider: &str| {
-        selected_key
-            .as_deref()
-            .is_none_or(|k| provider.to_lowercase() == k)
-    };
-
-    let success_parts = rows
-        .iter()
-        .filter(|r| matches_key(&r.provider))
-        .map(|r| format_bar(&r.provider, used_for(r)));
-    let error_parts = errors
-        .iter()
-        .filter(|e| matches_key(&e.provider))
-        .map(|e| format_bar_error(&e.provider));
-    let parts: Vec<String> = success_parts.chain(error_parts).collect();
-
-    if !parts.is_empty() {
-        // Always one provider in the bar text now that selected_key
-        // defaults to the first row / error.
-        return parts.into_iter().next().unwrap_or_default();
-    }
-
-    // Selected provider exists in neither set; fall back to the first row,
-    // or the first error if there are no successes.
-    rows.first()
-        .map(|r| format_bar(&r.provider, used_for(r)))
-        .or_else(|| errors.first().map(|e| format_bar_error(&e.provider)))
-        .unwrap_or_default()
-}
-
-fn format_bar_error(label: &str) -> String {
-    let (_dim, _separator, _green, _yellow, red, _neutral) = theme_palette();
-    let icon = icon_markup(label);
-    let escaped_label = pango_escape(label);
-    format!("{icon} {escaped_label} <span foreground=\"{red}\">⚠</span>")
-}
-
-fn check_and_notify(
-    config: &TokenGaugeConfig,
-    payloads: &[ProviderPayload],
-    costs: &HashMap<String, CostInfo>,
-) {
-    if !config.notifications.enabled || config.notifications.thresholds.is_empty() {
-        return;
-    }
-    let _ = costs; // costs no longer needed here; kept for a stable signature.
-
-    let path = notify_state_path(&config.cache_file);
-    let mut state = read_notify_state(&path);
-    let thresholds = &config.notifications.thresholds;
-
-    for payload in payloads {
-        if payload.has_error() {
-            continue;
-        }
-        let Some(usage) = &payload.usage else {
-            continue;
-        };
-        let name = provider_label(&payload.provider);
-        let (s_label, w_label, t_label) = tokengauge_core::window_labels(&payload.provider);
-        // Notify off the raw windows so we can key roll-over on the actual
-        // reset timestamp instead of the formatted "in 2h" countdown string.
-        let windows = [
-            ("session", usage.primary.as_ref(), s_label),
-            ("weekly", usage.secondary.as_ref(), w_label),
-            ("tertiary", usage.tertiary.as_ref(), t_label),
-        ];
-        for (slot, window, label) in windows {
-            let Some(window) = window else { continue };
-            let Some(pct) = window.used_percent.map(|pct| pct.min(100)) else {
-                continue;
-            };
-            let source = payload.source.as_deref().unwrap_or_default();
-            let key = format!("{}:{}:{}", payload.provider.to_lowercase(), source, slot);
-            let entry = state.entries.entry(key).or_default();
-            let resets_at = window.resets_at.as_deref();
-            let (to_fire, new_notified) = thresholds_to_fire(
-                pct,
-                resets_at,
-                entry.resets_at.as_deref(),
-                thresholds,
-                &entry.notified,
-            );
-            entry.notified = new_notified;
-            entry.resets_at = window.resets_at.clone();
-            if !to_fire.is_empty() {
-                let (_, _, reset_str) = tokengauge_core::format_window(Some(window.clone()));
-                for threshold in to_fire {
-                    fire_notification(name, label, pct, threshold, &reset_str);
-                }
-            }
-        }
-    }
-
-    let _ = write_notify_state(&path, &state);
 }
 
 /// `--check-update`: live GitHub check, cache result, print JSON status.
@@ -822,1308 +532,15 @@ fn handle_install_frontend(spec: &str) -> Result<()> {
     }
 }
 
-/// Restart the systemd user daemon so the freshly-installed binary is loaded.
-/// Best effort: returns false when there's no active unit to restart (plain
-/// polling mode) or systemctl is unavailable.
-fn restart_daemon() -> bool {
-    let active = Command::new("systemctl")
-        .args([
-            "--user",
-            "is-active",
-            "--quiet",
-            "tokengauge-daemon.service",
-        ])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if !active {
-        return false;
-    }
-    Command::new("systemctl")
-        .args(["--user", "restart", "tokengauge-daemon.service"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-/// Fire a one-shot "update available" desktop notification, guarding on the
-/// version so the daemon doesn't nag on every check.
-fn notify_update_available(config: &TokenGaugeConfig, status: &tokengauge_core::UpdateStatus) {
-    let Some(latest) = &status.latest else {
-        return;
-    };
-    if !status.available || status.notified.as_deref() == Some(latest.as_str()) {
-        return;
-    }
-    let title = "TokenGauge: update available";
-    let body = format!(
-        "v{latest} is available (you have v{}). Run tokengauge --update.",
-        status.current
-    );
-    let _ = Command::new("notify-send")
-        .arg("--app-name")
-        .arg("tokengauge")
-        .arg("--hint=int:transient:1")
-        .arg(title)
-        .arg(&body)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-
-    let mut persisted = status.clone();
-    persisted.notified = Some(latest.clone());
-    let _ = tokengauge_core::write_update_status(&config.cache_file, &persisted);
-}
-
-/// Daemon thread: periodically check GitHub and notify once per new version.
-fn daemon_update_loop(config: Arc<Mutex<TokenGaugeConfig>>) {
-    loop {
-        let snapshot = config.lock().expect("daemon config mutex poisoned").clone();
-        if !snapshot.update.check {
-            thread::sleep(Duration::from_secs(3600));
-            continue;
-        }
-        match update::check(&snapshot.cache_file) {
-            Ok(status) => {
-                if status.available {
-                    dlog(
-                        "update",
-                        &format!("newer version available: {:?}", status.latest),
-                    );
-                    notify_update_available(&snapshot, &status);
-                }
-            }
-            Err(e) => dlog("update", &format!("check failed: {e}")),
-        }
-        thread::sleep(Duration::from_secs(
-            snapshot.update.check_interval_secs.max(600),
-        ));
-    }
-}
-
-fn fire_notification(provider: &str, window: &str, pct: u8, threshold: u8, reset: &str) {
-    let title = format!("TokenGauge: {provider} {window} at {pct}%");
-    let body = if reset == "—" {
-        String::new()
-    } else {
-        format!("resets {reset}")
-    };
-    let urgency = if threshold >= 90 {
-        "critical"
-    } else if threshold >= 70 {
-        "normal"
-    } else {
-        "low"
-    };
-    let _ = Command::new("notify-send")
-        .arg("--urgency")
-        .arg(urgency)
-        .arg("--app-name")
-        .arg("tokengauge")
-        .arg(format!(
-            "--hint=int:transient:{}",
-            if threshold < 90 { 1 } else { 0 }
-        ))
-        .arg(&title)
-        .arg(&body)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-}
-
-/// Send SIGRTMIN+8 to every running `waybar` process.
-/// Replaces the previous `pkill -RTMIN+8 waybar` shell-out: no subprocess
-/// fork, no PATH dependency on pkill, no race window where the process
-/// list could change between match and send.
-fn signal_waybar() {
-    const SIGRTMIN_PLUS_8: libc::c_int = 42;
-    let pids = find_waybar_pids();
-    for pid in pids {
-        // SAFETY: kill(2) is a syscall; passing a stale PID is a no-op or
-        // would target a recycled pid (acceptable - we no-op on EPERM/ESRCH).
-        let _ = unsafe { libc::kill(pid, SIGRTMIN_PLUS_8) };
-    }
-}
-
-fn find_waybar_pids() -> Vec<libc::pid_t> {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let pid: libc::pid_t = entry.file_name().to_str()?.parse().ok()?;
-            let comm = std::fs::read_to_string(entry.path().join("comm")).ok()?;
-            (comm.trim() == "waybar").then_some(pid)
-        })
-        .collect()
-}
-
-/// Front-half of refresh: write sentinel, signal waybar, fork detached worker
-/// for the actual fetch, return immediately so waybar's on-click-right
-/// handler unblocks fast and waybar services the signal.
-fn handle_refresh_quick(config: &TokenGaugeConfig) {
-    let sentinel = refresh_sentinel_path(&config.cache_file);
-    let _ = std::fs::write(&sentinel, refresh_sentinel_deadline_ms(config).to_string());
-    signal_waybar();
-
-    if let Ok(exe) = std::env::current_exe() {
-        let mut cmd = Command::new(exe);
-        cmd.arg("--internal-refresh-worker")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        if let Some(path) = std::env::var_os("TOKENGAUGE_CONFIG") {
-            cmd.env("TOKENGAUGE_CONFIG", path);
-        }
-        let _ = cmd.spawn();
-    }
-}
-
-/// Detached worker: do the actual fetch + clear sentinel + signal waybar.
-fn worker_do_refresh(config: &TokenGaugeConfig) {
-    let sentinel = refresh_sentinel_path(&config.cache_file);
-    let _ = std::fs::remove_file(&config.cache_file);
-    let FetchResult {
-        payloads,
-        errors,
-        costs,
-    } = fetch_all_providers(config);
-    let _ = write_cache_full(
-        &config.cache_file,
-        &payloads,
-        &errors,
-        &costs,
-        &config.providers,
-    );
-    let _ = std::fs::remove_file(&sentinel);
-    check_and_notify(config, &payloads, &costs);
-    signal_waybar();
-}
-
-struct DoctorCheck {
-    label: String,
-    ok: bool,
-    detail: String,
-}
-
-fn handle_doctor(config_path: &Path) -> i32 {
-    let isatty = std::io::IsTerminal::is_terminal(&std::io::stdout());
-    let (green, red, dim, reset) = if isatty {
-        ("\x1b[32m", "\x1b[31m", "\x1b[2m", "\x1b[0m")
-    } else {
-        ("", "", "", "")
-    };
-    let section = |title: &str| {
-        println!("\n{title}");
-        println!("{}", "─".repeat(title.chars().count()));
-    };
-    let print_check = |c: &DoctorCheck| {
-        let icon = if c.ok {
-            format!("{green}✓{reset}")
-        } else {
-            format!("{red}✗{reset}")
-        };
-        if c.detail.is_empty() {
-            println!("  {icon}  {}", c.label);
-        } else {
-            println!("  {icon}  {}  {dim}- {}{reset}", c.label, c.detail);
-        }
-    };
-
-    let checks: std::cell::RefCell<Vec<DoctorCheck>> = std::cell::RefCell::new(Vec::new());
-    let record = |c: DoctorCheck| {
-        print_check(&c);
-        checks.borrow_mut().push(c);
-    };
-
-    println!("TokenGauge doctor");
-
-    // Config
-    section("Config");
-    let config = if config_path.exists() {
-        match load_config(Some(config_path.to_path_buf())) {
-            Ok(c) => {
-                record(DoctorCheck {
-                    label: format!("config loads: {}", config_path.display()),
-                    ok: true,
-                    detail: String::new(),
-                });
-                Some(c)
-            }
-            Err(e) => {
-                record(DoctorCheck {
-                    label: format!("config loads: {}", config_path.display()),
-                    ok: false,
-                    detail: e.to_string(),
-                });
-                None
-            }
-        }
-    } else {
-        record(DoctorCheck {
-            label: format!("config exists: {}", config_path.display()),
-            ok: false,
-            detail: "run any tokengauge invocation to write defaults".into(),
-        });
-        None
-    };
-
-    let cfg = config.unwrap_or_default();
-
-    // Credentials (read by the native fetchers) - one line per enabled
-    // provider, keyed off the auth sources each fetcher actually reads.
-    section("Credentials");
-    for provider in tokengauge_core::PROVIDERS {
-        if !cfg.providers.is_enabled(provider) {
-            continue;
-        }
-        let status = tokengauge_core::provider_auth_status(provider);
-        record(DoctorCheck {
-            label: format!("{provider} credentials"),
-            ok: status.ok,
-            detail: if status.ok {
-                status.detail
-            } else {
-                format!("{} - {}", status.detail, status.hint)
-            },
-        });
-        // When creds are missing and a sign-in CLI exists, report whether it's
-        // installed so the fix is actionable. (TokenGauge reads the credential
-        // file/env at runtime, not the CLI, so this only matters for sign-in.)
-        if !status.ok
-            && let Some(cli) = tokengauge_core::provider_cli_name(provider)
-        {
-            record(check_binary(
-                cli,
-                &format!("{provider} sign-in"),
-                &format!("install the {cli} CLI to sign in"),
-            ));
-        }
-    }
-
-    // Unknown / removed config keys
-    let unknown = cfg.unknown_config_keys();
-    if !unknown.is_empty() {
-        section("Removed config keys");
-        for key in &unknown {
-            record(DoctorCheck {
-                label: format!("unknown config key `{key}`"),
-                ok: false,
-                detail: "unknown or removed key - delete it from your config".into(),
-            });
-        }
-    }
-
-    // Where cost figures come from, and whether the two sources agree.
-    if cfg.ccusage_enabled {
-        section("Cost source");
-        let compare = cfg.cost_source != tokengauge_core::CostSource::Ccusage
-            && tokengauge_core::ccusage_runner_description().is_some();
-        let d = tokengauge_core::diagnose_costs(
-            cfg.cost_source,
-            &cfg.cache_file,
-            std::time::Duration::from_secs(cfg.ccusage_timeout_secs.max(1)),
-            compare,
-        );
-
-        record(DoctorCheck {
-            label: format!("cost source: {:?}", d.source).to_lowercase(),
-            ok: true,
-            detail: format!(
-                "{} events read in {}ms from {} transcript root(s)",
-                d.events,
-                d.elapsed.as_millis(),
-                d.roots.len()
-            ),
-        });
-        // Only `native` actually requires a transcript tree. A ccusage-only
-        // install has none by design, and `auto` covers the same case through
-        // the fallback, so failing the check there would fail a healthy machine.
-        let native_required = cfg.cost_source == tokengauge_core::CostSource::Native;
-        record(DoctorCheck {
-            label: if d.roots.is_empty() {
-                "no transcript roots".into()
-            } else {
-                "transcripts found".into()
-            },
-            ok: !d.roots.is_empty() || !native_required,
-            detail: if d.roots.is_empty() {
-                if native_required {
-                    "cost_source = \"native\" needs ~/.claude/projects or ~/.codex/sessions".into()
-                } else {
-                    "none yet - cost figures come from ccusage until a CLI writes one".into()
-                }
-            } else {
-                d.roots
-                    .iter()
-                    .map(|r| r.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            },
-        });
-        record(DoctorCheck {
-            label: format!("price table: {} models", d.prices),
-            ok: d.prices > 0,
-            detail: "from LiteLLM, cached beside the snapshot".into(),
-        });
-        // An unpriced model must read as a gap, never as $0 spent.
-        record(DoctorCheck {
-            label: if d.unpriced.is_empty() {
-                "every model in use is priced".into()
-            } else {
-                format!("{} model(s) have tokens but no price", d.unpriced.len())
-            },
-            ok: d.unpriced.is_empty(),
-            detail: if d.unpriced.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "{} - spend is undercounted until the price table catches up",
-                    d.unpriced.join(", ")
-                )
-            },
-        });
-        if compare {
-            match d.worst_token_drift() {
-                // Token counts come from the same transcripts and must agree;
-                // anything else means one of the two parsers has drifted.
-                Some((provider, drift)) => record(DoctorCheck {
-                    label: "native and ccusage agree on token counts".into(),
-                    ok: drift < 0.01,
-                    detail: format!(
-                        "worst gap {:.2}% ({provider}, month to date)",
-                        drift * 100.0
-                    ),
-                }),
-                None => record(DoctorCheck {
-                    label: "native vs ccusage".into(),
-                    ok: true,
-                    detail: "nothing in common to compare this month".into(),
-                }),
-            }
-        }
-    }
-
-    // External dependencies
-    section("Dependencies");
-    if cfg.ccusage_enabled {
-        // Only a hard requirement when it is the chosen source. Otherwise it is
-        // the fallback for a CLI we do not parse, and the second opinion the
-        // cost check above diffs against.
-        let required = cfg.cost_source == tokengauge_core::CostSource::Ccusage;
-        match tokengauge_core::ccusage_runner_description() {
-            Some(cmd) => record(DoctorCheck {
-                label: "ccusage runner available".into(),
-                ok: true,
-                detail: cmd,
-            }),
-            None if required => record(DoctorCheck {
-                label: "ccusage runner".into(),
-                ok: false,
-                detail: "cost_source = \"ccusage\" needs it: npm i -g ccusage / bun i -g ccusage, or switch cost_source to \"native\"".into(),
-            }),
-            None => record(DoctorCheck {
-                label: "ccusage runner absent (optional)".into(),
-                ok: true,
-                detail: "costs are read natively; install ccusage only to cross-check them".into(),
-            }),
-        }
-    } else {
-        record(DoctorCheck {
-            label: "ccusage disabled in config".into(),
-            ok: true,
-            detail: "no cost data".into(),
-        });
-    }
-    if cfg.notifications.enabled {
-        record(check_binary(
-            "notify-send",
-            "threshold notifications",
-            "install libnotify, or set notifications.enabled = false",
-        ));
-    }
-    record(check_binary(
-        "xdg-open",
-        "open dashboard/status URLs",
-        "install xdg-utils",
-    ));
-
-    // Cache + state files
-    section("Filesystem");
-    let cache_dir = cfg.cache_file.parent().unwrap_or(Path::new("."));
-    let cache_ok = std::fs::create_dir_all(cache_dir).is_ok();
-    record(DoctorCheck {
-        label: format!("cache directory writable: {}", cache_dir.display()),
-        ok: cache_ok,
-        detail: if cache_ok {
-            String::new()
-        } else {
-            "permission denied".into()
-        },
-    });
-
-    // Providers
-    section("Providers");
-    let enabled = cfg.providers.enabled_providers();
-    let disabled: Vec<&str> = tokengauge_core::PROVIDERS
-        .iter()
-        .copied()
-        .filter(|p| !cfg.providers.is_enabled(p))
-        .collect();
-    record(DoctorCheck {
-        label: "enabled".into(),
-        ok: !enabled.is_empty(),
-        detail: if enabled.is_empty() {
-            "none - set e.g. [providers] claude = true".into()
-        } else {
-            enabled.join(", ")
-        },
-    });
-    if !disabled.is_empty() {
-        // Surface the rest of the catalog so disabled providers are discoverable.
-        record(DoctorCheck {
-            label: "available (disabled)".into(),
-            ok: true,
-            detail: disabled.join(", "),
-        });
-    }
-    if !enabled.is_empty() {
-        // The definitive check: a live fetch per enabled provider.
-        let result = fetch_all_providers(&cfg);
-        for payload in &result.payloads {
-            // A stale payload is last-good cache served because the live fetch
-            // failed - report it as not-ok so --doctor doesn't read as success.
-            let detail = payload.source.clone().unwrap_or_default();
-            record(DoctorCheck {
-                label: format!("live fetch {}", payload.provider),
-                ok: !payload.stale,
-                detail: if payload.stale {
-                    format!("{detail} (stale cache - live fetch failed)")
-                } else {
-                    detail
-                },
-            });
-        }
-        for err in &result.errors {
-            record(DoctorCheck {
-                label: format!("live fetch {}", err.provider),
-                ok: false,
-                detail: err.message.clone(),
-            });
-        }
-    }
-
-    // Bar wiring. Waybar is one surface of several now, so its module is only
-    // missing-and-wrong when nothing else is drawing the gauge; on a desktop
-    // running the Plasma applet, the GNOME extension or the Omarchy widget,
-    // having no waybar config is the normal state and not a fault.
-    section("Bar wiring");
-    let drawn_by: Vec<&str> = tokengauge_core::frontend::installed()
-        .iter()
-        .map(|f| f.label)
-        .collect();
-    let drawn_by_text = drawn_by.join(", ");
-    let waybar_cfg = std::env::var_os("HOME")
-        .map(|h| PathBuf::from(h).join(".config/waybar/config.jsonc"))
-        .unwrap_or_else(|| PathBuf::from("~/.config/waybar/config.jsonc"));
-    if waybar_cfg.exists() {
-        let contents = std::fs::read_to_string(&waybar_cfg).unwrap_or_default();
-        let wired = contents.contains("custom/tokengauge");
-        record(DoctorCheck {
-            label: format!("module wired in {}", waybar_cfg.display()),
-            ok: wired || !drawn_by.is_empty(),
-            detail: match (wired, drawn_by.is_empty()) {
-                (true, _) => String::new(),
-                (false, true) => {
-                    "run scripts/install.sh to add the custom/tokengauge module".into()
-                }
-                (false, false) => format!("not wired, and not needed: {drawn_by_text} draws it"),
-            },
-        });
-    } else if drawn_by.is_empty() {
-        record(DoctorCheck {
-            label: "no bar wired up".into(),
-            ok: false,
-            detail: format!(
-                "no {} and no desktop frontend installed - run scripts/install.sh, or tokengauge --install-frontend <plasma|gnome|omarchy>",
-                waybar_cfg.display()
-            ),
-        });
-    } else {
-        record(DoctorCheck {
-            label: format!("waybar not in use - {drawn_by_text} draws the gauge"),
-            ok: true,
-            detail: String::new(),
-        });
-    }
-
-    // Click action prerequisites: the binary the user wants to spawn
-    // on left-click must be on PATH.
-    let click_cmd = resolve_click_command(&cfg);
-    let (label, ok, detail) = if click_cmd.is_empty() {
-        (
-            "click action launcher resolved".into(),
-            false,
-            "no TUI launcher found; set [waybar].tui_command or install a terminal".into(),
-        )
-    } else {
-        let first = click_cmd
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string();
-        let on_path = which(&first).is_some() || first.starts_with('/');
-        (
-            format!(
-                "click action: {:?} -> {}",
-                cfg.waybar.click_action, click_cmd
-            ),
-            on_path,
-            if on_path {
-                String::new()
-            } else {
-                format!("'{first}' not found on $PATH")
-            },
-        )
-    };
-    record(DoctorCheck { label, ok, detail });
-
-    section("Updates");
-    record(DoctorCheck {
-        label: format!("installed version: {}", update::current_version()),
-        ok: true,
-        detail: String::new(),
-    });
-    match tokengauge_core::read_update_status(&cfg.cache_file) {
-        Some(status) if status.available => record(DoctorCheck {
-            label: "update available".into(),
-            ok: true,
-            detail: format!(
-                "{} available - run: tokengauge --update",
-                status.latest.as_deref().unwrap_or("newer release")
-            ),
-        }),
-        Some(status) => record(DoctorCheck {
-            label: "up to date".into(),
-            ok: true,
-            detail: status
-                .latest
-                .map(|v| format!("latest: {v}"))
-                .unwrap_or_default(),
-        }),
-        None => record(DoctorCheck {
-            label: "no update check yet".into(),
-            ok: true,
-            detail: "run: tokengauge --check-update".into(),
-        }),
-    }
-
-    section("Desktop frontends");
-    {
-        use tokengauge_core::frontend;
-        let binary = update::current_version();
-        let present = frontend::installed();
-        if present.is_empty() {
-            record(DoctorCheck {
-                label: "none installed".into(),
-                ok: true,
-                detail: "install one: tokengauge --install-frontend <plasma|gnome|omarchy>".into(),
-            });
-        }
-        for f in present {
-            match f.installed_version() {
-                // A frontend is QML or JavaScript installed outside the binary
-                // directory, so it only moves when it is reinstalled. Skew here
-                // reads as a missing feature rather than a stale install.
-                Some(v) if v == binary => record(DoctorCheck {
-                    label: format!("{} v{v}", f.label),
-                    ok: true,
-                    detail: String::new(),
-                }),
-                Some(v) => record(DoctorCheck {
-                    label: format!("{} is v{v}, binary is v{binary}", f.label),
-                    ok: false,
-                    detail: format!("tokengauge --install-frontend {}", f.id),
-                }),
-                None => record(DoctorCheck {
-                    label: format!("{} version unreadable", f.label),
-                    ok: false,
-                    detail: format!("tokengauge --install-frontend {}", f.id),
-                }),
-            }
-        }
-    }
-
-    println!();
-    let failed = checks.borrow().iter().filter(|c| !c.ok).count();
-    if failed == 0 {
-        println!("{green}All checks passed.{reset}");
-        0
-    } else {
-        println!("{red}{failed} check(s) failed.{reset}");
-        1
-    }
-}
-
-fn check_binary(name: &str, purpose: &str, hint: &str) -> DoctorCheck {
-    let found = Command::new("which")
-        .arg(name)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    DoctorCheck {
-        label: format!("{name} on PATH ({purpose})"),
-        ok: found,
-        detail: if found { String::new() } else { hint.into() },
-    }
-}
-
 // ============================================================================
 // Daemon + client (Unix socket)
 // ============================================================================
 
-fn socket_path(cache_file: &Path) -> PathBuf {
-    let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
-    parent.join("tokengauge.sock")
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "cmd", rename_all = "snake_case")]
-enum SocketCommand {
-    Snapshot,
-    Subscribe,
-    Refresh,
-    Rotate { direction: String },
-    Open { target: String },
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum SocketReply {
-    Snapshot { output: WaybarOutput },
-    Update { output: WaybarOutput },
-    Ack,
-    Error { message: String },
-}
-
-fn connect_socket(config: &TokenGaugeConfig) -> std::io::Result<UnixStream> {
-    let path = socket_path(&config.cache_file);
-    UnixStream::connect(&path)
-}
-
-fn try_send_command(config: &TokenGaugeConfig, cmd: &SocketCommand) -> Result<()> {
-    let mut stream = connect_socket(config).map_err(|e| anyhow::anyhow!(e))?;
-    let line = serde_json::to_string(cmd)?;
-    writeln!(stream, "{line}")?;
-    stream.flush()?;
-    // Read one reply line for ack
-    let mut reader = BufReader::new(&stream);
-    let mut buf = String::new();
-    reader.read_line(&mut buf)?;
-    Ok(())
-}
-
-fn try_get_snapshot(config: &TokenGaugeConfig) -> Result<String> {
-    let mut stream = connect_socket(config).map_err(|e| anyhow::anyhow!(e))?;
-    let line = serde_json::to_string(&SocketCommand::Snapshot)?;
-    writeln!(stream, "{line}")?;
-    stream.flush()?;
-    let mut reader = BufReader::new(&stream);
-    let mut buf = String::new();
-    reader.read_line(&mut buf)?;
-    let reply: SocketReply = serde_json::from_str(buf.trim())?;
-    match reply {
-        SocketReply::Snapshot { output } => Ok(serde_json::to_string(&output)?),
-        SocketReply::Error { message } => Err(anyhow::anyhow!(message)),
-        _ => Err(anyhow::anyhow!("unexpected reply from daemon")),
-    }
-}
-
-/// Snapshot the daemon's current output, re-rendering with the refreshing
-/// indicator when the sentinel file is present (i.e. a manual refresh is
-/// still in flight). Lets snapshot clients (the standard waybar poll path)
-/// pick up the ⟳ state without subscribing.
-fn current_snapshot(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) -> WaybarOutput {
-    let sentinel = refresh_sentinel_path(&config.cache_file);
-    if refresh_in_progress(&sentinel) {
-        let cached = read_cache_full(&config.cache_file).ok();
-        let (rows, errors) = match cached {
-            Some(c) => {
-                let (mut payloads, mut errors, costs) = c.into_parts();
-                retain_enabled(&mut payloads, &mut errors, &config.providers);
-                (payload_to_rows_with_costs(payloads, &costs), errors)
-            }
-            None => (Vec::new(), Vec::new()),
-        };
-        return render_output(config, &rows, &errors, true);
-    }
-    state
-        .lock()
-        .expect("daemon state mutex poisoned")
-        .output
-        .clone()
-}
-
-struct DaemonState {
-    output: WaybarOutput,
-    subscribers: Vec<UnixStream>,
-}
-
-impl DaemonState {
-    fn broadcast(&mut self) {
-        let line = match serde_json::to_string(&SocketReply::Update {
-            output: self.output.clone(),
-        }) {
-            Ok(s) => format!("{s}\n"),
-            Err(_) => return,
-        };
-        self.subscribers
-            .retain_mut(|s| s.write_all(line.as_bytes()).is_ok());
-    }
-}
-
-/// Pick the strongest CSS class tier based on current state.
-/// Order of precedence (strongest first): refreshing > error > partial-error >
-/// crit (>=80%) > warn (>=50%) > base. `tokengauge-stale` is additive: it is
-/// appended whenever any row was served from last-good cache, on top of the
-/// tier so usage colouring still shows.
-fn compute_class(
-    rows: &[ProviderRow],
-    errors: &[ProviderFetchError],
-    refreshing: bool,
-    window: WaybarWindow,
-) -> String {
-    let stale_suffix = if rows.iter().any(|r| r.stale) {
-        " tokengauge-stale"
-    } else {
-        ""
-    };
-    if refreshing {
-        return "tokengauge tokengauge-refreshing".to_string();
-    }
-    if !errors.is_empty() {
-        return if rows.is_empty() {
-            "tokengauge tokengauge-error".to_string()
-        } else {
-            format!("tokengauge tokengauge-partial-error{stale_suffix}")
-        };
-    }
-    let max_pct = rows
-        .iter()
-        .filter_map(|r| match window {
-            WaybarWindow::Daily => r.session_used,
-            WaybarWindow::Weekly => r.weekly_used,
-        })
-        .max()
-        .unwrap_or(0);
-    let tier = match max_pct {
-        80..=u8::MAX => "tokengauge tokengauge-crit",
-        50..=79 => "tokengauge tokengauge-warn",
-        _ => "tokengauge",
-    };
-    format!("{tier}{stale_suffix}")
-}
-
-fn render_output(
-    config: &TokenGaugeConfig,
-    rows: &[ProviderRow],
-    errors: &[ProviderFetchError],
-    refreshing: bool,
-) -> WaybarOutput {
-    if rows.is_empty() && errors.is_empty() && !refreshing {
-        return WaybarOutput {
-            text: "—".into(),
-            tooltip: "<tt>TokenGauge: no providers</tt>".into(),
-            class: "tokengauge-empty".into(),
-        };
-    }
-    let yellow = theme().yellow.as_str();
-    let text_inner = build_text_for_rows_with_errors(rows, errors, config);
-    let text = if refreshing {
-        if rows.is_empty() && errors.is_empty() {
-            format!("   <span foreground=\"{yellow}\">⟳ Refreshing...</span>")
-        } else {
-            format!("   <span foreground=\"{yellow}\">⟳</span> {text_inner}")
-        }
-    } else {
-        format!("   {text_inner}")
-    };
-    let selected = selected_provider_for_tooltip(config, rows);
-    let tooltip_rows: Vec<&ProviderRow> = match selected {
-        Some(idx) => vec![&rows[idx]],
-        None => rows.iter().collect(),
-    };
-    let tooltip =
-        format_tooltip_with_errors(&tooltip_rows, errors, refreshing, &left_click_label(config));
-    let class = compute_class(rows, errors, refreshing, config.waybar.window.clone());
-    WaybarOutput {
-        text,
-        tooltip,
-        class,
-    }
-}
-
-/// Log a warning for each unrecognized config key (startup and after reloads).
-fn warn_unknown_config_keys(config: &TokenGaugeConfig) {
-    for key in config.unknown_config_keys() {
-        dlog(
-            "daemon",
-            &format!("ignoring unrecognized config key `{key}`"),
-        );
-    }
-}
-
-fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Result<()> {
-    let sock_path = socket_path(&config.cache_file);
-    let _ = std::fs::remove_file(&sock_path);
-    if let Some(parent) = sock_path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    let listener = UnixListener::bind(&sock_path)
-        .with_context(|| format!("failed to bind socket {}", sock_path.display()))?;
-    dlog(
-        "daemon",
-        &format!(
-            "listening on {} (refresh every {}s)",
-            sock_path.display(),
-            config.refresh_secs.max(10)
-        ),
-    );
-    warn_unknown_config_keys(&config);
-
-    let state = Arc::new(Mutex::new(DaemonState {
-        output: WaybarOutput {
-            text: "   <span foreground=\"#f9e2af\">⟳ Starting...</span>".into(),
-            tooltip: "<tt>TokenGauge daemon starting...</tt>".into(),
-            class: "tokengauge tokengauge-refreshing".into(),
-        },
-        subscribers: Vec::new(),
-    }));
-
-    let shared_config = Arc::new(Mutex::new(config));
-
-    // Initial fetch + periodic refresh loop
-    {
-        let state = Arc::clone(&state);
-        let cfg = Arc::clone(&shared_config);
-        thread::spawn(move || daemon_fetch_loop(state, cfg));
-    }
-
-    // Periodic GitHub release check + one-shot "update available" notification.
-    {
-        let cfg = Arc::clone(&shared_config);
-        thread::spawn(move || daemon_update_loop(cfg));
-    }
-
-    // Signal-driven immediate fetch (preserves backward compat with pkill -RTMIN+8)
-    {
-        let signal_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        // SIGRTMIN+8 on Linux glibc = 42. Preserves backward compat with the
-        // older waybar `signal: 8` + `pkill -RTMIN+8 waybar` invocations.
-        const SIGRTMIN_PLUS_8: i32 = 42;
-        signal_hook::flag::register(SIGRTMIN_PLUS_8, Arc::clone(&signal_flag))
-            .map_err(|e| anyhow::anyhow!("signal register: {e}"))?;
-        let state = Arc::clone(&state);
-        let cfg = Arc::clone(&shared_config);
-        thread::spawn(move || {
-            loop {
-                thread::sleep(Duration::from_millis(200));
-                if signal_flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                    dlog("signal", "SIGRTMIN+8 received, forcing fetch");
-                    let s = state.clone();
-                    let snapshot = cfg.lock().expect("daemon config mutex poisoned").clone();
-                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        do_fetch_and_broadcast(&s, &snapshot);
-                    }));
-                    if let Err(payload) = res {
-                        dlog(
-                            "signal",
-                            &format!("panic recovered: {}", panic_message(&payload)),
-                        );
-                    }
-                }
-            }
-        });
-    }
-
-    // SIGHUP: reload config + theme from disk without restart
-    {
-        let hup = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        signal_hook::flag::register(signal_hook::consts::SIGHUP, Arc::clone(&hup))?;
-        let cfg = Arc::clone(&shared_config);
-        let state = Arc::clone(&state);
-        let path = config_path.clone();
-        thread::spawn(move || {
-            loop {
-                thread::sleep(Duration::from_millis(200));
-                if hup.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                    dlog("signal", "SIGHUP received, reloading config");
-                    match load_config(Some(path.clone())) {
-                        Ok(new_cfg) => {
-                            tokengauge_core::install_theme(new_cfg.theme.resolve());
-                            let refresh_secs = new_cfg.refresh_secs.max(10);
-                            {
-                                let mut guard = cfg.lock().expect("daemon config mutex poisoned");
-                                *guard = new_cfg.clone();
-                            }
-                            dlog(
-                                "reload",
-                                &format!(
-                                    "config reloaded from {} (refresh every {refresh_secs}s)",
-                                    path.display()
-                                ),
-                            );
-                            warn_unknown_config_keys(&new_cfg);
-                            // Ask the cache, not the before/after config: a
-                            // provider switched *off* leaves it a superset, which
-                            // still answers and re-renders for free, and
-                            // `--set-provider` has usually already fetched the
-                            // one switched *on* before signalling us.
-                            if cache_is_stale(&new_cfg) {
-                                dlog(
-                                    "reload",
-                                    "cache cannot answer for the new config, refetching",
-                                );
-                                do_refresh_cycle(&state, &new_cfg);
-                                continue;
-                            }
-                            // Otherwise re-render cached output with the new
-                            // theme/config so colour changes show up before the
-                            // next fetch, without paying for a fetch.
-                            let cached = read_cache_full(&new_cfg.cache_file).ok();
-                            let (rows, errors) = match cached {
-                                Some(c) => {
-                                    let (mut payloads, mut errors, costs) = c.into_parts();
-                                    retain_enabled(&mut payloads, &mut errors, &new_cfg.providers);
-                                    (payload_to_rows_with_costs(payloads, &costs), errors)
-                                }
-                                None => (Vec::new(), Vec::new()),
-                            };
-                            let output = render_output(&new_cfg, &rows, &errors, false);
-                            let mut s = state.lock().expect("daemon state mutex poisoned");
-                            s.output = output;
-                            s.broadcast();
-                            drop(s);
-                            signal_waybar();
-                        }
-                        Err(e) => {
-                            dlog("reload", &format!("failed: {e}; keeping previous config"));
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-    let sock_path_clone = sock_path.clone();
-    // Graceful shutdown on SIGTERM/SIGINT
-    {
-        let term = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term))?;
-        signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term))?;
-        thread::spawn(move || {
-            loop {
-                thread::sleep(Duration::from_millis(200));
-                if term.load(std::sync::atomic::Ordering::SeqCst) {
-                    dlog("daemon", "SIGTERM/SIGINT received, shutting down");
-                    let _ = std::fs::remove_file(&sock_path_clone);
-                    std::process::exit(0);
-                }
-            }
-        });
-    }
-
-    // Accept connections
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let state = Arc::clone(&state);
-                let cfg = Arc::clone(&shared_config);
-                thread::spawn(move || {
-                    let snapshot = cfg.lock().expect("daemon config mutex poisoned").clone();
-                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        handle_client(stream, state, snapshot)
-                    }));
-                    match res {
-                        Ok(Err(e)) => dlog("client", &format!("error: {e}")),
-                        Err(payload) => dlog(
-                            "client",
-                            &format!("panic recovered: {}", panic_message(&payload)),
-                        ),
-                        Ok(Ok(())) => {}
-                    }
-                });
-            }
-            Err(e) => {
-                dlog("accept", &format!("failed: {e}"));
-            }
-        }
-    }
-    let _ = std::fs::remove_file(&sock_path);
-    Ok(())
-}
-
-fn dlog(tag: &str, msg: &str) {
-    let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
-    eprintln!("[{ts}] [{tag}] {msg}");
-}
-
-fn daemon_fetch_loop(state: Arc<Mutex<DaemonState>>, config: Arc<Mutex<TokenGaugeConfig>>) {
-    loop {
-        let snapshot = config.lock().expect("daemon config mutex poisoned").clone();
-        let s = state.clone();
-        // catch_unwind requires the closure to be UnwindSafe. Arc<Mutex> + Clone
-        // values used here are safe to recover - a panic taints nothing externally.
-        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            do_fetch_and_broadcast(&s, &snapshot);
-        }));
-        if let Err(payload) = res {
-            let msg = panic_message(&payload);
-            dlog("fetch", &format!("panic recovered: {msg}"));
-        }
-        thread::sleep(Duration::from_secs(snapshot.refresh_secs.max(10)));
-    }
-}
-
-fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<&'static str>() {
-        s.to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "<non-string panic payload>".to_string()
-    }
-}
-
-fn do_fetch_and_broadcast(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) {
-    let started = std::time::Instant::now();
-    let prior_costs = read_cache_full(&config.cache_file)
-        .map(|c| c.costs())
-        .unwrap_or_default();
-    let FetchResult {
-        payloads,
-        errors,
-        mut costs,
-    } = fetch_all_providers(config);
-    if costs.is_empty() && !prior_costs.is_empty() {
-        costs = prior_costs;
-    }
-    if let Err(e) = write_cache_full(
-        &config.cache_file,
-        &payloads,
-        &errors,
-        &costs,
-        &config.providers,
-    ) {
-        dlog("cache", &format!("write failed: {e}"));
-    }
-    check_and_notify(config, &payloads, &costs);
-    let rows = payload_to_rows_with_costs(payloads, &costs);
-    let output = render_output(config, &rows, &errors, false);
-    let subscriber_count = {
-        let mut s = state.lock().expect("daemon state mutex poisoned");
-        s.output = output;
-        s.broadcast();
-        s.subscribers.len()
-    };
-    dlog(
-        "fetch",
-        &format!(
-            "rows={} stale={} errors={} costs={} subscribers={} elapsed={:?}",
-            rows.len(),
-            rows.iter().filter(|r| r.stale).count(),
-            errors.len(),
-            costs.len(),
-            subscriber_count,
-            started.elapsed()
-        ),
-    );
-}
-
-/// Raise the ⟳ sentinel and signal waybar to re-poll so the indicator appears.
-/// Idempotent: callers that must guarantee the sentinel is up before replying to
-/// a client (see the Refresh command) can raise it themselves first.
-fn raise_refresh_sentinel(config: &TokenGaugeConfig) {
-    let _ = std::fs::write(
-        refresh_sentinel_path(&config.cache_file),
-        refresh_sentinel_deadline_ms(config).to_string(),
-    );
-    signal_waybar();
-}
-
-/// Full manual-refresh cycle: raise the sentinel so every frontend renders ⟳,
-/// fetch, then drop it. waybar is signalled on both edges so the bar picks up
-/// the indicator and the result without waiting for its poll interval.
-/// Panics are contained here rather than at each caller: the sentinel raised
-/// above must come down whatever the fetch does, or every client shows ⟳
-/// forever, and an escaping panic would kill the caller's long-lived thread.
-fn do_refresh_cycle(state: &Arc<Mutex<DaemonState>>, config: &TokenGaugeConfig) {
-    raise_refresh_sentinel(config);
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        do_fetch_and_broadcast(state, config);
-    }));
-    if let Err(payload) = res {
-        dlog(
-            "refresh",
-            &format!("panic recovered: {}", panic_message(&payload)),
-        );
-    }
-    let _ = std::fs::remove_file(refresh_sentinel_path(&config.cache_file));
-    signal_waybar();
-}
-
-fn handle_client(
-    mut stream: UnixStream,
-    state: Arc<Mutex<DaemonState>>,
-    config: TokenGaugeConfig,
-) -> Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut buf = String::new();
-    if reader.read_line(&mut buf)? == 0 {
-        return Ok(());
-    }
-    let cmd: SocketCommand = serde_json::from_str(buf.trim())?;
-    match cmd {
-        SocketCommand::Snapshot => {
-            let output = current_snapshot(&state, &config);
-            let reply = SocketReply::Snapshot { output };
-            writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
-            stream.flush()?;
-        }
-        SocketCommand::Subscribe => {
-            // Send current state, register as subscriber, keep stream alive
-            let output = current_snapshot(&state, &config);
-            let reply = SocketReply::Update { output };
-            writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
-            stream.flush()?;
-            state
-                .lock()
-                .expect("daemon state mutex poisoned")
-                .subscribers
-                .push(stream);
-            // Don't close - daemon broadcast will push updates
-        }
-        SocketCommand::Refresh => {
-            // Raise the sentinel and start the fetch before acking: a client
-            // that kicks a refresh and then polls for the ⟳ state (a panel
-            // on open) must never observe the gap between its ack and the fetch
-            // thread starting. The fetch itself runs in the background so the
-            // client doesn't block on the network.
-            //
-            // Both precede the ack, which is a `?` path: a client that hangs up
-            // before reading it would otherwise return early and strand the
-            // sentinel raised with no fetch thread left to take it down.
-            raise_refresh_sentinel(&config);
-            {
-                let state = state.clone();
-                let config = config.clone();
-                thread::spawn(move || do_refresh_cycle(&state, &config));
-            }
-            writeln!(stream, "{}", serde_json::to_string(&SocketReply::Ack)?)?;
-            stream.flush()?;
-        }
-        SocketCommand::Rotate { direction } => {
-            let dir = match direction.as_str() {
-                "prev" => RotateDir::Prev,
-                _ => RotateDir::Next,
-            };
-            let _ = handle_rotate(&config, dir);
-            // Re-render from current cache + rotation, scoped to the enabled set
-            // like handle_rotate just was: rotating off an unfiltered cache would
-            // put a disabled provider back in the bar.
-            let cached = read_cache_full(&config.cache_file).ok();
-            let (rows, errors) = match cached {
-                Some(c) => {
-                    let (mut payloads, mut errors, costs) = c.into_parts();
-                    retain_enabled(&mut payloads, &mut errors, &config.providers);
-                    (payload_to_rows_with_costs(payloads, &costs), errors)
-                }
-                None => (Vec::new(), Vec::new()),
-            };
-            let output = render_output(&config, &rows, &errors, false);
-            let mut s = state.lock().expect("daemon state mutex poisoned");
-            s.output = output;
-            s.broadcast();
-            writeln!(stream, "{}", serde_json::to_string(&SocketReply::Ack)?)?;
-            stream.flush()?;
-        }
-        SocketCommand::Open { target } => {
-            let t = match target.as_str() {
-                "status" => OpenTarget::Status,
-                _ => OpenTarget::Dashboard,
-            };
-            handle_open(&config, t);
-            writeln!(stream, "{}", serde_json::to_string(&SocketReply::Ack)?)?;
-            stream.flush()?;
-        }
-    }
-    Ok(())
-}
-
-fn run_client_tail(config: &TokenGaugeConfig) -> Result<()> {
-    // Retry connect briefly if daemon not yet up
-    let stream = loop {
-        match connect_socket(config) {
-            Ok(s) => break s,
-            Err(_) => {
-                thread::sleep(Duration::from_millis(500));
-                if !socket_path(&config.cache_file).exists() {
-                    // No daemon running - fall through to a one-shot snapshot
-                    let result = (|| {
-                        let sentinel = refresh_sentinel_path(&config.cache_file);
-                        let refreshing = refresh_in_progress(&sentinel);
-                        let (rows, errors, costs) = maybe_refresh(config)?;
-                        let rows_v = payload_to_rows_with_costs(rows, &costs);
-                        Ok::<_, anyhow::Error>(render_output(config, &rows_v, &errors, refreshing))
-                    })();
-                    if let Ok(out) = result {
-                        println!("{}", serde_json::to_string(&out)?);
-                    }
-                    // Wait + retry
-                    thread::sleep(Duration::from_secs(60));
-                    continue;
-                }
-            }
-        }
-    };
-    let mut writer = stream.try_clone()?;
-    writeln!(
-        writer,
-        "{}",
-        serde_json::to_string(&SocketCommand::Subscribe)?
-    )?;
-    writer.flush()?;
-    let reader = BufReader::new(stream);
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => break,
-        };
-        let reply: SocketReply = match serde_json::from_str(&line) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        if let SocketReply::Update { output } | SocketReply::Snapshot { output } = reply {
-            println!("{}", serde_json::to_string(&output)?);
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
-        }
-    }
-    // Daemon disconnected; exit cleanly so waybar restarts us
-    Ok(())
-}
-
 fn handle_open(config: &TokenGaugeConfig, target: OpenTarget) {
-    let cached = match read_cache_full(&config.cache_file) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    let rows = payload_to_rows_with_costs(cached.payloads().to_vec(), &cached.costs());
+    // Scoped to the enabled set like every other consumer of the snapshot: the
+    // selection resolves by index, so an unfiltered read opens the dashboard of
+    // whatever provider the user just switched off.
+    let (rows, _) = rows_from_cache(config);
     let Some(idx) = selected_provider_for_tooltip(config, &rows) else {
         // No selection: use first row if any.
         if rows.is_empty() {
@@ -2167,57 +584,19 @@ fn handle_click(config: &TokenGaugeConfig) {
 /// Resolve the shell command that the waybar `on-click` should run, based
 /// on the user's `[waybar].click_action` plus the matching override field.
 /// Empty return = nothing to spawn.
+///
+/// Terminal discovery lives in the core so every frontend's "open" button can
+/// be a spawn of the binary rather than toolkit-specific terminal knowledge.
 fn resolve_click_command(config: &TokenGaugeConfig) -> String {
     // The GTK popover is gone, so both actions land on the TUI. A config still
     // set to "popover" resolves here rather than doing nothing on click.
-    let explicit = config.waybar.tui_command.trim();
-    if !explicit.is_empty() {
-        return explicit.to_string();
-    }
-    default_tui_launcher()
-}
-
-fn default_tui_launcher() -> String {
-    // Prefer omarchy's launcher if installed.
-    if which("omarchy-launch-or-focus-tui").is_some() {
-        return "omarchy-launch-or-focus-tui tokengauge-tui".to_string();
-    }
-    // Fall back to $TERMINAL, then a list of common terminals.
-    let candidates: Vec<String> = std::env::var("TERMINAL")
-        .ok()
-        .into_iter()
-        .chain(
-            ["ghostty", "alacritty", "kitty", "wezterm", "foot", "xterm"]
-                .iter()
-                .map(|s| s.to_string()),
-        )
-        .collect();
-    for term in candidates {
-        if which(&term).is_some() {
-            return format!("{term} -e tokengauge-tui");
-        }
-    }
-    String::new()
-}
-
-fn which(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).find_map(|dir| {
-        let candidate = dir.join(name);
-        candidate.is_file().then_some(candidate)
-    })
+    tokengauge_core::launch::tui_command(config)
 }
 
 fn handle_rotate(config: &TokenGaugeConfig, dir: RotateDir) -> Result<()> {
-    let cached = match read_cache_full(&config.cache_file) {
-        Ok(c) => c,
-        Err(_) => return Ok(()),
-    };
     // Scoped to the enabled set, or scroll would still stop on a provider the
     // user disabled and pin the selection to a row nothing else will render.
-    let (mut payloads, mut errors, costs) = cached.into_parts();
-    retain_enabled(&mut payloads, &mut errors, &config.providers);
-    let rows = payload_to_rows_with_costs(payloads, &costs);
+    let (rows, _) = rows_from_cache(config);
     if rows.is_empty() {
         return Ok(());
     }
@@ -2255,307 +634,6 @@ fn handle_rotate(config: &TokenGaugeConfig, dir: RotateDir) -> Result<()> {
     Ok(())
 }
 
-type RefreshSnapshot = (
-    Vec<ProviderPayload>,
-    Vec<ProviderFetchError>,
-    HashMap<String, CostInfo>,
-);
-
-fn maybe_refresh(config: &TokenGaugeConfig) -> Result<RefreshSnapshot> {
-    if cache_is_stale(config) {
-        let prior_costs = read_cache_full(&config.cache_file)
-            .map(|c| c.costs())
-            .unwrap_or_default();
-        let FetchResult {
-            payloads,
-            errors,
-            mut costs,
-        } = fetch_all_providers(config);
-        if costs.is_empty() && !prior_costs.is_empty() {
-            costs = prior_costs;
-        }
-        write_cache_full(
-            &config.cache_file,
-            &payloads,
-            &errors,
-            &costs,
-            &config.providers,
-        )?;
-        check_and_notify(config, &payloads, &costs);
-        Ok((payloads, errors, costs))
-    } else {
-        // Scope the cache to the currently-enabled providers: it was written by
-        // whatever set was enabled at fetch time, so without this a provider
-        // disabled since then keeps rendering until the cache next turns over.
-        let (mut payloads, mut errors, costs) = read_cache_full(&config.cache_file)?.into_parts();
-        retain_enabled(&mut payloads, &mut errors, &config.providers);
-        Ok((payloads, errors, costs))
-    }
-}
-
-fn pango_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-fn tooltip_bar(percent: u8) -> String {
-    let filled = (percent.min(100) / 10) as usize;
-    let mut bar = String::with_capacity(30);
-    for _ in 0..filled {
-        bar.push('━');
-    }
-    for _ in filled..10 {
-        bar.push('─');
-    }
-    bar
-}
-
-const NERD_FONT_FACE: &str = "JetBrainsMono Nerd Font";
-
-fn icon_markup(label: &str) -> String {
-    let icon = provider_icon(label);
-    format!(
-        "<span face=\"{NERD_FONT_FACE}\" foreground=\"{}\">{}</span>",
-        icon.color_hex, icon.glyph
-    )
-}
-
-/// The `· ends ~26%` / `· empty in 2h 15m` trailer, coloured by how far the
-/// window is off an even burn. Shared so every tooltip gauge - the session and
-/// weekly ones and the extra windows - renders its projection identically.
-/// Map a core [`Tone`] onto the tooltip palette.
-fn tone_color(tone: Tone) -> &'static str {
-    let (dim, _separator, green, yellow, red, neutral) = theme_palette();
-    match tone {
-        Tone::Good => green,
-        Tone::Warn => yellow,
-        Tone::Critical => red,
-        Tone::Dim => dim,
-        Tone::Normal => neutral,
-    }
-}
-
-/// The tinted `· ends ~26%` / `· ↑161% vs prior avg` trailer.
-fn format_badge(row: &PanelRow) -> String {
-    if row.badge.is_empty() {
-        return String::new();
-    }
-    let color = tone_color(row.badge_tone);
-    format!(
-        "  <span foreground=\"{color}\">· {}</span>",
-        pango_escape(&row.badge)
-    )
-}
-
-/// A ten-cell bar from a 0.0-1.0 fill, for the sections carrying a fraction
-/// rather than a percentage.
-fn fraction_bar(fraction: f64) -> String {
-    tooltip_bar((fraction.clamp(0.0, 1.0) * 100.0).round() as u8)
-}
-
-/// Render one core panel section as tooltip lines: a blank spacer, a dim
-/// heading, then one line per row shaped by the section kind.
-fn format_panel_section(section: &Section) -> Vec<String> {
-    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
-    // Each column is padded to the widest entry in its own section, so the
-    // token counts line up under each other and so do the amounts.
-    let value_width = section
-        .rows
-        .iter()
-        .map(|r| r.value.chars().count())
-        .max()
-        .unwrap_or(0);
-    let suffix_width = section
-        .rows
-        .iter()
-        .map(|r| r.suffix.chars().count())
-        .max()
-        .unwrap_or(0);
-
-    let lines = section.rows.iter().map(|row| {
-        let label = format!("{:<16}", pango_escape(&row.label));
-        let value = format!("{:>value_width$}", pango_escape(&row.value));
-        match section.kind {
-            SectionKind::Meters => {
-                let color = tone_color(row.tone);
-                let bar = fraction_bar(row.fraction.unwrap_or(0.0));
-                let trailing = pango_escape(&row.footnote);
-                let badge = format_badge(row);
-                format!(
-                    "  {label}  [<span foreground=\"{color}\">{bar}</span>]  <span foreground=\"{color}\">{value}</span>   {trailing}{badge}"
-                )
-            }
-            SectionKind::Bars => {
-                let bar = fraction_bar(row.fraction.unwrap_or(0.0));
-                let (open, close) = if row.emphasized {
-                    ("<b>", "</b>")
-                } else {
-                    ("", "")
-                };
-                let suffix = if row.suffix.is_empty() {
-                    String::new()
-                } else {
-                    format!("  ·  {:>suffix_width$}", pango_escape(&row.suffix))
-                };
-                format!(
-                    "  {open}{label}{close}  <span foreground=\"{dim}\">[{bar}]</span>  {value}{suffix}"
-                )
-            }
-            SectionKind::Rows => {
-                let suffix = if row.suffix.is_empty() {
-                    String::new()
-                } else {
-                    format!("  ·  {}", pango_escape(&row.suffix))
-                };
-                let badge = format_badge(row);
-                format!(
-                    "  {label}  <span foreground=\"{dim}\">{value}</span>{badge}<span foreground=\"{dim}\">{suffix}</span>"
-                )
-            }
-        }
-    });
-
-    std::iter::once(String::new())
-        .chain(std::iter::once(format!(
-            "  <span foreground=\"{dim}\">{}</span>",
-            pango_escape(section.title)
-        )))
-        .chain(lines)
-        .collect()
-}
-
-fn format_credits_line(credits: &str) -> Option<String> {
-    if credits == "—" || credits.is_empty() {
-        return None;
-    }
-    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
-    Some(format!(
-        "  Credits  <span foreground=\"{dim}\">${}</span>",
-        pango_escape(credits)
-    ))
-}
-
-fn format_header(row: &ProviderRow) -> String {
-    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
-    let icon = icon_markup(&row.provider);
-    let name = pango_escape(&row.provider);
-    let plan = row.plan_label.as_deref().filter(|s| !s.is_empty());
-    let badge = match plan {
-        Some(p) => format!("  <span foreground=\"{dim}\">·  {}</span>", pango_escape(p)),
-        None => String::new(),
-    };
-    format!("<b>{icon}  {name}</b>{badge}")
-}
-
-fn format_provider_card(row: &ProviderRow) -> String {
-    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
-
-    let updated_line = row
-        .updated_iso
-        .as_deref()
-        .and_then(format_updated_relative)
-        .map(|rel| {
-            format!(
-                "  <span foreground=\"{dim}\">Updated {}</span>",
-                pango_escape(&rel)
-            )
-        });
-
-    // The tooltip is waybar's panel, so it draws the same sections in the same
-    // order as every other panel. The header, the credits and the input hints
-    // below are the only waybar-specific chrome left here.
-    let sections: Vec<String> = tokengauge_core::panel_spec(row)
-        .iter()
-        .flat_map(format_panel_section)
-        .collect();
-
-    let lines: Vec<String> = std::iter::once(format_header(row))
-        .chain(updated_line)
-        .chain(sections)
-        .chain(format_credits_line(&row.credits))
-        .collect();
-
-    format!("<tt>{}</tt>", lines.join("\n"))
-}
-
-fn format_error_card(err: &ProviderFetchError) -> String {
-    let (_dim, _separator, _green, _yellow, red, _neutral) = theme_palette();
-    let icon = icon_markup(&err.provider);
-    let name = pango_escape(&err.provider);
-    let msg = pango_escape(&err.message);
-    format!("<tt><b>{icon}  {name}</b>  <span foreground=\"{red}\">⚠ {msg}</span></tt>")
-}
-
-fn format_tooltip_with_errors(
-    rows: &[&ProviderRow],
-    errors: &[ProviderFetchError],
-    refreshing: bool,
-    left_verb: &str,
-) -> String {
-    let cards: Vec<String> = rows
-        .iter()
-        .map(|row| format_provider_card(row))
-        .chain(errors.iter().map(format_error_card))
-        .collect();
-    let cards_refs: Vec<&str> = cards.iter().map(String::as_str).collect();
-    format_tooltip_from_cards(&cards_refs, refreshing, left_verb)
-}
-
-fn format_tooltip_from_cards(cards: &[&str], refreshing: bool, left_verb: &str) -> String {
-    let (dim, separator, _green, yellow, _red, _neutral) = theme_palette();
-    let separator = format!(
-        "<tt><span foreground=\"{separator}\">────────────────────────────────────</span></tt>"
-    );
-    let body = cards.join(&format!("\n{separator}\n"));
-    let status_line = if refreshing {
-        format!("\n<tt><b><span foreground=\"{yellow}\">⟳ Refreshing...</span></b></tt>")
-    } else {
-        String::new()
-    };
-    let left_pair = ("left", left_verb);
-    let pairs: [(&str, &str); 5] = [
-        left_pair,
-        ("middle", "dashboard"),
-        ("right", "refresh"),
-        ("scroll", "rotate"),
-        ("back", "status"),
-    ];
-    let cell = |k: &str, v: &str| format!("{k:<6} {v:<10}");
-    let hint_lines: Vec<String> = pairs
-        .chunks(3)
-        .map(|chunk| {
-            let cells: Vec<String> = chunk.iter().map(|(k, v)| cell(k, v)).collect();
-            format!("  {}", cells.join("  ·  "))
-        })
-        .collect();
-    let hint = format!(
-        "\n\n<tt><span foreground=\"{dim}\">{}</span></tt>",
-        hint_lines.join("\n")
-    );
-    format!("{body}{status_line}{hint}")
-}
-
-/// Short verb shown in the tooltip's left-click hint. Both click actions land
-/// on the TUI now that the popover is gone, so there is nothing to branch on.
-fn left_click_label(_config: &TokenGaugeConfig) -> String {
-    "open TUI".to_string()
-}
-
-#[cfg(test)]
-fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
-    format_tooltip_with_errors(rows, &[], refreshing, "open")
-}
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -2564,265 +642,9 @@ fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
 mod tests {
     use super::*;
 
-    // ------------------------------------------------------------------------
-    // bar_blocks tests
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn bar_blocks_boundaries() {
-        assert_eq!(bar_blocks(0), "─────");
-        assert_eq!(bar_blocks(20), "━────");
-        assert_eq!(bar_blocks(40), "━━───");
-        assert_eq!(bar_blocks(60), "━━━──");
-        assert_eq!(bar_blocks(80), "━━━━─");
-        assert_eq!(bar_blocks(100), "━━━━━");
-    }
-
-    #[test]
-    fn bar_blocks_clamps_over_100() {
-        assert_eq!(bar_blocks(150), "━━━━━");
-    }
-
-    // ------------------------------------------------------------------------
-    // format_bar tests
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn format_bar_with_value() {
-        let result = format_bar("Claude", Some(42));
-        assert!(result.contains("Claude"));
-        assert!(result.contains("42%"));
-        assert!(result.contains("━━━──")); // 42% -> ceil(2.1) = 3 filled
-        assert!(result.contains("[<span"));
-        assert!(result.contains("</span>]"));
-        assert!(result.contains("\u{f0721}"));
-        assert!(result.contains("face=\"JetBrainsMono Nerd Font\""));
-        assert!(result.contains("foreground=\"#DE7356\""));
-        // percent + bar wrapped in status color span (42% -> green)
-        assert!(result.contains("foreground=\"#a6e3a1\""));
-    }
-
-    #[test]
-    fn format_bar_with_high_percent_uses_red() {
-        let result = format_bar("Claude", Some(85));
-        assert!(result.contains("foreground=\"#f38ba8\""));
-    }
-
-    #[test]
-    fn format_bar_none() {
-        let result = format_bar("Codex", None);
-        assert!(result.contains("Codex"));
-        assert!(result.contains("─────"));
-        assert!(result.contains("—"));
-        assert!(result.contains("\u{f0b2b}"));
-        assert!(result.contains("foreground=\"#74AA9C\""));
-        // dim color for missing data
-        assert!(result.contains("foreground=\"#6c7086\""));
-    }
-
-    #[test]
-    fn format_bar_escapes_label() {
-        let result = format_bar("ev<il>", Some(50));
-        assert!(result.contains("ev&lt;il&gt;"));
-        assert!(!result.contains(" ev<il> "));
-    }
-
-    // ------------------------------------------------------------------------
-    // tooltip_bar tests
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn tooltip_bar_lengths() {
-        assert_eq!(tooltip_bar(0).chars().count(), 10);
-        assert_eq!(tooltip_bar(100).chars().count(), 10);
-        assert_eq!(tooltip_bar(67).chars().count(), 10);
-        assert_eq!(tooltip_bar(0), "──────────");
-        assert_eq!(tooltip_bar(100), "━━━━━━━━━━");
-        assert_eq!(tooltip_bar(67), "━━━━━━────");
-    }
-
-    #[test]
-    fn tooltip_bar_clamps_over_100() {
-        assert_eq!(tooltip_bar(200).chars().count(), 10);
-        assert_eq!(tooltip_bar(200), "━━━━━━━━━━");
-    }
-
-    // color_hex_for_percent + format_tokens + provider_icon tested in core
-
-    // ------------------------------------------------------------------------
-    // pango_escape tests
-    // ------------------------------------------------------------------------
-
-    #[test]
-    fn pango_escape_specials() {
-        assert_eq!(pango_escape("a & b"), "a &amp; b");
-        assert_eq!(pango_escape("<tag>"), "&lt;tag&gt;");
-        assert_eq!(pango_escape("\"quote\""), "&quot;quote&quot;");
-        assert_eq!(pango_escape("it's"), "it&apos;s");
-        assert_eq!(pango_escape("plain text 123"), "plain text 123");
-    }
-
-    // ------------------------------------------------------------------------
-    // format_provider_card tests
-    // ------------------------------------------------------------------------
-
-    fn sample_row(provider: &str) -> ProviderRow {
-        ProviderRow {
-            provider: provider.to_string(),
-            session_used: Some(67),
-            session_window_minutes: Some(300),
-            session_reset: "in 2h 34m".to_string(),
-            session_pace: None,
-            weekly_used: Some(19),
-            weekly_window_minutes: Some(10080),
-            weekly_reset: "in 4d 11h".to_string(),
-            weekly_pace: None,
-            tertiary_used: None,
-            tertiary_reset: "—".to_string(),
-            credits: "—".to_string(),
-            source: "oauth".to_string(),
-            updated: "07:37".to_string(),
-            updated_iso: None,
-            plan_label: None,
-            extra_windows: Vec::new(),
-            cost: None,
-            stale: false,
-        }
-    }
-
-    #[test]
-    fn format_provider_card_full_data() {
-        let card = format_provider_card(&sample_row("Claude"));
-        assert!(card.starts_with("<tt><b>"));
-        assert!(card.contains("Claude</b>"));
-        assert!(card.ends_with("</tt>"));
-        assert!(card.contains("Session"));
-        assert!(card.contains("Weekly"));
-        assert!(card.contains("━━━━━━────"));
-        assert!(card.contains("━─────────"));
-        assert!(card.contains("<span foreground=\"#f9e2af\">67%</span>"));
-        assert!(card.contains("<span foreground=\"#a6e3a1\">19%</span>"));
-        assert!(card.contains("Resets in 2h 34m"));
-        assert!(card.contains("Resets in 4d 11h"));
-        assert!(card.contains("LIMITS"));
-    }
-
-    #[test]
-    fn format_provider_card_missing_session() {
-        // A window the provider does not report is dropped rather than drawn as
-        // a permanently empty meter - the same rule every other panel follows.
-        let mut row = sample_row("Codex");
-        row.session_used = None;
-        row.session_reset = "—".to_string();
-        let card = format_provider_card(&row);
-        assert!(card.contains("Codex</b>"));
-        assert!(!card.contains("Session"));
-        assert!(card.contains("━─────────"));
-        assert!(card.contains("Resets in 4d 11h"));
-    }
-
-    #[test]
-    fn format_provider_card_missing_reset_renders_not_started() {
-        let mut row = sample_row("Codex");
-        row.weekly_reset = "—".to_string();
-        let card = format_provider_card(&row);
-        assert!(card.contains("not started"));
-        assert!(!card.contains("Resets —"));
-    }
-
-    #[test]
-    fn format_provider_card_escapes_provider_name() {
-        let row = sample_row("ev<il>");
-        let card = format_provider_card(&row);
-        assert!(card.contains("ev&lt;il&gt;</b>"));
-        assert!(!card.contains("ev<il></b>"));
-    }
-
-    #[test]
-    fn format_provider_card_escapes_reset_string() {
-        let mut row = sample_row("Claude");
-        row.session_reset = "a & b".to_string();
-        let card = format_provider_card(&row);
-        assert!(card.contains("Resets a &amp; b"));
-    }
-
-    #[test]
-    fn format_provider_card_includes_icon() {
-        let card = format_provider_card(&sample_row("Claude"));
-        assert!(card.contains("\u{f0721}"));
-        assert!(card.contains("face=\"JetBrainsMono Nerd Font\""));
-        assert!(card.contains("foreground=\"#DE7356\""));
-        let codex_card = format_provider_card(&sample_row("Codex"));
-        assert!(codex_card.contains("\u{f0b2b}"));
-        let mut other = sample_row("Mystery");
-        other.provider = "Mystery".to_string();
-        let card = format_provider_card(&other);
-        assert!(card.contains("\u{f06a9}"));
-    }
-
-    #[test]
-    fn format_provider_card_omits_credits_when_dash() {
-        let card = format_provider_card(&sample_row("Claude"));
-        assert!(!card.contains("Credits"));
-    }
-
-    #[test]
-    fn format_provider_card_includes_credits_when_present() {
-        let mut row = sample_row("Kimi");
-        row.credits = "42.57".to_string();
-        let card = format_provider_card(&row);
-        assert!(card.contains("Credits"));
-        assert!(card.contains("$42.57"));
-    }
-
-    #[test]
-    fn format_tooltip_cards_joins_with_separator() {
-        let rows = [sample_row("Claude"), sample_row("Codex")];
-        let refs: Vec<&ProviderRow> = rows.iter().collect();
-        let tooltip = format_tooltip_cards(&refs, false);
-        assert!(tooltip.contains("</tt>\n<tt>"));
-        assert!(tooltip.contains("────────────────────────────────────"));
-    }
-
-    #[test]
-    fn format_tooltip_cards_single_card_no_separator() {
-        let row = sample_row("Claude");
-        let tooltip = format_tooltip_cards(&[&row], false);
-        assert!(!tooltip.contains("────────────────────────────────────"));
-    }
-
-    #[test]
-    fn format_tooltip_cards_refreshing_shows_indicator() {
-        let row = sample_row("Claude");
-        let tooltip = format_tooltip_cards(&[&row], true);
-        assert!(tooltip.contains("Refreshing"));
-        assert!(tooltip.contains("⟳"));
-    }
-
-    // ------------------------------------------------------------------------
-    // Socket protocol tests
-    //
-    // Each test binds its own UnixListener at a unique path under /tmp,
-    // spawns a one-shot server that drives `handle_client`, and exchanges
-    // one command/reply over a connected stream. Configs disable providers
-    // and ccusage so the Refresh path doesn't shell out to external bins.
-    // ------------------------------------------------------------------------
-
-    fn unique_test_dir(tag: &str) -> PathBuf {
-        let counter = std::sync::atomic::AtomicU64::new(0);
-        let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "tokengauge-test-{tag}-{}-{}-{}",
-            std::process::id(),
-            now_ms(),
-            n,
-        ));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        dir
-    }
-
     fn test_config(cache_file: PathBuf) -> TokenGaugeConfig {
         TokenGaugeConfig {
+            sync: Default::default(),
             refresh_secs: 600,
             timeout_secs: 10,
             stagger_ms: 0,
@@ -2839,217 +661,39 @@ mod tests {
         }
     }
 
-    fn test_state(text: &str) -> Arc<Mutex<DaemonState>> {
-        Arc::new(Mutex::new(DaemonState {
-            output: WaybarOutput {
-                text: text.into(),
-                tooltip: "TEST_TIP".into(),
-                class: "tokengauge-test".into(),
-            },
-            subscribers: Vec::new(),
-        }))
+    fn action_for(argv: &[&str]) -> Result<Action> {
+        let mut full = vec!["tokengauge"];
+        full.extend_from_slice(argv);
+        Action::from_args(&Args::parse_from(full))
     }
 
-    fn send_recv(sock_path: &Path, cmd: &SocketCommand) -> SocketReply {
-        let mut stream = UnixStream::connect(sock_path).expect("connect");
-        writeln!(stream, "{}", serde_json::to_string(cmd).unwrap()).unwrap();
-        stream.flush().unwrap();
-        let mut reader = BufReader::new(&stream);
-        let mut buf = String::new();
-        reader.read_line(&mut buf).unwrap();
-        serde_json::from_str(buf.trim()).expect("parse reply")
-    }
-
-    /// Bind a one-shot listener, spawn handle_client on accept, and
-    /// return both the socket path and the server's join handle.
-    fn spawn_one_shot_server(
-        cache_file: &Path,
-        state: Arc<Mutex<DaemonState>>,
-        config: TokenGaugeConfig,
-    ) -> (PathBuf, thread::JoinHandle<Result<()>>) {
-        let sock = socket_path(cache_file);
-        let _ = std::fs::remove_file(&sock);
-        let listener = UnixListener::bind(&sock).expect("bind listener");
-        let handle = thread::spawn(move || {
-            let (stream, _) = listener.accept()?;
-            handle_client(stream, state, config)
-        });
-        (sock, handle)
-    }
-
+    /// The precedence used to be the order of an if-chain nobody had written
+    /// down, and a flag that lost simply vanished.
     #[test]
-    fn socket_snapshot_returns_current_output() {
-        let dir = unique_test_dir("snapshot");
-        let cache = dir.join("cache.json");
-        let state = test_state("SNAPSHOT_TEXT");
-        let config = test_config(cache.clone());
-        let (sock, server) = spawn_one_shot_server(&cache, state, config);
-
-        let reply = send_recv(&sock, &SocketCommand::Snapshot);
-        match reply {
-            SocketReply::Snapshot { output } => {
-                assert_eq!(output.text, "SNAPSHOT_TEXT");
-                assert_eq!(output.tooltip, "TEST_TIP");
-                assert_eq!(output.class, "tokengauge-test");
-            }
-            other => panic!("unexpected reply: {other:?}"),
-        }
-        server.join().unwrap().unwrap();
-        let _ = std::fs::remove_file(&sock);
+    fn two_actions_at_once_are_refused_rather_than_one_silently_dropped() {
+        let error = match action_for(&["--json", "--set-provider", "claude=true"]) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("two actions were accepted"),
+        };
+        assert!(error.contains("--json"), "{error}");
+        assert!(error.contains("--set-provider"), "{error}");
     }
 
+    /// `--json` is `--sync-status`'s output format, not a second action - the
+    /// pairing is what `--sync-status --json` means and is documented as such.
     #[test]
-    fn socket_subscribe_returns_update_then_receives_broadcasts() {
-        let dir = unique_test_dir("subscribe");
-        let cache = dir.join("cache.json");
-        let state = test_state("INITIAL");
-        let config = test_config(cache.clone());
-        let (sock, server) = spawn_one_shot_server(&cache, Arc::clone(&state), config);
-
-        let mut stream = UnixStream::connect(&sock).unwrap();
-        writeln!(
-            stream,
-            "{}",
-            serde_json::to_string(&SocketCommand::Subscribe).unwrap()
-        )
-        .unwrap();
-        stream.flush().unwrap();
-
-        let read_stream = stream.try_clone().unwrap();
-        let mut reader = BufReader::new(read_stream);
-
-        let mut buf = String::new();
-        reader.read_line(&mut buf).unwrap();
-        let first: SocketReply = serde_json::from_str(buf.trim()).unwrap();
-        assert!(
-            matches!(&first, SocketReply::Update { output } if output.text == "INITIAL"),
-            "expected initial Update, got {first:?}"
-        );
-
-        // handle_client returns once subscriber is registered; wait for it.
-        server.join().unwrap().unwrap();
-
-        // Mutate state + broadcast. Subscriber should receive an Update.
-        {
-            let mut s = state.lock().unwrap();
-            s.output.text = "BROADCAST".into();
-            s.broadcast();
-        }
-
-        let mut buf2 = String::new();
-        reader.read_line(&mut buf2).unwrap();
-        let second: SocketReply = serde_json::from_str(buf2.trim()).unwrap();
-        assert!(
-            matches!(&second, SocketReply::Update { output } if output.text == "BROADCAST"),
-            "expected broadcast Update, got {second:?}"
-        );
-
-        let _ = std::fs::remove_file(&sock);
+    fn json_is_a_modifier_on_sync_status_and_not_a_rival_action() {
+        assert!(matches!(
+            action_for(&["--sync-status", "--json"]).expect("one action"),
+            Action::Sync(_)
+        ));
     }
 
+    /// No flags is what waybar itself runs, on a timer.
     #[test]
-    fn socket_refresh_acks_and_writes_sentinel() {
-        let dir = unique_test_dir("refresh");
-        let cache = dir.join("cache.json");
-        let state = test_state("REFRESH_TEXT");
-        let config = test_config(cache.clone());
-        let sentinel = refresh_sentinel_path(&config.cache_file);
-        let _ = std::fs::remove_file(&sentinel);
-        let (sock, server) = spawn_one_shot_server(&cache, state, config);
-
-        let reply = send_recv(&sock, &SocketCommand::Refresh);
-        assert!(
-            matches!(reply, SocketReply::Ack),
-            "expected ack, got {reply:?}"
-        );
-        assert!(sentinel.exists(), "Refresh should create the sentinel file");
-
-        server.join().unwrap().unwrap();
-        // Background fetch thread may still be running; cleanup is best-effort.
-        // Wait briefly so it clears its own sentinel/cache writes.
-        thread::sleep(Duration::from_millis(200));
-        let _ = std::fs::remove_file(&sentinel);
-        let _ = std::fs::remove_file(&sock);
+    fn no_flags_draws_the_bar() {
+        assert!(matches!(action_for(&[]).expect("default"), Action::Bar));
     }
-
-    #[test]
-    fn socket_rotate_acks_when_no_cache() {
-        let dir = unique_test_dir("rotate");
-        let cache = dir.join("cache.json");
-        let state = test_state("ROTATE_TEXT");
-        let config = test_config(cache.clone());
-        let (sock, server) = spawn_one_shot_server(&cache, state, config);
-
-        let reply = send_recv(
-            &sock,
-            &SocketCommand::Rotate {
-                direction: "next".into(),
-            },
-        );
-        assert!(
-            matches!(reply, SocketReply::Ack),
-            "expected ack, got {reply:?}"
-        );
-
-        server.join().unwrap().unwrap();
-        let _ = std::fs::remove_file(&sock);
-    }
-
-    #[test]
-    fn socket_open_acks_when_no_cache() {
-        let dir = unique_test_dir("open");
-        let cache = dir.join("cache.json");
-        let state = test_state("OPEN_TEXT");
-        let config = test_config(cache.clone());
-        let (sock, server) = spawn_one_shot_server(&cache, state, config);
-
-        let reply = send_recv(
-            &sock,
-            &SocketCommand::Open {
-                target: "dashboard".into(),
-            },
-        );
-        assert!(
-            matches!(reply, SocketReply::Ack),
-            "expected ack, got {reply:?}"
-        );
-
-        server.join().unwrap().unwrap();
-        let _ = std::fs::remove_file(&sock);
-    }
-
-    #[test]
-    fn socket_snapshot_renders_refreshing_when_sentinel_present() {
-        let dir = unique_test_dir("snapshot-refreshing");
-        let cache = dir.join("cache.json");
-        let state = test_state("BASELINE_TEXT");
-        let config = test_config(cache.clone());
-
-        // Drop a sentinel before the client connects so current_snapshot()
-        // picks the refreshing render path.
-        let sentinel = refresh_sentinel_path(&config.cache_file);
-        std::fs::write(&sentinel, now_ms().to_string()).unwrap();
-
-        let (sock, server) = spawn_one_shot_server(&cache, state, config);
-        let reply = send_recv(&sock, &SocketCommand::Snapshot);
-        match reply {
-            SocketReply::Snapshot { output } => {
-                assert!(
-                    output.class.contains("tokengauge-refreshing"),
-                    "expected refreshing class, got class={}",
-                    output.class
-                );
-            }
-            other => panic!("unexpected reply: {other:?}"),
-        }
-        server.join().unwrap().unwrap();
-        let _ = std::fs::remove_file(&sentinel);
-        let _ = std::fs::remove_file(&sock);
-    }
-
-    // ------------------------------------------------------------------------
-    // Click-action dispatch
-    // ------------------------------------------------------------------------
 
     #[test]
     fn resolve_click_command_popover_falls_back_to_tui() {
@@ -3068,17 +712,13 @@ mod tests {
         assert_eq!(resolve_click_command(&cfg), "alacritty -e tokengauge-tui");
     }
 
+    /// A configured command is used verbatim. Auto-detect is deliberately not
+    /// asserted on: it scans PATH, so what it picks is the runner's business,
+    /// and the test this replaces called it and asserted nothing at all.
     #[test]
-    fn resolve_click_command_tui_default_autodetect_nonempty() {
-        // Auto-detect picks something based on PATH; on the test runner we
-        // expect at least one of sh/xterm to be findable, but the exact
-        // value depends on the environment - assert only non-empty.
-        let cfg = test_config(PathBuf::from("/tmp/x"));
-        // Force PATH to contain at least /usr/bin so the candidate scan
-        // succeeds deterministically on the CI/dev box.
-        let _path = std::env::var_os("PATH");
-        // We don't manipulate env mid-test; rely on the runner having a
-        // sensible PATH. Empty is acceptable in a fully stripped env.
-        let _ = resolve_click_command(&cfg);
+    fn a_configured_click_command_is_used_as_written() {
+        let mut cfg = test_config(PathBuf::from("/tmp/x"));
+        cfg.waybar.tui_command = "kitty -e tokengauge-tui".into();
+        assert_eq!(resolve_click_command(&cfg), "kitty -e tokengauge-tui");
     }
 }

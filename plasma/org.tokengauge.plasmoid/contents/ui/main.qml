@@ -9,20 +9,34 @@ PlasmoidItem {
     property var snapshot: ({ rows: [], errors: [], enabled: [], primary: null, window: "daily", theme: {} })
     property var rows: snapshot.rows || []
     property string lastError: ""
-    property int selectedIndex: 0
-    // Once the user picks a tab / scrolls, stop snapping the selection back to
-    // the pinned provider on refresh.
-    property bool userSelected: false
 
-    // Row index of the pinned primary provider, or 0 (highest / first).
-    function primaryIndex(snap) {
-        var rows = snap.rows || []
-        if (snap.primary) {
-            for (var i = 0; i < rows.length; i++)
-                if ((rows[i].provider || "").toLowerCase() === snap.primary)
-                    return i
-        }
+    // The selection follows the provider id, not the slot it sits in: a row
+    // that appears or drops out on a refresh would otherwise slide a different
+    // provider's numbers under whatever the user was reading. Empty means the
+    // user has not picked one, so the pin still leads.
+    property string selectedProviderId: ""
+
+    readonly property int selectedIndex: {
+        for (var i = 0; i < rows.length; i++)
+            if (String(rows[i].provider) === selectedProviderId)
+                return i
+        // Nothing chosen, or the chosen provider has gone: follow the pin. The
+        // compact view reports its percentage, and opening the panel on a
+        // different provider reads as a bug.
+        var pinned = String(snapshot.primary || "").toLowerCase()
+        if (pinned !== "")
+            for (var j = 0; j < rows.length; j++)
+                if (String(rows[j].provider).toLowerCase() === pinned)
+                    return j
         return 0
+    }
+
+    // Step the selection by one row, wrapping. Used by the compact view's wheel.
+    function stepSelection(delta) {
+        var n = rows.length
+        if (n === 0) return
+        var next = ((selectedIndex + delta) % n + n) % n
+        root.selectedProviderId = String(rows[next].provider)
     }
 
     readonly property string waybarBin: Plasmoid.configuration.waybarBinary || "tokengauge-waybar"
@@ -39,9 +53,7 @@ PlasmoidItem {
     property string updateSource: ""
 
     // Row shown in the panel / hovered.
-    readonly property var selRow: rows.length > 0
-        ? rows[Math.min(selectedIndex, rows.length - 1)]
-        : null
+    readonly property var selRow: rows.length > 0 ? rows[selectedIndex] : null
 
     Plasmoid.icon: "utilities-system-monitor"
     toolTipMainText: selRow ? (selRow.label || selRow.provider) : "TokenGauge"
@@ -64,8 +76,15 @@ PlasmoidItem {
                            + root.toneColor(rows[j].tone) + "\"><b>"
                            + root.escapeHtml(rows[j].value) + "</b></font>")
         }
-        if (r.cost)
-            lines.push(i18n("Today") + ":&nbsp;<b>" + root.fmtUsd(r.cost.today_usd) + "</b>")
+        // Today's spend comes off the same section list, not off raw
+        // today_usd: the local formatter this replaces disagreed with core's
+        // money() above a hundred dollars ($312.21 against $312).
+        for (var k = 0; k < sections.length; k++) {
+            if (sections[k].id !== "cost" || sections[k].rows.length === 0) continue
+            var today = sections[k].rows[0]
+            lines.push(root.escapeHtml(today.label) + ":&nbsp;<b>"
+                       + root.escapeHtml(today.value) + "</b>")
+        }
         return lines.join("<br>")
     }
 
@@ -102,11 +121,6 @@ PlasmoidItem {
                 try {
                     var parsed = JSON.parse(data.stdout)
                     root.snapshot = parsed
-                    var n = (parsed.rows || []).length
-                    if (!root.userSelected)
-                        root.selectedIndex = root.primaryIndex(parsed)
-                    else if (root.selectedIndex >= n)
-                        root.selectedIndex = 0
                     root.lastError = ""
                 } catch (e) {
                     root.lastError = "parse error: " + e
@@ -169,6 +183,16 @@ PlasmoidItem {
         exec.connectSource(updateSource)
     }
 
+    // Opens the TUI's sync screen in a terminal. `--sync-setup` returns as soon
+    // as it has spawned one, so the `--json` chained behind it is not waiting on
+    // the user. `&&` and a kept stderr, matching applyUpdate: with `;` the
+    // compound command exits 0 whatever setup did, so "no terminal found" would
+    // never reach root.lastError.
+    function openSyncSetup() {
+        exec.connectSource(cmd(root.waybarBin + " --sync-setup >/dev/null && "
+                               + root.waybarBin + " --json"))
+    }
+
     function shellQuote(s) {
         return "'" + String(s).replace(/'/g, "'\\''") + "'"
     }
@@ -204,8 +228,7 @@ PlasmoidItem {
             .replace(/>/g, "&gt;")
     }
 
-    // A tone name from the core, mapped onto the snapshot theme. The compact
-    // representation still resolves a bare percentage, so both live here.
+    // A tone name from the core, mapped onto the snapshot theme.
     function toneColor(tone) {
         var t = root.snapshot.theme || {}
         switch (String(tone)) {
@@ -216,25 +239,11 @@ PlasmoidItem {
         }
     }
 
-    function tierColor(pct) {
-        var t = root.snapshot.theme || {}
-        if (pct === null || pct === undefined)
-            return t.dim || "#6c7086"
-        if (pct >= 80)
-            return t.red || "#f38ba8"
-        if (pct >= 50)
-            return t.yellow || "#f9e2af"
-        return t.green || "#a6e3a1"
-    }
-
-    function windowPercent(row) {
-        if (!row) return null
-        return root.snapshot.window === "weekly" ? row.weekly_used : row.session_used
-    }
-
-    function fmtUsd(v) {
-        if (v === null || v === undefined) return "—"
-        return "$" + Number(v).toFixed(2)
+    // The headline number and its tier, resolved by the core under the
+    // configured window. This used to pick the window here and carry its own
+    // copy of the 50/80 boundaries to tint it with.
+    function bar(row) {
+        return (row && row.bar) ? row.bar : { percent: null, tone: "dim" }
     }
 
     compactRepresentation: CompactRep {}

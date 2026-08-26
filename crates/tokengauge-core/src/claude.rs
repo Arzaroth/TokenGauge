@@ -15,6 +15,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+use crate::provider::check_status;
 use crate::{
     ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8, slug,
 };
@@ -392,16 +393,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         .send()
         .context("Claude usage request failed")?;
 
-    let status = resp.status();
-    if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Err(anyhow!("Claude unauthorized - run `claude` to log in"));
-    }
-    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        return Err(anyhow!("Claude rate-limited - try again shortly"));
-    }
-    if !status.is_success() {
-        return Err(anyhow!("Claude usage HTTP {}", status.as_u16()));
-    }
+    check_status(resp.status(), "Claude", "run `claude` to log in")?;
 
     let body: UsageResponse = resp.json().context("Claude usage JSON was invalid")?;
     let plan = plan_label(

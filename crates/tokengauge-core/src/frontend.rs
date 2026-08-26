@@ -216,11 +216,22 @@ impl Frontend {
                 .with_context(|| format!("cannot stage {} into {}", self.label, staged.display()));
         }
 
-        let _ = std::fs::remove_dir_all(dest);
+        // Move the old install aside rather than deleting it, so a rename that
+        // fails leaves something on disk. Deleting first and then unstaging on
+        // failure - which is what this did - left zero copies of a frontend the
+        // user had working a moment earlier.
+        let retired = dest.with_file_name(format!(".{name}.tg-old"));
+        let _ = std::fs::remove_dir_all(&retired);
+        let had_old = dest.exists() && std::fs::rename(dest, &retired).is_ok();
+
         if let Err(e) = std::fs::rename(&staged, dest) {
+            if had_old {
+                let _ = std::fs::rename(&retired, dest);
+            }
             let _ = std::fs::remove_dir_all(&staged);
             return Err(e).with_context(|| format!("cannot move {} into place", self.label));
         }
+        let _ = std::fs::remove_dir_all(&retired);
         Ok(dest.to_path_buf())
     }
 
@@ -278,6 +289,51 @@ mod tests {
         for f in FRONTENDS {
             assert!(f.dest_dir().is_some(), "{} has no destination", f.id);
         }
+    }
+
+    /// The old install must survive a failed replacement. This deleted the
+    /// destination first and unstaged the new copy on error, so a rename that
+    /// failed left the user with neither.
+    #[test]
+    fn a_failed_replacement_leaves_the_old_install_where_it_was() {
+        let tmp = std::env::temp_dir().join(format!(
+            "tg-frontend-rollback-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let plasma = find("plasma").unwrap();
+
+        let src = tmp.join(ARCHIVE_ROOT).join(plasma.payload);
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("new.txt"), "new").unwrap();
+
+        let dest = tmp.join("installed").join("org.tokengauge.plasmoid");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("old.txt"), "old").unwrap();
+
+        // A healthy run replaces it, and leaves neither staging directory.
+        plasma.install_into(&tmp, &dest).expect("install");
+        assert!(dest.join("new.txt").exists(), "the new copy is in place");
+        assert!(!dest.join("old.txt").exists(), "replaced, not merged");
+        let leftovers: Vec<_> = std::fs::read_dir(dest.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with('.'))
+            .collect();
+        assert!(leftovers.is_empty(), "staging left behind: {leftovers:?}");
+
+        // Now make the rename fail: a file sitting where the staging directory
+        // wants to go stops copy_dir before anything is moved aside.
+        std::fs::write(dest.with_file_name(".org.tokengauge.plasmoid.tg-new"), "x").unwrap();
+        assert!(plasma.install_into(&tmp, &dest).is_err());
+        assert!(
+            dest.join("new.txt").exists(),
+            "the working install has to still be there after a failure"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

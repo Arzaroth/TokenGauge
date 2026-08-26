@@ -9,11 +9,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use tokengauge_core::{TokenGaugeConfig, read_cache_full};
 
-use crate::{Args, DoctorCheck};
-
-/// A label no real check uses, so `handle_doctor` knows where to print the
-/// heading without this module reaching into its closures.
-pub const SECTION_MARKER: &str = "\u{0}fleet-sync-section";
+use crate::{Args, DoctorCheck, DoctorLine};
 
 pub enum SyncCommand {
     Init { force: bool },
@@ -169,17 +165,14 @@ fn status(config: &TokenGaugeConfig, as_json: bool) -> Result<()> {
     Ok(())
 }
 
-/// The doctor's fleet section, or nothing when sync is off.
-pub fn doctor_checks(cfg: &TokenGaugeConfig) -> Vec<DoctorCheck> {
+/// The doctor's fleet section, or nothing when sync is off. Carries its own
+/// heading, which is why the report is a list of lines rather than of checks.
+pub fn doctor_checks(cfg: &TokenGaugeConfig) -> Vec<DoctorLine> {
     if !cfg.sync.enabled {
         return Vec::new();
     }
-    let mut checks = vec![DoctorCheck {
-        label: SECTION_MARKER.to_string(),
-        ok: true,
-        detail: String::new(),
-    }];
-    let mut record = |check: DoctorCheck| checks.push(check);
+    let mut checks = vec![DoctorLine::Heading("Fleet sync")];
+    let mut record = |check: DoctorCheck| checks.push(DoctorLine::Check(check));
     let status = read_cache_full(&cfg.cache_file)
         .ok()
         .and_then(|cached| cached.sync().cloned());

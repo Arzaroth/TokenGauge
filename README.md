@@ -180,8 +180,9 @@ paths, project names or credentials.
 
 Each object is sealed with XChaCha20-Poly1305 under the fleet key and named with
 a keyed digest, so whoever holds the folder or bucket cannot read your usage or
-even count your machines. What that does **not** hide is *when* you write, so
-your working hours are still visible to them. And a symmetric key means there is
+tell which object belongs to which machine. Two things it does **not** hide:
+there is one object per device, so they can count your machines, and write
+timing is visible, so your working hours are too. And a symmetric key means there is
 no revocation: a lost machine can read the fleet until you re-key every other
 one with `--sync-init --sync-force` and `--sync-join`.
 

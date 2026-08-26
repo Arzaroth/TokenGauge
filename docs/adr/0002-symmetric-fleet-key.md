@@ -15,9 +15,10 @@ implying that "encrypted" means "revocable", and `--sync-rotate` is deliberately
 not built in v1: the manual path (`--sync-init --sync-force`, `--sync-join` on each
 machine, delete the old objects) is the honest shape of the operation.
 
-Object names are `HMAC(sync_key, device_id)` so the storage holder cannot count
-the fleet or link an object to a machine. Write timing still leaks working
-hours, and no filename scheme changes that.
+Object names are `HMAC(sync_key, device_id)` so the storage holder cannot link
+an object to a machine. The fleet's *size* is not hidden - one object per device
+means they are countable however they are named - and write timing still leaks
+working hours.
 
 Possession of the key is the only authentication. A device cannot prove which
 machine it is beyond holding the key, which is the right level for one person's

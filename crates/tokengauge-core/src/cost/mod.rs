@@ -198,11 +198,7 @@ impl NativeCostReport {
 /// The window one read has to cover: month-to-date and the rolling week, which
 /// reaches back past the 1st for the first six days of a month.
 fn window_start(today: NaiveDate) -> NaiveDate {
-    let month_start = today
-        .format("%Y-%m-01")
-        .to_string()
-        .parse::<NaiveDate>()
-        .unwrap_or(today);
+    let month_start = crate::month_start(today);
     let week_start = today
         .checked_sub_days(Days::new(WEEKLY_HISTORY_DAYS as u64 - 1))
         .unwrap_or(today);
@@ -330,11 +326,7 @@ pub fn build_report(
     }
 
     let periods = recent_periods(today, WEEKLY_HISTORY_DAYS);
-    let month_start = today
-        .format("%Y-%m-01")
-        .to_string()
-        .parse::<NaiveDate>()
-        .unwrap_or(today);
+    let month_start = crate::month_start(today);
 
     let mut costs = HashMap::new();
     for (provider, days) in buckets {

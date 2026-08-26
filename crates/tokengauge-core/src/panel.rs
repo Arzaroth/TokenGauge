@@ -233,7 +233,7 @@ pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
 /// mixed per-provider setup readable without inventing a marker for it.
 fn device_rows(cost: &CostInfo) -> Vec<PanelRow> {
     let max = cost.by_device.first().map(|d| d.tokens).unwrap_or(0);
-    let now_ms = crate::now_ms() as i64;
+    let now_ms = crate::now_ms();
     cost.by_device
         .iter()
         .map(|device| {
@@ -688,7 +688,7 @@ mod tests {
                     label: "desktop".into(),
                     tokens: 900_000_000,
                     usd: 700.0,
-                    updated_at_ms: crate::now_ms() as i64,
+                    updated_at_ms: crate::now_ms(),
                     partial: false,
                     is_local: true,
                 },
@@ -697,7 +697,7 @@ mod tests {
                     label: "laptop".into(),
                     tokens: 500_000_000,
                     usd: 350.91,
-                    updated_at_ms: crate::now_ms() as i64 - 7_200_000,
+                    updated_at_ms: crate::now_ms() - 7_200_000,
                     partial: true,
                     is_local: false,
                 },

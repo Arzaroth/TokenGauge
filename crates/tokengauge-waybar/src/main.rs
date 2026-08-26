@@ -14,6 +14,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::Result;
 use clap::Parser;
+use tokengauge_core::now_ms;
 use tokengauge_core::update;
 use tokengauge_core::{
     TokenGaugeConfig, WaybarState, cache_is_stale, config_set_oauth_provider, config_set_primary,
@@ -409,14 +410,6 @@ fn handle_set_primary(config: &TokenGaugeConfig, config_path: &Path, name: &str)
     tokengauge_core::bump_revision(&config.cache_file);
     signal_daemon_reload();
     Ok(())
-}
-
-fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 /// `--check-update`: live GitHub check, cache result, print JSON status.

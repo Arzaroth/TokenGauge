@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Datelike, Days, Local, NaiveDate, Utc};
+use chrono::{DateTime, Days, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -130,6 +130,7 @@ pub fn provider_label(name: &str) -> &str {
 mod claude;
 mod codex;
 pub mod cost;
+pub mod fmt;
 mod glm;
 mod grok;
 mod kimi;
@@ -139,6 +140,11 @@ pub mod panel;
 mod provider;
 pub mod sync;
 
+pub use fmt::{
+    format_tokens, format_updated, format_updated_relative, month_start, now_ms, sparkline,
+};
+pub(crate) use fmt::{pct_u8, slug};
+
 pub use cost::{CostSource, NativeCostReport};
 pub use pace::{PaceStage, UsagePace};
 pub use panel::{PanelRow, Section, SectionKind, Tone, panel_spec};
@@ -147,30 +153,6 @@ pub use sync::config::{
     config_set_sync_dir, config_set_sync_enabled, config_set_sync_label, config_set_sync_provider,
     config_set_sync_s3, config_set_sync_transport,
 };
-
-/// Round and clamp a float percentage into the `0..=100` byte range the render
-/// layer expects. Mirrors the old `de_opt_percent` serde hook, now called from
-/// the native fetchers instead of at deserialize time.
-pub(crate) fn pct_u8(v: f64) -> u8 {
-    v.round().clamp(0.0, 100.0) as u8
-}
-
-/// Lowercase, collapse each run of non-alphanumeric characters to a single `-`,
-/// and trim leading/trailing `-`. Used for stable extra-window ids.
-pub(crate) fn slug(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut prev_dash = false;
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.extend(c.to_lowercase());
-            prev_dash = false;
-        } else if !prev_dash {
-            out.push('-');
-            prev_dash = true;
-        }
-    }
-    out.trim_matches('-').to_string()
-}
 
 /// A blocking HTTP client with the per-request timeout wired to the config's
 /// `timeout_secs` (the subprocess-kill timeout is gone with codexbar).
@@ -1328,55 +1310,11 @@ fn format_reset_time(resets_at: Option<&str>, description: Option<String>) -> St
         let duration = reset_utc.signed_duration_since(now);
 
         if duration.num_seconds() > 0 {
-            let total_minutes = duration.num_minutes();
-            let days = total_minutes / (60 * 24);
-            let hours = (total_minutes / 60) % 24;
-            let mins = total_minutes % 60;
-
-            return if days > 0 {
-                format!("in {days}d {hours}h {mins}m")
-            } else if hours > 0 {
-                format!("in {hours}h {mins}m")
-            } else {
-                format!("in {mins}m")
-            };
+            return format!("in {}", fmt::format_duration(duration.num_minutes(), 3));
         }
     }
     // Fall back to description if we can't compute relative time
     description.unwrap_or_else(|| "—".to_string())
-}
-
-pub fn format_updated(value: Option<String>) -> String {
-    let Some(value) = value else {
-        return "—".to_string();
-    };
-    if let Ok(timestamp) = DateTime::parse_from_rfc3339(&value) {
-        let local = timestamp.with_timezone(&Local);
-        return local.format("%H:%M").to_string();
-    }
-    if let Some((_, time_part)) = value.split_once('T') {
-        let time = time_part.trim_end_matches('Z');
-        let short = time.get(0..5).unwrap_or(time);
-        return short.to_string();
-    }
-    value
-}
-
-/// Format an ISO8601 timestamp as a relative "Xm ago" string.
-/// Returns None if parsing fails.
-pub fn format_updated_relative(iso: &str) -> Option<String> {
-    let ts = DateTime::parse_from_rfc3339(iso).ok()?;
-    let delta = Utc::now().signed_duration_since(ts.with_timezone(&Utc));
-    let secs = delta.num_seconds().max(0);
-    Some(if secs < 60 {
-        "just now".to_string()
-    } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86400 {
-        format!("{}h ago", secs / 3600)
-    } else {
-        format!("{}d ago", secs / 86400)
-    })
 }
 
 fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
@@ -1516,7 +1454,7 @@ pub fn write_cache_full(
         meta: Some(CacheMeta {
             schema_version: CACHE_SCHEMA_VERSION,
             device: device_identity(path),
-            updated_at_ms: now_ms() as i64,
+            updated_at_ms: now_ms(),
             providers: providers
                 .enabled_providers()
                 .into_iter()
@@ -1750,13 +1688,6 @@ const REFRESH_SENTINEL_TTL: Duration = Duration::from_secs(30);
 /// worst case still counts as in-flight.
 const REFRESH_SENTINEL_MARGIN_MS: u64 = 10_000;
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 /// Wall-clock budget a manual refresh may legitimately take under the current
 /// config: per-provider timeout (the slower of the fetch and ccusage limits)
 /// plus the worst-case stagger delay, plus head-room. The sentinel stores
@@ -1770,8 +1701,8 @@ pub fn refresh_budget_ms(config: &TokenGaugeConfig) -> u64 {
 }
 
 /// Absolute deadline (epoch ms) to stamp into a fresh refresh sentinel.
-pub fn refresh_sentinel_deadline_ms(config: &TokenGaugeConfig) -> u64 {
-    now_ms().saturating_add(refresh_budget_ms(config))
+pub fn refresh_sentinel_deadline_ms(config: &TokenGaugeConfig) -> i64 {
+    now_ms().saturating_add(refresh_budget_ms(config) as i64)
 }
 
 /// True while a manual refresh is in flight. The sentinel holds an absolute
@@ -1783,7 +1714,7 @@ pub fn refresh_in_progress(sentinel: &Path) -> bool {
     let Ok(contents) = fs::read_to_string(sentinel) else {
         return false;
     };
-    if let Ok(deadline) = contents.trim().parse::<u64>()
+    if let Ok(deadline) = contents.trim().parse::<i64>()
         && deadline > now_ms()
     {
         return true;
@@ -2013,39 +1944,6 @@ pub fn provider_urls(provider: &str) -> ProviderUrls {
             dashboard: None,
             status: None,
         },
-    }
-}
-
-/// Render a 1-row sparkline from `values`, using the standard 8 block chars
-/// scaled relative to the max value. Empty input or all-zero input returns
-/// the lowest-block character repeated.
-pub fn sparkline(values: &[f64]) -> String {
-    if values.is_empty() {
-        return String::new();
-    }
-    let chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    let max = values.iter().cloned().fold(0.0_f64, f64::max);
-    if max <= 0.0 {
-        return chars[0].to_string().repeat(values.len());
-    }
-    values
-        .iter()
-        .map(|v| {
-            let idx = ((v.max(0.0) / max) * 7.0).round() as usize;
-            chars[idx.min(7)]
-        })
-        .collect()
-}
-
-pub fn format_tokens(t: u64) -> String {
-    if t >= 1_000_000_000 {
-        format!("{:.1}B", t as f64 / 1e9)
-    } else if t >= 1_000_000 {
-        format!("{:.1}M", t as f64 / 1e6)
-    } else if t >= 1_000 {
-        format!("{:.1}K", t as f64 / 1e3)
-    } else {
-        format!("{t}")
     }
 }
 
@@ -2320,7 +2218,7 @@ fn native_costs(
         &prices,
         today,
         &sync::local_device_id(config),
-        sync::note(&outcome.status, config.refresh_secs, now_ms() as i64),
+        sync::note(&outcome.status, config.refresh_secs, now_ms()),
     );
     report.sync = outcome.status;
     report
@@ -2340,7 +2238,7 @@ pub fn attach_fleet(
     local_id: &str,
     note: Option<panel::SyncNote>,
 ) {
-    let month_start = today.with_day(1).unwrap_or(today);
+    let month_start = fmt::month_start(today);
     let offset = *Local::now().offset();
     for (provider, cost) in report.costs.iter_mut() {
         cost.by_device =
@@ -2987,11 +2885,7 @@ pub fn fetch_ccusage_costs(timeout: Duration) -> HashMap<String, CostInfo> {
     // One deadline for every call this makes, retries included.
     let deadline = Instant::now() + timeout;
     let today_date = Local::now().date_naive();
-    let month_start_date = today_date
-        .format("%Y-%m-01")
-        .to_string()
-        .parse::<NaiveDate>()
-        .unwrap_or(today_date);
+    let month_start_date = fmt::month_start(today_date);
     // The rolling 7-day window reaches back past the 1st for the first six
     // days of a month, so the query has to start at whichever of the two is
     // earlier. Asking only from the 1st would zero-fill the days before it -

@@ -415,6 +415,17 @@ fn json_snapshot(
                 // `--open`, which resolves the provider from the config rather
                 // than from the caller. Carrying the URLs on the row lets them
                 // open exactly the provider they are displaying.
+                // The headline number and its tier, resolved here. Three
+                // frontends each picked the window themselves and each carried
+                // their own copy of the 50/80 boundaries to tint it with.
+                let percent = window_percent(r, &config.waybar.window);
+                map.insert(
+                    "bar".into(),
+                    serde_json::json!({
+                        "percent": percent,
+                        "tone": percent.map(Tone::for_percent).unwrap_or(Tone::Dim),
+                    }),
+                );
                 let urls = tokengauge_core::provider_urls(&r.provider);
                 map.insert(
                     "dashboard_url".into(),
@@ -1573,6 +1584,16 @@ impl DaemonState {
     }
 }
 
+/// The percentage the bar shows for a row, under the configured window. Every
+/// frontend resolved this itself; it is exported on the row now so they cannot
+/// disagree about which window the headline number came from.
+fn window_percent(row: &ProviderRow, window: &WaybarWindow) -> Option<u8> {
+    match window {
+        WaybarWindow::Daily => row.session_used,
+        WaybarWindow::Weekly => row.weekly_used,
+    }
+}
+
 /// Pick the strongest CSS class tier based on current state.
 /// Order of precedence (strongest first): refreshing > error > partial-error >
 /// crit (>=80%) > warn (>=50%) > base. `tokengauge-stale` is additive: it is
@@ -1601,15 +1622,13 @@ fn compute_class(
     }
     let max_pct = rows
         .iter()
-        .filter_map(|r| match window {
-            WaybarWindow::Daily => r.session_used,
-            WaybarWindow::Weekly => r.weekly_used,
-        })
+        .filter_map(|r| window_percent(r, &window))
         .max()
         .unwrap_or(0);
-    let tier = match max_pct {
-        80..=u8::MAX => "tokengauge tokengauge-crit",
-        50..=79 => "tokengauge tokengauge-warn",
+    // The CSS tier names are this frontend's; where the tiers fall is not.
+    let tier = match Tone::for_percent(max_pct) {
+        Tone::Critical => "tokengauge tokengauge-crit",
+        Tone::Warn => "tokengauge tokengauge-warn",
         _ => "tokengauge",
     };
     format!("{tier}{stale_suffix}")
@@ -2711,6 +2730,7 @@ mod tests {
             "session_pace",
             "weekly_pace",
             "panel",
+            "bar",
             "dashboard_url",
             "status_url",
         ] {

@@ -221,8 +221,7 @@ PlasmoidItem {
             .replace(/>/g, "&gt;")
     }
 
-    // A tone name from the core, mapped onto the snapshot theme. The compact
-    // representation still resolves a bare percentage, so both live here.
+    // A tone name from the core, mapped onto the snapshot theme.
     function toneColor(tone) {
         var t = root.snapshot.theme || {}
         switch (String(tone)) {
@@ -233,20 +232,11 @@ PlasmoidItem {
         }
     }
 
-    function tierColor(pct) {
-        var t = root.snapshot.theme || {}
-        if (pct === null || pct === undefined)
-            return t.dim || "#6c7086"
-        if (pct >= 80)
-            return t.red || "#f38ba8"
-        if (pct >= 50)
-            return t.yellow || "#f9e2af"
-        return t.green || "#a6e3a1"
-    }
-
-    function windowPercent(row) {
-        if (!row) return null
-        return root.snapshot.window === "weekly" ? row.weekly_used : row.session_used
+    // The headline number and its tier, resolved by the core under the
+    // configured window. This used to pick the window here and carry its own
+    // copy of the 50/80 boundaries to tint it with.
+    function bar(row) {
+        return (row && row.bar) ? row.bar : { percent: null, tone: "dim" }
     }
 
     compactRepresentation: CompactRep {}

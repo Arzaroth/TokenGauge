@@ -1867,13 +1867,22 @@ impl Theme {
         }
     }
 
-    /// Pick the color matching a usage percentage (green <50, yellow <80, red).
-    pub fn color_for_percent(&self, percent: u8) -> &str {
-        match percent {
-            0..=49 => &self.green,
-            50..=79 => &self.yellow,
-            _ => &self.red,
+    /// This palette's colour for a semantic tier.
+    pub fn color_for_tone(&self, tone: panel::Tone) -> &str {
+        match tone {
+            panel::Tone::Good => &self.green,
+            panel::Tone::Warn => &self.yellow,
+            panel::Tone::Critical => &self.red,
+            panel::Tone::Dim => &self.dim,
+            panel::Tone::Normal => &self.neutral,
         }
+    }
+
+    /// The gauge colour for a usage percentage. `Tone::for_percent` owns where
+    /// the tiers fall; this owns only what they look like. Four copies of the
+    /// 50/80 boundaries had accumulated across the Rust surfaces alone.
+    pub fn color_for_percent(&self, percent: u8) -> &str {
+        self.color_for_tone(panel::Tone::for_percent(percent))
     }
 }
 
@@ -1988,14 +1997,6 @@ pub fn provider_urls(provider: &str) -> ProviderUrls {
             dashboard: None,
             status: None,
         },
-    }
-}
-
-pub fn color_hex_for_percent(percent: u8) -> &'static str {
-    match percent {
-        0..=49 => GREEN_HEX,
-        50..=79 => YELLOW_HEX,
-        _ => RED_HEX,
     }
 }
 
@@ -4235,12 +4236,13 @@ mod tests {
     }
 
     #[test]
-    fn color_hex_for_percent_thresholds() {
-        assert_eq!(color_hex_for_percent(0), GREEN_HEX);
-        assert_eq!(color_hex_for_percent(49), GREEN_HEX);
-        assert_eq!(color_hex_for_percent(50), YELLOW_HEX);
-        assert_eq!(color_hex_for_percent(79), YELLOW_HEX);
-        assert_eq!(color_hex_for_percent(80), RED_HEX);
+    fn the_gauge_tiers_come_from_one_threshold_table() {
+        let t = Theme::catppuccin();
+        assert_eq!(t.color_for_percent(0), t.green);
+        assert_eq!(t.color_for_percent(49), t.green);
+        assert_eq!(t.color_for_percent(50), t.yellow);
+        assert_eq!(t.color_for_percent(79), t.yellow);
+        assert_eq!(t.color_for_percent(80), t.red);
     }
 
     #[test]

@@ -139,7 +139,13 @@ fn status(config: &TokenGaugeConfig, as_json: bool) -> Result<()> {
         chrono::Utc::now().timestamp_millis(),
     );
 
-    println!("Sync       {}", if report.enabled { "on" } else { "off" });
+    // The config, not the snapshot's copy of it: `report.enabled` records what
+    // the *last cycle* ran with, so enabling sync and asking straight away -
+    // before any fetch - reported "off" for something that was on.
+    println!(
+        "Sync       {}",
+        if config.sync.enabled { "on" } else { "off" }
+    );
     if !report.transport.is_empty() {
         println!("Transport  {}", report.transport);
     }

@@ -57,6 +57,10 @@ pub enum SyncTransportKind {
 #[serde(default)]
 pub struct SyncDirConfig {
     pub path: PathBuf,
+    /// See [`SyncConfig::unknown`]. A typo here means sync quietly does not
+    /// work, so it has to be reportable rather than dropped.
+    #[serde(flatten)]
+    pub unknown: HashMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -70,6 +74,9 @@ pub struct SyncS3Config {
     /// that is awkward. They are never written into the snapshot or logged.
     pub access_key_id: String,
     pub secret_access_key: String,
+    /// See [`SyncConfig::unknown`].
+    #[serde(flatten)]
+    pub unknown: HashMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

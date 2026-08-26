@@ -12,7 +12,6 @@
 //! heading through the same list.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use tokengauge_core::update;
 use tokengauge_core::{fetch_all_providers, load_config};
@@ -557,13 +556,10 @@ pub(crate) fn doctor_lines(config_path: &Path) -> Vec<DoctorLine> {
 }
 
 pub(crate) fn check_binary(name: &str, purpose: &str, hint: &str) -> DoctorCheck {
-    let found = Command::new("which")
-        .arg(name)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    // The core's own PATH walk rather than spawning `which`: one fewer process
+    // per checked binary, and no dependency on `which` itself being installed -
+    // which the doctor would have reported as the binary being missing.
+    let found = tokengauge_core::launch::which(name).is_some();
     DoctorCheck {
         label: format!("{name} on PATH ({purpose})"),
         ok: found,

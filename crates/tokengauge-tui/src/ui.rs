@@ -295,9 +295,18 @@ const BARS_ROW_CAP: usize = 6;
 const DAY_CHART_ID: &str = "tokens_by_day";
 const DAY_CHART_HEIGHT: u16 = 5;
 
+/// The one `Bars` section that is never trimmed. A model list has a long tail
+/// of sub-1% entries and losing it costs nothing; the device list is the answer
+/// to "where did this total come from", and a machine dropped off the bottom
+/// makes the rows stop adding up to the figure above them. Every other frontend
+/// draws all of them.
+const UNCAPPED_ID: &str = "tokens_by_device";
+
 fn section_rows(section: &Section) -> &[PanelRow] {
     match section.kind {
-        SectionKind::Bars => &section.rows[..section.rows.len().min(BARS_ROW_CAP)],
+        SectionKind::Bars if section.id != UNCAPPED_ID => {
+            &section.rows[..section.rows.len().min(BARS_ROW_CAP)]
+        }
         _ => &section.rows,
     }
 }
@@ -919,6 +928,35 @@ mod tests {
         assert!(out.contains("2 devices"), "{out}");
         assert!(out.contains("error"), "{out}");
         assert!(out.contains("bucket unreachable"), "{out}");
+    }
+
+    /// A model list is trimmed to six because its tail is sub-1% noise. The
+    /// device list is not: it answers "where did this total come from", and a
+    /// machine dropped off the bottom makes the rows stop adding up to the
+    /// figure above them.
+    #[test]
+    fn a_large_fleet_is_not_trimmed_to_the_bars_cap() {
+        let mut row = provider_with_sync_note();
+        let cost = row.cost.as_mut().expect("cost");
+        let one = cost.by_device[0].clone();
+        cost.by_device = (0..9)
+            .map(|n| tokengauge_core::sync::DeviceCost {
+                device_id: format!("d{n}"),
+                label: format!("machine-{n}"),
+                ..one.clone()
+            })
+            .collect();
+
+        let devices = section(&row, "tokens_by_device");
+        assert_eq!(devices.rows.len(), 9);
+        assert_eq!(
+            section_rows(&devices).len(),
+            9,
+            "a nine-machine fleet lost machines to the six-row cap"
+        );
+        // The cap still applies to the section it was meant for.
+        let models = section(&row, "tokens_by_model");
+        assert!(section_rows(&models).len() <= BARS_ROW_CAP);
     }
 
     #[test]

@@ -324,14 +324,34 @@ mod tests {
             .collect();
         assert!(leftovers.is_empty(), "staging left behind: {leftovers:?}");
 
-        // Now make the rename fail: a file sitting where the staging directory
-        // wants to go stops copy_dir before anything is moved aside.
-        std::fs::write(dest.with_file_name(".org.tokengauge.plasmoid.tg-new"), "x").unwrap();
-        assert!(plasma.install_into(&tmp, &dest).is_err());
-        assert!(
-            dest.join("new.txt").exists(),
-            "the working install has to still be there after a failure"
-        );
+        // Fail *after* staging, which is the half that matters: a file sitting
+        // where the retired copy wants to go makes the move-aside fail, so the
+        // old install is still at `dest` when the promotion rename runs - and
+        // that rename then fails too, because `dest` is a non-empty directory.
+        // Both failure paths have to leave the working install where it is.
+        //
+        // Failing during staging instead - which is what this test used to do,
+        // by putting the file at `.tg-new` - never reached any of that.
+        //
+        // Unix only, because the provocation is POSIX rename semantics:
+        // Windows' MoveFileEx replaces an existing file rather than refusing,
+        // so the move-aside succeeds there and the install goes through. No
+        // real coverage lost - every frontend in this table is a Linux desktop.
+        #[cfg(unix)]
+        {
+            std::fs::write(dest.with_file_name(".org.tokengauge.plasmoid.tg-old"), "x").unwrap();
+            assert!(plasma.install_into(&tmp, &dest).is_err());
+            assert!(
+                dest.join("new.txt").exists(),
+                "the working install has to still be there after a failure"
+            );
+            assert!(
+                !dest
+                    .with_file_name(".org.tokengauge.plasmoid.tg-new")
+                    .exists(),
+                "the staged copy has to be cleaned up on the way out"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

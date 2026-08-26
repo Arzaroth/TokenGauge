@@ -52,19 +52,14 @@ Panel {
   property bool settingsOpen: false
   property real wheelAccumulator: 0
 
-  // The frontend's own read failure and the snapshot's per-provider fetch
-  // errors, in one string. Both have to reach the panel once data exists: a
-  // binary that vanished leaves the last good numbers on screen aging quietly,
-  // which is the one state that looks exactly like a working panel.
-  readonly property string errorText: {
-    if (present(usage.lastError) !== "") return String(usage.lastError)
-    var parts = []
-    for (var i = 0; i < usage.errors.length; i++) {
-      var e = usage.errors[i]
-      parts.push(String(e.provider || "?") + ": " + String(e.message || e.raw || "error"))
-    }
-    return parts.join("\n")
-  }
+  // The frontend's own read failure - a binary that vanished, a snapshot that
+  // will not parse - which is the state that looks exactly like a working
+  // panel because the last good numbers stay on screen.
+  //
+  // Per-provider fetch errors are not folded in here: the Errors repeater at
+  // the foot of the panel already lists them, and joining them into this
+  // banner printed every one of them twice.
+  readonly property string errorText: present(usage.lastError)
 
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }

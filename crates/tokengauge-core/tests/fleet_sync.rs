@@ -32,6 +32,7 @@ fn config(root: &Path) -> TokenGaugeConfig {
             enabled: true,
             dir: SyncDirConfig {
                 path: root.join("shared"),
+                ..SyncDirConfig::default()
             },
             ..SyncConfig::default()
         },

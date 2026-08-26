@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.1] - 2026-08-26
+
+### Fixed
+
+- The Omarchy widget printed every provider fetch error twice - once in the banner added in 0.24.0, once in the error list at the foot of the panel. The banner now carries only the frontend's own read failure, which is what it was for.
+- A typo under `[sync.dir]` or `[sync.s3]` was dropped in silence. `--doctor` names it, as it already did for every other section - and a typo there is the one that makes sync quietly not work.
+- `--sync-status` read "Sync off" for a fleet that had just been switched on, because it reported what the last completed cycle ran with rather than what the config says.
+- The TUI trimmed the by-device list to six machines. A model list has a long tail worth trimming; a device list is the answer to where a total came from, and a hidden machine makes the rows stop adding up.
+- `--doctor` walks `PATH` itself instead of spawning `which`, so a machine without `which` installed no longer reports every binary as missing.
+
 ## [0.24.0] - 2026-08-26
 
 ### Added

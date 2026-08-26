@@ -1644,8 +1644,7 @@ fn render_output(
         Some(idx) => vec![&rows[idx]],
         None => rows.iter().collect(),
     };
-    let tooltip =
-        format_tooltip_with_errors(&tooltip_rows, errors, refreshing, &left_click_label(config));
+    let tooltip = format_tooltip_with_errors(&tooltip_rows, errors, refreshing, LEFT_CLICK_LABEL);
     let class = compute_class(rows, errors, refreshing, config.waybar.window.clone());
     WaybarOutput {
         text,
@@ -2498,10 +2497,9 @@ fn format_tooltip_from_cards(cards: &[&str], refreshing: bool, left_verb: &str) 
 }
 
 /// Short verb shown in the tooltip's left-click hint. Both click actions land
-/// on the TUI now that the popover is gone, so there is nothing to branch on.
-fn left_click_label(_config: &TokenGaugeConfig) -> String {
-    "open TUI".to_string()
-}
+/// on the TUI now that the popover is gone, so there is nothing to branch on -
+/// it was a function taking a config it ignored.
+const LEFT_CLICK_LABEL: &str = "open TUI";
 
 #[cfg(test)]
 fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
@@ -3108,17 +3106,13 @@ mod tests {
         assert_eq!(resolve_click_command(&cfg), "alacritty -e tokengauge-tui");
     }
 
+    /// A configured command is used verbatim. Auto-detect is deliberately not
+    /// asserted on: it scans PATH, so what it picks is the runner's business,
+    /// and the test this replaces called it and asserted nothing at all.
     #[test]
-    fn resolve_click_command_tui_default_autodetect_nonempty() {
-        // Auto-detect picks something based on PATH; on the test runner we
-        // expect at least one of sh/xterm to be findable, but the exact
-        // value depends on the environment - assert only non-empty.
-        let cfg = test_config(PathBuf::from("/tmp/x"));
-        // Force PATH to contain at least /usr/bin so the candidate scan
-        // succeeds deterministically on the CI/dev box.
-        let _path = std::env::var_os("PATH");
-        // We don't manipulate env mid-test; rely on the runner having a
-        // sensible PATH. Empty is acceptable in a fully stripped env.
-        let _ = resolve_click_command(&cfg);
+    fn a_configured_click_command_is_used_as_written() {
+        let mut cfg = test_config(PathBuf::from("/tmp/x"));
+        cfg.waybar.tui_command = "kitty -e tokengauge-tui".into();
+        assert_eq!(resolve_click_command(&cfg), "kitty -e tokengauge-tui");
     }
 }

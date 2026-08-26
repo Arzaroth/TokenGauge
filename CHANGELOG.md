@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Threshold notifications re-fired on every refresh. Anthropic recomputes `resets_at` per request, so the same window returns a few hundred microseconds later each fetch; the roll-over check read any forward move as a fresh window and cleared the one-shot guard. A window now has to move by more than a minute to count as rolled over.
 - The one-line installer and updater in the README pointed at a `main` branch that no longer exists, so both would have started 404ing once GitHub's CDN cache expired. They point at `master`, which is and was the default branch.
 
 ## [0.24.1] - 2026-08-26

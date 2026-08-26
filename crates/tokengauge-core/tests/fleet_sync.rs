@@ -505,12 +505,12 @@ fn a_provider_this_build_cannot_rate_is_reported_not_swallowed() {
         outcome.status.unreadable_providers,
         vec!["quasar".to_string()]
     );
-    let report = sync::describe(&outcome.status, Utc::now().timestamp_millis());
+    let report = sync::describe(&outcome.status, 600, Utc::now().timestamp_millis());
     assert!(
         report
             .problems
             .iter()
-            .any(|p| p.contains("quasar") && p.contains("update TokenGauge")),
+            .any(|p| p.contains("quasar") && p.contains("Update TokenGauge")),
         "the gap has to be visible: {:?}",
         report.problems
     );

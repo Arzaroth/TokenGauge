@@ -137,7 +137,11 @@ fn status(config: &TokenGaugeConfig, as_json: bool) -> Result<()> {
         return Ok(());
     };
 
-    let report = tokengauge_core::sync::describe(&status, chrono::Utc::now().timestamp_millis());
+    let report = tokengauge_core::sync::describe(
+        &status,
+        config.refresh_secs,
+        chrono::Utc::now().timestamp_millis(),
+    );
 
     println!("Sync       {}", if report.enabled { "on" } else { "off" });
     if !report.transport.is_empty() {
@@ -216,59 +220,24 @@ pub fn doctor_checks(cfg: &TokenGaugeConfig) -> Vec<DoctorCheck> {
             detail: "run: tokengauge --sync-test".into(),
         }),
         Some(status) => {
-            record(match &status.error {
-                Some(error) => DoctorCheck {
-                    label: "last cycle failed".into(),
-                    ok: false,
-                    detail: error.clone(),
-                },
-                None => DoctorCheck {
-                    label: format!("{} device(s) in the fleet", status.devices.len()),
-                    ok: true,
-                    detail: status.transport.clone(),
-                },
+            record(DoctorCheck {
+                label: format!("{} device(s) in the fleet", status.devices.len()),
+                ok: status.error.is_none(),
+                detail: status.transport.clone(),
             });
-            for skipped in &status.skipped {
+            // Every wording below is the core's. This section used to re-derive
+            // the skipped objects, the overlaps and the quiet machines with its
+            // own phrasing for each, which is three chances to say something
+            // the panel does not.
+            for finding in tokengauge_core::sync::findings(
+                status,
+                cfg.refresh_secs,
+                chrono::Utc::now().timestamp_millis(),
+            ) {
                 record(DoctorCheck {
-                    label: "object skipped".into(),
-                    ok: false,
-                    detail: format!("{} - {}", skipped.name, skipped.reason),
-                });
-            }
-            for overlap in &status.overlaps {
-                record(DoctorCheck {
-                    label: "the same transcripts were read twice".into(),
-                    ok: false,
-                    detail: format!(
-                        "{} on {}; counted once. Turn that provider off under [sync.providers] on one of them.",
-                        overlap.devices.join(" and "),
-                        overlap.date
-                    ),
-                });
-            }
-            // A device id is derived from the machine, so one id under two
-            // hostnames means a cloned image rather than two machines.
-            let mut seen: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
-            for device in &status.devices {
-                if let Some(previous) =
-                    seen.insert(device.device_id.as_str(), device.hostname.as_str())
-                    && previous != device.hostname
-                {
-                    record(DoctorCheck {
-                        label: "two machines share one device id".into(),
-                        ok: false,
-                        detail: format!(
-                            "{previous} and {} - a cloned image or restored disk",
-                            device.hostname
-                        ),
-                    });
-                }
-            }
-            for device in status.devices.iter().filter(|d| d.stale) {
-                record(DoctorCheck {
-                    label: format!("{} has gone quiet", device.label),
-                    ok: true,
-                    detail: "its past days still count; --sync-forget drops it".into(),
+                    label: finding.title.to_string(),
+                    ok: !finding.is_problem(),
+                    detail: finding.sentence(),
                 });
             }
         }

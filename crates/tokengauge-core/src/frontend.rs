@@ -332,18 +332,26 @@ mod tests {
         //
         // Failing during staging instead - which is what this test used to do,
         // by putting the file at `.tg-new` - never reached any of that.
-        std::fs::write(dest.with_file_name(".org.tokengauge.plasmoid.tg-old"), "x").unwrap();
-        assert!(plasma.install_into(&tmp, &dest).is_err());
-        assert!(
-            dest.join("new.txt").exists(),
-            "the working install has to still be there after a failure"
-        );
-        assert!(
-            !dest
-                .with_file_name(".org.tokengauge.plasmoid.tg-new")
-                .exists(),
-            "the staged copy has to be cleaned up on the way out"
-        );
+        //
+        // Unix only, because the provocation is POSIX rename semantics:
+        // Windows' MoveFileEx replaces an existing file rather than refusing,
+        // so the move-aside succeeds there and the install goes through. No
+        // real coverage lost - every frontend in this table is a Linux desktop.
+        #[cfg(unix)]
+        {
+            std::fs::write(dest.with_file_name(".org.tokengauge.plasmoid.tg-old"), "x").unwrap();
+            assert!(plasma.install_into(&tmp, &dest).is_err());
+            assert!(
+                dest.join("new.txt").exists(),
+                "the working install has to still be there after a failure"
+            );
+            assert!(
+                !dest
+                    .with_file_name(".org.tokengauge.plasmoid.tg-new")
+                    .exists(),
+                "the staged copy has to be cleaned up on the way out"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

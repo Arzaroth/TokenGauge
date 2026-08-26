@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The Omarchy widget drew a `Rows` suffix over its own label. That section anchors the label to the left edge and the value group to the right, with nothing between them, which holds while every suffix is a figure and breaks on the first one that is a sentence: the Sync row's note ran back across "Sync". The suffix now elides to whatever room is left beside the label, and the full sentence is still on hover.
+
 ## [0.24.2] - 2026-08-26
 
 ### Fixed

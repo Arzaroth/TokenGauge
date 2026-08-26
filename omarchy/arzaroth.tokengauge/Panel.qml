@@ -660,55 +660,82 @@ Panel {
                 model: parent.modelData.kind === "rows" ? parent.modelData.rows : []
 
                 Item {
+                  id: keyRow
                   required property var modelData
                   width: parent.width
-                  height: rowLabelText.implicitHeight
+                  height: keyRowLines.height
 
-                  Text {
-                    id: rowLabelText
-                    anchors.left: parent.left
-                    text: modelData.label
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                  }
+                  Column {
+                    id: keyRowLines
+                    width: parent.width
+                    spacing: Style.space(2)
 
-                  Row {
-                    id: rowValues
-                    anchors.right: parent.right
-                    spacing: Style.space(6)
+                    Item {
+                      width: parent.width
+                      height: rowLabelText.implicitHeight
 
-                    // Anchored right against a label anchored left, so nothing
-                    // but this stops a long suffix from being drawn over it.
-                    readonly property real room: parent.width - rowLabelText.implicitWidth
-                      - spacing - rowValueText.width
-                      - (rowBadgeText.visible ? rowBadgeText.width + spacing : 0)
+                      Text {
+                        id: rowLabelText
+                        anchors.left: parent.left
+                        text: keyRow.modelData.label
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                      }
 
-                    Text {
-                      id: rowValueText
-                      text: modelData.value
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
+                      Text {
+                        anchors.right: parent.right
+                        text: keyRow.modelData.value
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                      }
                     }
 
-                    Text {
-                      id: rowBadgeText
-                      visible: text !== ""
-                      text: root.present(modelData.badge)
-                      color: root.toneColor(modelData.badge_tone)
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                    }
+                    // A badge and a suffix beside the label leave a sentence
+                    // fighting over what is left of a narrow popup, so they
+                    // drop to a caption line. It tracks the right edge because
+                    // that is where the figure it qualifies sits.
+                    Item {
+                      width: parent.width
+                      height: keyRowCaption.height
+                      visible: rowBadgeText.text !== "" || rowSuffixText.text !== ""
 
-                    Text {
-                      visible: root.present(modelData.suffix) !== "" && width > 0
-                      width: Math.max(0, Math.min(implicitWidth, rowValues.room))
-                      elide: Text.ElideRight
-                      text: "\u00b7  " + root.present(modelData.suffix)
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
+                      Row {
+                        id: keyRowCaption
+                        anchors.right: parent.right
+                        spacing: Style.space(6)
+
+                        Text {
+                          id: rowBadgeText
+                          visible: text !== ""
+                          text: root.present(keyRow.modelData.badge)
+                          color: root.toneColor(keyRow.modelData.badge_tone)
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                        }
+
+                        Text {
+                          id: rowSuffixText
+                          visible: text !== ""
+                          // The trend badge carries an arrow, which falls back
+                          // to a font with taller metrics; top-aligned in a Row
+                          // that lands the two strings on different baselines.
+                          anchors.baseline: rowBadgeText.visible ? rowBadgeText.baseline : undefined
+                          width: Math.min(implicitWidth, keyRow.width
+                            - (rowBadgeText.visible ? rowBadgeText.width + keyRowCaption.spacing : 0))
+                          elide: Text.ElideRight
+                          // The separator divides a badge from a suffix, so a
+                          // row with no badge must not open on one.
+                          text: root.present(keyRow.modelData.suffix) === ""
+                            ? ""
+                            : (rowBadgeText.visible ? "\u00b7  " : "")
+                              + root.present(keyRow.modelData.suffix)
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                        }
+                      }
                     }
                   }
 
@@ -717,13 +744,13 @@ Panel {
                   MouseArea {
                     id: keyHover
                     anchors.fill: parent
-                    hoverEnabled: root.present(modelData.tooltip) !== ""
+                    hoverEnabled: root.present(keyRow.modelData.tooltip) !== ""
                     acceptedButtons: Qt.NoButton
                   }
 
                   PanelToolTip {
-                    visible: keyHover.containsMouse && root.present(modelData.tooltip) !== ""
-                    text: root.present(modelData.tooltip)
+                    visible: keyHover.containsMouse && root.present(keyRow.modelData.tooltip) !== ""
+                    text: root.present(keyRow.modelData.tooltip)
                     fontFamily: root.fontFamily
                   }
                 }

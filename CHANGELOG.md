@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A cost row's badge and suffix take their own line in the desktop panels.** They shared the line with the label and the value, which fits the waybar tooltip, where the line is as wide as the sentence needs, and fits nothing else: the Omarchy widget drew the sync note straight over "Sync", and "Today  $623  ↑109% vs prior avg  ·  865.3M tokens" filled a popup edge to edge. Omarchy, Plasma, GNOME and the Windows tray now put the label and the figure on one line and the badge and suffix on a caption line under it. The TUI and the waybar tooltip are unchanged: both are monospace and as wide as the terminal.
+- A row with no badge opened its suffix on the separator that was supposed to divide the two, so "This month" read "·  3.9B tokens". The separator now appears only when a badge precedes it.
+- The trend badge's arrow falls back to a font with taller metrics, and a top-aligned row put the badge and the suffix beside it on different baselines. The Omarchy caption line aligns on the baseline, and the Plasma one asks its layout for the same.
+
 ## [0.24.3] - 2026-08-26
 
 ### Fixed

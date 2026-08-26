@@ -599,27 +599,38 @@ mod win {
         }
     }
 
-    /// Label, tinted badge, dim suffix and value on one line, no bar.
+    /// Label and value on one line; a badge and a suffix drop to a caption line
+    /// under it, indented onto the value column the way a meter's footnote is.
     fn key_row(ui: &mut egui::Ui, row: &tokengauge_core::PanelRow) {
-        let line = ui.horizontal(|ui| {
-            ui.add_sized(
-                [110.0, 18.0],
-                egui::Label::new(RichText::new(&row.label).color(SUB)),
-            );
-            ui.label(RichText::new(&row.value).monospace());
-            if !row.badge.is_empty() {
-                ui.label(
-                    RichText::new(&row.badge)
-                        .small()
-                        .color(tone_color(row.badge_tone)),
+        let line = ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [110.0, 18.0],
+                    egui::Label::new(RichText::new(&row.label).color(SUB)),
                 );
-            }
-            if !row.suffix.is_empty() {
-                ui.label(
-                    RichText::new(format!("\u{b7} {}", row.suffix))
-                        .small()
-                        .color(SUB),
-                );
+                ui.label(RichText::new(&row.value).monospace());
+            });
+            if !row.badge.is_empty() || !row.suffix.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.add_space(110.0);
+                    if !row.badge.is_empty() {
+                        ui.label(
+                            RichText::new(&row.badge)
+                                .small()
+                                .color(tone_color(row.badge_tone)),
+                        );
+                    }
+                    if !row.suffix.is_empty() {
+                        // The separator divides a badge from a suffix, so a row
+                        // with no badge must not open on one.
+                        let text = if row.badge.is_empty() {
+                            row.suffix.clone()
+                        } else {
+                            format!("\u{b7} {}", row.suffix)
+                        };
+                        ui.label(RichText::new(text).small().color(SUB));
+                    }
+                });
             }
         });
         // The suffix is the spec's ellipsized copy for surfaces that cannot

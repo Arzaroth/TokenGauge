@@ -126,31 +126,64 @@ Item {
         HoverHandler { id: barHover }
     }
 
-    // Label, value, tinted badge and dim suffix on one line, no bar. The cost
-    // figures.
-    component KeyRow: RowLayout {
+    // Label and value on one line; a badge and a suffix drop to a caption line
+    // under it. The cost figures.
+    component KeyRow: ColumnLayout {
+        id: keyRow
         required property var modelData
         Layout.fillWidth: true
-        PlasmaComponents.Label { text: modelData.label; opacity: 0.85; Layout.fillWidth: true }
-        PlasmaComponents.Label {
-            text: modelData.badge
-            visible: text !== ""
-            color: root.toneColor(modelData.badge_tone)
-            font: Kirigami.Theme.smallFont
+        spacing: 0
+
+        RowLayout {
+            Layout.fillWidth: true
+            PlasmaComponents.Label {
+                text: keyRow.modelData.label
+                opacity: 0.85
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+            }
+            PlasmaComponents.Label { text: keyRow.modelData.value; font.family: "monospace" }
         }
-        PlasmaComponents.Label {
-            text: String(modelData.suffix || "") === "" ? "" : "·  " + modelData.suffix
-            visible: text !== ""
-            opacity: 0.6
-            font: Kirigami.Theme.smallFont
+
+        // Beside the label the two of them leave a sentence fighting over what
+        // is left of a narrow popup. The caption line tracks the right edge,
+        // because that is where the figure it qualifies sits.
+        RowLayout {
+            Layout.fillWidth: true
+            visible: keyBadge.text !== "" || keySuffix.text !== ""
+
+            Item { Layout.fillWidth: true }
+
+            PlasmaComponents.Label {
+                id: keyBadge
+                text: keyRow.modelData.badge
+                visible: text !== ""
+                color: root.toneColor(keyRow.modelData.badge_tone)
+                font: Kirigami.Theme.smallFont
+                Layout.alignment: Qt.AlignBaseline
+            }
+
+            PlasmaComponents.Label {
+                id: keySuffix
+                // The separator divides a badge from a suffix, so a row with no
+                // badge must not open on one.
+                text: String(keyRow.modelData.suffix || "") === ""
+                    ? ""
+                    : (keyBadge.visible ? "·  " : "") + keyRow.modelData.suffix
+                visible: text !== ""
+                opacity: 0.6
+                elide: Text.ElideRight
+                font: Kirigami.Theme.smallFont
+                Layout.alignment: Qt.AlignBaseline
+                Layout.maximumWidth: implicitWidth
+            }
         }
-        PlasmaComponents.Label { text: modelData.value; font.family: "monospace" }
 
         // The suffix is the spec's ellipsized copy for surfaces that cannot
         // wrap; the tooltip carries the whole sentence.
         HoverHandler { id: keyHover }
-        PlasmaComponents.ToolTip.text: modelData.tooltip || ""
-        PlasmaComponents.ToolTip.visible: String(modelData.tooltip || "") !== "" && keyHover.hovered
+        PlasmaComponents.ToolTip.text: keyRow.modelData.tooltip || ""
+        PlasmaComponents.ToolTip.visible: String(keyRow.modelData.tooltip || "") !== "" && keyHover.hovered
     }
 
     QQC2.ButtonGroup { id: tabGroup }

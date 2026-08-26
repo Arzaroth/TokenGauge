@@ -623,19 +623,33 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return wrap;
     }
 
-    // Label, tinted badge, dim suffix and value on one line, no bar.
+    // Label and value on one line; a badge and a suffix drop to a caption line
+    // under it, because beside the label the two of them leave a sentence
+    // fighting over what is left of a narrow popup. The caption tracks the
+    // right edge, where the figure it qualifies sits.
     _keyRow(row) {
+        const wrap = box(true, {x_expand: true});
+
         const line = box(false, {x_expand: true});
         line.add_child(label(row.label, 'tokengauge-cost-label'));
         line.add_child(spacer());
-        if (row.badge) {
-            line.add_child(label(row.badge, 'tokengauge-dim',
-                `color: ${this._toneColor(row.badge_tone)};`));
-        }
-        if (row.suffix)
-            line.add_child(label(`  ·  ${row.suffix}  `, 'tokengauge-dim'));
         line.add_child(label(row.value, 'tokengauge-cost-value'));
-        return line;
+        wrap.add_child(line);
+
+        if (row.badge || row.suffix) {
+            const caption = box(false, {x_expand: true});
+            caption.add_child(spacer());
+            if (row.badge) {
+                caption.add_child(label(row.badge, 'tokengauge-dim',
+                    `color: ${this._toneColor(row.badge_tone)};`));
+            }
+            // The separator divides a badge from a suffix, so a row with no
+            // badge must not open on one.
+            if (row.suffix)
+                caption.add_child(label(row.badge ? `  ·  ${row.suffix}` : row.suffix, 'tokengauge-dim'));
+            wrap.add_child(caption);
+        }
+        return wrap;
     }
 
     _pinSection() {

@@ -380,9 +380,74 @@ fn glm_auth() -> AuthStatus {
     }
 }
 
+/// Directory the installer drops provider SVG logos into. Overridable with
+/// `TOKENGAUGE_ICON_DIR` (e.g. point it at the repo `assets/providers` when
+/// running a dev build).
+pub fn provider_icon_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("TOKENGAUGE_ICON_DIR") {
+        return PathBuf::from(dir);
+    }
+    let base = std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".local/share"));
+    base.join("tokengauge").join("icons")
+}
+
+/// Path to a provider's bundled brand SVG, or None when no logo is installed
+/// (the frontend then falls back to the glyph icon).
+pub fn provider_icon_svg_path(label: &str) -> Option<PathBuf> {
+    let slug = provider_icon_slug(label)?;
+    let path = provider_icon_dir().join(format!("ProviderIcon-{slug}.svg"));
+    path.exists().then_some(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------------------
+    // provider_label tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn provider_label_known_providers() {
+        assert_eq!(provider_label("claude"), "Claude");
+        assert_eq!(provider_label("codex"), "Codex");
+    }
+
+    #[test]
+    fn provider_label_unknown_returns_input() {
+        assert_eq!(provider_label("unknown_provider"), "unknown_provider");
+    }
+
+    #[test]
+    fn provider_icon_known_and_default() {
+        assert_eq!(provider_icon("Claude").glyph, "\u{f0721}");
+        assert_eq!(provider_icon("claude").color_hex, "#DE7356");
+        assert_eq!(provider_icon("Codex").glyph, "\u{f0b2b}");
+        assert_eq!(provider_icon("Unknown").glyph, "\u{f06a9}");
+    }
+
+    #[test]
+    fn provider_cli_names() {
+        assert_eq!(provider_cli_name("kimi"), Some("kimi"));
+        assert_eq!(provider_cli_name("grok"), Some("grok"));
+        assert_eq!(provider_cli_name("claude"), Some("claude"));
+        // GLM authenticates with an API key - no CLI.
+        assert_eq!(provider_cli_name("glm"), None);
+        assert_eq!(provider_cli_name("nope"), None);
+    }
+
+    #[test]
+    fn provider_auth_status_covers_all_providers() {
+        // Never panics and always yields a hint when not satisfied.
+        for provider in PROVIDERS {
+            let status = provider_auth_status(provider);
+            if !status.ok {
+                assert!(!status.hint.is_empty(), "{provider} missing hint");
+            }
+        }
+    }
 
     /// `PROVIDERS` is a const the frontends iterate, and the table is what
     /// everything else reads. Two lists of the same thing is exactly the shape

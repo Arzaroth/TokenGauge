@@ -10,7 +10,17 @@
 //! `fetch_ccusage_costs` covers every call it makes, retries included, because
 //! three separate timeouts is three ways to hang a bar for a minute.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, anyhow};
+use chrono::{Local, NaiveDate};
+use serde::Deserialize;
+
 use crate::*;
+use chrono::Days;
 
 /// Map a ccusage model name to a TokenGauge provider key.
 /// Returns None if the model doesn't belong to a tracked provider.

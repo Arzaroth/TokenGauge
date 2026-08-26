@@ -186,4 +186,66 @@ mod tests {
         assert_eq!(format_tokens(384_000_000), "384.0M");
         assert_eq!(format_tokens(2_000_000_000), "2.0B");
     }
+
+    // ------------------------------------------------------------------------
+    // format_updated tests
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn format_updated_rfc3339() {
+        // Full RFC3339 timestamp should be formatted to local time HH:MM
+        let result = format_updated(Some("2026-01-20T07:37:16Z".to_string()));
+        // We can't assert exact time due to timezone, but it should be HH:MM format
+        assert!(result.len() == 5 || result.len() <= 8); // "HH:MM" or with timezone offset
+        assert!(result.contains(':'));
+    }
+
+    #[test]
+    fn format_updated_iso_with_t() {
+        // ISO format with T separator, extracts time part
+        let result = format_updated(Some("2026-01-20T14:30:00Z".to_string()));
+        assert!(result.contains(':'));
+    }
+
+    #[test]
+    fn format_updated_none() {
+        assert_eq!(format_updated(None), "—");
+    }
+
+    #[test]
+    fn format_updated_fallback() {
+        // Unknown format returns as-is
+        let result = format_updated(Some("unknown format".to_string()));
+        assert_eq!(result, "unknown format");
+    }
+
+    #[test]
+    fn format_tokens_units() {
+        assert_eq!(format_tokens(500), "500");
+        assert_eq!(format_tokens(1_500), "1.5K");
+        assert_eq!(format_tokens(2_300_000), "2.3M");
+        assert_eq!(format_tokens(4_500_000_000), "4.5B");
+    }
+
+    #[test]
+    fn sparkline_basic_ramp() {
+        assert_eq!(
+            sparkline(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
+                .chars()
+                .count(),
+            8
+        );
+        assert_eq!(sparkline(&[0.0, 7.0]), "▁█");
+        assert_eq!(sparkline(&[3.5, 7.0]), "▅█");
+    }
+
+    #[test]
+    fn sparkline_all_zero() {
+        assert_eq!(sparkline(&[0.0, 0.0, 0.0]), "▁▁▁");
+    }
+
+    #[test]
+    fn sparkline_empty() {
+        assert_eq!(sparkline(&[]), "");
+    }
 }

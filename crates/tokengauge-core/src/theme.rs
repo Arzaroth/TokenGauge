@@ -152,6 +152,26 @@ pub fn parse_hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
     Some((r, g, b))
 }
 
+impl ThemeConfig {
+    /// Build a concrete Theme by resolving the preset and applying any
+    /// per-field overrides on top.
+    pub fn resolve(&self) -> Theme {
+        let base = match self.preset.to_lowercase().as_str() {
+            "nord" => Theme::nord(),
+            "gruvbox" => Theme::gruvbox(),
+            _ => Theme::catppuccin(),
+        };
+        Theme {
+            dim: self.dim.clone().unwrap_or(base.dim),
+            separator: self.separator.clone().unwrap_or(base.separator),
+            green: self.green.clone().unwrap_or(base.green),
+            yellow: self.yellow.clone().unwrap_or(base.yellow),
+            red: self.red.clone().unwrap_or(base.red),
+            neutral: self.neutral.clone().unwrap_or(base.neutral),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

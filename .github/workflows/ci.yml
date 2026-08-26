@@ -104,7 +104,12 @@ jobs:
       - name: Check the frontend manifests
         run: |
           shopt -s globstar nullglob
-          for file in gnome/**/metadata.json omarchy/**/manifest.json plasma/**/*.json; do
+          files=(gnome/**/metadata.json omarchy/**/manifest.json plasma/**/*.json)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "no frontend manifests found - the glob has gone stale" >&2
+            exit 1
+          fi
+          for file in "${files[@]}"; do
             node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$file"
           done
 

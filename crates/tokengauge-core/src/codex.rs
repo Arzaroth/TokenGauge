@@ -15,6 +15,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::provider::{check_status, epoch_to_rfc3339, json_int, json_num, trimmed};
 use crate::{
     Credits, ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8,
     slug,
@@ -244,10 +245,6 @@ struct Whoami {
     chatgpt_plan_type: Option<String>,
 }
 
-fn trimmed(v: Option<String>) -> Option<String> {
-    v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
-}
-
 /// Resolve which account a personal access token speaks for. Best-effort:
 /// `wham/usage` answers without the account header as well, and it is the call
 /// whose 401 tells the user their token is no good.
@@ -452,23 +449,6 @@ struct AddRateLimit {
 // Pure mapping
 // ---------------------------------------------------------------------------
 
-fn as_f64(v: &Value) -> Option<f64> {
-    v.as_f64()
-        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-        // Reject NaN/inf (string forms like "NaN"/"inf" parse successfully) so a
-        // malformed value can't masquerade as live data past the stale fallback.
-        .filter(|v| v.is_finite())
-}
-
-fn as_i64(v: &Value) -> Option<i64> {
-    v.as_i64()
-        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-}
-
-fn epoch_to_rfc3339(secs: i64) -> Option<String> {
-    DateTime::from_timestamp(secs, 0).map(|dt| dt.to_rfc3339())
-}
-
 #[derive(PartialEq)]
 enum Role {
     Session,
@@ -540,7 +520,7 @@ fn win_to_usage(w: Win) -> UsageWindow {
     UsageWindow {
         used_percent: Some(pct_u8(w.used_percent as f64)),
         reset_description: None,
-        resets_at: epoch_to_rfc3339(w.reset_at),
+        resets_at: epoch_to_rfc3339(w.reset_at as f64),
         window_minutes: Some((w.limit_window_seconds / 60).max(0) as u32),
     }
 }
@@ -551,7 +531,7 @@ fn add_usage(w: Win) -> UsageWindow {
         used_percent: Some(pct_u8(w.used_percent as f64)),
         reset_description: None,
         resets_at: (w.reset_at > 0)
-            .then(|| epoch_to_rfc3339(w.reset_at))
+            .then(|| epoch_to_rfc3339(w.reset_at as f64))
             .flatten(),
         window_minutes: (w.limit_window_seconds > 0)
             .then_some((w.limit_window_seconds / 60) as u32),
@@ -559,29 +539,29 @@ fn add_usage(w: Win) -> UsageWindow {
 }
 
 fn individual_to_window(il: &IndividualLimit) -> Option<UsageWindow> {
-    let limit = il.limit.as_ref().and_then(as_f64).filter(|&l| l > 0.0)?;
+    let limit = il.limit.as_ref().and_then(json_num).filter(|&l| l > 0.0)?;
     // Require an actual measurement (remaining_percent or used); don't fabricate
     // a live 0% from a limit alone, which would suppress the stale fallback. An
     // out-of-range remaining_percent is garbage - fall back to used/limit.
     let used_pct = match il
         .remaining_percent
         .as_ref()
-        .and_then(as_f64)
+        .and_then(json_num)
         .filter(|rp| (0.0..=100.0).contains(rp))
     {
         Some(rp) => 100.0 - rp,
         None => il
             .used
             .as_ref()
-            .and_then(as_f64)
+            .and_then(json_num)
             .map(|u| u / limit * 100.0)?,
     };
     let resets_at = il
         .resets_at
         .as_ref()
-        .and_then(as_i64)
+        .and_then(json_int)
         .filter(|&s| s > 0)
-        .and_then(epoch_to_rfc3339);
+        .and_then(|s| epoch_to_rfc3339(s as f64));
     Some(UsageWindow {
         used_percent: Some(pct_u8(used_pct)),
         reset_description: None,
@@ -698,7 +678,7 @@ fn to_payload(
         .credits
         .as_ref()
         .and_then(|c| c.balance.as_ref())
-        .and_then(as_f64)
+        .and_then(json_num)
         .map(|b| Credits { remaining: Some(b) });
 
     let mut extra_rate_windows = Vec::new();
@@ -728,22 +708,19 @@ fn to_payload(
         return Err(anyhow!("Codex returned no usage windows"));
     }
 
-    Ok(ProviderPayload {
-        provider: "codex".to_string(),
-        version: None,
-        source: Some(source.to_string()),
-        usage: Some(UsageSnapshot {
+    let mut payload = ProviderPayload::live(
+        "codex",
+        source,
+        UsageSnapshot {
             primary,
             secondary,
-            tertiary: None,
-            updated_at: Some(now.to_rfc3339()),
             login_method: resp.plan_type.or(plan_hint),
             extra_rate_windows,
-        }),
-        credits,
-        error: None,
-        stale: false,
-    })
+            ..UsageSnapshot::at(now)
+        },
+    );
+    payload.credits = credits;
+    Ok(payload)
 }
 
 // ---------------------------------------------------------------------------
@@ -766,13 +743,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     }
     let resp = req.send().context("Codex usage request failed")?;
 
-    let status = resp.status();
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Err(anyhow!("Codex unauthorized - run `codex` to log in"));
-    }
-    if !status.is_success() {
-        return Err(anyhow!("Codex usage HTTP {}", status.as_u16()));
-    }
+    check_status(resp.status(), "Codex", "run `codex` to log in")?;
 
     let body: UsageResponse = resp.json().context("Codex usage JSON was invalid")?;
     Ok(vec![to_payload(body, now, cred.source, cred.plan_hint)?])
@@ -869,11 +840,11 @@ mod tests {
 
     #[test]
     fn as_f64_rejects_non_finite() {
-        assert_eq!(as_f64(&json!("NaN")), None);
-        assert_eq!(as_f64(&json!("inf")), None);
-        assert_eq!(as_f64(&json!("-inf")), None);
-        assert_eq!(as_f64(&json!("7.5")), Some(7.5));
-        assert_eq!(as_f64(&json!(3)), Some(3.0));
+        assert_eq!(json_num(&json!("NaN")), None);
+        assert_eq!(json_num(&json!("inf")), None);
+        assert_eq!(json_num(&json!("-inf")), None);
+        assert_eq!(json_num(&json!("7.5")), Some(7.5));
+        assert_eq!(json_num(&json!(3)), Some(3.0));
     }
 
     #[test]

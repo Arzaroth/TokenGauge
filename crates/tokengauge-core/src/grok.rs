@@ -14,6 +14,7 @@ use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
 
+use crate::provider::check_status;
 use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
 const BILLING_ENDPOINT: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
@@ -419,22 +420,15 @@ fn to_payload(
         resets_at: billing.resets_at,
         window_minutes: Some(10080),
     };
-    ProviderPayload {
-        provider: "grok".to_string(),
-        version: None,
-        source: Some("grok-web".to_string()),
-        usage: Some(UsageSnapshot {
+    ProviderPayload::live(
+        "grok",
+        "grok-web",
+        UsageSnapshot {
             primary: Some(primary),
-            secondary: None,
-            tertiary: None,
-            updated_at: Some(now.to_rfc3339()),
             login_method,
-            extra_rate_windows: Vec::new(),
-        }),
-        credits: None,
-        error: None,
-        stale: false,
-    }
+            ..UsageSnapshot::at(now)
+        },
+    )
 }
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
@@ -456,13 +450,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         .send()
         .context("Grok billing request failed")?;
 
-    let status = resp.status();
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Err(anyhow!("Grok unauthorized - run `grok login`"));
-    }
-    if !status.is_success() {
-        return Err(anyhow!("Grok billing HTTP {}", status.as_u16()));
-    }
+    check_status(resp.status(), "Grok", "run `grok login`")?;
 
     // gRPC carries its own status (HTTP header for unary, else the trailer frame).
     let header_status = resp

@@ -1,4 +1,5 @@
 use ratatui::style::Color;
+use tokengauge_core::panel::Tone;
 use tokengauge_core::{parse_hex_rgb, theme};
 
 pub fn hex_to_color(hex: &str) -> Color {
@@ -14,6 +15,17 @@ pub fn dim() -> Color {
 
 pub fn green() -> Color {
     hex_to_color(&theme().green)
+}
+
+/// The panel spec hands out semantic tiers; the palette is per-frontend.
+pub fn tone_color(tone: Tone) -> Color {
+    match tone {
+        Tone::Good => green(),
+        Tone::Warn => hex_to_color(&theme().yellow),
+        Tone::Critical => hex_to_color(&theme().red),
+        Tone::Dim => dim(),
+        Tone::Normal => Color::White,
+    }
 }
 
 pub fn color_for(percent: u8) -> Color {

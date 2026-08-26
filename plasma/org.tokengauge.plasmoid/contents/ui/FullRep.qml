@@ -145,6 +145,12 @@ Item {
             font: Kirigami.Theme.smallFont
         }
         PlasmaComponents.Label { text: modelData.value; font.family: "monospace" }
+
+        // The suffix is the spec's ellipsized copy for surfaces that cannot
+        // wrap; the tooltip carries the whole sentence.
+        HoverHandler { id: keyHover }
+        PlasmaComponents.ToolTip.text: modelData.tooltip || ""
+        PlasmaComponents.ToolTip.visible: String(modelData.tooltip || "") !== "" && keyHover.hovered
     }
 
     QQC2.ButtonGroup { id: tabGroup }

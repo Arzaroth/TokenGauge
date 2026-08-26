@@ -233,7 +233,7 @@ mod win {
                 settings_open: false,
                 quit,
                 tray,
-                _items: vec![show_i, refresh_i, update_i, quit_i],
+                _items: vec![show_i, refresh_i, sync_i, update_i, quit_i],
                 last_tip: String::new(),
             })
         }
@@ -601,7 +601,7 @@ mod win {
 
     /// Label, tinted badge, dim suffix and value on one line, no bar.
     fn key_row(ui: &mut egui::Ui, row: &tokengauge_core::PanelRow) {
-        ui.horizontal(|ui| {
+        let line = ui.horizontal(|ui| {
             ui.add_sized(
                 [110.0, 18.0],
                 egui::Label::new(RichText::new(&row.label).color(SUB)),
@@ -622,6 +622,12 @@ mod win {
                 );
             }
         });
+        // The suffix is the spec's ellipsized copy for surfaces that cannot
+        // wrap; the tooltip carries the whole sentence, and the sync detail is
+        // the row that actually needs it.
+        if !row.tooltip.is_empty() {
+            line.response.on_hover_text(&row.tooltip);
+        }
     }
 
     fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) {

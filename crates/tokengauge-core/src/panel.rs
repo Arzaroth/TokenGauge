@@ -771,21 +771,31 @@ mod tests {
     /// renderers read label, bar, value and suffix; a badge set here is
     /// invisible on all five surfaces.
     #[test]
-    fn a_bars_row_never_hides_content_in_a_field_bars_does_not_draw() {
+    fn a_row_never_hides_content_in_a_field_its_kind_does_not_draw() {
         let mut r = row();
         r.cost = Some(cost());
-        for section in panel_spec(&r)
-            .iter()
-            .filter(|s| s.kind == SectionKind::Bars)
-        {
+        for section in panel_spec(&r).iter() {
             for row in &section.rows {
-                assert!(
-                    row.badge.is_empty(),
-                    "{}: `{}` puts \"{}\" in a badge no Bars renderer draws",
-                    section.id,
-                    row.label,
-                    row.badge
-                );
+                // Per kind: the fields no frontend's delegate for that kind
+                // reads. Filling one is content the user never sees.
+                let undrawn: &[(&str, bool)] = match section.kind {
+                    SectionKind::Meters => &[("suffix", !row.suffix.is_empty())],
+                    SectionKind::Bars => &[
+                        ("badge", !row.badge.is_empty()),
+                        ("footnote", !row.footnote.is_empty()),
+                    ],
+                    SectionKind::Rows => &[
+                        ("fraction", row.fraction.is_some()),
+                        ("footnote", !row.footnote.is_empty()),
+                    ],
+                };
+                for (field, filled) in undrawn {
+                    assert!(
+                        !filled,
+                        "{}: `{}` fills `{field}`, which no {:?} renderer draws",
+                        section.id, row.label, section.kind
+                    );
+                }
             }
         }
     }

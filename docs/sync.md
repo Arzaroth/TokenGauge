@@ -218,7 +218,6 @@ doubles the failure modes for no gain and is a non-goal.
 enabled = true
 transport = "dir"          # "dir" | "s3"
 label = "desktop"          # optional, defaults to hostname
-retention_days = 35        # month-to-date plus the weekly panel
 retention_days = 35        # days of buckets a contribution carries
 peer_max_age_days = 30     # silent this long, reported as quiet
 
@@ -399,8 +398,12 @@ later wants a header icon rather than a panel row.
    It leaves the by-device rows on its own once it has no tokens in the period
    shown, which needs no rule. `--sync-forget <device>` deletes the object.
 7. **A cloned machine id** (VM template, restored image) shows up as one device
-   id publishing under two hostnames. `--doctor` warns, `--sync-reset-id`
-   regenerates.
+   id publishing under two hostnames. `--doctor` warns. The id is derived from
+   the system's machine id, so the cure is to give the clone its own:
+   empty `/etc/machine-id` and run `systemd-machine-id-setup`, or, where there
+   is no system id to derive from, delete `tokengauge-device-id` beside the
+   snapshot. The next cycle publishes under a new id; `--sync-forget <device>`
+   drops the object the two shared.
 8. **Asymmetric per-provider config.** If one machine syncs codex and another
    does not, codex totals silently exclude the second machine. The by-device
    section shows who contributed, and `--doctor` names a device publishing a

@@ -4,6 +4,8 @@
 //! way one feature at a time. The six flags also became one typed command
 //! instead of six early returns threaded through the startup path.
 
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use tokengauge_core::{TokenGaugeConfig, read_cache_full};
 
@@ -49,14 +51,14 @@ pub fn from_args(args: &Args) -> Option<SyncCommand> {
     None
 }
 
-pub fn run(command: SyncCommand, config: &TokenGaugeConfig) -> Result<()> {
+pub fn run(command: SyncCommand, config: &TokenGaugeConfig, config_path: &Path) -> Result<()> {
     match command {
         SyncCommand::Init { force } => init(config, force),
         SyncCommand::Join { key, force } => join(config, &key, force),
         SyncCommand::Status { json } => status(config, json),
         SyncCommand::Test => test(config),
         SyncCommand::Forget(device) => forget(config, &device),
-        SyncCommand::Setup => setup(config),
+        SyncCommand::Setup => setup(config, config_path),
     }
 }
 
@@ -107,9 +109,9 @@ fn forget(config: &TokenGaugeConfig, device: &str) -> Result<()> {
     Ok(())
 }
 
-fn setup(config: &TokenGaugeConfig) -> Result<()> {
+fn setup(config: &TokenGaugeConfig, config_path: &Path) -> Result<()> {
     let command = tokengauge_core::launch::tui_sync_command(config);
-    if !tokengauge_core::launch::spawn_shell(&command) {
+    if !tokengauge_core::launch::spawn_shell_with_config(&command, config_path) {
         anyhow::bail!(
             "no terminal found to open the TUI in; set [waybar] tui_command, or run `tokengauge-tui --sync` yourself"
         );

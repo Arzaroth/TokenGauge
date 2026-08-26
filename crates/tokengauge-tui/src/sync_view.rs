@@ -419,7 +419,11 @@ impl SyncView {
                 Style::default().fg(theme::green()),
             ));
             lines.push(Line::from(Span::styled(
-                "            Run `tokengauge --sync-join <key>` on the other machine.",
+                "            On the other machine: `tokengauge --sync-join -`, then paste the key.",
+                dim,
+            )));
+            lines.push(Line::from(Span::styled(
+                "            Reading it from stdin keeps it out of shell history and argv.",
                 dim,
             )));
         }
@@ -743,7 +747,10 @@ mod tests {
         press(&mut view, 'g');
         let shown = screen(&view);
         assert!(shown.contains("tgsync1"), "{shown}");
-        assert!(shown.contains("--sync-join"), "{shown}");
+        // The key must never be suggested as an argument: argv and shell
+        // history both outlive the paste.
+        assert!(shown.contains("--sync-join -"), "{shown}");
+        assert!(!shown.contains("--sync-join <key>"), "{shown}");
     }
 
     #[test]

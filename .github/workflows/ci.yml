@@ -69,7 +69,25 @@ jobs:
             echo "no QML found - the glob has gone stale" >&2
             exit 1
           fi
-          /usr/lib/qt6/bin/qmllint "${files[@]}"
+          # Every import here is unresolvable in CI - Kirigami, Plasma and
+          # Quickshell are not installed - and some qmllint builds exit
+          # non-zero on those warnings while others exit 0. So the exit code
+          # is not the signal: a `[syntax]` diagnostic is. That is the failure
+          # that actually ships, since a frontend with a syntax error loads as
+          # a blank panel.
+          set +e
+          out=$(/usr/lib/qt6/bin/qmllint "${files[@]}" 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+          if [[ $status -eq 126 || $status -eq 127 ]]; then
+            echo "::error::qmllint could not be run (exit $status)"
+            exit 1
+          fi
+          if grep -q '\[syntax\]' <<<"$out"; then
+            echo "::error::QML syntax error - see the [syntax] diagnostics above"
+            exit 1
+          fi
 
       - name: Check the GNOME extension
         run: |

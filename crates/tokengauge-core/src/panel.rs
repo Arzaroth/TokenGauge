@@ -283,12 +283,8 @@ fn device_tooltip(device: &DeviceCost, now_ms: i64) -> String {
     lines.join("\n")
 }
 
-/// Relative time for a device row, and for `--sync-status`.
-pub fn ago_public(then_ms: i64, now_ms: i64) -> String {
-    ago(then_ms, now_ms)
-}
-
-pub(crate) fn ago(then_ms: i64, now_ms: i64) -> String {
+/// Relative time for a device row, for `--sync-status` and for the TUI.
+pub fn ago(then_ms: i64, now_ms: i64) -> String {
     let seconds = ((now_ms - then_ms) / 1000).max(0);
     match seconds {
         0..=89 => "just now".to_string(),

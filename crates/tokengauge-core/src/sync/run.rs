@@ -146,6 +146,85 @@ pub fn refresh(
     }
 }
 
+/// The fleet's state as lines, resolved once here.
+///
+/// Three hand-rolled copies of this had already drifted apart: the TUI's had
+/// lost the quiet marker, the overlap's kept device, the re-key notice and the
+/// `[sync.providers]` advice the other two carried. The TUI's exemption is from
+/// *layout* parity; everything a user reads still comes from the core.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncReport {
+    pub enabled: bool,
+    pub transport: String,
+    pub key_id: String,
+    /// Relative, already formatted. `None` when no cycle has finished.
+    pub last_pull: Option<String>,
+    pub devices: Vec<DeviceLine>,
+    /// Worst first, in the same order as [`note`].
+    pub problems: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceLine {
+    pub label: String,
+    /// "this machine, 3m ago", "quiet, 12d ago".
+    pub detail: String,
+}
+
+pub fn describe(status: &SyncStatus, now_ms: i64) -> SyncReport {
+    let mut problems = Vec::new();
+    if let Some(error) = &status.error {
+        problems.push(error.clone());
+    }
+    for overlap in &status.overlaps {
+        problems.push(format!(
+            "{} read the same transcripts on {}; counted once, from {}. Turn that provider off under [sync.providers] on one of them.",
+            overlap.devices.join(" and "),
+            overlap.date,
+            overlap.kept
+        ));
+    }
+    if !status.dropped.is_empty() {
+        problems.push(format!(
+            "new fleet key; dropped {} from the old fleet",
+            status.dropped.join(", ")
+        ));
+    }
+    for skipped in &status.skipped {
+        problems.push(format!("{} - {}", skipped.name, skipped.reason));
+    }
+
+    SyncReport {
+        enabled: status.enabled,
+        transport: status.transport.clone(),
+        key_id: status.key_id.clone(),
+        last_pull: status
+            .last_pull_ms
+            .map(|last| crate::panel::ago(last, now_ms)),
+        devices: status
+            .devices
+            .iter()
+            .map(|device| {
+                let mut notes = Vec::new();
+                if device.is_local {
+                    notes.push("this machine".to_string());
+                }
+                if device.stale {
+                    notes.push("quiet".to_string());
+                }
+                notes.push(crate::panel::ago(device.updated_at_ms, now_ms));
+                DeviceLine {
+                    label: device.label.clone(),
+                    detail: notes.join(", "),
+                }
+            })
+            .collect(),
+        problems,
+    }
+}
+
 /// What the panel should say about sync, or nothing when it is off.
 ///
 /// Ordered worst-first: a transport that is down, then a transcript tree read
@@ -639,6 +718,54 @@ mod tests {
             last_pull_ms,
             ..Default::default()
         }
+    }
+
+    /// The wording every surface shows. It lived in three hand-rolled copies
+    /// that had already drifted: one had lost the quiet marker, the overlap's
+    /// kept device and the re-key notice.
+    #[test]
+    fn one_report_carries_everything_each_surface_used_to_re_derive() {
+        let now = 10_000_000_000;
+        let mut status = status_with(2, Some(now - 1000));
+        status.transport = "dir:/tmp/fleet/v1".into();
+        status.key_id = "024d4dba".into();
+        status.devices[0].updated_at_ms = now - 1000;
+        status.devices[1].stale = true;
+        status.devices[1].updated_at_ms = now - 12 * 86_400_000;
+        status.dropped = vec!["old-laptop".into()];
+        status.overlaps = vec![OverlapNote {
+            date: "2026-08-25".into(),
+            devices: vec!["desktop".into(), "laptop".into()],
+            kept: "desktop".into(),
+        }];
+        status.skipped = vec![SkippedObject {
+            name: "abc.tgsync".into(),
+            reason: "sealed for another fleet key (6712469d)".into(),
+        }];
+        status.error = Some("the folder is gone".into());
+
+        let report = describe(&status, now);
+
+        assert_eq!(report.last_pull.as_deref(), Some("just now"));
+        assert_eq!(report.devices[0].detail, "this machine, just now");
+        assert!(
+            report.devices[1].detail.contains("quiet"),
+            "a silent machine has to say so: {:?}",
+            report.devices[1].detail
+        );
+
+        // Worst first, and nothing dropped on the floor.
+        assert_eq!(report.problems.len(), 4);
+        assert_eq!(report.problems[0], "the folder is gone");
+        assert!(report.problems[1].contains("counted once, from desktop"));
+        assert!(
+            report.problems[1].contains("[sync.providers]"),
+            "the advice that says what to actually do must survive"
+        );
+        assert!(report.problems[2].contains("old-laptop"));
+        assert!(report.problems[3].contains("another fleet key"));
+
+        assert!(describe(&SyncStatus::default(), now).problems.is_empty());
     }
 
     /// The wording every frontend shows, and its worst-first order.

@@ -11,7 +11,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use tokengauge_core::sync::SyncStatus;
-use tokengauge_core::{SyncTransportKind, TokenGaugeConfig, load_config, panel, read_cache_full};
+use tokengauge_core::{SyncTransportKind, TokenGaugeConfig, load_config, read_cache_full};
 
 use crate::theme;
 
@@ -425,66 +425,46 @@ impl SyncView {
         }
 
         let now_ms = chrono::Utc::now().timestamp_millis();
-        match self.status.as_ref() {
-            None => lines.push(field(
+        let Some(report) = self
+            .status
+            .as_ref()
+            .map(|status| tokengauge_core::sync::describe(status, now_ms))
+        else {
+            lines.push(field(
                 "Last sync",
                 "has not run yet".into(),
                 Style::default().fg(theme::dim()),
-            )),
-            Some(status) => {
-                if let Some(last) = status.last_pull_ms {
-                    lines.push(field(
-                        "Last sync",
-                        panel::ago_public(last, now_ms),
-                        Style::default(),
-                    ));
-                }
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled("Devices", dim)));
-                for device in &status.devices {
-                    let mut notes = vec![panel::ago_public(device.updated_at_ms, now_ms)];
-                    if device.is_local {
-                        notes.insert(0, "this machine".into());
-                    }
-                    lines.push(Line::from(vec![
-                        Span::raw(format!("  {:<20}", device.label)),
-                        Span::styled(notes.join(", "), dim),
-                    ]));
-                }
-                if status.devices.len() < 2 {
-                    lines.push(Line::from(Span::styled(
-                        "  no other machine has published yet",
-                        dim,
-                    )));
-                }
+            ));
+            return lines;
+        };
 
-                let mut problems: Vec<String> = Vec::new();
-                if let Some(error) = &status.error {
-                    problems.push(error.clone());
-                }
-                problems.extend(
-                    status
-                        .skipped
-                        .iter()
-                        .map(|s| format!("{} - {}", s.name, s.reason)),
-                );
-                problems.extend(status.overlaps.iter().map(|o| {
-                    format!(
-                        "{} read the same transcripts on {}; counted once",
-                        o.devices.join(" and "),
-                        o.date
-                    )
-                }));
-                if !problems.is_empty() {
-                    lines.push(Line::from(""));
-                    lines.push(Line::from(Span::styled("Problems", dim)));
-                    for problem in problems {
-                        lines.push(Line::from(Span::styled(
-                            format!("  {problem}"),
-                            Style::default().fg(Color::Red),
-                        )));
-                    }
-                }
+        if let Some(last) = &report.last_pull {
+            lines.push(field("Last sync", last.clone(), Style::default()));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("Devices", dim)));
+        for device in &report.devices {
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {:<20}", device.label)),
+                Span::styled(device.detail.clone(), dim),
+            ]));
+        }
+        if report.devices.len() < 2 {
+            lines.push(Line::from(Span::styled(
+                "  no other machine has published yet",
+                dim,
+            )));
+        }
+
+        if !report.problems.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Problems", dim)));
+            for problem in &report.problems {
+                lines.push(Line::from(Span::styled(
+                    format!("  {problem}"),
+                    Style::default().fg(Color::Red),
+                )));
             }
         }
         lines

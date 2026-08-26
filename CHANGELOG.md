@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The pin-to-bar setting was called four things across four frontends - "Auto", "Highest", "Highest usage" and the raw id. It is "Highest usage" everywhere.
 - A provider error body that merely mentioned the word "timeout" was reported as the request having timed out - including one advising you to raise your own timeout.
 - Two providers whose names share a prefix could answer for each other's costs, and which one won depended on hash order, so the same snapshot could put the money on a different row from one run to the next.
+- Passing two commands at once - `--json --set-provider claude=true` - silently ran whichever the flag chain happened to test first and dropped the other. It now says which two and stops. `--sync-status --json` still means what it always did: `--json` is that command's output format, not a second command.
 - Installing a frontend no longer risks leaving nothing behind: the old copy is moved aside and put back if the replacement fails, rather than deleted before the new one is in place.
 - `--set-provider` and a frontend's settings pane writing the config at the same moment could clobber each other's staging file and rename the result over the config.
 

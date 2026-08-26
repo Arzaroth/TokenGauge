@@ -1252,26 +1252,6 @@ fn apply_stale_fallback(
 // Payload Processing
 // ============================================================================
 
-pub fn parse_payload(value: serde_json::Value) -> Result<Vec<ProviderPayload>> {
-    if value.is_array() {
-        serde_json::from_value(value).context("failed to parse provider payload list")
-    } else {
-        let payload: ProviderPayload =
-            serde_json::from_value(value).context("failed to parse provider payload")?;
-        Ok(vec![payload])
-    }
-}
-
-pub fn parse_payload_bytes(bytes: &[u8]) -> Result<Vec<ProviderPayload>> {
-    let value: serde_json::Value =
-        serde_json::from_slice(bytes).context("provider payload was not JSON")?;
-    parse_payload(value)
-}
-
-pub fn payload_to_rows(payloads: Vec<ProviderPayload>) -> Vec<ProviderRow> {
-    payload_to_rows_with_costs(payloads, &HashMap::new())
-}
-
 pub fn payload_to_rows_with_costs(
     payloads: Vec<ProviderPayload>,
     costs: &HashMap<String, CostInfo>,
@@ -1497,12 +1477,6 @@ pub fn read_cache_full(path: &Path) -> Result<CachedData> {
         .with_context(|| format!("failed to read cache file {}", path.display()))?;
     let cached: CachedData = serde_json::from_str(&contents).context("cached JSON was invalid")?;
     Ok(cached)
-}
-
-/// Read cache, returning only successful payloads (for backwards compatibility).
-pub fn read_cache(path: &Path) -> Result<Vec<ProviderPayload>> {
-    let cached = read_cache_full(path)?;
-    Ok(cached.payloads().to_vec())
 }
 
 /// Write cache with payloads, errors and optional costs.
@@ -1808,15 +1782,6 @@ pub fn refresh_in_progress(sentinel: &Path) -> bool {
         return false;
     };
     age < REFRESH_SENTINEL_TTL
-}
-
-/// Write cache with only payloads (legacy, for backwards compatibility).
-pub fn write_cache(
-    path: &Path,
-    payloads: &[ProviderPayload],
-    providers: &ProvidersConfig,
-) -> Result<()> {
-    write_cache_full(path, payloads, &[], &HashMap::new(), providers, None)
 }
 
 // ============================================================================
@@ -3191,10 +3156,12 @@ where
 
     edit(&mut doc);
 
-    let tmp = path.with_extension("toml.tmp");
-    fs::write(&tmp, doc.to_string())
-        .with_context(|| format!("failed to write {}", tmp.display()))?;
-    fs::rename(&tmp, path).with_context(|| format!("failed to replace {}", path.display()))?;
+    // Through write_atomic, which names its temp per call. A fixed `.toml.tmp`
+    // had two writers - `--set-provider` from a frontend and the settings pane
+    // of another - clobbering each other's half-written file and renaming the
+    // result over the config.
+    write_atomic(path, doc.to_string().as_bytes())
+        .with_context(|| format!("failed to replace {}", path.display()))?;
     Ok(())
 }
 
@@ -4004,39 +3971,7 @@ mod tests {
     // ------------------------------------------------------------------------
 
     #[test]
-    fn parse_payload_single_object() {
-        let json = r#"{"provider":"claude","version":"2.1.12","source":"oauth"}"#;
-        let value: serde_json::Value = serde_json::from_str(json).unwrap();
-        let payloads = parse_payload(value).unwrap();
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(payloads[0].provider, "claude");
-    }
-
-    #[test]
-    fn parse_payload_array() {
-        let json = r#"[{"provider":"claude"},{"provider":"codex"}]"#;
-        let value: serde_json::Value = serde_json::from_str(json).unwrap();
-        let payloads = parse_payload(value).unwrap();
-        assert_eq!(payloads.len(), 2);
-    }
-
-    #[test]
-    fn parse_payload_bytes_valid() {
-        let json = br#"{"provider":"claude","version":"2.1.12"}"#;
-        let payloads = parse_payload_bytes(json).unwrap();
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(payloads[0].version, Some("2.1.12".to_string()));
-    }
-
-    #[test]
-    fn parse_payload_bytes_invalid_json() {
-        let json = b"not valid json";
-        let result = parse_payload_bytes(json);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn parse_payload_with_full_usage() {
+    fn a_fetchers_payload_deserialises_every_window_field() {
         let json = r#"{
             "provider": "claude",
             "version": "2.1.12",
@@ -4059,10 +3994,7 @@ mod tests {
             "credits": null,
             "error": null
         }"#;
-        let payloads = parse_payload_bytes(json.as_bytes()).unwrap();
-        assert_eq!(payloads.len(), 1);
-
-        let payload = &payloads[0];
+        let payload: ProviderPayload = serde_json::from_slice(json.as_bytes()).unwrap();
         assert_eq!(payload.provider, "claude");
         assert!(!payload.has_error());
 
@@ -4073,8 +4005,12 @@ mod tests {
     }
 
     // ------------------------------------------------------------------------
-    // payload_to_rows tests
+    // payload_to_rows_with_costs tests
     // ------------------------------------------------------------------------
+
+    fn rows_of(payloads: Vec<ProviderPayload>) -> Vec<ProviderRow> {
+        payload_to_rows_with_costs(payloads, &HashMap::new())
+    }
 
     #[test]
     fn payload_to_rows_filters_errors() {
@@ -4100,7 +4036,7 @@ mod tests {
             }),
             stale: false,
         };
-        let rows = payload_to_rows(vec![good, bad]);
+        let rows = rows_of(vec![good, bad]);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].provider, "Claude");
     }
@@ -4118,7 +4054,7 @@ mod tests {
             error: None,
             stale: false,
         };
-        let rows = payload_to_rows(vec![payload]);
+        let rows = rows_of(vec![payload]);
         assert_eq!(rows[0].credits, "42.57"); // 2 decimal places
     }
 
@@ -4134,7 +4070,7 @@ mod tests {
             error: None,
             stale: false,
         };
-        let rows = payload_to_rows(vec![payload1]);
+        let rows = rows_of(vec![payload1]);
         assert_eq!(rows[0].source, "2.1.12 (oauth)");
 
         // Only version
@@ -4147,7 +4083,7 @@ mod tests {
             error: None,
             stale: false,
         };
-        let rows = payload_to_rows(vec![payload2]);
+        let rows = rows_of(vec![payload2]);
         assert_eq!(rows[0].source, "2.1.12");
 
         // Only source
@@ -4160,7 +4096,7 @@ mod tests {
             error: None,
             stale: false,
         };
-        let rows = payload_to_rows(vec![payload3]);
+        let rows = rows_of(vec![payload3]);
         assert_eq!(rows[0].source, "oauth");
 
         // Neither
@@ -4173,7 +4109,7 @@ mod tests {
             error: None,
             stale: false,
         };
-        let rows = payload_to_rows(vec![payload4]);
+        let rows = rows_of(vec![payload4]);
         assert_eq!(rows[0].source, "—");
     }
 

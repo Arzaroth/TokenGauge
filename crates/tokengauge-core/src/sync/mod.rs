@@ -13,6 +13,7 @@ pub mod contribution;
 pub mod crypto;
 pub mod fleet;
 pub mod hour;
+pub mod report;
 pub mod run;
 pub mod s3;
 pub mod store;
@@ -27,8 +28,8 @@ pub use fleet::{
     DeviceCost, DeviceSlice, FleetStore, KeyChange, ObjectState, Overlap, STORE_RETENTION_DAYS,
 };
 pub use hour::Hour;
-pub use run::{
-    DeviceLine, DeviceStatus, OverlapNote, SkippedObject, SyncOutcome, SyncReport, SyncStatus,
-    describe, forget, local_device_id, note, refresh, test_round_trip,
+pub use report::{
+    DeviceLine, DeviceStatus, OverlapNote, SkippedObject, SyncReport, SyncStatus, describe, note,
 };
+pub use run::{SyncOutcome, forget, local_device_id, refresh, test_round_trip};
 pub use transport::{PeerEntry, Transport};

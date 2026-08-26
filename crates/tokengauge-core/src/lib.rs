@@ -107,21 +107,6 @@ impl ProviderPayload {
 // Provider Registry
 // ============================================================================
 
-/// The providers TokenGauge fetches natively, both OAuth.
-pub const PROVIDERS: &[&str] = &["codex", "claude", "kimi", "grok", "glm"];
-
-/// Get the display label for a provider.
-pub fn provider_label(name: &str) -> &str {
-    match name {
-        "codex" => "Codex",
-        "claude" => "Claude",
-        "kimi" => "Kimi",
-        "grok" => "Grok",
-        "glm" => "GLM",
-        other => other,
-    }
-}
-
 // ============================================================================
 // Native fetcher helpers (shared by the claude/codex modules)
 // ============================================================================
@@ -139,6 +124,7 @@ pub mod launch;
 pub mod pace;
 pub mod panel;
 mod provider;
+pub mod providers;
 pub mod statefiles;
 pub mod sync;
 pub mod theme;
@@ -149,6 +135,7 @@ pub use fmt::{
     format_tokens, format_updated, format_updated_relative, month_start, now_ms, sparkline,
 };
 pub(crate) use fmt::{pct_u8, slug};
+pub use providers::*;
 pub use statefiles::*;
 pub use theme::*;
 
@@ -170,140 +157,6 @@ pub(crate) fn http_client(timeout: Duration) -> Result<reqwest::blocking::Client
         .context("failed to build HTTP client")
 }
 
-/// Path to the Claude OAuth credentials file the native fetcher reads.
-pub fn claude_credentials_path() -> PathBuf {
-    claude::credentials_path()
-}
-
-/// Path to the Codex auth file the native fetcher reads (honors `CODEX_HOME`).
-pub fn codex_auth_path() -> PathBuf {
-    codex::auth_path()
-}
-
-/// Path to the Kimi Code CLI credential file the native fetcher reads (honors
-/// `KIMI_CODE_HOME`).
-pub fn kimi_credentials_path() -> PathBuf {
-    kimi::credentials_path()
-}
-
-/// Path to the Grok CLI auth file the native fetcher reads (honors `GROK_HOME`).
-pub fn grok_auth_path() -> PathBuf {
-    grok::auth_path()
-}
-
-/// The CLI a provider's credentials come from, if any. `None` means the
-/// provider authenticates with an API key / env var and needs no CLI.
-pub fn provider_cli_name(provider: &str) -> Option<&'static str> {
-    Some(match provider.to_lowercase().as_str() {
-        "claude" => "claude",
-        "codex" => "codex",
-        "kimi" => "kimi",
-        "grok" => "grok",
-        _ => return None,
-    })
-}
-
-/// Whether a provider's credentials are currently available, and where from.
-pub struct AuthStatus {
-    /// At least one accepted auth source is present.
-    pub ok: bool,
-    /// What was found (or what is missing).
-    pub detail: String,
-    /// How to satisfy it when missing (empty when `ok`).
-    pub hint: &'static str,
-}
-
-fn env_var_present(name: &str) -> bool {
-    std::env::var(name)
-        .ok()
-        .is_some_and(|v| !v.trim().is_empty())
-}
-
-fn file_auth_status(path: PathBuf, hint: &'static str) -> AuthStatus {
-    if path.exists() {
-        AuthStatus {
-            ok: true,
-            detail: path.display().to_string(),
-            hint: "",
-        }
-    } else {
-        AuthStatus {
-            ok: false,
-            detail: format!("{} not found", path.display()),
-            hint,
-        }
-    }
-}
-
-/// Report a provider's credential presence without doing a network fetch.
-/// Mirrors the auth sources each native fetcher actually reads.
-pub fn provider_auth_status(provider: &str) -> AuthStatus {
-    match provider.to_lowercase().as_str() {
-        "claude" => file_auth_status(claude_credentials_path(), "run `claude` to sign in"),
-        "codex" => file_auth_status(codex_auth_path(), "run `codex` to sign in"),
-        "grok" => match grok::credentials_valid(Utc::now()) {
-            Ok(()) => AuthStatus {
-                ok: true,
-                detail: grok_auth_path().display().to_string(),
-                hint: "",
-            },
-            Err(err) => AuthStatus {
-                ok: false,
-                detail: err.to_string(),
-                hint: "run `grok login` to sign in",
-            },
-        },
-        "kimi" => {
-            let path = kimi_credentials_path();
-            // Mirror kimi::resolve_auth, which prefers KIMI_CODE_API_KEY over the
-            // CLI file and validates the file (parse + freshness) when used.
-            if env_var_present("KIMI_CODE_API_KEY") {
-                AuthStatus {
-                    ok: true,
-                    detail: "KIMI_CODE_API_KEY set".to_string(),
-                    hint: "",
-                }
-            } else {
-                match kimi::credentials_valid() {
-                    Ok(()) => AuthStatus {
-                        ok: true,
-                        detail: format!("{} (kimi CLI)", path.display()),
-                        hint: "",
-                    },
-                    Err(err) => AuthStatus {
-                        ok: false,
-                        detail: err.to_string(),
-                        hint: "sign in with `kimi` or set KIMI_CODE_API_KEY",
-                    },
-                }
-            }
-        }
-        "glm" => {
-            if let Some(var) = ["Z_AI_API_KEY", "ZAI_API_TOKEN"]
-                .into_iter()
-                .find(|v| env_var_present(v))
-            {
-                AuthStatus {
-                    ok: true,
-                    detail: format!("{var} set"),
-                    hint: "",
-                }
-            } else {
-                AuthStatus {
-                    ok: false,
-                    detail: "Z_AI_API_KEY unset".to_string(),
-                    hint: "set Z_AI_API_KEY (legacy ZAI_API_TOKEN also works)",
-                }
-            }
-        }
-        other => AuthStatus {
-            ok: false,
-            detail: format!("unknown provider {other}"),
-            hint: "",
-        },
-    }
-}
-
 // ============================================================================
 // Configuration Types
 // ============================================================================
@@ -321,41 +174,6 @@ pub struct ProvidersConfig {
     /// configs. Captured so `--doctor` can warn instead of silently ignoring.
     #[serde(flatten)]
     pub unknown: HashMap<String, toml::Value>,
-}
-
-impl ProvidersConfig {
-    /// Get list of all enabled provider names.
-    pub fn enabled_providers(&self) -> Vec<&'static str> {
-        let mut enabled = Vec::new();
-        if self.codex.unwrap_or(false) {
-            enabled.push("codex");
-        }
-        if self.claude.unwrap_or(false) {
-            enabled.push("claude");
-        }
-        if self.kimi.unwrap_or(false) {
-            enabled.push("kimi");
-        }
-        if self.grok.unwrap_or(false) {
-            enabled.push("grok");
-        }
-        if self.glm.unwrap_or(false) {
-            enabled.push("glm");
-        }
-        enabled
-    }
-
-    /// Check if a provider is enabled (used for filtering payloads).
-    pub fn is_enabled(&self, provider: &str) -> bool {
-        match provider {
-            "codex" => self.codex.unwrap_or(false),
-            "claude" => self.claude.unwrap_or(false),
-            "kimi" => self.kimi.unwrap_or(false),
-            "grok" => self.grok.unwrap_or(false),
-            "glm" => self.glm.unwrap_or(false),
-            _ => false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -954,18 +772,6 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<Output> {
     }
 }
 
-/// Fetch a single provider's usage natively over HTTP.
-pub fn fetch_single_provider(provider: &str, timeout: Duration) -> Result<Vec<ProviderPayload>> {
-    match provider {
-        "claude" => claude::fetch(timeout),
-        "codex" => codex::fetch(timeout),
-        "kimi" => kimi::fetch(timeout),
-        "grok" => grok::fetch(timeout),
-        "glm" => glm::fetch(timeout),
-        other => Err(anyhow!("unknown provider {other}")),
-    }
-}
-
 /// Fetch all enabled providers in parallel.
 pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
     let enabled = config.providers.enabled_providers();
@@ -1379,52 +1185,6 @@ pub fn retain_enabled(
 // Display helpers (shared between waybar binary and TUI)
 // ============================================================================
 
-pub struct ProviderIcon {
-    pub glyph: &'static str,
-    pub color_hex: &'static str,
-}
-
-pub fn provider_icon(label: &str) -> ProviderIcon {
-    match label.to_lowercase().as_str() {
-        "claude" => ProviderIcon {
-            glyph: "\u{f0721}",
-            color_hex: "#DE7356",
-        },
-        "codex" => ProviderIcon {
-            glyph: "\u{f0b2b}",
-            color_hex: "#74AA9C",
-        },
-        "kimi" => ProviderIcon {
-            glyph: "\u{f06a9}",
-            color_hex: "#FE603C",
-        },
-        "grok" => ProviderIcon {
-            glyph: "\u{f06a9}",
-            color_hex: "#000000",
-        },
-        "glm" => ProviderIcon {
-            glyph: "\u{f06a9}",
-            color_hex: "#E85A6A",
-        },
-        _ => ProviderIcon {
-            glyph: "\u{f06a9}",
-            color_hex: NEUTRAL_HEX,
-        },
-    }
-}
-
-/// Basename slug of the bundled brand SVG for a provider label, if one ships.
-pub fn provider_icon_slug(label: &str) -> Option<&'static str> {
-    Some(match label.to_lowercase().as_str() {
-        "claude" => "claude",
-        "codex" => "codex",
-        "kimi" => "kimi",
-        "grok" => "grok",
-        "glm" => "glm",
-        _ => return None,
-    })
-}
-
 /// Directory the installer drops provider SVG logos into. Overridable with
 /// `TOKENGAUGE_ICON_DIR` (e.g. point it at the repo `assets/providers` when
 /// running a dev build).
@@ -1444,53 +1204,6 @@ pub fn provider_icon_svg_path(label: &str) -> Option<PathBuf> {
     let slug = provider_icon_slug(label)?;
     let path = provider_icon_dir().join(format!("ProviderIcon-{slug}.svg"));
     path.exists().then_some(path)
-}
-
-/// Provider-specific labels for the three usage windows.
-/// Defaults to generic "Session"/"Weekly"/"Tertiary" for unknown providers.
-pub fn window_labels(provider: &str) -> (&'static str, &'static str, &'static str) {
-    match provider.to_lowercase().as_str() {
-        "claude" => ("Session", "Weekly (all)", "Weekly (Sonnet)"),
-        "kimi" => ("Weekly", "Rate Limit", "Tertiary"),
-        "grok" => ("Weekly", "On-demand", "Tertiary"),
-        "glm" => ("Weekly", "30-day", "5-hour"),
-        _ => ("Session", "Weekly", "Tertiary"),
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ProviderUrls {
-    pub dashboard: Option<&'static str>,
-    pub status: Option<&'static str>,
-}
-
-pub fn provider_urls(provider: &str) -> ProviderUrls {
-    match provider.to_lowercase().as_str() {
-        "claude" => ProviderUrls {
-            dashboard: Some("https://claude.ai/settings/usage"),
-            status: Some("https://status.anthropic.com"),
-        },
-        "codex" => ProviderUrls {
-            dashboard: Some("https://platform.openai.com/usage"),
-            status: Some("https://status.openai.com"),
-        },
-        "kimi" => ProviderUrls {
-            dashboard: Some("https://www.kimi.com/code/console"),
-            status: None,
-        },
-        "grok" => ProviderUrls {
-            dashboard: Some("https://grok.com/?_s=usage"),
-            status: Some("https://status.x.ai"),
-        },
-        "glm" => ProviderUrls {
-            dashboard: Some("https://zcode.z.ai/en"),
-            status: None,
-        },
-        _ => ProviderUrls {
-            dashboard: None,
-            status: None,
-        },
-    }
 }
 
 // ============================================================================
@@ -1668,7 +1381,7 @@ impl CostDiagnostics {
                 // Present on one side only. Meaningful for the trees we parse,
                 // expected for anything the fallback covers.
                 (mine, theirs)
-                    if NATIVELY_READ.contains(&provider.as_str())
+                    if natively_read().contains(&provider.as_str())
                         && (mine.unwrap_or(0) > 0 || theirs.unwrap_or(0) > 0) =>
                 {
                     consider(provider, 1.0);
@@ -1679,13 +1392,6 @@ impl CostDiagnostics {
         worst
     }
 }
-
-/// The providers the native readers can produce on their own, being the
-/// transcript trees they parse. Everything else reaches a cost row through the
-/// `auto` fallback, so its absence from a native read says nothing.
-/// Providers TokenGauge parses transcripts for. Only these produce usage
-/// events, so only these can take part in fleet sync.
-pub const NATIVELY_READ: &[&str] = &["claude", "codex"];
 
 /// Run the native readers, and ccusage alongside them when asked, so the two
 /// can be compared. This is what keeps the dependency earning its keep: a

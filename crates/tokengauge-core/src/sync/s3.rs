@@ -571,6 +571,7 @@ mod tests {
             prefix: "fleet".into(),
             access_key_id: "from-config".into(),
             secret_access_key: "shhh".into(),
+            unknown: Default::default(),
         };
         let transport = S3Transport::new(&configured, Duration::from_secs(5)).expect("build");
 

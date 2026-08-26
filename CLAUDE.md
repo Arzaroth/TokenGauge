@@ -2,7 +2,7 @@
 
 ## Frontend parity (hard rule)
 
-TokenGauge ships one gauge across five surfaces. **A user-facing feature lands
+TokenGauge ships one gauge across six surfaces. **A user-facing feature lands
 on all of them, or it is not done.**
 
 | Surface    | Where                                        | Draws the panel |

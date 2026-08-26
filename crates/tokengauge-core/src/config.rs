@@ -155,6 +155,14 @@ impl TokenGaugeConfig {
                 .keys()
                 .map(|k| format!("sync.providers.{k}")),
         );
+        keys.extend(
+            self.sync
+                .dir
+                .unknown
+                .keys()
+                .map(|k| format!("sync.dir.{k}")),
+        );
+        keys.extend(self.sync.s3.unknown.keys().map(|k| format!("sync.s3.{k}")));
         keys.sort();
         keys
     }
@@ -545,6 +553,23 @@ mod tests {
         );
         // Parsing does not fail - the daemon keeps running on an old config.
         assert!(config.providers.claude.unwrap_or(false));
+    }
+
+    /// The transport sections were the gap: a typo in `[sync.s3]` means sync
+    /// quietly does not work, which is the one failure the whole unknown-key
+    /// mechanism exists to make loud. Both were dropped in silence.
+    #[test]
+    fn a_typo_in_a_transport_section_is_reported_too() {
+        let config: TokenGaugeConfig = toml::from_str(
+            "[sync.dir]\npath = \"/tmp/x\"\npth = \"typo\"\n\
+             [sync.s3]\nbucket = \"b\"\nendpiont = \"typo\"\n",
+        )
+        .expect("parses");
+        let keys = config.unknown_config_keys();
+        assert!(keys.contains(&"sync.dir.pth".to_string()), "{keys:?}");
+        assert!(keys.contains(&"sync.s3.endpiont".to_string()), "{keys:?}");
+        // The real keys beside them are not mistaken for typos.
+        assert_eq!(keys.len(), 2, "{keys:?}");
     }
 
     #[test]

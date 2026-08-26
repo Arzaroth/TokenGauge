@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PageUp and PageDown in the TUI did nothing: the scroll offset they moved was never read by anything that draws. Removed rather than left as a key that looks bound.
 - Sync wording lived in four places - the panel badge, `--sync-status`, `--doctor` and the TUI sync screen - and all four had drifted. There is one `sync::findings()` list now; the doctor's cloned-disk check, which only it had, reaches the panel and `--sync-status` too, and the "no other machine has published yet" line the TUI printed itself is the core's.
 - CI checks the desktop frontends. `qmllint` over the Plasma and Omarchy QML, `node --check` over the GNOME extension, and a parse of every frontend manifest - the desktop frontends install separately from the binary, so until now a syntax error in one shipped without any job noticing. The Windows job also runs clippy over the tray, which is the only place it can run at all.
+- `--doctor` names where the price table came from: downloaded, cached, cached-past-its-window, or compiled into the binary. A machine that has never reached LiteLLM rates everything against the copy from release day, which is the intended fallback and was invisible - it showed up only as a model priced since then reading as unpriced, which looks like a reader bug.
 
 ## [0.23.0] - 2026-08-25
 

@@ -2388,6 +2388,10 @@ pub struct CostDiagnostics {
     pub elapsed: Duration,
     pub roots: Vec<PathBuf>,
     pub prices: usize,
+    /// Which of the four fallbacks the price table came from. A cold or
+    /// offline machine rates everything against the compiled-in copy, which
+    /// is correct and completely invisible from the cost row.
+    pub price_source: cost::pricing::PriceSource,
     pub unpriced: Vec<String>,
     /// Month-to-date tokens and spend per provider, from each source. The
     /// token counts are the parser check: they come from the transcripts and
@@ -2472,12 +2476,18 @@ pub fn diagnose_costs(
             .collect()
     };
 
+    // No network here: --doctor reports the table the cost path would use, and
+    // a download from inside the diagnosis would report a freshness the real
+    // fetch did not have.
+    let (prices, price_source) = cost::pricing::load_with_source(cache_file, timeout, false);
+
     CostDiagnostics {
         source,
         events: report.events,
         elapsed,
         roots: cost::transcript_roots(),
-        prices: cost::pricing::load(cache_file, timeout, false).len(),
+        prices: prices.len(),
+        price_source,
         native: month_totals(&report.costs),
         ccusage: compare.then(|| month_totals(&fetch_ccusage_costs(timeout))),
         unpriced: report.unpriced,

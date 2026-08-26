@@ -347,7 +347,21 @@ fn main() -> Result<()> {
 fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
     let (payloads, errors, costs) = maybe_refresh(config)?;
     let rows = payload_to_rows_with_costs(payloads, &costs);
+    println!(
+        "{}",
+        serde_json::to_string(&json_snapshot(config, &rows, &errors))?
+    );
+    Ok(())
+}
 
+/// The snapshot object itself. Split out from the printing so the key set five
+/// frontends parse can be pinned by a test - none of them are compiled here,
+/// and a renamed field reaches them as a blank panel.
+fn json_snapshot(
+    config: &TokenGaugeConfig,
+    rows: &[ProviderRow],
+    errors: &[ProviderFetchError],
+) -> serde_json::Value {
     let enabled: Vec<String> = config
         .providers
         .enabled_providers()
@@ -425,7 +439,7 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
         WaybarWindow::Weekly => "weekly",
     };
     let update_status = tokengauge_core::read_update_status(&config.cache_file);
-    let out = serde_json::json!({
+    serde_json::json!({
         // Frontends show this in their settings pane; `update` only carries a
         // version once a release check has run, and is null until then.
         "version": env!("CARGO_PKG_VERSION"),
@@ -448,9 +462,7 @@ fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
         // so a fetch by the daemon or by another frontend lands immediately
         // instead of on the next poll. It holds no provider data.
         "revision_file": tokengauge_core::revision_path(&config.cache_file),
-    });
-    println!("{}", serde_json::to_string(&out)?);
-    Ok(())
+    })
 }
 
 /// `--set-provider NAME=BOOL`: toggle an OAuth provider in the config, fetch
@@ -1123,10 +1135,25 @@ fn handle_doctor(config_path: &Path) -> i32 {
                     .join(", ")
             },
         });
+        // Which of the four fallbacks the table came from. A machine that has
+        // never reached LiteLLM rates everything against the copy compiled in
+        // on release day - correct, and invisible from the cost row, where it
+        // shows up only as a model priced since then reading as unpriced.
         record(DoctorCheck {
-            label: format!("price table: {} models", d.prices),
-            ok: d.prices > 0,
-            detail: "from LiteLLM, cached beside the snapshot".into(),
+            label: format!(
+                "price table: {} models, {}",
+                d.prices,
+                d.price_source.label()
+            ),
+            ok: d.prices > 0 && d.price_source.is_current(),
+            detail: if d.price_source.is_current() {
+                "from LiteLLM, cached beside the snapshot".into()
+            } else {
+                format!(
+                    "{}; a model priced since will read as unpriced below",
+                    tokengauge_core::cost::pricing::price_cache_path(&cfg.cache_file).display()
+                )
+            },
         });
         // An unpriced model must read as a gap, never as $0 spent.
         record(DoctorCheck {
@@ -2613,6 +2640,93 @@ mod tests {
             cost: None,
             stale: false,
         }
+    }
+
+    /// The contract five frontends parse, none of which the compiler sees. A
+    /// renamed or dropped key reaches them as a blank panel, a missing tab
+    /// strip or a settings pane that cannot toggle anything, and no Rust test
+    /// would have failed on the way there. Adding a key is fine; taking one
+    /// away or renaming it means editing all five and this list.
+    #[test]
+    fn the_json_snapshot_keeps_the_keys_every_frontend_reads() {
+        let config = TokenGaugeConfig::default();
+        let row = sample_row("claude");
+        let snapshot = json_snapshot(&config, std::slice::from_ref(&row), &[]);
+
+        let top: Vec<&str> = snapshot
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        for key in [
+            "version",
+            "rows",
+            "errors",
+            "enabled",
+            "providers",
+            "primary",
+            "window",
+            "theme",
+            "update",
+            "revision_file",
+        ] {
+            assert!(top.contains(&key), "top-level `{key}` is gone: {top:?}");
+        }
+
+        let theme: Vec<&str> = snapshot["theme"]
+            .as_object()
+            .expect("a theme object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        for key in ["dim", "separator", "green", "yellow", "red", "neutral"] {
+            assert!(theme.contains(&key), "theme.{key} is gone: {theme:?}");
+        }
+
+        let row_value = &snapshot["rows"][0];
+        let keys: Vec<&str> = row_value
+            .as_object()
+            .expect("a row object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        for key in [
+            // Serialised straight off ProviderRow.
+            "provider",
+            "session_used",
+            "session_reset",
+            "weekly_used",
+            "weekly_reset",
+            "credits",
+            "source",
+            "updated",
+            "plan_label",
+            "extra_windows",
+            "stale",
+            // Added here, and invisible to ProviderRow's own derive.
+            "label",
+            "glyph",
+            "color",
+            "icon_svg",
+            "window_labels",
+            "session_pace",
+            "weekly_pace",
+            "panel",
+            "dashboard_url",
+            "status_url",
+        ] {
+            assert!(keys.contains(&key), "row key `{key}` is gone: {keys:?}");
+        }
+
+        // The panel is the whole content contract; a row that carries an empty
+        // one draws nothing anywhere.
+        assert!(
+            snapshot["rows"][0]["panel"]
+                .as_array()
+                .is_some_and(|sections| !sections.is_empty()),
+            "the row carries no panel sections"
+        );
     }
 
     #[test]

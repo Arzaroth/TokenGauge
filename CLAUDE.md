@@ -169,13 +169,16 @@ daemon started before the rename is the same process to reload.
   `-R Arzaroth/TokenGauge`.
 - Before finishing: `cargo fmt --all`, `cargo clippy --workspace --all-targets`,
   `cargo test --workspace`. For QML run `qmllint`, for the GNOME extension
-  `node --input-type=module --check`.
+  `node --input-type=module --check`. CI's `frontends` job runs the last two, so
+  they are enforced rather than remembered.
 - `tokengauge-tray` is `cfg(windows)`-gated with Windows-only GUI deps, so it
-  does not type-check on Linux. To verify a change to it, temporarily lift the
-  `[target.'cfg(windows)'.dependencies]` header in its `Cargo.toml` and swap the
-  three `#[cfg(windows)]` / `#[cfg(not(windows))]` attributes in `main.rs` for
-  `#[cfg(all())]` / `#[cfg(any())]`, run `cargo clippy -p tokengauge-tray`, then
-  revert both. eframe and tray-icon do build on Linux.
+  does not type-check on Linux. CI's Windows job runs `cargo clippy -p
+  tokengauge-tray` and is the authority. To check a change locally before
+  pushing, temporarily lift the `[target.'cfg(windows)'.dependencies]` header in
+  its `Cargo.toml` and swap the three `#[cfg(windows)]` / `#[cfg(not(windows))]`
+  attributes in `main.rs` for `#[cfg(all())]` / `#[cfg(any())]`, run
+  `cargo clippy -p tokengauge-tray`, then revert both. eframe and tray-icon do
+  build on Linux.
 - A running `tokengauge --daemon` (the installed binary in
   `~/.local/bin`) serves the bar and tooltip over
   `<cache_file parent>/tokengauge.sock`, so a freshly built binary invoked with

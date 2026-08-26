@@ -157,32 +157,77 @@ fn download(timeout: Duration) -> Result<PriceTable> {
     Ok(table)
 }
 
+/// Where a loaded table came from. An offline machine quietly rating everything
+/// against the copy compiled in on release day is not a failure - it is the
+/// deliberate fallback - but it is invisible from the cost row, which is why
+/// `--doctor` names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PriceSource {
+    /// Cached beside the snapshot, inside its freshness window.
+    Fresh,
+    /// Downloaded on this call.
+    Downloaded,
+    /// Cached but past its window; the network did not answer.
+    Stale,
+    /// The copy compiled into the binary. The floor every other case falls to,
+    /// so it is also the sane default for a diagnosis that never ran.
+    #[default]
+    Vendored,
+}
+
+impl PriceSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            PriceSource::Fresh => "cached",
+            PriceSource::Downloaded => "downloaded",
+            PriceSource::Stale => "cached, past its refresh window",
+            PriceSource::Vendored => "compiled in",
+        }
+    }
+
+    /// A table that is not current. Not an error - it still prices everything
+    /// it covers - but a model priced since this copy was made reads as
+    /// unpriced, which looks like a reader bug from the cost row.
+    pub fn is_current(self) -> bool {
+        matches!(self, PriceSource::Fresh | PriceSource::Downloaded)
+    }
+}
+
 /// Load the price table: fresh cache, else a download, else a stale cache, else
 /// the vendored copy. Never fails - an outdated price is a better answer than
 /// no cost at all, and an unpriced model is reported rather than shown as $0.
 pub fn load(cache_file: &Path, timeout: Duration, allow_network: bool) -> PriceTable {
+    load_with_source(cache_file, timeout, allow_network).0
+}
+
+/// [`load`], saying which of the four it fell through to.
+pub fn load_with_source(
+    cache_file: &Path,
+    timeout: Duration,
+    allow_network: bool,
+) -> (PriceTable, PriceSource) {
     let path = price_cache_path(cache_file);
     if is_fresh(&path)
         && let Ok(raw) = fs::read_to_string(&path)
         && let Ok(table) = PriceTable::from_json(&raw)
         && !table.is_empty()
     {
-        return table;
+        return (table, PriceSource::Fresh);
     }
     if allow_network && let Ok(table) = download(timeout) {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
         let _ = crate::write_atomic(&path, table.to_json().as_bytes());
-        return table;
+        return (table, PriceSource::Downloaded);
     }
     if let Ok(raw) = fs::read_to_string(&path)
         && let Ok(table) = PriceTable::from_json(&raw)
         && !table.is_empty()
     {
-        return table;
+        return (table, PriceSource::Stale);
     }
-    PriceTable::vendored()
+    (PriceTable::vendored(), PriceSource::Vendored)
 }
 
 #[cfg(test)]
@@ -293,6 +338,51 @@ mod tests {
         assert_eq!(price.input, 1.0);
         assert_eq!(price.output, 2.0);
         let _ = fs::remove_dir_all(cache_file.parent().expect("parent"));
+    }
+
+    /// A machine that has never reached LiteLLM rates everything against the
+    /// table compiled in on release day. That is the deliberate fallback, and
+    /// from the cost row it is indistinguishable from a current table - so the
+    /// loader has to say which one it handed back.
+    #[test]
+    fn the_loader_says_which_of_the_four_it_fell_through_to() {
+        let dir = std::env::temp_dir().join(format!(
+            "tokengauge-price-source-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let cache_file = dir.join("tokengauge-usage.json");
+
+        // Nothing cached, no network allowed: the compiled-in copy.
+        let (table, source) = load_with_source(&cache_file, Duration::from_secs(1), false);
+        assert_eq!(source, PriceSource::Vendored);
+        assert!(!source.is_current());
+        assert_eq!(table.len(), PriceTable::vendored().len());
+
+        // A cache written now is fresh, and reads as its own source.
+        let path = price_cache_path(&cache_file);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("cache dir");
+        std::fs::write(&path, PriceTable::vendored().to_json()).expect("write cache");
+        let (_, source) = load_with_source(&cache_file, Duration::from_secs(1), false);
+        assert_eq!(source, PriceSource::Fresh);
+        assert!(source.is_current());
+
+        // Backdated past the TTL, with the network refused: still served, but
+        // named as stale rather than passed off as current.
+        let old = SystemTime::now() - PRICE_TTL - Duration::from_secs(60);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("reopen the cache")
+            .set_modified(old)
+            .expect("backdate the cache");
+        let (table, source) = load_with_source(&cache_file, Duration::from_secs(1), false);
+        assert_eq!(source, PriceSource::Stale);
+        assert!(!source.is_current());
+        assert!(!table.is_empty(), "a stale table is still served");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

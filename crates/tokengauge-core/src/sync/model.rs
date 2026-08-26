@@ -332,6 +332,9 @@ impl Default for FleetStore {
             last_pull_ms: None,
             last_publish_ms: None,
             published_hash: None,
+            key_id: None,
+            retired_key_ids: Vec::new(),
+            published_name: None,
         }
     }
 }
@@ -360,6 +363,28 @@ pub struct FleetStore {
     /// that has done nothing since does not churn the storage.
     #[serde(default)]
     pub published_hash: Option<u64>,
+    /// The fleet key this store was last built under. See [`FleetStore::adopt_key`].
+    #[serde(default)]
+    pub key_id: Option<String>,
+    /// Keys this machine used to hold. An object sealed under one of these is
+    /// our own past, so it is passed over in silence; an object under a key we
+    /// have never held is a different fleet sharing the storage, which is worth
+    /// saying out loud.
+    #[serde(default)]
+    pub retired_key_ids: Vec<String>,
+    /// The object name this device last published under, so a re-key can take
+    /// its own unreadable litter out of a shared folder.
+    #[serde(default)]
+    pub published_name: Option<String>,
+}
+
+/// What changing the fleet key cost.
+#[derive(Debug, Clone, Default)]
+pub struct KeyChange {
+    /// Peers that belonged to the old fleet.
+    pub dropped: Vec<String>,
+    /// What this device published under the old key.
+    pub previous_object: Option<String>,
 }
 
 /// One peer object as we last saw it. A `reason` means it was rejected, and is
@@ -375,6 +400,48 @@ pub struct ObjectState {
 impl FleetStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Take on a fleet key, returning the peers dropped because the key changed.
+    ///
+    /// A different key is a different fleet. The old peers' objects are sealed
+    /// under a key this machine no longer has, so they would be reported as
+    /// foreign on every cycle from here to forever, and their rows would show
+    /// machines this one no longer shares anything with. Rotating a key across
+    /// the same machines costs only what predates the wire retention, because
+    /// each of them republishes on its next cycle.
+    ///
+    /// This device's own history stays: it is ours, and the store is the only
+    /// record of it.
+    pub fn adopt_key(&mut self, key_id: &str, local_id: &str) -> Option<KeyChange> {
+        if self.key_id.as_deref() == Some(key_id) {
+            return None;
+        }
+        let first_time = self.key_id.is_none();
+        let change = KeyChange {
+            dropped: self
+                .devices
+                .iter()
+                .filter(|(id, _)| id.as_str() != local_id)
+                .map(|(_, slice)| slice.device.display().to_string())
+                .collect(),
+            previous_object: self.published_name.clone(),
+        };
+
+        if let Some(retired) = self.key_id.take() {
+            self.retired_key_ids.retain(|id| *id != retired);
+            self.retired_key_ids.push(retired);
+            // A handful is plenty: this only exists to recognise our own litter.
+            let excess = self.retired_key_ids.len().saturating_sub(8);
+            self.retired_key_ids.drain(..excess);
+        }
+        self.devices.retain(|id, _| id == local_id);
+        self.objects.clear();
+        self.published_hash = None;
+        self.published_name = None;
+        self.key_id = Some(key_id.to_string());
+
+        if first_time { None } else { Some(change) }
     }
 
     /// Replace this device's buckets inside `[from, ..]` and leave everything

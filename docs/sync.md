@@ -385,26 +385,34 @@ later wants a header icon rather than a panel row.
    `(device, hour)` and ages out on the *local* retention rule, not the peer's.
    Otherwise a machine that vanishes for two months would take its history out
    of the fleet with it, and this file is state, not cache.
-5. **A retired machine** leaves the by-device section after `peer_max_age_days`
+5. **Re-keying starts a fleet rather than rotating one.** A store built under a
+   different key keeps only this device: the old peers' objects are sealed under
+   a key this machine no longer holds, so they would be reported foreign every
+   cycle and their rows would claim a fleet it has left. Retired key ids are
+   remembered so our own old objects are passed over in silence rather than
+   reported, and the object this device published under the old key is deleted
+   rather than left as litter nobody can read. Peers republish on their next
+   cycle, so the real cost is peer history older than `retention_days`.
+6. **A retired machine** leaves the by-device section after `peer_max_age_days`
    but keeps contributing to historical days, because those days really did
    happen. `--sync-forget <device>` deletes the object and pins it out.
-6. **A cloned machine id** (VM template, restored image) shows up as one device
+7. **A cloned machine id** (VM template, restored image) shows up as one device
    id publishing under two hostnames. `--doctor` warns, `--sync-reset-id`
    regenerates.
-7. **Asymmetric per-provider config.** If one machine syncs codex and another
+8. **Asymmetric per-provider config.** If one machine syncs codex and another
    does not, codex totals silently exclude the second machine. The by-device
    section shows who contributed, and `--doctor` names a device publishing a
    narrower provider set than the local one - usually a config the user forgot
    to mirror.
-8. **Orphaned objects.** A device that regenerates its id leaves an object
+9. **Orphaned objects.** A device that regenerates its id leaves an object
    nobody claims. Nothing is ever auto-deleted: a machine can legitimately be
    off for a season, and a few stale kilobytes cost less than one wrongly
    deleted history. `--doctor` lists objects that have not moved in longer than
    `peer_max_age_days` as candidates, `--sync-forget` removes one on request.
-9. **A lost machine cannot be revoked**, only out-run by re-keying every other
+10. **A lost machine cannot be revoked**, only out-run by re-keying every other
    device. See ADR 0002; the docs must say it rather than let "encrypted" imply
    otherwise.
-10. **A future schema** is skipped with a named reason. Never a parse crash.
+11. **A future schema** is skipped with a named reason. Never a parse crash.
 
 ## 9. Non-goals
 

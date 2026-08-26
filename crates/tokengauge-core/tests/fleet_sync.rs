@@ -172,11 +172,60 @@ fn a_new_target_gets_this_machine_even_when_the_data_has_not_changed() {
     let status = sync::refresh(&config, &local, since).status;
     assert!(status.published, "a re-keyed fleet writes a new object");
     assert_eq!(
-        objects_in(&moved).len(),
-        2,
-        "the old object stays until --sync-forget removes it"
+        objects_in(&moved),
+        vec![rekeyed.object_name(&sync::local_device_id(&config))],
+        "the object under the old key is unreadable to everyone now, including \
+         us, so it is not left behind in a shared folder"
     );
-    assert!(objects_in(&moved).contains(&rekeyed.object_name(&sync::local_device_id(&config))));
+}
+
+/// A different key is a different fleet, so the machines from the old one stop
+/// counting. Their objects are sealed under a key this machine no longer holds,
+/// and their rows would claim a fleet it is no longer part of.
+#[test]
+fn re_keying_leaves_the_old_fleet_behind_but_keeps_this_machine() {
+    let root = scratch("rekey");
+    let config = config(&root);
+    let since = (Utc::now() - Duration::days(7))
+        .with_timezone(&chrono::Local)
+        .date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+    let local = vec![event(2, 100, 1)];
+
+    publish_peer(&root, &key, 4242);
+    let outcome = sync::refresh(&config, &local, since);
+    assert_eq!(outcome.status.devices.len(), 2, "the peer joined");
+    assert_eq!(
+        outcome.events.iter().map(|e| e.tokens.output).sum::<u64>(),
+        4242
+    );
+
+    sync::store_key(&config.cache_file, &FleetKey::generate(), true).expect("re-key");
+    let outcome = sync::refresh(&config, &local, since);
+
+    assert_eq!(outcome.status.dropped, vec!["laptop".to_string()]);
+    assert_eq!(
+        outcome.status.devices.len(),
+        1,
+        "only this machine is in the new fleet"
+    );
+    assert!(
+        outcome.events.is_empty(),
+        "the old fleet's tokens must stop counting"
+    );
+    assert!(
+        outcome.status.skipped.is_empty(),
+        "the old object must not be reported as foreign every cycle: {:?}",
+        outcome.status.skipped
+    );
+    assert!(
+        sync::store::load(&config.cache_file)
+            .0
+            .devices
+            .contains_key(&sync::local_device_id(&config)),
+        "this machine's own history is ours and stays"
+    );
 }
 
 #[test]

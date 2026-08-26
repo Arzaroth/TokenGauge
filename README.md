@@ -141,11 +141,15 @@ Press `e` to turn sync on, `d` to point it at a folder your sync tool handles
 generate the fleet key, and `t` to check the round trip. Copy the key it shows.
 
 On every other machine, the same screen, but press `j` and paste the key instead
-of `g`. Or from a shell:
+of `g`. Or from a shell, reading the key from stdin:
 
 ```bash
-tokengauge --sync-join tgsync1…
+tokengauge --sync-join -
 ```
+
+Pass the key as an argument only in a script you trust: an argument lands in
+shell history and in `/proc/<pid>/cmdline`, and possession of the key is the
+only authentication there is.
 
 The desktop frontends all have a button for this: the Plasma applet's settings
 pane, the GNOME popup header, `y` in the Omarchy widget's settings, and the
@@ -185,6 +189,12 @@ there is one object per device, so they can count your machines, and write
 timing is visible, so your working hours are too. And a symmetric key means there is
 no revocation: a lost machine can read the fleet until you re-key every other
 one with `--sync-init --sync-force` and `--sync-join`.
+
+Re-keying starts a fleet, it does not rotate one in place. A machine that adopts
+a new key drops the old fleet's devices from its panel, deletes the object it
+published under the old key, and keeps its own history. The other machines
+republish theirs on their next cycle, so what is actually lost is peer history
+older than `retention_days`.
 
 ### If you sync `~/.claude/projects` yourself
 

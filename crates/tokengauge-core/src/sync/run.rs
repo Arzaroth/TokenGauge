@@ -36,6 +36,10 @@ pub struct SyncStatus {
     /// synced `~/.claude/projects` looks like from here.
     #[serde(default)]
     pub overlaps: Vec<OverlapNote>,
+    /// Peers dropped because the fleet key changed. Non-empty only on the cycle
+    /// that noticed, so it reads as an event rather than a state.
+    #[serde(default)]
+    pub dropped: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,6 +181,16 @@ pub fn note(status: &SyncStatus, refresh_secs: u64, now_ms: i64) -> Option<crate
             ),
         );
     }
+    if !status.dropped.is_empty() {
+        return note(
+            Tone::Warn,
+            "re-keyed",
+            format!(
+                "new fleet key; dropped {} from the old fleet",
+                status.dropped.join(", ")
+            ),
+        );
+    }
     if let Some(skipped) = status.skipped.first() {
         return note(
             Tone::Warn,
@@ -229,8 +243,20 @@ fn cycle(
         "no fleet key on this machine; run `--sync-init` here, or `--sync-join <key>` to join an existing fleet",
     )?;
     status.key_id = key.id_hex();
+    let key_change = store.adopt_key(&key.id_hex(), &device.id);
+    status.dropped = key_change
+        .as_ref()
+        .map(|change| change.dropped.clone())
+        .unwrap_or_default();
+
     let transport = transport::open(&config.sync)?;
     status.transport = transport.describe();
+
+    // Our own object under the old key is unreadable to everyone now, including
+    // us. Leaving it in a shared folder is litter nothing would ever collect.
+    if let Some(previous) = key_change.and_then(|change| change.previous_object) {
+        let _ = transport.delete(&previous);
+    }
 
     let providers = config
         .sync
@@ -245,6 +271,7 @@ fn cycle(
                 serde_json::to_vec(&contribution).context("could not serialise a contribution")?;
             transport.put(&own_name, &key.seal(&own_name, &body)?)?;
             store.published_hash = Some(hash);
+            store.published_name = Some(own_name.clone());
             store.last_publish_ms = Some(now.timestamp_millis());
             status.published = true;
         }
@@ -267,6 +294,21 @@ fn cycle(
             }
             continue;
         };
+
+        // An object under a key we used to hold is our own past, not a fleet
+        // sharing our storage, so it is passed over rather than reported.
+        if let Err(crypto::OpenError::ForeignKey { key_id }) = key.open(&entry.name, &sealed)
+            && store.retired_key_ids.contains(&key_id)
+        {
+            store.objects.insert(
+                entry.name,
+                ObjectState {
+                    version: entry.version,
+                    reason: None,
+                },
+            );
+            continue;
+        }
 
         let outcome = key
             .open(&entry.name, &sealed)

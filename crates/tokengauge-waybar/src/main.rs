@@ -124,7 +124,10 @@ struct Args {
     /// every other machine with `--sync-join`.
     #[arg(long)]
     sync_init: bool,
-    /// Join the fleet a `--sync-init` key belongs to.
+    /// Join the fleet a `--sync-init` key belongs to. Prefer `--sync-join -`,
+    /// which reads the key from stdin: an argument lands in shell history and
+    /// in `/proc/<pid>/cmdline`, and possession of the key is the only
+    /// authentication there is.
     #[arg(long, value_name = "KEY")]
     sync_join: Option<String>,
     /// Replace an existing fleet key. Every machine has to be re-keyed
@@ -224,7 +227,18 @@ fn main() -> Result<()> {
     }
 
     if let Some(raw) = args.sync_join.as_deref() {
-        let key = tokengauge_core::sync::FleetKey::parse(raw)?;
+        let raw = if raw.trim() == "-" {
+            let mut typed = String::new();
+            if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                eprint!("Fleet key: ");
+            }
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut typed)
+                .context("could not read the fleet key from stdin")?;
+            typed
+        } else {
+            raw.to_string()
+        };
+        let key = tokengauge_core::sync::FleetKey::parse(&raw)?;
         let path = tokengauge_core::sync::store_key(&config.cache_file, &key, args.sync_force)?;
         eprintln!("Joined fleet {} (key at {})", key.id_hex(), path.display());
         return Ok(());

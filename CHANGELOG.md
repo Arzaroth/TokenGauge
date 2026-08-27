@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The GNOME panel draws its bars again.** A limit gauge's fill sat centred in its track rather than starting at the left, and the tokens-by-day and tokens-by-model rows drew no share bar at all: both sized a plain widget and left St to place it, and the row fill chased the row's width from a `notify::width` handler that ran a frame behind the allocation. Both are drawn now, at the width the popup actually gave the row, which is what the other panels have always shown.
+
 ## [0.25.3] - 2026-08-27
 
 ### Fixed

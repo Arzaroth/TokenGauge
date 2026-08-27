@@ -9,8 +9,6 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const METER_WIDTH = 288;
-
 // How often the open menu re-reads the snapshot. See `_setLive`.
 const LIVE_INTERVAL_SECS = 30;
 
@@ -46,6 +44,42 @@ function label(text, styleClass, style) {
 
 function spacer() {
     return new St.Widget({x_expand: true});
+}
+
+// A fill sized in CSS lands wherever the layout puts it, and one sized from a
+// `notify::width` handler is a frame behind the allocation it tracks. Draw it
+// instead: the repaint runs with the width the popup actually gave the row.
+function barFill(fraction, radius, styleClass, style) {
+    const clamped = Math.max(0, Math.min(1, Number(fraction) || 0));
+    const area = new St.DrawingArea({
+        style_class: styleClass,
+        style,
+        x_expand: true,
+        y_expand: true,
+        x_align: Clutter.ActorAlign.FILL,
+        y_align: Clutter.ActorAlign.FILL,
+    });
+    area.connect('repaint', () => {
+        const [width, height] = area.get_surface_size();
+        const w = Math.round(width * clamped);
+        if (w <= 0 || height <= 0)
+            return;
+        const r = Math.min(radius, w / 2, height / 2);
+        const cr = area.get_context();
+        cr.newSubPath();
+        cr.arc(w - r, r, r, -Math.PI / 2, 0);
+        cr.arc(w - r, height - r, r, 0, Math.PI / 2);
+        cr.arc(r, height - r, r, Math.PI / 2, Math.PI);
+        cr.arc(r, r, r, Math.PI, 1.5 * Math.PI);
+        cr.closePath();
+        // GNOME 45 has no `cr.setSourceColor`; the components are 8-bit on
+        // every shell the extension supports.
+        const c = area.get_theme_node().get_foreground_color();
+        cr.setSourceRGBA(c.red / 255, c.green / 255, c.blue / 255, c.alpha / 255);
+        cr.fill();
+        cr.$dispose();
+    });
+    return area;
 }
 
 // St has no tooltip of its own, and the panel spec fills `tooltip` for every
@@ -632,15 +666,11 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
         const track = new St.Widget({
             style_class: 'tokengauge-meter-track',
-            style: `width: ${METER_WIDTH}px;`,
             layout_manager: new Clutter.BinLayout(),
+            x_expand: true,
         });
-        const clamped = Math.max(0, Math.min(1, Number(row.fraction) || 0));
-        track.add_child(new St.Widget({
-            style_class: 'tokengauge-meter-fill',
-            style: `width: ${Math.round(METER_WIDTH * clamped)}px; background-color: ${this._toneColor(row.tone)};`,
-            x_align: Clutter.ActorAlign.START,
-        }));
+        track.add_child(barFill(row.fraction, 4, 'tokengauge-meter-fill',
+            `color: ${this._toneColor(row.tone)};`));
         meter.add_child(track);
 
         if (row.footnote || row.badge) {
@@ -660,23 +690,12 @@ class TokenGaugeIndicator extends PanelMenu.Button {
     // One line per row with the share bar filling the row behind the text, so a
     // seven-day list and a model breakdown both stay on one screen.
     _barRow(row) {
-        const clamped = Math.max(0, Math.min(1, Number(row.fraction) || 0));
         const wrap = new St.Widget({
             style_class: 'tokengauge-bar-row',
             layout_manager: new Clutter.BinLayout(),
             x_expand: true,
         });
-        const fill = new St.Widget({
-            style_class: 'tokengauge-bar-fill',
-            x_align: Clutter.ActorAlign.START,
-        });
-        // The menu stretches past METER_WIDTH, so a fill sized against that
-        // constant reads short on a wide popup - a 100% row would not reach the
-        // end. Track the width the row is actually given.
-        wrap.connect('notify::width', () => {
-            fill.width = Math.round(wrap.width * clamped);
-        });
-        wrap.add_child(fill);
+        wrap.add_child(barFill(row.fraction, 3, 'tokengauge-bar-fill'));
 
         const line = box(false, {x_expand: true, style_class: 'tokengauge-bar-text'});
         const weight = row.emphasized ? 'font-weight: bold;' : '';

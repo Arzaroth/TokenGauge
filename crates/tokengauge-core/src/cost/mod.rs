@@ -366,6 +366,7 @@ pub fn build_report(
                     date: period.clone(),
                     usd: totals.map(|t| t.usd).unwrap_or(0.0),
                     tokens: totals.map(|t| t.tokens.total()).unwrap_or(0),
+                    by_device: Vec::new(),
                 }
             })
             .collect();
@@ -499,6 +500,7 @@ fn into_model_costs(models: HashMap<&str, Totals>) -> (f64, u64, Vec<ModelCost>)
                 output_tokens: t.tokens.output,
                 cache_creation_tokens: t.tokens.cache_creation(),
                 cache_read_tokens: t.tokens.cache_read,
+                by_device: Vec::new(),
             }
         })
         .collect();

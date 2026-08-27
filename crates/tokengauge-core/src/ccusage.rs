@@ -180,6 +180,7 @@ impl AggregatedProvider {
                 output_tokens: t.output_tokens,
                 cache_creation_tokens: t.cache_creation_tokens,
                 cache_read_tokens: t.cache_read_tokens,
+                by_device: Vec::new(),
             })
             .collect();
         models.sort_by(|a, b| {
@@ -240,6 +241,7 @@ fn last_n_days_by_provider(
                         date: p.clone(),
                         usd,
                         tokens,
+                        by_device: Vec::new(),
                     }
                 })
                 .collect();

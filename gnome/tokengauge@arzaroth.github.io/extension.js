@@ -45,6 +45,42 @@ function spacer() {
     return new St.Widget({x_expand: true});
 }
 
+// St has no tooltip of its own, and the panel spec fills `tooltip` for every
+// row whose line is an abbreviation of what it carries: a day's exact tokens,
+// a model's split by device, the whole sync sentence behind its badge. The
+// label goes in the shell's own layer so the popup cannot clip it.
+function attachTooltip(actor, text) {
+    if (!text)
+        return actor;
+    actor.reactive = true;
+    actor.track_hover = true;
+    let tip = null;
+    const hide = () => {
+        if (tip) {
+            tip.destroy();
+            tip = null;
+        }
+    };
+    actor.connect('notify::hover', () => {
+        hide();
+        if (!actor.hover)
+            return;
+        tip = new St.Label({style_class: 'tokengauge-tooltip', text});
+        tip.clutter_text.line_wrap = true;
+        Main.layoutManager.uiGroup.add_child(tip);
+        const [x, y] = actor.get_transformed_position();
+        const right = global.stage.width - tip.get_width() - 4;
+        // Above the row, unless that leaves the stage: the first rows of the
+        // popup sit close enough to the top panel for it to.
+        const above = y - tip.get_height() - 6;
+        tip.set_position(
+            Math.round(Math.max(4, Math.min(x, right))),
+            Math.round(above >= 4 ? above : y + actor.get_height() + 6));
+    });
+    actor.connect('destroy', hide);
+    return actor;
+}
+
 const Indicator = GObject.registerClass(
 class TokenGaugeIndicator extends PanelMenu.Button {
     _init(extension) {
@@ -589,7 +625,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             trailing.add_child(spacer());
             meter.add_child(trailing);
         }
-        return meter;
+        return attachTooltip(meter, row.tooltip);
     }
 
     // One line per row with the share bar filling the row behind the text, so a
@@ -620,7 +656,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         const value = row.suffix ? `${row.value}  ·  ${row.suffix}` : row.value;
         line.add_child(label(value, 'tokengauge-cost-value', weight));
         wrap.add_child(line);
-        return wrap;
+        return attachTooltip(wrap, row.tooltip);
     }
 
     // Label and value on one line; a badge and a suffix drop to a caption line
@@ -649,7 +685,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
                 caption.add_child(label(row.badge ? `  ·  ${row.suffix}` : row.suffix, 'tokengauge-dim'));
             wrap.add_child(caption);
         }
-        return wrap;
+        return attachTooltip(wrap, row.tooltip);
     }
 
     _pinSection() {

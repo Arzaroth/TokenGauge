@@ -115,6 +115,11 @@ Edit `~/.config/tokengauge/config.toml`:
 | `update.check` | Daemon checks GitHub releases and notifies when a newer version exists | `true` |
 | `update.check_interval_secs` | Seconds between daemon update checks | `21600` |
 
+`refresh_secs` governs **fetching**, not drawing: a panel you are looking at
+re-reads the snapshot every few seconds so its reset countdowns keep counting
+down, and asks a provider for new percentages only once the snapshot has aged
+past `refresh_secs`. Raising it makes the numbers older, never the clock.
+
 `ccusage` is auto-detected on PATH (preferring a global install, then `bunx`, then `npx`).
 
 ## Fleet sync

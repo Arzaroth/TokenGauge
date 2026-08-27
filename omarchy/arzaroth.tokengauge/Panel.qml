@@ -333,6 +333,10 @@ Panel {
   Usage {
     id: usage
     settings: root.settings
+    // While the panel is up, the snapshot is re-read on a short cycle: the
+    // reset countdowns are drawn against the clock at render time, so a panel
+    // left open would otherwise sit on the countdown it opened with.
+    live: root.opened
   }
 
   IpcHandler {

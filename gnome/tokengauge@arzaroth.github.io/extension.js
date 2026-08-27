@@ -11,6 +11,9 @@ import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/ex
 
 const METER_WIDTH = 288;
 
+// How often the open menu re-reads the snapshot. See `_setLive`.
+const LIVE_INTERVAL_SECS = 30;
+
 const FALLBACK_THEME = {
     red: '#f38ba8',
     yellow: '#f9e2af',
@@ -99,6 +102,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         this._cancellable = null;
         this._requestId = 0;
         this._timeoutId = 0;
+        this._liveTimeoutId = 0;
         this._menuDirty = true;
         this._revisionFile = '';
         this._revisionMonitor = null;
@@ -123,6 +127,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
                 this._menuDirty = false;
                 this._renderMenu();
             }
+            this._setLive(open);
         });
         this.connect('scroll-event', (_actor, event) => this._onScroll(event));
         this._settingsChangedId = this._settings.connect('changed', (_s, key) => {
@@ -342,6 +347,30 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             return GLib.SOURCE_CONTINUE;
         });
         this._reload();
+    }
+
+    // The menu is open, so the snapshot is re-read on a much shorter cycle than
+    // the poll. A reset time is counted against the clock at render time, which
+    // means the countdown only moves when `--json` runs again - a menu left open
+    // otherwise keeps the countdown it opened with. The binary serves the
+    // snapshot it already has and refetches only once that snapshot has aged
+    // past `refresh_secs`, so this costs a subprocess, not a provider call.
+    _setLive(live) {
+        if (this._liveTimeoutId) {
+            GLib.Source.remove(this._liveTimeoutId);
+            this._liveTimeoutId = 0;
+        }
+        if (!live)
+            return;
+        if (!this._updating)
+            this._reload();
+        this._liveTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, LIVE_INTERVAL_SECS, () => {
+            // A poll would cancel an in-flight `--update` read and leave the
+            // button stuck on "Updating…", exactly as it would on the long timer.
+            if (!this._updating)
+                this._reload();
+            return GLib.SOURCE_CONTINUE;
+        });
     }
 
     // Also invalidates the in-flight request, so a queued callback cannot render
@@ -720,6 +749,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             GLib.Source.remove(this._timeoutId);
             this._timeoutId = 0;
         }
+        this._setLive(false);
         if (this._settingsChangedId) {
             this._settings.disconnect(this._settingsChangedId);
             this._settingsChangedId = 0;

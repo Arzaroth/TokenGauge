@@ -40,7 +40,7 @@ mod win {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use eframe::egui::{self, Color32, ProgressBar, RichText, ViewportCommand};
     use tokengauge_core::{
@@ -126,6 +126,8 @@ mod win {
         tray: TrayIcon,
         _items: Vec<MenuItem>,
         last_tip: String,
+        cfg_path: std::path::PathBuf,
+        last_cache_poll: Instant,
     }
 
     /// The tray menu's ids, bundled so the event loop takes one of them rather
@@ -157,31 +159,10 @@ mod win {
             }
 
             // Seed from the shared cache for an instant first paint.
-            if let Ok(config) = load_config(Some(cfg_path.clone()))
-                && let Ok(cached) = read_cache_full(&config.cache_file)
-            {
-                let (mut payloads, mut errors, costs) = cached.into_parts();
-                retain_enabled(&mut payloads, &mut errors, &config.providers);
-                let rows = payload_to_rows_with_costs(payloads, &costs)
-                    .iter()
-                    .map(to_row)
-                    .collect();
-                let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
-                s.rows = rows;
-                s.enabled = config
-                    .providers
-                    .enabled_providers()
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect();
-                s.primary = config.waybar.primary.clone().unwrap_or_default();
-                s.errors = errors
-                    .iter()
-                    .map(|e| format!("{}: {}", e.provider, e.message))
-                    .collect();
-            }
+            load_from_cache(&shared, &cfg_path);
 
             // Background fetch loop.
+            let cfg_path_for_app = cfg_path.clone();
             {
                 let ctx = ctx.clone();
                 let shared = shared.clone();
@@ -235,7 +216,32 @@ mod win {
                 tray,
                 _items: vec![show_i, refresh_i, sync_i, update_i, quit_i],
                 last_tip: String::new(),
+                cfg_path: cfg_path_for_app,
+                last_cache_poll: Instant::now(),
             })
+        }
+
+        /// Re-read the snapshot on a short cycle, so the countdowns in the
+        /// panel tick and a fetch by the daemon or another frontend lands here.
+        /// Nothing is fetched: this is a file read, and the fetch loop keeps its
+        /// own cadence. egui stops ticking while the window is hidden, so this
+        /// runs only when there is something on screen to be wrong.
+        fn repoll_cache(&mut self) {
+            if self.last_cache_poll.elapsed() < Duration::from_secs(15) {
+                return;
+            }
+            self.last_cache_poll = Instant::now();
+            // A fetch in flight is about to write both the snapshot and the
+            // rows; loading the one it is replacing would flash the old figures.
+            if self
+                .shared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .fetching
+            {
+                return;
+            }
+            load_from_cache(&self.shared, &self.cfg_path);
         }
 
         /// Reflect the latest usage in the tray icon (peak %) and tooltip.
@@ -258,6 +264,7 @@ mod win {
         // Runs before each `ui`. Handles close-to-tray and keeps the tray icon
         // fresh; tray clicks are serviced by the dedicated thread.
         fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            self.repoll_cache();
             let snap = self
                 .shared
                 .lock()
@@ -851,6 +858,42 @@ mod win {
             }
             thread::sleep(Duration::from_millis(120));
         }
+    }
+
+    /// Rebuild the rows from the snapshot on disk, without fetching anything.
+    ///
+    /// Both the first paint and the tick below go through here: it is what
+    /// picks up a fetch the daemon or another frontend made, and what makes the
+    /// reset countdowns move. A countdown is measured against the clock at the
+    /// moment a row is built, so it only advances when the rows are built
+    /// again - the instant it counts down to is absolute, which is why a
+    /// snapshot minutes old still yields the right one.
+    fn load_from_cache(shared: &Mutex<Snapshot>, cfg_path: &std::path::Path) {
+        let Ok(config) = load_config(Some(cfg_path.to_path_buf())) else {
+            return;
+        };
+        let Ok(cached) = read_cache_full(&config.cache_file) else {
+            return;
+        };
+        let (mut payloads, mut errors, costs) = cached.into_parts();
+        retain_enabled(&mut payloads, &mut errors, &config.providers);
+        let rows = payload_to_rows_with_costs(payloads, &costs)
+            .iter()
+            .map(to_row)
+            .collect();
+        let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
+        s.rows = rows;
+        s.enabled = config
+            .providers
+            .enabled_providers()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        s.primary = config.waybar.primary.clone().unwrap_or_default();
+        s.errors = errors
+            .iter()
+            .map(|e| format!("{}: {}", e.provider, e.message))
+            .collect();
     }
 
     fn fetch_loop(

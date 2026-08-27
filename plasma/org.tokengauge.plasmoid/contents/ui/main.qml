@@ -208,6 +208,20 @@ PlasmoidItem {
         onTriggered: root.reload()
     }
 
+    // While the panel is open, on a much shorter cycle. A reset time is counted
+    // against the clock at render time, so the countdown only moves when the
+    // snapshot is rendered again - a panel left open otherwise keeps the
+    // countdown it opened with. `--json` serves the snapshot it already has and
+    // refetches only once that snapshot has aged past `refresh_secs`, so this
+    // costs a subprocess, not a provider call.
+    Timer {
+        interval: 30000
+        running: root.expanded
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: root.reload()
+    }
+
     Component.onCompleted: watch()
 
     Component.onDestruction: {

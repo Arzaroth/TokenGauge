@@ -18,6 +18,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::*;
@@ -181,19 +182,61 @@ pub fn write_cache_full(
 /// enabled now. Every reader routes its fetch-or-serve decision through here so
 /// none of them can disagree about what stale means.
 pub fn cache_is_stale(config: &TokenGaugeConfig) -> bool {
-    let expired = fs::metadata(&config.cache_file)
+    let Some(written_at) = fs::metadata(&config.cache_file)
         .and_then(|meta| meta.modified())
         .ok()
-        .and_then(|modified| std::time::SystemTime::now().duration_since(modified).ok())
+    else {
+        return true;
+    };
+    let expired = std::time::SystemTime::now()
+        .duration_since(written_at)
         .map(|age| age >= Duration::from_secs(config.refresh_secs))
         .unwrap_or(true);
     if expired {
         return true;
     }
     match read_cache_full(&config.cache_file) {
-        Ok(cached) => !cached.covers(&config.providers),
+        Ok(cached) => {
+            !cached.covers(&config.providers)
+                || rolled_over(cached.payloads(), written_at.into(), Utc::now())
+        }
         Err(_) => true,
     }
+}
+
+/// True when a window this snapshot reported has reset since it was written.
+///
+/// The percentages beside such a window describe a window that no longer
+/// exists, so serving them is wrong however young the snapshot is - and the
+/// reset is exactly the moment a user looks. The comparison is against the
+/// write, not against now alone: a provider that reports an instant already in
+/// the past reports the same one on the next fetch, and asking again on every
+/// render would never stop.
+fn rolled_over(
+    payloads: &[ProviderPayload],
+    written_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> bool {
+    payloads
+        .iter()
+        .filter_map(|payload| payload.usage.as_ref())
+        .flat_map(|usage| {
+            [&usage.primary, &usage.secondary, &usage.tertiary]
+                .into_iter()
+                .flatten()
+                .chain(
+                    usage
+                        .extra_rate_windows
+                        .iter()
+                        .filter_map(|e| e.window.as_ref()),
+                )
+        })
+        .filter_map(|window| window.resets_at.as_deref())
+        .filter_map(|iso| DateTime::parse_from_rfc3339(iso).ok())
+        .any(|reset| {
+            let reset = reset.with_timezone(&Utc);
+            reset <= now && reset > written_at
+        })
 }
 
 /// Drop cached payloads and errors for providers that are no longer enabled.
@@ -216,6 +259,61 @@ pub fn retain_enabled(
 mod tests {
     use super::*;
     use crate::statefiles::tests::cache_test_dir;
+
+    fn payload_resetting_at(resets_at: Option<&str>) -> ProviderPayload {
+        ProviderPayload {
+            provider: "claude".into(),
+            version: None,
+            source: None,
+            usage: Some(UsageSnapshot {
+                primary: Some(UsageWindow {
+                    used_percent: Some(69),
+                    reset_description: None,
+                    resets_at: resets_at.map(str::to_string),
+                    window_minutes: Some(300),
+                }),
+                secondary: None,
+                tertiary: None,
+                updated_at: None,
+                login_method: None,
+                extra_rate_windows: Vec::new(),
+            }),
+            credits: None,
+            error: None,
+            stale: false,
+        }
+    }
+
+    #[test]
+    fn a_window_that_reset_since_the_write_is_stale_however_young_the_snapshot() {
+        let now = Utc::now();
+        let written_at = now - chrono::Duration::minutes(5);
+        let rolled = payload_resetting_at(Some(&(now - chrono::Duration::minutes(2)).to_rfc3339()));
+        assert!(rolled_over(&[rolled], written_at, now));
+
+        let pending = payload_resetting_at(Some(&(now + chrono::Duration::hours(2)).to_rfc3339()));
+        assert!(!rolled_over(&[pending], written_at, now));
+    }
+
+    #[test]
+    fn a_reset_time_already_past_at_the_write_never_asks_again() {
+        // Otherwise a provider reporting a stale instant would have every
+        // render refetch, and every fetch report the same instant.
+        let now = Utc::now();
+        let written_at = now - chrono::Duration::minutes(5);
+        let stuck = payload_resetting_at(Some(&(now - chrono::Duration::hours(1)).to_rfc3339()));
+        assert!(!rolled_over(&[stuck], written_at, now));
+    }
+
+    #[test]
+    fn a_window_with_no_reset_time_never_rolls_over() {
+        let now = Utc::now();
+        assert!(!rolled_over(
+            &[payload_resetting_at(None)],
+            now - chrono::Duration::minutes(5),
+            now
+        ));
+    }
 
     #[test]
     fn retain_enabled_drops_disabled_providers_from_cache() {

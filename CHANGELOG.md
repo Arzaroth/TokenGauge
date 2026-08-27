@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A panel showing last known values keeps its pace projections.** Every window kept its percentage and its reset time while the "ends ~62%" beside them vanished, which read as the projection being uncomputable when it was being deliberately withheld: `used` stops moving when a fetch fails, so a pace measured against a clock that kept going decays on its own, and the longer the outage lasted the more it read as a slowdown that never happened. The projection is now measured from the instant the figures were true, which is what the rest of a stale panel already shows, so it holds still instead of drifting. A window that has since rolled over still carries none - that one really does describe nothing that is still the case.
+
 ## [0.25.0] - 2026-08-27
 
 ### Added

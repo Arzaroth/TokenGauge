@@ -90,14 +90,30 @@ fn lookup_cost(provider: &str, costs: &HashMap<String, CostInfo>) -> Option<Cost
         .map(|(_, v)| v.clone())
 }
 
-/// Compute burn pace for a usage window, if it has the percent, duration and
-/// reset time pace needs.
-fn window_pace(window: &UsageWindow, now: DateTime<Utc>) -> Option<UsagePace> {
+/// Burn pace for a usage window, if it has the percent, duration and reset
+/// time pace needs - measured as of `anchor`, dropped once the window has
+/// rolled over.
+///
+/// The two clocks are different on purpose: the projection is measured from
+/// the instant the figures were true, and thrown away against the real one,
+/// because a projection to a window that has already reset describes nothing
+/// that is still the case however good the numbers behind it were.
+fn window_pace(
+    window: &UsageWindow,
+    anchor: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<UsagePace> {
+    let reset = DateTime::parse_from_rfc3339(window.resets_at.as_deref()?)
+        .ok()?
+        .with_timezone(&Utc);
+    if reset <= now {
+        return None;
+    }
     UsagePace::for_window(
         window.used_percent?,
         window.window_minutes,
         window.resets_at.as_deref(),
-        now,
+        anchor,
     )
 }
 
@@ -149,10 +165,30 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
 
     if let Some(usage) = payload.usage {
         let now = Utc::now();
-        let live = !payload.stale;
-        if live {
-            session_pace = usage.primary.as_ref().and_then(|w| window_pace(w, now));
-            weekly_pace = usage.secondary.as_ref().and_then(|w| window_pace(w, now));
+        // `used` stopped moving when the fetch did, so a pace measured against
+        // a clock that kept going decays on its own: the longer the outage
+        // lasts, the more it reads as a slowdown that never happened. The
+        // payload's own instant is what the rest of the panel is already
+        // showing, so the projection is measured from there.
+        // A stale payload with no `updated_at` gets none at all: last known
+        // values with no instant to attach them to leave nothing honest to
+        // measure against.
+        let anchor = usage
+            .updated_at
+            .as_deref()
+            .and_then(|iso| DateTime::parse_from_rfc3339(iso).ok())
+            .map(|at| at.with_timezone(&Utc))
+            .or_else(|| (!payload.stale).then_some(now));
+
+        if let Some(anchor) = anchor {
+            session_pace = usage
+                .primary
+                .as_ref()
+                .and_then(|w| window_pace(w, anchor, now));
+            weekly_pace = usage
+                .secondary
+                .as_ref()
+                .and_then(|w| window_pace(w, anchor, now));
         }
 
         let (s_used, s_win, s_reset) = format_window(usage.primary);
@@ -179,13 +215,11 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
             .filter_map(|w| {
                 let title = w.title?;
                 let placeholder = w.placeholder;
-                let pace = if live {
+                let pace = anchor.and_then(|anchor| {
                     w.window
                         .as_ref()
-                        .and_then(|window| window_pace(window, now))
-                } else {
-                    None
-                };
+                        .and_then(|window| window_pace(window, anchor, now))
+                });
                 let (used, _, reset) = format_window(w.window);
                 Some(ExtraWindowRow {
                     title,
@@ -354,6 +388,93 @@ mod tests {
 
     fn rows_of(payloads: Vec<ProviderPayload>) -> Vec<ProviderRow> {
         payload_to_rows_with_costs(payloads, &HashMap::new())
+    }
+
+    /// A weekly window, `used` per cent of the way through, resetting in two
+    /// hours, last fetched `fetched_minutes_ago` ago.
+    fn paced(
+        used: u8,
+        fetched_minutes_ago: i64,
+        reset_in_minutes: i64,
+        stale: bool,
+    ) -> ProviderPayload {
+        let now = Utc::now();
+        let window = |used: u8| UsageWindow {
+            used_percent: Some(used),
+            reset_description: None,
+            resets_at: Some((now + chrono::Duration::minutes(reset_in_minutes)).to_rfc3339()),
+            window_minutes: Some(10080),
+        };
+        ProviderPayload {
+            provider: "claude".to_string(),
+            version: None,
+            source: None,
+            usage: Some(UsageSnapshot {
+                primary: None,
+                secondary: Some(window(used)),
+                tertiary: None,
+                updated_at: Some(
+                    (now - chrono::Duration::minutes(fetched_minutes_ago)).to_rfc3339(),
+                ),
+                login_method: None,
+                extra_rate_windows: Vec::new(),
+            }),
+            credits: None,
+            error: None,
+            stale,
+        }
+    }
+
+    /// Every other figure on a stale panel is the last known one. The pace used
+    /// to be the exception, and dropping it is what left a window with a
+    /// percentage, a reset time and no projection between them.
+    #[test]
+    fn a_stale_payload_keeps_the_pace_it_was_fetched_with() {
+        let rows = rows_of(vec![paced(60, 90, 120, true)]);
+        let pace = rows[0].weekly_pace.as_ref().expect("a stale pace");
+
+        // Measured from the payload's own instant, not from now: an outage
+        // must not walk the projection down on its own.
+        let fresh = rows_of(vec![paced(60, 90, 120, false)]);
+        let live = fresh[0].weekly_pace.as_ref().expect("a live pace");
+        assert!(
+            (pace.projected_percent - live.projected_percent).abs() < 0.001,
+            "{} vs {}",
+            pace.projected_percent,
+            live.projected_percent
+        );
+
+        // And the anchor is what moves it: the same figures fetched ten hours
+        // ago describe a window less far through, so they project higher. If
+        // both were measured against `now` these would be equal.
+        let older = rows_of(vec![paced(60, 600, 120, true)]);
+        let older = older[0].weekly_pace.as_ref().expect("a stale pace");
+        assert!(
+            older.projected_percent > pace.projected_percent,
+            "{} vs {}",
+            older.projected_percent,
+            pace.projected_percent
+        );
+    }
+
+    /// However good the numbers behind it were, a projection to a window that
+    /// has already rolled over describes nothing that is still the case.
+    #[test]
+    fn a_window_that_has_since_reset_carries_no_pace() {
+        let rows = rows_of(vec![paced(60, 90, -30, true)]);
+        assert!(rows[0].weekly_pace.is_none());
+    }
+
+    /// The one case that still withholds the pace: last known values with no
+    /// instant to attach them to. Falling back to `now` here would quietly
+    /// revive the decay this change removed, for exactly the payloads that
+    /// cannot say how old they are.
+    #[test]
+    fn a_stale_payload_with_no_instant_carries_no_pace() {
+        let mut payload = paced(60, 90, 120, true);
+        payload.usage.as_mut().expect("usage").updated_at = None;
+        let rows = rows_of(vec![payload]);
+        assert!(rows[0].weekly_pace.is_none());
     }
 
     #[test]

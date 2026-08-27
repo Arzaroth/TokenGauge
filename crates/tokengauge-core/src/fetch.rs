@@ -369,8 +369,36 @@ pub fn attach_fleet(
     let month_start = fmt::month_start(today);
     let offset = *Local::now().offset();
     for (provider, cost) in report.costs.iter_mut() {
-        cost.by_device =
-            store.device_totals(provider, (month_start, today), offset, prices, local_id);
+        cost.by_device = store.device_totals(
+            provider,
+            (month_start, today),
+            offset,
+            prices,
+            local_id,
+            None,
+        );
+        // On a lone machine the split restates the row it hangs off, so the day
+        // and model rows only carry one once there is something to attribute.
+        if cost.by_device.len() > 1 {
+            for day in cost.weekly_history.iter_mut() {
+                let Ok(date) = day.date.parse::<chrono::NaiveDate>() else {
+                    continue;
+                };
+                day.by_device =
+                    store.device_totals(provider, (date, date), offset, prices, local_id, None);
+            }
+            for model in cost.monthly_models.iter_mut() {
+                let want = model.model.clone();
+                model.by_device = store.device_totals(
+                    provider,
+                    (month_start, today),
+                    offset,
+                    prices,
+                    local_id,
+                    Some(&want),
+                );
+            }
+        }
         cost.sync_note = note.clone();
     }
 }

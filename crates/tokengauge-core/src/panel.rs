@@ -457,6 +457,9 @@ fn day_rows(cost: &CostInfo) -> Vec<PanelRow> {
                 exact_tokens(day.tokens),
                 day.usd
             );
+            if let Some(split) = device_breakdown(&day.by_device) {
+                r.tooltip.push_str(&split);
+            }
             r
         })
         .collect()
@@ -487,6 +490,30 @@ fn model_rows(cost: &CostInfo) -> Vec<PanelRow> {
         .collect()
 }
 
+/// Which machines a day or a model came from, under the figure it splits.
+///
+/// `by_device` is empty unless the fleet has more than one machine in it, and
+/// that decision lives in `fetch::attach_fleet` rather than here: a split of one
+/// restates the row it hangs off.
+fn device_breakdown(devices: &[DeviceCost]) -> Option<String> {
+    if devices.is_empty() {
+        return None;
+    }
+    let mut out = String::from("\n\nBy device");
+    for device in devices {
+        out.push_str(&format!(
+            "\n{}  {}  ·  {}",
+            device.label,
+            format_tokens(device.tokens),
+            money(device.usd)
+        ));
+        if device.partial {
+            out.push_str("  · partial");
+        }
+    }
+    Some(out)
+}
+
 fn model_tooltip(m: &ModelCost) -> String {
     let mut lines = vec![m.model.clone()];
     // The split only reaches the snapshot from ccusage 16+; older caches carry
@@ -507,7 +534,11 @@ fn model_tooltip(m: &ModelCost) -> String {
         lines.push(format!("{} tokens", exact_tokens(m.tokens)));
     }
     lines.push(format!("${:.2} this month", m.usd));
-    lines.join("\n")
+    let mut out = lines.join("\n");
+    if let Some(split) = device_breakdown(&m.by_device) {
+        out.push_str(&split);
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -663,6 +694,7 @@ mod tests {
                     output_tokens: 0,
                     cache_creation_tokens: 0,
                     cache_read_tokens: 0,
+                    by_device: Vec::new(),
                 },
                 ModelCost {
                     model: "claude-opus-5".into(),
@@ -672,6 +704,7 @@ mod tests {
                     output_tokens: 200,
                     cache_creation_tokens: 300,
                     cache_read_tokens: 200,
+                    by_device: Vec::new(),
                 },
             ],
             burn_rate: Some(BurnRate {
@@ -714,11 +747,13 @@ mod tests {
                     date: "2026-08-21".into(),
                     usd: 1.0,
                     tokens: 500,
+                    by_device: Vec::new(),
                 },
                 DayCost {
                     date: "2026-08-22".into(),
                     usd: 2.0,
                     tokens: 1000,
+                    by_device: Vec::new(),
                 },
             ],
         }
@@ -867,6 +902,89 @@ mod tests {
         let spec = panel_spec(&r);
         let labels: Vec<&str> = spec[0].rows.iter().map(|w| w.label.as_str()).collect();
         assert_eq!(labels, vec!["Session", "Weekly (all)", "Fable only"]);
+    }
+
+    fn split() -> Vec<DeviceCost> {
+        vec![
+            DeviceCost {
+                device_id: "aaaa".into(),
+                label: "desktop".into(),
+                tokens: 600,
+                usd: 1.2,
+                updated_at_ms: crate::now_ms(),
+                partial: false,
+                is_local: true,
+            },
+            DeviceCost {
+                device_id: "bbbb".into(),
+                label: "laptop".into(),
+                tokens: 400,
+                usd: 0.8,
+                updated_at_ms: crate::now_ms(),
+                partial: true,
+                is_local: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn a_day_and_a_model_tooltip_carry_the_fleet_split() {
+        let mut c = cost();
+        c.weekly_history.last_mut().expect("a day").by_device = split();
+        for model in c.monthly_models.iter_mut() {
+            model.by_device = split();
+        }
+        let mut r = row();
+        r.cost = Some(c);
+        let spec = panel_spec(&r);
+
+        let today = spec
+            .iter()
+            .find(|s| s.id == "tokens_by_day")
+            .expect("days")
+            .rows
+            .last()
+            .expect("today")
+            .clone();
+        assert!(today.tooltip.contains("By device"), "{}", today.tooltip);
+        assert!(
+            today.tooltip.contains("desktop  600  ·  $1.20"),
+            "{}",
+            today.tooltip
+        );
+        // The marker the by-device rows already use, rather than a second
+        // wording for the same thing.
+        assert!(
+            today.tooltip.contains("laptop  400  ·  $0.80  · partial"),
+            "{}",
+            today.tooltip
+        );
+
+        let model = spec
+            .iter()
+            .find(|s| s.id == "tokens_by_model")
+            .expect("models")
+            .rows[0]
+            .clone();
+        assert!(model.tooltip.contains("By device"), "{}", model.tooltip);
+        assert!(model.tooltip.contains("desktop"), "{}", model.tooltip);
+    }
+
+    #[test]
+    fn a_lone_machine_gets_no_split_under_its_rows() {
+        let mut r = row();
+        r.cost = Some(cost());
+        let spec = panel_spec(&r);
+        for section in spec.iter().filter(|s| s.id.starts_with("tokens_by_")) {
+            for row in &section.rows {
+                assert!(
+                    !row.tooltip.contains("By device"),
+                    "{} {}",
+                    section.id,
+                    row.tooltip
+                );
+            }
+        }
     }
 
     #[test]

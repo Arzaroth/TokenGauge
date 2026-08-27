@@ -499,14 +499,23 @@ fn device_breakdown(devices: &[DeviceCost]) -> Option<String> {
     if devices.is_empty() {
         return None;
     }
+    // Columns, not a sentence: the tooltips render in a monospace face, and
+    // unpadded fields only line up when the label and token widths happen to
+    // cancel out, which reads as broken on the day they stop.
+    let rows: Vec<(&str, String, String)> = devices
+        .iter()
+        .map(|d| (d.label.as_str(), format_tokens(d.tokens), money(d.usd)))
+        .collect();
+    let width = |f: fn(&(&str, String, String)) -> usize| rows.iter().map(f).max().unwrap_or(0);
+    let (lw, tw, mw) = (
+        width(|r| r.0.chars().count()),
+        width(|r| r.1.chars().count()),
+        width(|r| r.2.chars().count()),
+    );
+
     let mut out = String::from("\n\nBy device");
-    for device in devices {
-        out.push_str(&format!(
-            "\n{}  {}  ·  {}",
-            device.label,
-            format_tokens(device.tokens),
-            money(device.usd)
-        ));
+    for ((label, tokens, usd), device) in rows.iter().zip(devices) {
+        out.push_str(&format!("\n{label:<lw$}  {tokens:>tw$}  ·  {usd:>mw$}"));
         if device.partial {
             out.push_str("  · partial");
         }
@@ -947,6 +956,9 @@ mod tests {
             .expect("today")
             .clone();
         assert!(today.tooltip.contains("By device"), "{}", today.tooltip);
+        // Padded into columns: the shorter label, token and money strings are
+        // widened to the longest of each, so the bullets and figures align in
+        // the monospace faces the tooltips render in.
         assert!(
             today.tooltip.contains("desktop  600  ·  $1.20"),
             "{}",
@@ -955,7 +967,7 @@ mod tests {
         // The marker the by-device rows already use, rather than a second
         // wording for the same thing.
         assert!(
-            today.tooltip.contains("laptop  400  ·  $0.80  · partial"),
+            today.tooltip.contains("laptop   400  ·  $0.80  · partial"),
             "{}",
             today.tooltip
         );

@@ -340,17 +340,7 @@ impl FleetStore {
     /// rather than the start of an hour, and there is no reason to make the
     /// local session figure coarser than it already is.
     pub fn synthetic_events(&self, local_id: &str, local_from: Hour) -> Vec<UsageEvent> {
-        let overlaps = self.overlaps();
-        let dropped: Vec<(NaiveDate, &str)> = overlaps
-            .iter()
-            .flat_map(|overlap| {
-                overlap
-                    .devices
-                    .iter()
-                    .filter(|id| **id != overlap.kept)
-                    .map(move |id| (overlap.date, id.as_str()))
-            })
-            .collect();
+        let dropped = self.dropped_days();
 
         let offset = *chrono::Local::now().offset();
         let mut events = Vec::new();
@@ -359,10 +349,7 @@ impl FleetStore {
                 if id == local_id && bucket.hour >= local_from {
                     continue;
                 }
-                if dropped
-                    .iter()
-                    .any(|(date, dropped_id)| *date == bucket.hour.utc_date() && dropped_id == id)
-                {
+                if is_dropped(&dropped, bucket, id) {
                     continue;
                 }
                 let Some(provider) = intern_provider(&bucket.provider) else {
@@ -380,6 +367,24 @@ impl FleetStore {
             }
         }
         events
+    }
+
+    /// The day a device read that another device already reported.
+    ///
+    /// Two machines that sync `~/.claude/projects` between them read the same
+    /// transcripts, so the same day arrives twice. `synthetic_events` keeps one
+    /// copy, which means everything that attributes those totals has to drop
+    /// the same copy or a split will out-run the row it splits.
+    fn dropped_days(&self) -> Vec<(NaiveDate, String)> {
+        let mut dropped = Vec::new();
+        for overlap in self.overlaps() {
+            for id in &overlap.devices {
+                if *id != overlap.kept {
+                    dropped.push((overlap.date, id.clone()));
+                }
+            }
+        }
+        dropped
     }
 
     /// Providers held in the store that this build cannot rate.
@@ -420,6 +425,7 @@ impl FleetStore {
         model: Option<&str>,
     ) -> Vec<DeviceCost> {
         let (from, to) = range;
+        let dropped = self.dropped_days();
         let mut rows: Vec<DeviceCost> = self
             .devices
             .iter()
@@ -431,6 +437,9 @@ impl FleetStore {
                         continue;
                     }
                     if model.is_some_and(|want| !bucket.model.eq_ignore_ascii_case(want)) {
+                        continue;
+                    }
+                    if is_dropped(&dropped, bucket, id) {
                         continue;
                     }
                     let date = bucket.hour.date_at(offset);
@@ -460,6 +469,13 @@ impl FleetStore {
         rows.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.label.cmp(&b.label)));
         rows
     }
+}
+
+/// Whether this bucket belongs to the copy of a day that the fleet drops.
+fn is_dropped(dropped: &[(NaiveDate, String)], bucket: &Bucket, device_id: &str) -> bool {
+    dropped
+        .iter()
+        .any(|(date, id)| *date == bucket.hour.utc_date() && id == device_id)
 }
 
 #[cfg(test)]
@@ -808,6 +824,43 @@ mod tests {
         assert!(rows[0].partial, "joined mid-month");
         assert!(!rows[1].partial);
         assert!(rows[1].is_local);
+    }
+
+    /// Two machines that sync the same transcript tree report the same day
+    /// twice. The row total keeps one copy, so a split that counted both would
+    /// out-run the row it splits - the one thing the split must never do.
+    #[test]
+    fn device_totals_drop_the_copy_of_a_day_the_row_total_drops() {
+        let utc = FixedOffset::east_opt(0).expect("offset");
+        let events = [event("claude", "opus", hour("2026-08-04T09"), 10, Some(1))];
+        let mut store = FleetStore::new();
+        store.upsert_local(&device("a"), hour("2026-08-01T00"), &events, 1);
+        store.upsert_local(&device("b"), hour("2026-08-01T00"), &events, 2);
+        assert_eq!(store.overlaps().len(), 1, "the same day, read twice");
+
+        let rows = store.device_totals(
+            "claude",
+            (
+                hour("2026-08-01T00").utc_date(),
+                hour("2026-08-25T00").utc_date(),
+            ),
+            utc,
+            &PriceTable::default(),
+            "a",
+            None,
+        );
+
+        // `synthetic_events` with a local id the store does not hold is what
+        // `build_report` sums the row total out of.
+        let row_total: u64 = store
+            .synthetic_events("neither", hour("2026-09-01T00"))
+            .iter()
+            .map(|e| e.tokens.total())
+            .sum();
+        let split: u64 = rows.iter().map(|r| r.tokens).sum();
+
+        assert_eq!(rows.len(), 1, "one machine is credited, not both");
+        assert_eq!(split, row_total);
     }
 
     /// The narrowed total is what a model row's tooltip attributes, so it has

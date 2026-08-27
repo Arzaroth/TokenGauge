@@ -70,9 +70,12 @@ function attachTooltip(actor, text) {
         Main.layoutManager.uiGroup.add_child(tip);
         const [x, y] = actor.get_transformed_position();
         const right = global.stage.width - tip.get_width() - 4;
+        // Above the row, unless that leaves the stage: the first rows of the
+        // popup sit close enough to the top panel for it to.
+        const above = y - tip.get_height() - 6;
         tip.set_position(
             Math.round(Math.max(4, Math.min(x, right))),
-            Math.round(y - tip.get_height() - 6));
+            Math.round(above >= 4 ? above : y + actor.get_height() + 6));
     });
     actor.connect('destroy', hide);
     return actor;

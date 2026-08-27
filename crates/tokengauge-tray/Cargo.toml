@@ -1,6 +1,6 @@
 [package]
 name = "tokengauge-tray"
-version = "0.25.3"
+version = "0.25.4"
 edition = "2024"
 rust-version.workspace = true
 

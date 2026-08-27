@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A reset countdown counts down.** "Resets in 6m" against a dashboard saying 3 minutes was not a stale number, it was an unrendered one: the instant a window resets at is absolute, so the countdown is measured against the clock at the moment a row is built - and nothing built a row between polls. The desktop panels re-read the snapshot on the same ten-minute cycle they fetch on, so a panel sat on the countdown it opened with, and the waybar bar replayed the output the daemon had rendered at its last fetch. The panels now re-read while they are on screen (every 30 seconds for Omarchy, Plasma and GNOME; every 15 for the TUI and the tray), and the daemon renders each snapshot request instead of replaying the last one. No provider is asked anything extra for it: a re-render serves the snapshot already on disk, and only its age decides a fetch. The percentages still wait for that fetch - they have nowhere else to come from.
+- A window whose reset time had come and gone read "not started", which is what the panel says for a window that never had a reset time at all - so the two limits about to roll over looked like the two that had never been touched. It says "Resets now" from the last minute onwards.
+- **A snapshot is stale once a window it reported has reset.** Its percentages describe a window that no longer exists, however young the snapshot is, and the reset is exactly the moment someone looks. Only a rollover since the write counts: a provider reporting an instant already in the past reports the same one on the next fetch, and asking again on every render would never stop.
+
 ## [0.25.2] - 2026-08-27
 
 ### Fixed

@@ -11,6 +11,10 @@ Item {
 
   property var settings: ({})
 
+  // Set by the panel while it is open; see the tick timer at the foot.
+  property bool live: false
+  onLiveChanged: if (live) reload()
+
   property var snapshot: null
   property string lastError: ""
   property bool loading: false
@@ -214,6 +218,17 @@ Item {
   Timer {
     interval: root.refreshIntervalSec * 1000
     running: true
+    repeat: true
+    onTriggered: root.reload()
+  }
+
+  // The panel is on screen. Reset times are relative to the clock at render
+  // time, not to the fetch, so re-running `--json` is what makes the countdown
+  // tick - and it is cheap: the binary serves the snapshot it already has and
+  // only refetches once that snapshot has aged past `refresh_secs`.
+  Timer {
+    interval: 30000
+    running: root.live
     repeat: true
     onTriggered: root.reload()
   }

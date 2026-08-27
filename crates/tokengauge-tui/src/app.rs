@@ -171,11 +171,17 @@ impl App {
         }
     }
 
+    /// Rebuild the rows from the snapshot on disk, without fetching.
+    ///
+    /// This is what picks up a fetch another frontend or the daemon made, and
+    /// it is also what makes the reset countdowns tick: they are counted
+    /// against the clock at render time, so they only move when a row is built
+    /// again. Reading the snapshot costs a file read, so the cycle is short.
     fn maybe_repoll_cache(&mut self) {
         if self.pending_refresh.is_some() {
             return;
         }
-        if self.last_cache_poll.elapsed() < Duration::from_secs(60) {
+        if self.last_cache_poll.elapsed() < Duration::from_secs(15) {
             return;
         }
         self.last_cache_poll = Instant::now();

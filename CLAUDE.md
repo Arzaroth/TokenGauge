@@ -80,10 +80,14 @@ holds the only record of past days' tokens and costs.
 `cache_is_stale()` in core is the single fetch-or-serve decision. A snapshot is
 stale when it is missing, older than `refresh_secs`, **or** was written before a
 provider that is enabled now was switched on - `CacheMeta.providers` records the
-set each fetch ran with. Age alone was the old rule, and it is why enabling a
-provider used to do nothing for ten minutes. `retain_enabled()` still handles the
-other direction, filtering a provider switched off out of a snapshot that is
-otherwise fine.
+set each fetch ran with - **or** a window it reported has reset since it was
+written, because those percentages describe a window that no longer exists. Age
+alone was the old rule, and it is why enabling a provider used to do nothing for
+ten minutes. The rollover test compares against the write, not against now
+alone: a provider reporting an instant already past reports the same one on the
+next fetch, and asking again on every render would never stop. `retain_enabled()`
+still handles the other direction, filtering a provider switched off out of a
+snapshot that is otherwise fine.
 
 Every write goes through `write_cache_full`, which writes atomically and then
 rewrites `tokengauge-revision`. Frontends watch that file (Quickshell `FileView`,
@@ -91,6 +95,23 @@ GNOME `Gio.FileMonitor`, and `--wait-change` for the Plasma applet, whose toolki
 has no watcher) and re-run `--json` when it moves. Their poll timers stay: with
 no daemon running, a poll is what ages the snapshot out and triggers the next
 fetch.
+
+### Rendering is not fetching
+
+A reset countdown is measured against the clock at the moment `panel.rs` builds
+the row, not against the fetch - the instant it counts down to is absolute, so a
+snapshot minutes old still yields the right countdown. What that costs is a
+render: a frontend that rebuilds its rows only when it refetches shows the
+countdown it last rebuilt with, which is how "Resets in 6m" survived next to a
+dashboard saying 3 minutes.
+
+So every frontend re-renders on a **short** cycle while it is on screen, and
+that cycle has nothing to do with `refresh_secs`: Omarchy, Plasma and GNOME
+re-run `--json` every 30s while the panel is open, the TUI and the tray rebuild
+from the snapshot every 15s, and the daemon renders each socket snapshot request
+rather than replaying the output it rendered at its last fetch. None of that
+asks a provider anything - `cache_is_stale()` alone decides that, which is why a
+render can be cheap and frequent while a fetch stays rare.
 
 `--set-provider` fetches before it returns, because frontends run
 `--set-provider && --json` in one subprocess and the `--json` has to see the new

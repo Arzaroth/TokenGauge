@@ -130,6 +130,16 @@ pub fn format_window(window: Option<UsageWindow>) -> (Option<u8>, Option<u32>, S
 
 /// Format reset time as relative duration (e.g., "in 2h 30m") if possible,
 /// otherwise fall back to the description (e.g., "Jan 22 at 5:59PM").
+///
+/// Counted against the clock at render time, never against the fetch: the
+/// instant is absolute, so a countdown drawn from a snapshot minutes old is
+/// still the right countdown. The percentage beside it is the one that has to
+/// wait for the next fetch.
+///
+/// A reset instant already past is a window that rolled over since the fetch,
+/// which is a different thing from a window that never had a reset time - and
+/// says "now" rather than counting up, because the panel calls the latter
+/// "not started".
 fn format_reset_time(resets_at: Option<&str>, description: Option<String>) -> String {
     if let Some(resets_at) = resets_at
         && let Ok(reset_time) = DateTime::parse_from_rfc3339(resets_at)
@@ -138,9 +148,13 @@ fn format_reset_time(resets_at: Option<&str>, description: Option<String>) -> St
         let reset_utc = reset_time.with_timezone(&Utc);
         let duration = reset_utc.signed_duration_since(now);
 
-        if duration.num_seconds() > 0 {
-            return format!("in {}", fmt::format_duration(duration.num_minutes(), 3));
-        }
+        // Under a minute left rounds to "in 0m", which reads as broken on a
+        // countdown that now ticks.
+        return if duration.num_seconds() >= 60 {
+            format!("in {}", fmt::format_duration(duration.num_minutes(), 3))
+        } else {
+            "now".to_string()
+        };
     }
     // Fall back to description if we can't compute relative time
     description.unwrap_or_else(|| "—".to_string())
@@ -380,6 +394,34 @@ mod tests {
             "unexpected reset: {}",
             reset
         );
+    }
+
+    #[test]
+    fn format_window_reset_already_passed_says_now() {
+        // The window rolled over since the fetch, so its description is as old
+        // as its instant and neither of them is the answer.
+        let past = Utc::now() - chrono::Duration::minutes(3);
+        let window = UsageWindow {
+            used_percent: Some(69),
+            reset_description: Some("Jan 20 at 12:59PM".to_string()),
+            resets_at: Some(past.to_rfc3339()),
+            window_minutes: Some(10080),
+        };
+        let (_, _, reset) = format_window(Some(window));
+        assert_eq!(reset, "now");
+    }
+
+    #[test]
+    fn format_window_under_a_minute_says_now() {
+        let soon = Utc::now() + chrono::Duration::seconds(20);
+        let window = UsageWindow {
+            used_percent: Some(90),
+            reset_description: None,
+            resets_at: Some(soon.to_rfc3339()),
+            window_minutes: Some(300),
+        };
+        let (_, _, reset) = format_window(Some(window));
+        assert_eq!(reset, "now");
     }
 
     // ------------------------------------------------------------------------

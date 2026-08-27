@@ -166,24 +166,35 @@ pub(crate) fn try_get_snapshot(config: &TokenGaugeConfig) -> Result<String> {
     }
 }
 
-/// Snapshot the daemon's current output, re-rendering with the refreshing
-/// indicator when the sentinel file is present (i.e. a manual refresh is
-/// still in flight). Lets snapshot clients (the standard waybar poll path)
-/// pick up the ⟳ state without subscribing.
+/// The daemon's answer to a snapshot request - the standard waybar poll path -
+/// rendered from the snapshot on disk rather than replayed from the last fetch.
+///
+/// Rendering again is what picks up the ⟳ while a manual refresh is in flight,
+/// and it is what makes the reset countdowns in the tooltip move: a countdown
+/// is measured against the clock at the moment the row is built, so replaying
+/// the output of the last fetch replays the countdown it was rendered with. The
+/// instant it counts down to is absolute, so a snapshot minutes old still
+/// yields the right one - only the percentages have to wait for a fetch.
+///
+/// The stored output is the fallback for a cache that reads back as nothing:
+/// a bar that has gone blank is worse than a bar a few minutes behind. Not
+/// while a refresh is in flight, though - there the empty render carries the ⟳
+/// that says so, and the first fetch on a cold machine has no output to replay
+/// anyway.
 pub(crate) fn current_snapshot(
     state: &Arc<Mutex<DaemonState>>,
     config: &TokenGaugeConfig,
 ) -> WaybarOutput {
-    let sentinel = refresh_sentinel_path(&config.cache_file);
-    if refresh_in_progress(&sentinel) {
-        let (rows, errors) = rows_from_cache(config);
-        return render_output(config, &rows, &errors, true);
+    let refreshing = refresh_in_progress(&refresh_sentinel_path(&config.cache_file));
+    let (rows, errors) = rows_from_cache(config);
+    if !refreshing && rows.is_empty() && errors.is_empty() {
+        return state
+            .lock()
+            .expect("daemon state mutex poisoned")
+            .output
+            .clone();
     }
-    state
-        .lock()
-        .expect("daemon state mutex poisoned")
-        .output
-        .clone()
+    render_output(config, &rows, &errors, refreshing)
 }
 
 pub(crate) struct DaemonState {
@@ -701,8 +712,74 @@ mod tests {
         (sock, handle)
     }
 
+    /// A snapshot request re-renders, so the countdowns in the tooltip are
+    /// counted from now and not from whenever the last fetch happened. The
+    /// stored output is a fallback, exercised by the test below it.
     #[test]
-    fn socket_snapshot_returns_current_output() {
+    fn socket_snapshot_renders_the_cache_rather_than_replaying_the_last_fetch() {
+        use std::collections::HashMap;
+        use tokengauge_core::{
+            ProviderPayload, ProvidersConfig, UsageSnapshot, UsageWindow, write_cache_full,
+        };
+
+        let dir = unique_test_dir("snapshot-rerender");
+        let cache = dir.join("cache.json");
+        let mut config = test_config(cache.clone());
+        config.providers = ProvidersConfig {
+            claude: Some(true),
+            ..Default::default()
+        };
+        let payload = ProviderPayload {
+            provider: "claude".into(),
+            version: None,
+            source: None,
+            usage: Some(UsageSnapshot {
+                primary: Some(UsageWindow {
+                    used_percent: Some(36),
+                    reset_description: None,
+                    resets_at: Some((chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339()),
+                    window_minutes: Some(300),
+                }),
+                secondary: None,
+                tertiary: None,
+                updated_at: None,
+                login_method: None,
+                extra_rate_windows: Vec::new(),
+            }),
+            credits: None,
+            error: None,
+            stale: false,
+        };
+        write_cache_full(
+            &cache,
+            &[payload],
+            &[],
+            &HashMap::new(),
+            &config.providers,
+            None,
+        )
+        .unwrap();
+
+        let state = test_state("BASELINE_TEXT");
+        let (sock, server) = spawn_one_shot_server(&cache, state, config);
+        let reply = send_recv(&sock, &SocketCommand::Snapshot);
+        match reply {
+            SocketReply::Snapshot { output } => {
+                assert_ne!(output.text, "BASELINE_TEXT", "replayed the stored output");
+                assert!(
+                    output.tooltip.contains("Resets in 1h 59m"),
+                    "expected a countdown measured now, got {}",
+                    output.tooltip
+                );
+            }
+            other => panic!("unexpected reply: {other:?}"),
+        }
+        server.join().unwrap().unwrap();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn socket_snapshot_falls_back_to_the_last_output_when_the_cache_reads_as_nothing() {
         let dir = unique_test_dir("snapshot");
         let cache = dir.join("cache.json");
         let state = test_state("SNAPSHOT_TEXT");

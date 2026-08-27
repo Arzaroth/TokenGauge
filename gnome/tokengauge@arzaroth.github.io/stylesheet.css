@@ -84,13 +84,9 @@
 
 .tokengauge-meter-track {
     height: 8px;
+    min-width: 288px;
     border-radius: 4px;
     background-color: rgba(255, 255, 255, 0.12);
-}
-
-.tokengauge-meter-fill {
-    height: 8px;
-    border-radius: 4px;
 }
 
 .tokengauge-section {
@@ -113,8 +109,7 @@
 }
 
 .tokengauge-bar-fill {
-    border-radius: 3px;
-    background-color: rgba(255, 255, 255, 0.14);
+    color: rgba(255, 255, 255, 0.14);
 }
 
 .tokengauge-bar-text {

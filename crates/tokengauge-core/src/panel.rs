@@ -180,14 +180,20 @@ pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
         });
     }
 
-    if let Some(cost) = row.cost.as_ref() {
+    // A provider can have one without the other: a plan sells a window and a
+    // reader prices its transcripts, while a prepaid provider sells a balance
+    // and writes nothing to read.
+    let cost_rows = cost_rows(row.cost.as_ref(), row.credits);
+    if !cost_rows.is_empty() {
         out.push(Section {
             id: "cost",
             title: "COST",
             kind: SectionKind::Rows,
-            rows: cost_rows(cost),
+            rows: cost_rows,
         });
+    }
 
+    if let Some(cost) = row.cost.as_ref() {
         let days = day_rows(cost);
         if !days.is_empty() {
             out.push(Section {
@@ -353,7 +359,50 @@ fn limit_rows(row: &ProviderRow) -> Vec<PanelRow> {
 // Cost
 // ---------------------------------------------------------------------------
 
-fn cost_rows(cost: &CostInfo) -> Vec<PanelRow> {
+fn cost_rows(cost: Option<&CostInfo>, credits: Option<f64>) -> Vec<PanelRow> {
+    let mut out = Vec::new();
+    if let Some(cost) = cost {
+        out.extend(spend_rows(cost));
+    }
+
+    // Under the spend it is being drawn down by. A credit balance is what a
+    // provider selling credits has instead of a window, so for such a provider
+    // this is the only row in the section; for Codex it sits below a month's spend.
+    if let Some(balance) = credits {
+        out.push(PanelRow::new("Credits", money(balance)));
+    }
+
+    // Sync stays last: it is the section's status line, not one of its figures.
+    if let Some(note) = cost.and_then(|c| c.sync_note.as_ref()) {
+        out.push(sync_row(note));
+    }
+
+    out
+}
+
+fn sync_row(note: &SyncNote) -> PanelRow {
+    let mut r = PanelRow::new(
+        "Sync",
+        match note.devices {
+            1 => "1 device".to_string(),
+            n => format!("{n} devices"),
+        },
+    );
+    r.badge = note.headline.clone();
+    r.badge_tone = note.tone;
+    // A transport error can be a paragraph. Rows renderers print the suffix
+    // inline on surfaces with no wrapping, so the line is capped and the whole
+    // sentence kept for the tooltip.
+    r.suffix = ellipsize(&note.detail, 72);
+    r.tooltip = if note.detail.is_empty() {
+        "Cost and token figures cover every machine in the fleet".to_string()
+    } else {
+        note.detail.clone()
+    };
+    r
+}
+
+fn spend_rows(cost: &CostInfo) -> Vec<PanelRow> {
     let mut out = Vec::new();
 
     let mut today = PanelRow::new("Today", money(cost.today_usd));
@@ -387,28 +436,6 @@ fn cost_rows(cost: &CostInfo) -> Vec<PanelRow> {
             "Burn rate",
             format!("{}/hr", money(burn.cost_per_hour)),
         ));
-    }
-
-    if let Some(note) = cost.sync_note.as_ref() {
-        let mut r = PanelRow::new(
-            "Sync",
-            match note.devices {
-                1 => "1 device".to_string(),
-                n => format!("{n} devices"),
-            },
-        );
-        r.badge = note.headline.clone();
-        r.badge_tone = note.tone;
-        // A transport error can be a paragraph. Rows renderers print the suffix
-        // inline on surfaces with no wrapping, so the line is capped and the
-        // whole sentence kept for the tooltip.
-        r.suffix = ellipsize(&note.detail, 72);
-        r.tooltip = if note.detail.is_empty() {
-            "Cost and token figures cover every machine in the fleet".to_string()
-        } else {
-            note.detail.clone()
-        };
-        out.push(r);
     }
 
     out
@@ -676,7 +703,7 @@ mod tests {
             weekly_pace: None,
             tertiary_used: None,
             tertiary_reset: "—".into(),
-            credits: "—".into(),
+            credits: None,
             source: "—".into(),
             updated: "just now".into(),
             updated_iso: None,
@@ -870,6 +897,52 @@ mod tests {
     fn cost_sections_are_omitted_without_cost() {
         let ids: Vec<&str> = panel_spec(&row()).iter().map(|s| s.id).collect();
         assert_eq!(ids, vec!["limits"]);
+    }
+
+    /// A provider selling prepaid credits has a balance and no transcripts to
+    /// read, so COST is the balance and nothing else. The waybar tooltip and
+    /// the TUI each used to draw this themselves, below the panel, and the four
+    /// desktop panels drew it nowhere.
+    #[test]
+    fn a_balance_alone_is_enough_for_a_cost_section() {
+        let mut row = row();
+        row.credits = Some(18.44);
+        let spec = panel_spec(&row);
+        let cost = spec.iter().find(|s| s.id == "cost").expect("cost section");
+        assert_eq!(cost.kind, SectionKind::Rows);
+        assert_eq!(cost.rows.len(), 1);
+        assert_eq!(cost.rows[0].label, "Credits");
+        assert_eq!(cost.rows[0].value, "$18.44");
+    }
+
+    /// Under the spend it is being drawn down by, and above the sync status
+    /// line, which is not one of the section's figures.
+    #[test]
+    fn a_balance_sits_below_the_spend_it_is_drawn_down_by() {
+        let mut row = row();
+        row.cost = Some(cost());
+        row.credits = Some(18.44);
+        let spec = panel_spec(&row);
+        let labels: Vec<&str> = spec
+            .iter()
+            .find(|s| s.id == "cost")
+            .expect("cost section")
+            .rows
+            .iter()
+            .map(|r| r.label.as_str())
+            .collect();
+        let credits = labels
+            .iter()
+            .position(|l| *l == "Credits")
+            .expect("credits");
+        let month = labels
+            .iter()
+            .position(|l| *l == "This month")
+            .expect("month");
+        assert!(month < credits, "{labels:?}");
+        if let Some(sync) = labels.iter().position(|l| *l == "Sync") {
+            assert!(credits < sync, "{labels:?}");
+        }
     }
 
     #[test]

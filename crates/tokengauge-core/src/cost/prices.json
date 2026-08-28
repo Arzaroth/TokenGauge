@@ -8,14 +8,14 @@
  },
  "claude-3-haiku-20240307": {
   "cache_creation_input_token_cost": 3e-07,
-  "cache_creation_input_token_cost_above_1hr": 6e-06,
+  "cache_creation_input_token_cost_above_1hr": 5e-07,
   "cache_read_input_token_cost": 3e-08,
   "input_cost_per_token": 2.5e-07,
   "output_cost_per_token": 1.25e-06
  },
  "claude-3-opus-20240229": {
   "cache_creation_input_token_cost": 1.875e-05,
-  "cache_creation_input_token_cost_above_1hr": 6e-06,
+  "cache_creation_input_token_cost_above_1hr": 3e-05,
   "cache_read_input_token_cost": 1.5e-06,
   "input_cost_per_token": 1.5e-05,
   "output_cost_per_token": 7.5e-05
@@ -924,5 +924,281 @@
  "openai.gpt-oss-safeguard-20b": {
   "input_cost_per_token": 7e-08,
   "output_cost_per_token": 2e-07
+ },
+ "openrouter/moonshotai/kimi-k2.5": {
+  "cache_read_input_token_cost": 1e-07,
+  "input_cost_per_token": 6e-07,
+  "output_cost_per_token": 3e-06
+ },
+ "openrouter/x-ai/grok-4": {
+  "input_cost_per_token": 3e-06,
+  "output_cost_per_token": 1.5e-05
+ },
+ "openrouter/z-ai/glm-4.6": {
+  "input_cost_per_token": 4e-07,
+  "output_cost_per_token": 1.75e-06
+ },
+ "openrouter/z-ai/glm-4.6:exacto": {
+  "input_cost_per_token": 4.5e-07,
+  "output_cost_per_token": 1.9e-06
+ },
+ "openrouter/z-ai/glm-4.7": {
+  "cache_creation_input_token_cost": 0.0,
+  "cache_read_input_token_cost": 0.0,
+  "input_cost_per_token": 4e-07,
+  "output_cost_per_token": 1.5e-06
+ },
+ "openrouter/z-ai/glm-4.7-flash": {
+  "cache_creation_input_token_cost": 0.0,
+  "cache_read_input_token_cost": 0.0,
+  "input_cost_per_token": 7e-08,
+  "output_cost_per_token": 4e-07
+ },
+ "openrouter/z-ai/glm-5": {
+  "input_cost_per_token": 8e-07,
+  "output_cost_per_token": 2.56e-06
+ },
+ "openrouter/z-ai/glm-5.1": {
+  "cache_creation_input_token_cost": 0.0,
+  "cache_read_input_token_cost": 5.25e-07,
+  "input_cost_per_token": 1.05e-06,
+  "output_cost_per_token": 3.5e-06
+ },
+ "xai/grok-3": {
+  "cache_read_input_token_cost": 7.5e-07,
+  "input_cost_per_token": 3e-06,
+  "output_cost_per_token": 1.5e-05
+ },
+ "xai/grok-3-beta": {
+  "cache_read_input_token_cost": 7.5e-07,
+  "input_cost_per_token": 3e-06,
+  "output_cost_per_token": 1.5e-05
+ },
+ "xai/grok-3-fast-beta": {
+  "cache_read_input_token_cost": 1.25e-06,
+  "input_cost_per_token": 5e-06,
+  "output_cost_per_token": 2.5e-05
+ },
+ "xai/grok-3-fast-latest": {
+  "cache_read_input_token_cost": 1.25e-06,
+  "input_cost_per_token": 5e-06,
+  "output_cost_per_token": 2.5e-05
+ },
+ "xai/grok-3-latest": {
+  "cache_read_input_token_cost": 7.5e-07,
+  "input_cost_per_token": 3e-06,
+  "output_cost_per_token": 1.5e-05
+ },
+ "xai/grok-3-mini": {
+  "cache_read_input_token_cost": 7.5e-08,
+  "input_cost_per_token": 3e-07,
+  "output_cost_per_token": 5e-07
+ },
+ "xai/grok-3-mini-beta": {
+  "cache_read_input_token_cost": 7.5e-08,
+  "input_cost_per_token": 3e-07,
+  "output_cost_per_token": 5e-07
+ },
+ "xai/grok-3-mini-fast": {
+  "cache_read_input_token_cost": 1.5e-07,
+  "input_cost_per_token": 6e-07,
+  "output_cost_per_token": 4e-06
+ },
+ "xai/grok-3-mini-fast-beta": {
+  "cache_read_input_token_cost": 1.5e-07,
+  "input_cost_per_token": 6e-07,
+  "output_cost_per_token": 4e-06
+ },
+ "xai/grok-3-mini-fast-latest": {
+  "cache_read_input_token_cost": 1.5e-07,
+  "input_cost_per_token": 6e-07,
+  "output_cost_per_token": 4e-06
+ },
+ "xai/grok-3-mini-latest": {
+  "cache_read_input_token_cost": 7.5e-08,
+  "input_cost_per_token": 3e-07,
+  "output_cost_per_token": 5e-07
+ },
+ "xai/grok-4": {
+  "input_cost_per_token": 3e-06,
+  "output_cost_per_token": 1.5e-05
+ },
+ "xai/grok-4-0709": {
+  "input_cost_per_token": 3e-06,
+  "output_cost_per_token": 1.5e-05
+ },
+ "xai/grok-4-1-fast": {
+  "cache_read_input_token_cost": 5e-08,
+  "input_cost_per_token": 2e-07,
+  "output_cost_per_token": 5e-07
+ },
+ "xai/grok-4-1-fast-non-reasoning": {
+  "cache_read_input_token_cost": 5e-08,
+  "input_cost_per_token": 2e-07,
+  "output_cost_per_token": 5e-07
+ },
+ "xai/grok-4-1-fast-non-reasoning-latest": {
+  "cache_read_input_token_cost": 5e-08,
+  "input_cost_per_token": 2e-07,
+  "output_cost_per_token": 5e-07
+ },
+ "xai/grok-4-1-fast-reasoning": {
+  "cache_read_input_token_cost": 5e-08,
+  "input_cost_per_token": 2e-07,
+  "output_cost_per_token": 5e-07
+ },
+ "xai/grok-4-1-fast-reasoning-latest": {
+  "cache_read_input_token_cost": 5e-08,
+  "input_cost_per_token": 2e-07,
+  "output_cost_per_token": 5e-07
+ },
+ "xai/grok-4-fast-non-reasoning": {
+  "cache_read_input_token_cost": 5e-08,
+  "input_cost_per_token": 2e-07,
+  "output_cost_per_token": 5e-07
+ },
+ "xai/grok-4-fast-reasoning": {
+  "cache_read_input_token_cost": 5e-08,
+  "input_cost_per_token": 2e-07,
+  "output_cost_per_token": 5e-07
+ },
+ "xai/grok-4-latest": {
+  "input_cost_per_token": 3e-06,
+  "output_cost_per_token": 1.5e-05
+ },
+ "xai/grok-4.20-0309-non-reasoning": {
+  "cache_read_input_token_cost": 2e-07,
+  "input_cost_per_token": 1.25e-06,
+  "output_cost_per_token": 2.5e-06
+ },
+ "xai/grok-4.20-0309-reasoning": {
+  "cache_read_input_token_cost": 2e-07,
+  "input_cost_per_token": 1.25e-06,
+  "output_cost_per_token": 2.5e-06
+ },
+ "xai/grok-4.20-beta-0309-non-reasoning": {
+  "cache_read_input_token_cost": 2e-07,
+  "input_cost_per_token": 1.25e-06,
+  "output_cost_per_token": 2.5e-06
+ },
+ "xai/grok-4.20-beta-0309-reasoning": {
+  "cache_read_input_token_cost": 2e-07,
+  "input_cost_per_token": 1.25e-06,
+  "output_cost_per_token": 2.5e-06
+ },
+ "xai/grok-4.20-multi-agent-0309": {
+  "cache_read_input_token_cost": 2e-07,
+  "input_cost_per_token": 1.25e-06,
+  "output_cost_per_token": 2.5e-06
+ },
+ "xai/grok-4.20-multi-agent-beta-0309": {
+  "cache_read_input_token_cost": 2e-07,
+  "input_cost_per_token": 1.25e-06,
+  "output_cost_per_token": 2.5e-06
+ },
+ "xai/grok-4.3": {
+  "cache_read_input_token_cost": 2e-07,
+  "input_cost_per_token": 1.25e-06,
+  "output_cost_per_token": 2.5e-06
+ },
+ "xai/grok-4.3-latest": {
+  "cache_read_input_token_cost": 2e-07,
+  "input_cost_per_token": 1.25e-06,
+  "output_cost_per_token": 2.5e-06
+ },
+ "xai/grok-4.5": {
+  "cache_read_input_token_cost": 3e-07,
+  "input_cost_per_token": 2e-06,
+  "output_cost_per_token": 6e-06
+ },
+ "xai/grok-4.5-latest": {
+  "cache_read_input_token_cost": 3e-07,
+  "input_cost_per_token": 2e-06,
+  "output_cost_per_token": 6e-06
+ },
+ "xai/grok-4.6": {
+  "cache_read_input_token_cost": 5e-07,
+  "input_cost_per_token": 2e-06,
+  "output_cost_per_token": 6e-06
+ },
+ "xai/grok-build-0.1": {
+  "cache_read_input_token_cost": 2e-07,
+  "input_cost_per_token": 1e-06,
+  "output_cost_per_token": 2e-06
+ },
+ "xai/grok-code-fast": {
+  "cache_read_input_token_cost": 2e-07,
+  "input_cost_per_token": 1e-06,
+  "output_cost_per_token": 2e-06
+ },
+ "xai/grok-code-fast-1": {
+  "cache_read_input_token_cost": 2e-07,
+  "input_cost_per_token": 1e-06,
+  "output_cost_per_token": 2e-06
+ },
+ "xai/grok-code-fast-1-0825": {
+  "cache_read_input_token_cost": 2e-07,
+  "input_cost_per_token": 1e-06,
+  "output_cost_per_token": 2e-06
+ },
+ "zai/glm-4-32b-0414-128k": {
+  "input_cost_per_token": 1e-07,
+  "output_cost_per_token": 1e-07
+ },
+ "zai/glm-4.5": {
+  "input_cost_per_token": 6e-07,
+  "output_cost_per_token": 2.2e-06
+ },
+ "zai/glm-4.5-air": {
+  "input_cost_per_token": 2e-07,
+  "output_cost_per_token": 1.1e-06
+ },
+ "zai/glm-4.5-airx": {
+  "input_cost_per_token": 1.1e-06,
+  "output_cost_per_token": 4.5e-06
+ },
+ "zai/glm-4.5-x": {
+  "input_cost_per_token": 2.2e-06,
+  "output_cost_per_token": 8.9e-06
+ },
+ "zai/glm-4.5v": {
+  "input_cost_per_token": 6e-07,
+  "output_cost_per_token": 1.8e-06
+ },
+ "zai/glm-4.6": {
+  "cache_creation_input_token_cost": 0,
+  "cache_read_input_token_cost": 1.1e-07,
+  "input_cost_per_token": 6e-07,
+  "output_cost_per_token": 2.2e-06
+ },
+ "zai/glm-4.7": {
+  "cache_creation_input_token_cost": 0,
+  "cache_read_input_token_cost": 1.1e-07,
+  "input_cost_per_token": 6e-07,
+  "output_cost_per_token": 2.2e-06
+ },
+ "zai/glm-5": {
+  "cache_creation_input_token_cost": 0,
+  "cache_read_input_token_cost": 2e-07,
+  "input_cost_per_token": 1e-06,
+  "output_cost_per_token": 3.2e-06
+ },
+ "zai/glm-5-code": {
+  "cache_creation_input_token_cost": 0,
+  "cache_read_input_token_cost": 3e-07,
+  "input_cost_per_token": 1.2e-06,
+  "output_cost_per_token": 5e-06
+ },
+ "zai/glm-5.1": {
+  "cache_creation_input_token_cost": 0,
+  "cache_read_input_token_cost": 2.6e-07,
+  "input_cost_per_token": 1.4e-06,
+  "output_cost_per_token": 4.4e-06
+ },
+ "zai/glm-5.3": {
+  "cache_creation_input_token_cost": 0,
+  "cache_read_input_token_cost": 2.6e-07,
+  "input_cost_per_token": 1.4e-06,
+  "output_cost_per_token": 4.4e-06
  }
 }

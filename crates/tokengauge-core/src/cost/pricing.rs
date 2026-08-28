@@ -80,6 +80,90 @@ fn base_model_name(model: &str) -> &str {
     }
 }
 
+/// The vendor paths LiteLLM files a provider's models under.
+///
+/// Only the makers whose models are sold through someone else's namespace need
+/// one. Anthropic and OpenAI models are keyed bare, which is why this went
+/// unnoticed for as long as those were the only two providers with a reader.
+fn vendor_prefixes(model: &str) -> &'static [&'static str] {
+    match model_to_provider(model) {
+        Some("glm") => &["zai/", "z-ai/", "openrouter/z-ai/"],
+        Some("grok") => &["xai/", "x-ai/", "openrouter/x-ai/"],
+        Some("kimi") => &["moonshot/", "moonshotai/", "openrouter/moonshotai/"],
+        _ => &[],
+    }
+}
+
+/// Plan names a CLI reports in place of a model.
+///
+/// The Kimi Code subscription writes `kimi-for-coding` whatever the plan is
+/// routing to that month, and LiteLLM prices models, not plans. Rated at the
+/// model the plan currently serves: ccusage splits this on a timestamp because
+/// the plan served k2.5 until April 2026, which this does not reproduce - a
+/// transcript that old is outside every window the panel draws.
+const PLAN_ALIASES: &[(&str, &str)] = &[("kimi-for-coding", "moonshot/kimi-k2.6")];
+
+fn push_unique(out: &mut Vec<String>, candidate: String) {
+    if !candidate.is_empty() && !out.contains(&candidate) {
+        out.push(candidate);
+    }
+}
+
+/// The price-table keys to try for one transcript model name, in order.
+///
+/// A transcript carries the id the CLI was configured with - `glm-4.6`,
+/// `kimi-k2-thinking`, `grok-4.5-build` - and LiteLLM keys the same model under
+/// the vendor selling it. Without the walk, every GLM and Kimi call read out of
+/// a Claude Code transcript was attributed to the right provider, counted into
+/// the right day, and then rated at zero.
+fn price_candidates(lower: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    push_unique(&mut out, lower.to_string());
+
+    // Grok names the plan in the model id, and the bracket has to come off
+    // before the context-window suffix is read: a leading `[` would otherwise
+    // take the whole name with it.
+    let unbracketed = lower.strip_prefix("[grok] ").unwrap_or(lower).trim();
+    let base = base_model_name(unbracketed);
+    push_unique(&mut out, base.to_string());
+    let unbuilt = base.strip_suffix("-build").unwrap_or(base);
+    push_unique(&mut out, unbuilt.to_string());
+
+    for name in [base, unbuilt] {
+        if let Some((_, alias)) = PLAN_ALIASES.iter().find(|(plan, _)| *plan == name) {
+            push_unique(&mut out, (*alias).to_string());
+        }
+        for prefix in vendor_prefixes(name) {
+            push_unique(&mut out, format!("{prefix}{name}"));
+        }
+    }
+    out
+}
+
+/// Which provider a *price-table key* belongs to, and `None` when no name a
+/// transcript can carry would ever resolve to it.
+///
+/// LiteLLM keys a model by where you buy it rather than by who made it, so
+/// asking [`model_to_provider`] about the whole key kept `moonshot/...` - which
+/// happens to lead with a maker's name - and dropped all 75 Grok and all 98 GLM
+/// entries in the table on the floor.
+///
+/// The mirror of [`price_candidates`]: a bare name, or one under a vendor path
+/// that function builds. LiteLLM also files the same models under bedrock,
+/// azure and half a dozen resellers, and nothing here can ask for those - they
+/// would be 700 entries of dead weight compiled into every binary.
+fn attribute_price_key(key: &str) -> Option<&'static str> {
+    if let Some(provider) = model_to_provider(key) {
+        return Some(provider);
+    }
+    let bare = key.rsplit('/').next()?;
+    let provider = model_to_provider(bare)?;
+    vendor_prefixes(bare)
+        .iter()
+        .any(|prefix| key.len() == prefix.len() + bare.len() && key.starts_with(prefix))
+        .then_some(provider)
+}
+
 impl PriceTable {
     fn from_json(raw: &str) -> Result<Self> {
         let parsed: HashMap<String, serde_json::Value> =
@@ -89,7 +173,7 @@ impl PriceTable {
             // The upstream table also holds embeddings, rerankers and a
             // `sample_spec` doc entry; anything we cannot attribute to a
             // provider is not a model we will ever look up.
-            if model_to_provider(&name).is_none() {
+            if attribute_price_key(&name.to_lowercase()).is_none() {
                 continue;
             }
             if let Ok(price) = serde_json::from_value::<ModelPrice>(value)
@@ -115,10 +199,9 @@ impl PriceTable {
 
     pub fn get(&self, model: &str) -> Option<&ModelPrice> {
         let lower = model.to_lowercase();
-        if let Some(p) = self.models.get(&lower) {
-            return Some(p);
-        }
-        self.models.get(&base_model_name(&lower).to_lowercase())
+        price_candidates(&lower)
+            .iter()
+            .find_map(|candidate| self.models.get(candidate))
     }
 
     fn to_json(&self) -> String {
@@ -261,6 +344,66 @@ mod tests {
     #[test]
     fn unknown_model_has_no_price_rather_than_a_zero_one() {
         assert!(PriceTable::vendored().get("claude-not-a-model-9").is_none());
+    }
+
+    /// The bug this walk exists for: a GLM or Kimi plan driven through Claude
+    /// Code lands in `~/.claude/projects` under its own model name, is
+    /// attributed to the right provider by `model_to_provider`, and was then
+    /// rated at zero because LiteLLM files those models under `zai/` and
+    /// `moonshot/`. Tokens counted, money silently missing.
+    #[test]
+    fn a_model_sold_under_a_vendor_path_is_priced_by_its_bare_name() {
+        let t = PriceTable::vendored();
+        for model in [
+            "glm-4.6",
+            "glm-4.7",
+            "glm-5",
+            "kimi-k2-thinking",
+            "kimi-k2.5",
+            "kimi-k2.6",
+            "grok-4",
+            "grok-code-fast-1",
+        ] {
+            assert!(t.get(model).is_some(), "{model} priced at nothing");
+        }
+        assert_eq!(t.get("glm-4.6"), t.get("zai/glm-4.6"));
+        assert_eq!(t.get("kimi-k2.6"), t.get("moonshot/kimi-k2.6"));
+    }
+
+    /// Grok reports the plan in the model id. Both spellings have to reach the
+    /// same price, and the bracket has to come off before the context-window
+    /// suffix is read - `base_model_name` would otherwise take the whole name.
+    #[test]
+    fn grok_plan_decoration_does_not_hide_the_model() {
+        let t = PriceTable::vendored();
+        let plain = t.get("grok-4.5");
+        assert!(plain.is_some(), "grok-4.5 priced at nothing");
+        assert_eq!(t.get("grok-4.5-build"), plain);
+        assert_eq!(t.get("[grok] grok-4.5-build"), plain);
+    }
+
+    /// `kimi-for-coding` is the subscription, not a model, and LiteLLM prices
+    /// models.
+    #[test]
+    fn a_plan_alias_is_rated_at_the_model_the_plan_serves() {
+        let t = PriceTable::vendored();
+        assert_eq!(t.get("kimi-for-coding"), t.get("moonshot/kimi-k2.6"));
+        assert!(t.get("kimi-for-coding").is_some());
+    }
+
+    /// The table carries only what `price_candidates` can ask for. LiteLLM
+    /// lists these same models under bedrock, azure and several resellers;
+    /// carrying those would be several hundred entries in every binary that
+    /// no lookup can reach.
+    #[test]
+    fn the_table_holds_only_keys_a_lookup_can_reach() {
+        assert_eq!(attribute_price_key("zai/glm-4.6"), Some("glm"));
+        assert_eq!(attribute_price_key("xai/grok-4"), Some("grok"));
+        assert_eq!(attribute_price_key("openrouter/z-ai/glm-4.6"), Some("glm"));
+        assert_eq!(attribute_price_key("claude-opus-5"), Some("claude"));
+        assert_eq!(attribute_price_key("bedrock/us-east-1/zai.glm-5"), None);
+        assert_eq!(attribute_price_key("azure_ai/grok-4"), None);
+        assert_eq!(attribute_price_key("baseten/zai-org/glm-4.6"), None);
     }
 
     #[test]

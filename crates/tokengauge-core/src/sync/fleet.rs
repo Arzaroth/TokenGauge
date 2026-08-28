@@ -730,9 +730,14 @@ mod tests {
     }
 
     #[test]
+    /// A provider with no transcript reader behind it has a `CostInfo` and no
+    /// events under it, so publishing it would report a machine that had gone
+    /// quiet. Every provider with a reader is on the wire; GLM is the one
+    /// without one of its own.
     fn a_ccusage_only_provider_never_reaches_the_wire() {
         assert!(syncable("claude"));
-        assert!(!syncable("kimi"));
+        assert!(syncable("kimi"));
+        assert!(!syncable("glm"));
 
         let mut store = FleetStore::new();
         store.upsert_local(
@@ -740,7 +745,7 @@ mod tests {
             hour("2026-08-01T00"),
             &[
                 event("claude", "opus", hour("2026-08-25T14"), 60, Some(1)),
-                event("kimi", "k2", hour("2026-08-25T14"), 99, Some(2)),
+                event("glm", "glm-4.6", hour("2026-08-25T14"), 99, Some(2)),
             ],
             1,
         );
@@ -749,7 +754,7 @@ mod tests {
             .contribution(
                 "a",
                 hour("2026-08-25T15").start(),
-                &["claude".to_string(), "kimi".to_string()],
+                &["claude".to_string(), "glm".to_string()],
                 WIRE_RETENTION_DAYS,
             )
             .expect("slice");

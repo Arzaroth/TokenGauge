@@ -22,14 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-call events, and until now there were none behind either provider. GLM is
   the one left out, having no reader of its own - it is read only when the plan
   is driven through Claude Code.
-- **A credit balance is part of the panel.** The waybar tooltip and the TUI each
-  drew one their own way and the Windows tray a third, each below the panel
-  rather than in it, and the Plasma applet, the GNOME popup and the Omarchy
-  widget drew it nowhere. It is a row in the COST section now, so all six
-  surfaces show it and all six format it the same - which for a balance over a
-  hundred dollars they did not. This is also the seat a provider selling prepaid
-  credits rather than a usage window needs, since such a provider has no meter
-  to draw.
+- **A credit balance is part of the panel.** Three surfaces drew one below the
+  panel rather than in it - the waybar tooltip, the TUI and the Windows tray,
+  each with its own copy of the same rule - and the Plasma applet, the GNOME
+  popup and the Omarchy widget drew it nowhere at all. It is a row in the COST
+  section now, so all six show it and one place decides how. It keeps its cents
+  past a hundred dollars, where a spend figure drops them: a month's spend is a
+  magnitude and a balance is what is left to spend it from. This is also the
+  seat a provider selling prepaid credits rather than a usage window needs,
+  since such a provider has no meter to draw.
 
 ### Fixed
 
@@ -45,9 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The zero it produced was self-concealing: `auto` asks ccusage only about
   providers the readers found *nothing* for, and a row with tokens and no money
   is not nothing, so the fallback that would have priced it was never spawned.
-- `--doctor` now reports a Kimi or Grok session ccusage found and the readers
-  missed as drift, rather than excusing it as a provider only ccusage can see.
-  That was true when neither had a reader.
+- `--doctor` now reports drift when ccusage finds a Kimi or Grok session that
+  the readers missed, rather than excusing it as a provider that only ccusage
+  can see. That was fair when neither had a reader.
 - `scripts/make-prices.py` regenerates the vendored price table, which had no
   generator and had to be sliced by hand with the same rule the runtime applies.
   A machine that has never reached LiteLLM rates against this copy, so it was

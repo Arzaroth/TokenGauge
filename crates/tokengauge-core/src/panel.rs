@@ -368,8 +368,8 @@ fn cost_rows(cost: Option<&CostInfo>, credits: Option<f64>) -> Vec<PanelRow> {
     // Under the spend it is being drawn down by. A credit balance is what a
     // provider selling credits has instead of a window, so for such a provider
     // this is the only row in the section; for Codex it sits below a month's spend.
-    if let Some(balance) = credits {
-        out.push(PanelRow::new("Credits", money(balance)));
+    if let Some(remaining) = credits {
+        out.push(PanelRow::new("Credits", balance(remaining)));
     }
 
     // Sync stays last: it is the section's status line, not one of its figures.
@@ -595,6 +595,17 @@ fn ellipsize(text: &str, max: usize) -> String {
         _ => cut.trim_end(),
     };
     format!("{trimmed}…")
+}
+
+/// A prepaid balance, which keeps the cents [`money`] drops past a hundred
+/// dollars. A month's spend is a magnitude, where the cents are noise; a
+/// balance is what is left to spend it from, counting down to zero, and $100.49
+/// rounded to $100 misstates it.
+fn balance(value: f64) -> String {
+    if !value.is_finite() {
+        return "-".to_string();
+    }
+    format!("${value:.2}")
 }
 
 pub fn money(value: f64) -> String {
@@ -913,6 +924,16 @@ mod tests {
         assert_eq!(cost.rows.len(), 1);
         assert_eq!(cost.rows[0].label, "Credits");
         assert_eq!(cost.rows[0].value, "$18.44");
+    }
+
+    /// `money` rounds past a hundred dollars, which is right for a month's
+    /// spend and wrong for the money left on a prepaid plan.
+    #[test]
+    fn a_balance_keeps_the_cents_a_spend_figure_drops() {
+        assert_eq!(balance(100.49), "$100.49");
+        assert_eq!(money(100.49), "$100");
+        assert_eq!(balance(4.5), "$4.50");
+        assert_eq!(balance(f64::NAN), "-");
     }
 
     /// Under the spend it is being drawn down by, and above the sync status

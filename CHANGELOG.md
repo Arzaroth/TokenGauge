@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   question the month-wide TOKENS BY MODEL section cannot answer. A "By model"
   table now sits above the device one: what spent the day, then where it was
   spent. It comes off `panel.rs`, so all six frontends carry it. The four
-  largest models are named and the tail is folded into one `other` row, because
-  the split rides in every snapshot and hangs off a tooltip.
+  biggest spenders are named, and past four rows the tail is folded into one
+  `other` row, because the split rides in every snapshot and hangs off a
+  tooltip.
 
 ## [0.26.0] - 2026-08-31
 

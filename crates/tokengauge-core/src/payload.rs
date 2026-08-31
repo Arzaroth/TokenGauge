@@ -194,7 +194,7 @@ pub struct DayCost {
     /// than one, because on a single machine it restates the row it hangs off.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub by_device: Vec<sync::DeviceCost>,
-    /// Which models spent the day, largest first and capped by
+    /// Which models spent the day, largest first, with the tail folded by
     /// [`DayModelCost::top`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub by_model: Vec<DayModelCost>,
@@ -215,13 +215,14 @@ pub struct DayModelCost {
 /// The model id the folded tail of [`DayModelCost::top`] carries.
 pub const OTHER_MODELS: &str = "other";
 
-/// How many models a day names before the tail is folded into one row.
+/// How many rows a day's split ever has: four models when nothing needs
+/// folding, three and the fold when something does.
 const DAY_MODEL_ROWS: usize = 4;
 
 impl DayModelCost {
-    /// Largest first, with everything past the fourth folded into one
-    /// [`OTHER_MODELS`] row: this split rides in every snapshot and is read off
-    /// a tooltip, and a day that touched a dozen models fits neither.
+    /// Largest first, capped at [`DAY_MODEL_ROWS`] rows by folding the tail
+    /// into one [`OTHER_MODELS`] row: this split rides in every snapshot and is
+    /// read off a tooltip, and a day that touched a dozen models fits neither.
     pub fn top(mut models: Vec<DayModelCost>) -> Vec<DayModelCost> {
         models.retain(|m| m.tokens > 0);
         models.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.model.cmp(&b.model)));

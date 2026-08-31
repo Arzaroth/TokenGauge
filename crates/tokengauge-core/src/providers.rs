@@ -321,23 +321,52 @@ fn claude_auth() -> AuthStatus {
     // to a credential every fetch rejects. This checks the same sources the
     // fetcher does (env, file, keychain/Credential Manager) without a network
     // call, so `--doctor` says what the bar will actually see.
-    match claude::credential_status(Utc::now()) {
+    claude_auth_status(claude::credential_status(Utc::now()))
+}
+
+/// Turn a credential probe into a doctor status.
+///
+/// Split out so the mapping is tested without a network call and without
+/// depending on whether the test host happens to be signed in to Claude - the
+/// gap that let the empty-hint regression pass locally and fail in CI.
+///
+/// The detail is the bare reason and the hint is the fix, kept apart on purpose:
+/// the fetcher's own error message carries both (`... - run \`claude ...\``) for
+/// the surfaces with no hint field, but the doctor prints "detail - hint" and
+/// would stutter if the detail already ended in the fix.
+fn claude_auth_status(result: Result<&'static str>) -> AuthStatus {
+    match result {
+        Ok(".credentials.json") => AuthStatus {
+            ok: true,
+            detail: claude_credentials_path().display().to_string(),
+            hint: "",
+        },
         Ok(source) => AuthStatus {
             ok: true,
-            detail: match source {
-                ".credentials.json" => claude_credentials_path().display().to_string(),
-                other => other.to_string(),
-            },
+            detail: source.to_string(),
             hint: "",
         },
-        // The message already names the fix (`claude` / `claude setup-token`),
-        // so no separate hint - the doctor prints "detail - hint" and a second
-        // "run claude" reads as a stutter.
-        Err(e) => AuthStatus {
-            ok: false,
-            detail: e.to_string(),
-            hint: "",
-        },
+        Err(e) => {
+            let msg = e.to_string();
+            let (detail, hint) = if msg.contains("not signed in") {
+                ("Claude not signed in", "run `claude setup-token`")
+            } else if msg.contains("expired") {
+                ("Claude token expired", "run `claude` to log in")
+            } else if msg.contains("user:profile") {
+                ("Claude OAuth missing user:profile scope", "re-run `claude`")
+            } else {
+                return AuthStatus {
+                    ok: false,
+                    detail: msg,
+                    hint: "run `claude` (or `claude setup-token`)",
+                };
+            };
+            AuthStatus {
+                ok: false,
+                detail: detail.to_string(),
+                hint,
+            }
+        }
     }
 }
 
@@ -470,6 +499,43 @@ mod tests {
                 assert!(!status.hint.is_empty(), "{provider} missing hint");
             }
         }
+    }
+
+    /// The regression above: a not-ok Claude status must name its fix, on a CI
+    /// host that is not signed in. Tested through the mapping directly so it
+    /// does not depend on the machine's own `~/.claude`.
+    #[test]
+    fn a_failed_claude_credential_probe_still_names_its_fix() {
+        for msg in [
+            "Claude not signed in - run `claude setup-token`",
+            "Claude token expired - run `claude` to log in",
+            "Claude OAuth missing user:profile scope",
+            "some other failure",
+        ] {
+            let status = claude_auth_status(Err(anyhow!("{msg}")));
+            assert!(!status.ok);
+            assert!(!status.hint.is_empty(), "no hint for: {msg}");
+            // detail and hint must not repeat, or the doctor stutters.
+            assert!(
+                !status.detail.contains(status.hint),
+                "detail repeats hint: {} / {}",
+                status.detail,
+                status.hint
+            );
+        }
+    }
+
+    /// A found credential names its source, and the file source resolves to the
+    /// real path rather than the bare label.
+    #[test]
+    fn a_found_claude_credential_reports_its_source() {
+        let env = claude_auth_status(Ok("TOKENGAUGE_CLAUDE_OAUTH_TOKEN"));
+        assert!(env.ok);
+        assert_eq!(env.detail, "TOKENGAUGE_CLAUDE_OAUTH_TOKEN");
+        assert_eq!(
+            claude_auth_status(Ok(".credentials.json")).detail,
+            claude_credentials_path().display().to_string()
+        );
     }
 
     /// `PROVIDERS` is a const the frontends iterate, and the table is what

@@ -208,13 +208,22 @@ pub(crate) fn recent_periods(today: NaiveDate, n: usize) -> Vec<String> {
 
 /// Last `n` calendar days of cost and tokens per provider, oldest first. Every
 /// provider's series covers the same dates, zero-filled where it spent nothing.
+/// One day of one provider, while it is still being summed.
+#[derive(Debug, Default)]
+struct DayAccum {
+    usd: f64,
+    tokens: u64,
+    /// model -> (usd, tokens)
+    models: HashMap<String, (f64, u64)>,
+}
+
 fn last_n_days_by_provider(
     response: &CcusageDailyResponse,
     today: NaiveDate,
     n: usize,
 ) -> HashMap<String, Vec<DayCost>> {
-    // (provider, period) -> (usd, tokens)
-    let mut per_day: HashMap<String, HashMap<String, (f64, u64)>> = HashMap::new();
+    // provider -> period -> that day
+    let mut per_day: HashMap<String, HashMap<String, DayAccum>> = HashMap::new();
     for day in &response.daily {
         if day.period.is_empty() {
             continue;
@@ -224,24 +233,35 @@ fn last_n_days_by_provider(
                 .entry(provider.to_string())
                 .or_default()
                 .entry(day.period.clone())
-                .or_insert((0.0, 0));
-            entry.0 += b.cost;
-            entry.1 += ccusage_total_tokens(b);
+                .or_default();
+            let tokens = ccusage_total_tokens(b);
+            entry.usd += b.cost;
+            entry.tokens += tokens;
+            let model = entry.models.entry(b.model_name.clone()).or_insert((0.0, 0));
+            model.0 += b.cost;
+            model.1 += tokens;
         }
     }
     let periods = recent_periods(today, n);
     per_day
         .into_iter()
         .map(|(provider, days)| {
+            let mut days = days;
             let series: Vec<DayCost> = periods
                 .iter()
                 .map(|p| {
-                    let (usd, tokens) = days.get(p).copied().unwrap_or((0.0, 0));
+                    let day = days.remove(p).unwrap_or_default();
                     DayCost {
                         date: p.clone(),
-                        usd,
-                        tokens,
+                        usd: day.usd,
+                        tokens: day.tokens,
                         by_device: Vec::new(),
+                        by_model: DayModelCost::top(
+                            day.models
+                                .into_iter()
+                                .map(|(model, (usd, tokens))| DayModelCost { model, usd, tokens })
+                                .collect(),
+                        ),
                     }
                 })
                 .collect();
@@ -708,6 +728,26 @@ mod tests {
         assert_eq!(
             codex.iter().map(|d| d.tokens).collect::<Vec<_>>(),
             vec![0, 0, 0, 10]
+        );
+
+        // Each day names the models that spent it, and only its own: the 20th
+        // is the one day both providers ran.
+        assert_eq!(
+            claude[3]
+                .by_model
+                .iter()
+                .map(|m| (m.model.as_str(), m.tokens))
+                .collect::<Vec<_>>(),
+            vec![("claude-opus-5", 10)]
+        );
+        assert!(claude[2].by_model.is_empty());
+        assert_eq!(
+            codex[3]
+                .by_model
+                .iter()
+                .map(|m| (m.model.as_str(), m.tokens))
+                .collect::<Vec<_>>(),
+            vec![("gpt-5-codex", 10)]
         );
     }
 

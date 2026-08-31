@@ -17,7 +17,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BurnRate, CostInfo, DayCost, ModelCost, ProviderPayload, WEEKLY_HISTORY_DAYS, recent_periods,
+    BurnRate, CostInfo, DayCost, DayModelCost, ModelCost, ProviderPayload, WEEKLY_HISTORY_DAYS,
+    recent_periods,
 };
 
 pub mod claude_code;
@@ -369,6 +370,7 @@ pub fn build_report(
         let mut today_models: HashMap<&str, Totals> = HashMap::new();
         let mut monthly_models: HashMap<&str, Totals> = HashMap::new();
         let mut per_day: HashMap<String, Totals> = HashMap::new();
+        let mut per_day_models: HashMap<String, Vec<DayModelCost>> = HashMap::new();
 
         for (date, models) in &days {
             let key = date.format("%Y-%m-%d").to_string();
@@ -389,6 +391,14 @@ pub fn build_report(
                     .entry(key.clone())
                     .or_default()
                     .add(totals.usd, &totals.tokens);
+                per_day_models
+                    .entry(key.clone())
+                    .or_default()
+                    .push(DayModelCost {
+                        model: (*model).to_string(),
+                        usd: totals.usd,
+                        tokens: totals.tokens.total(),
+                    });
             }
         }
 
@@ -403,6 +413,7 @@ pub fn build_report(
                     usd: totals.map(|t| t.usd).unwrap_or(0.0),
                     tokens: totals.map(|t| t.tokens.total()).unwrap_or(0),
                     by_device: Vec::new(),
+                    by_model: DayModelCost::top(per_day_models.remove(period).unwrap_or_default()),
                 }
             })
             .collect();
@@ -635,6 +646,37 @@ mod tests {
         assert_eq!(claude.weekly_history[1].usd, 0.0);
         assert_eq!(claude.weekly_history[1].tokens, 0);
         assert_eq!(claude.today_tokens, 2000);
+    }
+
+    #[test]
+    fn a_day_carries_the_models_that_spent_it() {
+        let prices = pricing::PriceTable::vendored();
+        let events = vec![
+            event("claude", "claude-opus-5", day(2026, 8, 24), 2000),
+            event("claude", "claude-haiku-4-5", day(2026, 8, 24), 500),
+            event("claude", "claude-opus-5", day(2026, 8, 23), 100),
+        ];
+        let report = build_report(&events, &prices, day(2026, 8, 24));
+        let claude = report.costs.get("claude").expect("claude");
+
+        let today = claude.weekly_history.last().expect("today");
+        assert_eq!(
+            today
+                .by_model
+                .iter()
+                .map(|m| (m.model.as_str(), m.tokens))
+                .collect::<Vec<_>>(),
+            vec![("claude-opus-5", 2000), ("claude-haiku-4-5", 500)]
+        );
+        assert_eq!(
+            today.by_model.iter().map(|m| m.tokens).sum::<u64>(),
+            today.tokens
+        );
+        // Each day splits itself, not the week: yesterday ran one model, and an
+        // idle day has nothing to name.
+        let yesterday = &claude.weekly_history[WEEKLY_HISTORY_DAYS - 2];
+        assert_eq!(yesterday.by_model.len(), 1);
+        assert!(claude.weekly_history[0].by_model.is_empty());
     }
 
     #[test]

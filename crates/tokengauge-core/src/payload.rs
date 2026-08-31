@@ -194,6 +194,49 @@ pub struct DayCost {
     /// than one, because on a single machine it restates the row it hangs off.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub by_device: Vec<sync::DeviceCost>,
+    /// Which models spent the day, largest first, with the tail folded by
+    /// [`DayModelCost::top`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by_model: Vec<DayModelCost>,
+}
+
+/// One model's share of one day.
+///
+/// Slimmer than [`ModelCost`]: this hangs off a tooltip that renders a count and
+/// a figure, and seven days of the four-way token split would ride in every
+/// snapshot for nothing to read.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DayModelCost {
+    pub model: String,
+    pub usd: f64,
+    pub tokens: u64,
+}
+
+/// The model id the folded tail of [`DayModelCost::top`] carries.
+pub const OTHER_MODELS: &str = "other";
+
+/// How many rows a day's split ever has: four models when nothing needs
+/// folding, three and the fold when something does.
+const DAY_MODEL_ROWS: usize = 4;
+
+impl DayModelCost {
+    /// Largest first, capped at [`DAY_MODEL_ROWS`] rows by folding the tail
+    /// into one [`OTHER_MODELS`] row: this split rides in every snapshot and is
+    /// read off a tooltip, and a day that touched a dozen models fits neither.
+    pub fn top(mut models: Vec<DayModelCost>) -> Vec<DayModelCost> {
+        models.retain(|m| m.tokens > 0);
+        models.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.model.cmp(&b.model)));
+        if models.len() <= DAY_MODEL_ROWS {
+            return models;
+        }
+        let tail = models.split_off(DAY_MODEL_ROWS - 1);
+        models.push(DayModelCost {
+            model: OTHER_MODELS.to_string(),
+            usd: tail.iter().map(|m| m.usd).sum(),
+            tokens: tail.iter().map(|m| m.tokens).sum(),
+        });
+        models
+    }
 }
 
 /// Per-model cost slice (ccusage modelBreakdowns).
@@ -227,6 +270,39 @@ pub struct BurnRate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------------------
+    // DayModelCost tests
+    // ------------------------------------------------------------------------
+
+    fn day_model(model: &str, tokens: u64) -> DayModelCost {
+        DayModelCost {
+            model: model.to_string(),
+            usd: tokens as f64 / 1000.0,
+            tokens,
+        }
+    }
+
+    #[test]
+    fn a_days_models_are_ordered_and_the_tail_is_folded() {
+        let models = DayModelCost::top(vec![
+            day_model("a", 10),
+            day_model("b", 50),
+            day_model("c", 40),
+            day_model("d", 30),
+            day_model("e", 20),
+            day_model("f", 0),
+        ]);
+
+        assert_eq!(
+            models.iter().map(|m| m.model.as_str()).collect::<Vec<_>>(),
+            vec!["b", "c", "d", OTHER_MODELS]
+        );
+        // The fold sums the tail rather than dropping it: the split still adds
+        // up to the day it hangs off.
+        assert_eq!(models.iter().map(|m| m.tokens).sum::<u64>(), 150);
+        assert_eq!(models[3].tokens, 30);
+    }
 
     // ------------------------------------------------------------------------
     // ProviderPayload tests

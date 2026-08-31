@@ -77,7 +77,6 @@ mod win {
         plan: Option<String>,
         stale: bool,
         updated: String,
-        credits: String,
         /// Kept out of `panel` because the tray icon needs the raw number.
         session_used: Option<u8>,
         weekly_used: Option<u8>,
@@ -90,7 +89,6 @@ mod win {
             plan: r.plan_label.clone(),
             stale: r.stale,
             updated: r.updated.clone(),
-            credits: r.credits.clone(),
             session_used: r.session_used,
             weekly_used: r.weekly_used,
             panel: panel_spec(r),
@@ -434,14 +432,6 @@ mod win {
                     }
                 }
 
-                if row.credits != "\u{2014}" && !row.credits.is_empty() {
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new(format!("Credits: ${}", row.credits))
-                            .small()
-                            .color(SUB),
-                    );
-                }
                 if !row.updated.is_empty() && row.updated != "\u{2014}" {
                     ui.add_space(6.0);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

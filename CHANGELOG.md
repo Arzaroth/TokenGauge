@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Kimi and Grok costs are read natively.** Both CLIs write per-call token
+  counts and neither was being read: `~/.kimi-code/sessions/**/wire.jsonl` and
+  `~/.grok/sessions/**/updates.jsonl` now go through readers of their own, so
+  those plans get the same day, model and burn-rate detail Claude and Codex have
+  had, without ccusage. Each carries the trap its format hides - a Kimi
+  session-scoped `usage.record` restates the running total of the turns beside
+  it, and Grok's `cachedReadTokens` sits *inside* `inputTokens` the way Codex
+  reports cache reads rather than beside them, as Anthropic does. Summing either
+  naively roughly doubles the bill.
+- **Both can take part in fleet sync**, which they could not before: sync buckets
+  per-call events, and until now there were none behind either provider. GLM is
+  the one left out, having no reader of its own - it is read only when the plan
+  is driven through Claude Code.
+- **A credit balance is part of the panel.** Three surfaces drew one below the
+  panel rather than in it - the waybar tooltip, the TUI and the Windows tray,
+  each with its own copy of the same rule - and the Plasma applet, the GNOME
+  popup and the Omarchy widget drew it nowhere at all. It is a row in the COST
+  section now, so all six show it and one place decides how. It keeps its cents
+  past a hundred dollars, where a spend figure drops them: a month's spend is a
+  magnitude and a balance is what is left to spend it from. This is also the
+  seat a provider selling prepaid credits rather than a usage window needs,
+  since such a provider has no meter to draw.
+
+### Fixed
+
+- **A GLM, Kimi or Grok call was counted and then priced at zero.** LiteLLM keys
+  a model by where you buy it - `zai/glm-4.6`, `xai/grok-4`,
+  `moonshot/kimi-k2-thinking` - and TokenGauge looked it up by the bare name a
+  transcript carries. Worse, the table was *filtered* on the same mistaken
+  assumption, so all 75 Grok and all 98 GLM entries were dropped before any
+  lookup could reach them. A GLM plan driven through Claude Code was landing in
+  the right provider, the right day and the right model row, showing tokens and
+  $0.00. A lookup now walks the vendor paths, and `kimi-for-coding` - the
+  subscription, not a model - is rated at the model the plan serves.
+- The zero it produced was self-concealing: `auto` asks ccusage only about
+  providers the readers found *nothing* for, and a row with tokens and no money
+  is not nothing, so the fallback that would have priced it was never spawned.
+- `--doctor` now reports drift when ccusage finds a Kimi or Grok session that
+  the readers missed, rather than excusing it as a provider that only ccusage
+  can see. That was fair when neither had a reader.
+- `scripts/make-prices.py` regenerates the vendored price table, which had no
+  generator and had to be sliced by hand with the same rule the runtime applies.
+  A machine that has never reached LiteLLM rates against this copy, so it was
+  carrying the same hole.
+
 ## [0.25.4] - 2026-08-27
 
 ### Fixed

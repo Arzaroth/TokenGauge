@@ -29,7 +29,9 @@ pub struct ProviderRow {
     pub weekly_pace: Option<UsagePace>,
     pub tertiary_used: Option<u8>,
     pub tertiary_reset: String,
-    pub credits: String,
+    /// A prepaid balance in USD, for the providers that sell one instead of a
+    /// window. [`crate::panel`] formats it; a row does not.
+    pub credits: Option<f64>,
     pub source: String,
     pub updated: String,
     pub updated_iso: Option<String>,
@@ -246,11 +248,7 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
             .collect();
     }
 
-    let credits = payload
-        .credits
-        .and_then(|credits| credits.remaining)
-        .map(|remaining| format!("{remaining:.2}"))
-        .unwrap_or_else(|| "—".to_string());
+    let credits = payload.credits.and_then(|credits| credits.remaining);
 
     let source = match (payload.version, payload.source) {
         (Some(version), Some(source)) => format!("{version} ({source})"),
@@ -549,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn payload_to_rows_formats_credits() {
+    fn payload_to_rows_carries_the_credit_balance() {
         let payload = ProviderPayload {
             provider: "zai".to_string(),
             version: None,
@@ -562,7 +560,7 @@ mod tests {
             stale: false,
         };
         let rows = rows_of(vec![payload]);
-        assert_eq!(rows[0].credits, "42.57"); // 2 decimal places
+        assert_eq!(rows[0].credits, Some(42.567));
     }
 
     #[test]

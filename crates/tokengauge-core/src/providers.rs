@@ -119,7 +119,7 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
             status: None,
         },
         windows: ("Weekly", "Rate Limit", "Tertiary"),
-        natively_read: false,
+        natively_read: true,
         fetch: kimi::fetch,
         auth: kimi_auth,
         enabled_in: |c| c.kimi,
@@ -136,7 +136,7 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
             status: Some("https://status.x.ai"),
         },
         windows: ("Weekly", "On-demand", "Tertiary"),
-        natively_read: false,
+        natively_read: true,
         fetch: grok::fetch,
         auth: grok_auth,
         enabled_in: |c| c.grok,
@@ -545,6 +545,6 @@ mod tests {
     /// publish nothing and read as a machine that had gone quiet.
     #[test]
     fn only_the_transcript_backed_providers_claim_to_be_native() {
-        assert_eq!(natively_read(), vec!["codex", "claude"]);
+        assert_eq!(natively_read(), vec!["codex", "claude", "kimi", "grok"]);
     }
 }

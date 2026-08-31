@@ -27,6 +27,39 @@ Item {
         return suffix === "" ? String(row.value || "") : row.value + "  ·  " + suffix
     }
 
+    // The spec pads a tooltip's sub-tables - a day by model, a day by device -
+    // with spaces, so they only line up in a monospace face, and the styled
+    // tooltip wraps at 14 gridUnits, which a padded line already brushes
+    // against. The attached tooltip carries neither font nor width, hence an
+    // instance of our own.
+    component MonoToolTip: PlasmaComponents.ToolTip {
+        id: tip
+        readonly property real maxTextWidth: Kirigami.Units.gridUnit * 30
+        font.family: "monospace"
+        contentItem: Item {
+            implicitWidth: Math.min(tip.maxTextWidth, tipLabel.contentWidth)
+            implicitHeight: tipLabel.implicitHeight
+            PlasmaComponents.Label {
+                id: tipLabel
+                text: tip.text
+                font: tip.font
+                wrapMode: Text.Wrap
+                // Device and model names come from a provider API, and rich
+                // text would collapse the padding this whole component exists
+                // to keep.
+                textFormat: Text.PlainText
+                Kirigami.Theme.colorSet: Kirigami.Theme.Tooltip
+                Kirigami.Theme.inherit: false
+                // Only a transport error is long enough to reach this; the
+                // tables are far short of it and stay on one line each.
+                onLineLaidOut: (line) => {
+                    if (line.implicitWidth > tip.maxTextWidth)
+                        line.width = tip.maxTextWidth
+                }
+            }
+        }
+    }
+
     // Label and value on one line, a full-width bar under it, then the reset
     // note and the pace badge. The limit gauges.
     component Meter: ColumnLayout {
@@ -120,9 +153,11 @@ Item {
                 font.bold: modelData.emphasized === true
             }
         }
-        PlasmaComponents.ToolTip.text: modelData.tooltip || ""
-        PlasmaComponents.ToolTip.visible: String(modelData.tooltip || "") !== "" && barHover.hovered
-        PlasmaComponents.ToolTip.delay: 300
+        MonoToolTip {
+            text: modelData.tooltip || ""
+            visible: text !== "" && barHover.hovered
+            delay: 300
+        }
         HoverHandler { id: barHover }
     }
 
@@ -182,8 +217,10 @@ Item {
         // The suffix is the spec's ellipsized copy for surfaces that cannot
         // wrap; the tooltip carries the whole sentence.
         HoverHandler { id: keyHover }
-        PlasmaComponents.ToolTip.text: keyRow.modelData.tooltip || ""
-        PlasmaComponents.ToolTip.visible: String(keyRow.modelData.tooltip || "") !== "" && keyHover.hovered
+        MonoToolTip {
+            text: keyRow.modelData.tooltip || ""
+            visible: text !== "" && keyHover.hovered
+        }
     }
 
     QQC2.ButtonGroup { id: tabGroup }

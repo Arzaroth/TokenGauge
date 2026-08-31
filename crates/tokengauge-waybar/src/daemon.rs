@@ -856,14 +856,22 @@ mod tests {
         let config = test_config(cache.clone());
         let sentinel = refresh_sentinel_path(&config.cache_file);
         let _ = std::fs::remove_file(&sentinel);
-        let (sock, server) = spawn_one_shot_server(&cache, state, config);
+        let (sock, server) = spawn_one_shot_server(&cache, state.clone(), config);
 
+        // The cycle the command spawns takes the sentinel back down the moment
+        // its fetch returns, and with no network to wait on that beats the
+        // assertion below. Holding the state lock parks the cycle where it
+        // publishes its result - after the sentinel is up, before it comes
+        // down - so what is asserted here is the ordering the handler promises
+        // rather than whichever thread won. The ack path takes no lock.
+        let parked = state.lock().unwrap();
         let reply = send_recv(&sock, &SocketCommand::Refresh);
         assert!(
             matches!(reply, SocketReply::Ack),
             "expected ack, got {reply:?}"
         );
         assert!(sentinel.exists(), "Refresh should create the sentinel file");
+        drop(parked);
 
         server.join().unwrap().unwrap();
         // Background fetch thread may still be running; cleanup is best-effort.

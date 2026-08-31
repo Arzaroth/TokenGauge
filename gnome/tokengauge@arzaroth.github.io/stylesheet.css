@@ -131,6 +131,9 @@
 }
 
 .tokengauge-tooltip {
+    /* The panel spec pads its sub-tables with spaces: they only line up in a
+       monospace face. */
+    font-family: monospace;
     background-color: rgba(0, 0, 0, 0.88);
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 6px;

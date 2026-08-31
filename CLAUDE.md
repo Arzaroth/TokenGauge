@@ -118,6 +118,35 @@ render can be cheap and frequent while a fetch stays rare.
 provider. The daemon's SIGHUP reload then finds a snapshot that already covers
 the new set and re-renders instead of fetching again.
 
+## A credential is where the tool put it, which is not always a file
+
+The Claude token used to be read from `~/.claude/.credentials.json` and nowhere
+else. That broke twice for the same reason: Claude Code 2.1.x moved the token
+into the macOS keychain and left the file a stub, and the Windows desktop app
+delegates auth to the app over an IPC socket and writes a stub too. A present
+file says nothing about whether it holds a token. `claude.rs` now reads
+`TOKENGAUGE_CLAUDE_OAUTH_TOKEN`, then the file, then the OS credential store
+(macOS keychain / Windows Credential Manager, via `keyring`, gated off Linux so
+no dbus is pulled), and takes the first that is **usable, not merely present** -
+a hollow file must never shadow a good keychain entry. An empty access token is
+"not signed in - run `claude setup-token`", a distinct state from "expired",
+because re-login does not repopulate a file the desktop app owns.
+
+Two rules fall out of this and are easy to regress:
+
+- `--doctor`'s Credentials check must **validate, not stat**. `provider_auth_status`
+  for Claude runs the same source walk (no network) so a hollow file reads red,
+  not green. A check that greenlights a credential the fetcher rejects is worse
+  than no check.
+- The credential reader and the transcript reader must agree on
+  `CLAUDE_CONFIG_DIR`. They did not; the fix is `claude_config_dir()`. If you add
+  a state file under `~/.claude`, route it through there.
+
+The keychain / Credential Manager path is `cfg(any(windows, target_os =
+"macos"))` and compiles away on Linux, so it is exercised only by the Windows CI
+job and never on Mac - treat that path the way the tray crate is treated: build
+it on the platform that has it, or it is unverified.
+
 ## Costs are read, not shelled out for
 
 `crates/tokengauge-core/src/cost/` parses the transcripts the CLIs already

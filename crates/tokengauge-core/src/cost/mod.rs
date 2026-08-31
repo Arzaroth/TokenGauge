@@ -22,6 +22,8 @@ use crate::{
 
 pub mod claude_code;
 pub mod codex_cli;
+pub mod grok_cli;
+pub mod kimi_cli;
 pub mod pricing;
 
 /// Where cost figures come from.
@@ -218,10 +220,7 @@ pub fn fetch_native(cache_file: &Path, timeout: Duration, today: NaiveDate) -> N
 /// device's data and no more.
 pub fn read_window(today: NaiveDate) -> (Vec<UsageEvent>, NaiveDate) {
     let since = window_start(today);
-    (
-        read_events_from(&claude_code::roots(), &codex_cli::roots(), since),
-        since,
-    )
+    (read_events_from(&Roots::discover(), since), since)
 }
 
 /// Rate a set of events, wherever they were read.
@@ -238,19 +237,56 @@ pub fn rate(
     build_report(events, &prices, today)
 }
 
-/// Read both transcript shapes from explicit roots, oldest window bound first.
+/// Where each reader looks.
+///
+/// One field per reader rather than one argument per reader: adding a CLI is
+/// supposed to be a reader and nothing else, and a growing argument list makes
+/// it an edit to every caller as well. [`Default`] gives a test the two trees it
+/// cares about and empty roots for the rest.
+#[derive(Debug, Clone, Default)]
+pub struct Roots {
+    pub claude: Vec<PathBuf>,
+    pub codex: Vec<PathBuf>,
+    pub kimi: Vec<PathBuf>,
+    pub grok: Vec<PathBuf>,
+}
+
+impl Roots {
+    /// Every reader's own default locations.
+    pub fn discover() -> Self {
+        Self {
+            claude: claude_code::roots(),
+            codex: codex_cli::roots(),
+            kimi: kimi_cli::roots(),
+            grok: grok_cli::roots(),
+        }
+    }
+
+    pub fn all(&self) -> Vec<PathBuf> {
+        let mut out = self.claude.clone();
+        out.extend(self.codex.iter().cloned());
+        out.extend(self.kimi.iter().cloned());
+        out.extend(self.grok.iter().cloned());
+        out
+    }
+}
+
+/// Read every transcript shape from explicit roots, oldest window bound first.
 ///
 /// Split out from [`fetch_native`] so a test can point at a fixture tree
 /// without touching process-global environment variables.
-pub fn read_events_from(
-    claude_roots: &[PathBuf],
-    codex_roots: &[PathBuf],
-    since: NaiveDate,
-) -> Vec<UsageEvent> {
+pub fn read_events_from(roots: &Roots, since: NaiveDate) -> Vec<UsageEvent> {
+    // A `seen` set per reader: the keys are only unique within one transcript
+    // format, and a shared set would let one reader's hash collide another's
+    // and silently drop a call.
     let mut claude_seen = HashMap::new();
     let mut codex_seen = HashSet::new();
-    let mut events = claude_code::read_events(claude_roots, since, &mut claude_seen);
-    events.extend(codex_cli::read_events(codex_roots, since, &mut codex_seen));
+    let mut kimi_seen = HashSet::new();
+    let mut grok_seen = HashSet::new();
+    let mut events = claude_code::read_events(&roots.claude, since, &mut claude_seen);
+    events.extend(codex_cli::read_events(&roots.codex, since, &mut codex_seen));
+    events.extend(kimi_cli::read_events(&roots.kimi, since, &mut kimi_seen));
+    events.extend(grok_cli::read_events(&roots.grok, since, &mut grok_seen));
     events
 }
 
@@ -515,9 +551,7 @@ fn into_model_costs(models: HashMap<&str, Totals>) -> (f64, u64, Vec<ModelCost>)
 
 /// Freshness of the last native read, for `--doctor`.
 pub fn transcript_roots() -> Vec<PathBuf> {
-    let mut roots = claude_code::roots();
-    roots.extend(codex_cli::roots());
-    roots
+    Roots::discover().all()
 }
 
 #[cfg(test)]
@@ -797,7 +831,7 @@ mod tests {
     #[ignore = "reads the developer's own transcripts and shells out to ccusage"]
     fn agrees_with_ccusage_on_real_transcripts() {
         let since = day(2026, 1, 1);
-        let events = read_events_from(&claude_code::roots(), &codex_cli::roots(), since);
+        let events = read_events_from(&Roots::discover(), since);
         assert!(!events.is_empty(), "no transcripts to check against");
 
         let mut ours: HashMap<&str, u64> = HashMap::new();

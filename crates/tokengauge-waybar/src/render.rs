@@ -371,17 +371,6 @@ pub(crate) fn format_panel_section(section: &Section) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn format_credits_line(credits: &str) -> Option<String> {
-    if credits == "—" || credits.is_empty() {
-        return None;
-    }
-    let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
-    Some(format!(
-        "  Credits  <span foreground=\"{dim}\">${}</span>",
-        pango_escape(credits)
-    ))
-}
-
 pub(crate) fn format_header(row: &ProviderRow) -> String {
     let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
     let icon = icon_markup(&row.provider);
@@ -409,8 +398,8 @@ pub(crate) fn format_provider_card(row: &ProviderRow) -> String {
         });
 
     // The tooltip is waybar's panel, so it draws the same sections in the same
-    // order as every other panel. The header, the credits and the input hints
-    // below are the only waybar-specific chrome left here.
+    // order as every other panel. The header and the input hints below are the
+    // only waybar-specific chrome left here.
     let sections: Vec<String> = tokengauge_core::panel_spec(row)
         .iter()
         .flat_map(format_panel_section)
@@ -419,7 +408,6 @@ pub(crate) fn format_provider_card(row: &ProviderRow) -> String {
     let lines: Vec<String> = std::iter::once(format_header(row))
         .chain(updated_line)
         .chain(sections)
-        .chain(format_credits_line(&row.credits))
         .collect();
 
     format!("<tt>{}</tt>", lines.join("\n"))
@@ -611,7 +599,7 @@ pub(crate) mod tests {
             weekly_pace: None,
             tertiary_used: None,
             tertiary_reset: "—".to_string(),
-            credits: "—".to_string(),
+            credits: None,
             source: "oauth".to_string(),
             updated: "07:37".to_string(),
             updated_iso: None,
@@ -706,7 +694,7 @@ pub(crate) mod tests {
     #[test]
     fn format_provider_card_includes_credits_when_present() {
         let mut row = sample_row("Kimi");
-        row.credits = "42.57".to_string();
+        row.credits = Some(42.57);
         let card = format_provider_card(&row);
         assert!(card.contains("Credits"));
         assert!(card.contains("$42.57"));

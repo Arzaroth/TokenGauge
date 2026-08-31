@@ -717,15 +717,18 @@ mod tests {
 
     #[test]
     fn a_provider_only_ccusage_can_see_is_not_drift() {
-        // Kimi driven from its own CLI writes into neither tree we parse; the
-        // `auto` fallback is what covers it, so its absence is not a fault.
-        let d = diagnostics(&[("claude", 100)], &[("claude", 100), ("kimi", 900)]);
+        // GLM has no reader of its own - it is read only when the plan is
+        // driven through Claude Code - so the `auto` fallback is what covers a
+        // GLM CLI, and its absence from a native read is not a fault. Kimi and
+        // Grok have their own readers now, so for those the same shape *is*
+        // drift: it says the reader missed a session ccusage found.
+        let d = diagnostics(&[("claude", 100)], &[("claude", 100), ("glm", 900)]);
         let (provider, drift) = d.worst_token_drift().expect("claude is comparable");
         assert_eq!(provider, "claude");
-        assert_eq!(drift, 0.0, "kimi being ccusage-only must not read as drift");
+        assert_eq!(drift, 0.0, "glm being ccusage-only must not read as drift");
 
         // And with nothing comparable at all, there is no verdict to give.
-        let empty = diagnostics(&[], &[("kimi", 900)]);
+        let empty = diagnostics(&[], &[("glm", 900)]);
         assert!(empty.worst_token_drift().is_none());
     }
 
@@ -741,8 +744,8 @@ mod tests {
         // A Claude/Codex machine never spawns the subprocess.
         assert!(missing_providers(&report, &["claude", "codex"]).is_empty());
 
-        // Kimi enabled with nothing in either transcript tree: its own CLI
-        // writes elsewhere, so ccusage still has to be asked about it.
+        // Kimi enabled with nothing any reader found: the machine may be on a
+        // wire format this build does not parse, so ccusage is still asked.
         let missing = missing_providers(&report, &["claude", "codex", "kimi"]);
         assert_eq!(missing.len(), 1);
         assert!(missing.contains("kimi"));

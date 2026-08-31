@@ -231,23 +231,16 @@ fn render_detail(frame: &mut Frame, area: Rect, state: &mut AppState) {
     // and every string in them. This frontend picks a shape per kind and loops,
     // so a section added in panel.rs reaches the terminal with no edit here.
     let spec = panel_spec(row);
-    let credits_height = (row.credits != "—" && !row.credits.is_empty()) as u16 * 2;
 
     let mut constraints: Vec<Constraint> = spec
         .iter()
         .map(|section| Constraint::Length(section_height(section)))
         .collect();
-    if credits_height > 0 {
-        constraints.push(Constraint::Length(credits_height));
-    }
     constraints.push(Constraint::Min(0));
 
     let chunks = Layout::vertical(constraints).split(inner);
     for (i, section) in spec.iter().enumerate() {
         render_section(frame, chunks[i], section);
-    }
-    if credits_height > 0 {
-        render_credits(frame, chunks[spec.len()], row);
     }
 }
 
@@ -664,16 +657,6 @@ fn render_day_chart(frame: &mut Frame, area: Rect, section: &Section) {
     }
 }
 
-fn render_credits(frame: &mut Frame, area: Rect, row: &ProviderRow) {
-    let line = Line::from(vec![
-        Span::raw("  "),
-        Span::styled("Credits", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw("    "),
-        Span::styled(format!("${}", row.credits), Style::default().fg(green())),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
-}
-
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -899,7 +882,7 @@ mod tests {
             weekly_pace: None,
             tertiary_used: None,
             tertiary_reset: "—".into(),
-            credits: "—".into(),
+            credits: None,
             source: "oauth".into(),
             updated: "now".into(),
             updated_iso: None,

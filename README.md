@@ -213,8 +213,10 @@ claude = false
 codex = true
 ```
 
-Providers whose costs come from ccusage - a Kimi or Grok plan driven from its own
-CLI - cannot sync at all yet: there are no per-call events behind them to bucket.
+GLM cannot sync yet: it has no transcript reader of its own - its spend is read
+only when the plan is driven through Claude Code - and sync buckets per-call
+events, so there is nothing behind it to bucket. Claude, Codex, Kimi and Grok all
+take part.
 
 ### Checking on it
 
@@ -490,7 +492,8 @@ are supported, both building and running natively on Windows 10: the
 Usage limits for every supported provider (Codex, Claude, Kimi, Grok, GLM) are
 fetched natively over HTTP; sign in to the providers you enable so TokenGauge can
 read their credentials. **Cost/token** detail is read natively too, from the
-transcripts the CLIs write under `%USERPROFILE%\.claude` and `%USERPROFILE%\.codex`.
+transcripts the CLIs write under `%USERPROFILE%\.claude`, `%USERPROFILE%\.codex`,
+`%USERPROFILE%\.kimi-code` and `%USERPROFILE%\.grok`.
 `ccusage` is optional: it covers a CLI TokenGauge does not parse yet, and
 `--doctor` cross-checks against it. Neither source creates provider rows on its
 own.

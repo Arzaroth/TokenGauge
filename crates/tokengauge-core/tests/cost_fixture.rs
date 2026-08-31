@@ -16,7 +16,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use chrono::NaiveDate;
-use tokengauge_core::cost::read_events_from;
+use tokengauge_core::cost::{Roots, read_events_from};
 
 fn fixture(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -34,8 +34,11 @@ fn golden() -> serde_json::Value {
 /// Everything the fixture holds, keyed by provider then model.
 fn read_fixture() -> HashMap<String, HashMap<String, u64>> {
     let events = read_events_from(
-        &[fixture(".claude/projects")],
-        &[fixture(".codex/sessions")],
+        &Roots {
+            claude: vec![fixture(".claude/projects")],
+            codex: vec![fixture(".codex/sessions")],
+            ..Roots::default()
+        },
         NaiveDate::from_ymd_opt(2025, 1, 1).expect("valid date"),
     );
     assert!(

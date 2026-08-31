@@ -660,7 +660,13 @@ mod tests {
                 // ccusage off so the Cost source section makes no subprocess
                 // call - the test is about section order, not about what a
                 // machine happens to have on PATH.
-                "refresh_secs = 600\nccusage_enabled = false\ncache_file = \"{}\"\n[providers]\n",
+                //
+                // Single-quoted TOML literal: a Windows temp path has
+                // backslashes, and in a double-quoted string `\U`/`\T` are
+                // invalid escapes that fail the parse - which would silently
+                // fall back to the default config (providers enabled) and break
+                // this test's premise that the Credentials section is empty.
+                "refresh_secs = 600\nccusage_enabled = false\ncache_file = '{}'\n[providers]\n",
                 dir.join("usage.json").display()
             ),
         )

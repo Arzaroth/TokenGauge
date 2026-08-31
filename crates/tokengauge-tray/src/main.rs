@@ -529,6 +529,9 @@ mod win {
             return;
         }
         response.clone().on_hover_ui(|ui| {
+            // on_hover_text caps the popup at this width on its own; a sync
+            // error is long enough to need the cap that on_hover_ui drops.
+            ui.set_max_width(ui.spacing().tooltip_width);
             ui.label(RichText::new(tooltip).monospace());
         });
     }

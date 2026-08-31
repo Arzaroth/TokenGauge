@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A day tooltip names the models that spent it.** Hovering a bar in TOKENS BY
+  DAY showed the date, the tokens and the figure, and a "By device" split only
+  on a fleet of more than one machine - never what the day actually went on, a
+  question the month-wide TOKENS BY MODEL section cannot answer. A "By model"
+  table now sits above the device one: what spent the day, then where it was
+  spent. It comes off `panel.rs`, so all six frontends carry it. Four rows at
+  most, the biggest spenders first, with the tail folded into one `other` row
+  once there are more than four: the split rides in every snapshot and hangs
+  off a tooltip.
+
 ## [0.26.0] - 2026-08-31
 
 ### Added

@@ -163,8 +163,15 @@ fn load_from_env() -> Source {
 }
 
 fn load_from_file(path: &Path) -> Source {
-    let data = std::fs::read_to_string(path).ok()?;
-    Some(parse_credentials(&data))
+    match std::fs::read_to_string(path) {
+        Ok(data) => Some(parse_credentials(&data)),
+        // A missing file is this source being absent, not a fault - the next
+        // source gets a turn. Anything else (a permission wall, a file that is
+        // not UTF-8) is a real problem with the configured path and must be
+        // reported, not silently skipped past.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => Some(Err(anyhow!("cannot read {}: {e}", path.display()))),
+    }
 }
 
 #[cfg(any(windows, target_os = "macos"))]

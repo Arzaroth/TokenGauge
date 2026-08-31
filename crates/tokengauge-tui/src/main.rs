@@ -49,9 +49,11 @@ fn main() -> Result<()> {
         let config_path = args.config.unwrap_or_else(default_config_path);
         // No extras: the bar wiring and fleet-sync checks belong to the waybar
         // binary, which is Linux-only and not installed beside this one.
-        std::process::exit(tokengauge_core::doctor::handle_doctor(&config_path, |_| {
-            Vec::new()
-        }));
+        std::process::exit(tokengauge_core::doctor::handle_doctor(
+            &config_path,
+            env!("CARGO_PKG_VERSION"),
+            |_| Vec::new(),
+        ));
     }
 
     if !crossterm::tty::IsTty::is_tty(&io::stdout()) {

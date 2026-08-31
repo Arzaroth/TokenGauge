@@ -15,7 +15,7 @@ use crate::*;
 
 /// Print the report and return the exit code.
 pub(crate) fn handle_doctor(config_path: &Path) -> i32 {
-    tokengauge_core::doctor::handle_doctor(config_path, waybar_checks)
+    tokengauge_core::doctor::handle_doctor(config_path, env!("CARGO_PKG_VERSION"), waybar_checks)
 }
 
 /// Slotted into the core's report where "Bar wiring" has always been.

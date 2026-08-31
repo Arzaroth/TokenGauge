@@ -40,6 +40,7 @@ mod codex;
 pub mod config;
 pub mod cost;
 mod device;
+pub mod doctor;
 pub mod fetch;
 pub mod fmt;
 mod glm;

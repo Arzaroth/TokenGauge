@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
+use tokengauge_core::default_config_path;
 
 use crate::app::App;
 
@@ -29,6 +30,10 @@ struct Args {
     /// runs, so every frontend's "set up sync" button is one spawn.
     #[arg(long)]
     sync: bool,
+    /// Print what this machine looks like to TokenGauge and exit non-zero if
+    /// anything is wrong.
+    #[arg(long)]
+    doctor: bool,
 }
 
 fn main() -> Result<()> {
@@ -36,6 +41,17 @@ fn main() -> Result<()> {
 
     if args.update || args.check_update {
         return run_update(args.config, args.check_update);
+    }
+
+    // Before the TTY check: the doctor is the thing you run when the dashboard
+    // will not tell you anything, including from a pipe.
+    if args.doctor {
+        let config_path = args.config.unwrap_or_else(default_config_path);
+        // No extras: the bar wiring and fleet-sync checks belong to the waybar
+        // binary, which is Linux-only and not installed beside this one.
+        std::process::exit(tokengauge_core::doctor::handle_doctor(&config_path, |_| {
+            Vec::new()
+        }));
     }
 
     if !crossterm::tty::IsTty::is_tty(&io::stdout()) {

@@ -1,11 +1,19 @@
 //! Native Claude OAuth usage fetcher.
 //!
-//! Read-only: TokenGauge reads `~/.claude/.credentials.json` and calls the
-//! Anthropic OAuth usage endpoint. It never refreshes or writes that file -
-//! the `claude` CLI owns refresh (it rotates the token on its own schedule and
-//! would race any lock we invent), and the file also holds unrelated `mcpOAuth`
-//! secrets. On an expired token we surface an error and let the stale-cache
-//! fallback keep the last-good number visible until `claude` is next run.
+//! Read-only: TokenGauge reads Claude Code's OAuth credential and calls the
+//! Anthropic OAuth usage endpoint. It never refreshes or writes it - the
+//! `claude` CLI owns refresh (it rotates the token on its own schedule and
+//! would race any lock we invent).
+//!
+//! The credential comes from whichever of three sources first yields a usable
+//! one: the `TOKENGAUGE_CLAUDE_OAUTH_TOKEN` override, `~/.claude/.credentials.json`,
+//! and the OS credential store Claude Code uses on macOS (keychain) and Windows
+//! (Credential Manager). "First usable, not first present" matters because
+//! Claude Code 2.1.x moved the token into the keychain on macOS and leaves a
+//! hollow file behind, and the Windows desktop app delegates auth over IPC and
+//! writes a hollow file too - so the file existing says nothing about whether
+//! it holds a token. On no usable credential we surface an error and let the
+//! stale-cache fallback keep the last-good number visible.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -50,7 +58,8 @@ struct Credentials {
 struct Oauth {
     #[serde(rename = "accessToken")]
     access_token: String,
-    /// Milliseconds since epoch. Absent => treated as expired.
+    /// Milliseconds since epoch. Absent => unknown, left for the server to
+    /// reject; see `validate_oauth`.
     #[serde(rename = "expiresAt")]
     expires_at: Option<i64>,
     #[serde(default)]
@@ -61,32 +70,185 @@ struct Oauth {
     subscription_type: Option<String>,
 }
 
-pub(crate) fn credentials_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join(".claude")
-        .join(".credentials.json")
+/// Explicit override for a machine where no credential we can read holds the
+/// token - the Claude desktop app on Windows delegates auth over an IPC socket
+/// and writes only a hollow `.credentials.json`, so a user there can point us
+/// at a token from `claude setup-token` instead.
+const ENV_TOKEN: &str = "TOKENGAUGE_CLAUDE_OAUTH_TOKEN";
+const ENV_SCOPES: &str = "TOKENGAUGE_CLAUDE_OAUTH_SCOPES";
+
+/// The OS credential store Claude Code writes to on macOS (a keychain item) and
+/// on Windows (a Credential Manager entry). Claude Code 2.1.x moved the token
+/// off disk into this on macOS, so the file path alone finds only a stub there.
+#[cfg(any(windows, target_os = "macos"))]
+const KEYRING_SERVICE: &str = "Claude Code-credentials";
+
+/// The `.claude` directory: `CLAUDE_CONFIG_DIR` when set, so the credential
+/// reader and the transcript reader (which already honours it) agree on where
+/// Claude Code keeps its state.
+fn claude_config_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR")
+        && !dir.trim().is_empty()
+    {
+        return PathBuf::from(dir.trim());
+    }
+    dirs::home_dir().unwrap_or_default().join(".claude")
 }
 
-fn read_credentials(path: &Path, now: DateTime<Utc>) -> Result<Oauth> {
-    let data = std::fs::read_to_string(path)
-        .map_err(|_| anyhow!("Claude not logged in - run `claude`"))?;
-    let creds: Credentials = serde_json::from_str(&data).context("credentials JSON was invalid")?;
-    let oauth = creds
-        .oauth
-        .ok_or_else(|| anyhow!("Claude not logged in - run `claude`"))?;
+pub(crate) fn credentials_path() -> PathBuf {
+    claude_config_dir().join(".credentials.json")
+}
 
-    let expired = match oauth.expires_at {
-        Some(ms) => now.timestamp_millis() >= ms,
-        None => true,
-    };
-    if expired {
+/// Accept both shapes the token arrives in: the file wraps it in
+/// `claudeAiOauth`, the OS credential store on some builds holds the bare OAuth
+/// object.
+fn parse_credentials(data: &str) -> Result<Oauth> {
+    if let Ok(creds) = serde_json::from_str::<Credentials>(data)
+        && let Some(oauth) = creds.oauth
+    {
+        return Ok(oauth);
+    }
+    serde_json::from_str::<Oauth>(data).context("credentials JSON was invalid")
+}
+
+/// Whether a parsed credential can actually be sent.
+///
+/// The empty-token check is first and its own message: a hollow
+/// `.credentials.json` - all keys present, every token value emptied - is what
+/// Claude Code leaves behind when the desktop app owns auth or a login lapses,
+/// and "expired" there sends the user to re-run a login that will not help.
+/// Absent expiry is treated as unknown rather than dead, so an explicit env
+/// token (which carries no metadata) is usable and the server's 401 is what
+/// says otherwise.
+fn validate_oauth(oauth: Oauth, now: DateTime<Utc>) -> Result<Oauth> {
+    if oauth.access_token.trim().is_empty() {
+        return Err(anyhow!("Claude not signed in - run `claude setup-token`"));
+    }
+    if oauth
+        .expires_at
+        .is_some_and(|ms| now.timestamp_millis() >= ms)
+    {
         return Err(anyhow!("Claude token expired - run `claude` to log in"));
     }
     if !oauth.scopes.iter().any(|s| s == "user:profile") {
         return Err(anyhow!("Claude OAuth missing user:profile scope"));
     }
     Ok(oauth)
+}
+
+/// `None` = this source has nothing (skip it); `Some(Err)` = it has something
+/// broken (worth reporting if nothing better turns up).
+type Source = Option<Result<Oauth>>;
+
+/// A credential source: a label for `--doctor` and the loader behind it.
+type Loader = (&'static str, fn() -> Source);
+
+fn load_from_env() -> Source {
+    let token = std::env::var(ENV_TOKEN).ok()?;
+    if token.trim().is_empty() {
+        return None;
+    }
+    let scopes = std::env::var(ENV_SCOPES)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.split_whitespace().map(str::to_string).collect())
+        .unwrap_or_else(|| vec!["user:profile".to_string()]);
+    Some(Ok(Oauth {
+        access_token: token,
+        expires_at: None,
+        scopes,
+        rate_limit_tier: None,
+        subscription_type: None,
+    }))
+}
+
+fn load_from_file(path: &Path) -> Source {
+    let data = std::fs::read_to_string(path).ok()?;
+    Some(parse_credentials(&data))
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn keyring_accounts() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |value: &str| {
+        let value = value.trim();
+        if !value.is_empty() && !out.iter().any(|existing| existing == value) {
+            out.push(value.to_string());
+        }
+    };
+    for key in ["USER", "USERNAME"] {
+        if let Ok(value) = std::env::var(key) {
+            add(&value);
+            // A `DOMAIN\user` login also has to be tried as the bare user.
+            if let Some((_, bare)) = value.rsplit_once('\\') {
+                add(bare);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn load_from_keyring() -> Source {
+    for account in keyring_accounts() {
+        let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, &account) else {
+            continue;
+        };
+        match entry.get_password() {
+            Ok(secret) if !secret.trim().is_empty() => {
+                return Some(parse_credentials(secret.trim()));
+            }
+            _ => continue,
+        }
+    }
+    None
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn load_from_keyring() -> Source {
+    None
+}
+
+/// The first credential that is present *and* usable, from - in order - the
+/// env override, the file, and the OS credential store.
+///
+/// First *usable*, not first *present*: a hollow file must not shadow a good
+/// keyring entry, which is exactly the macOS case where the file is a stub and
+/// the token lives in the keychain. The error reported when none work is the
+/// first concrete one, because a present-but-broken source (an expired file)
+/// is more actionable than a merely-absent one.
+fn load_oauth(now: DateTime<Utc>) -> Result<(Oauth, &'static str)> {
+    let loaders: [Loader; 3] = [
+        ("TOKENGAUGE_CLAUDE_OAUTH_TOKEN", load_from_env),
+        (".credentials.json", || load_from_file(&credentials_path())),
+        ("OS credential store", load_from_keyring),
+    ];
+    let mut first_err: Option<anyhow::Error> = None;
+    for (source, loader) in loaders {
+        if let Some(parsed) = loader() {
+            match parsed.and_then(|oauth| validate_oauth(oauth, now)) {
+                Ok(oauth) => return Ok((oauth, source)),
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
+    }
+    Err(first_err.unwrap_or_else(|| anyhow!("Claude not signed in - run `claude setup-token`")))
+}
+
+/// For `--doctor`: which source holds a usable credential, without a network
+/// fetch. `Err` carries the same message the fetch would surface.
+pub(crate) fn credential_status(now: DateTime<Utc>) -> Result<&'static str> {
+    load_oauth(now).map(|(_, source)| source)
+}
+
+#[cfg(test)]
+fn read_credentials(path: &Path, now: DateTime<Utc>) -> Result<Oauth> {
+    match load_from_file(path) {
+        Some(parsed) => parsed.and_then(|oauth| validate_oauth(oauth, now)),
+        None => Err(anyhow!("Claude not signed in - run `claude setup-token`")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -380,7 +542,7 @@ fn to_payload(
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
-    let oauth = read_credentials(&credentials_path(), now)?;
+    let (oauth, _source) = load_oauth(now)?;
 
     let client = http_client(timeout)?;
     let resp = client
@@ -624,5 +786,55 @@ mod tests {
         assert!(err.contains("user:profile"), "{err}");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The real Windows file: every key present, every token value emptied,
+    /// `expiresAt` zero. It must read as "not signed in" and point at
+    /// `setup-token`, not as "expired" - re-running a login the desktop app
+    /// owns does not repopulate this file.
+    #[test]
+    fn a_hollow_credential_file_says_not_signed_in_not_expired() {
+        let oauth: Oauth = serde_json::from_str(
+            r#"{"accessToken":"","expiresAt":0,"refreshToken":"","scopes":["user:profile"],"subscriptionType":"max"}"#,
+        )
+        .unwrap();
+        let err = validate_oauth(oauth, Utc::now()).unwrap_err().to_string();
+        assert!(err.contains("not signed in"), "{err}");
+        assert!(err.contains("setup-token"), "{err}");
+        assert!(err.len() <= 60, "message too long: {err}");
+    }
+
+    /// A whitespace-only token is as empty as an empty one.
+    #[test]
+    fn a_blank_token_is_not_signed_in() {
+        let oauth: Oauth =
+            serde_json::from_str(r#"{"accessToken":"   ","scopes":["user:profile"]}"#).unwrap();
+        assert!(
+            validate_oauth(oauth, Utc::now())
+                .unwrap_err()
+                .to_string()
+                .contains("not signed in")
+        );
+    }
+
+    /// An explicit token has no expiry metadata; absent expiry must not read as
+    /// dead, or the env override could never be used.
+    #[test]
+    fn absent_expiry_is_not_treated_as_expired() {
+        let oauth: Oauth =
+            serde_json::from_str(r#"{"accessToken":"real","scopes":["user:profile"]}"#).unwrap();
+        assert!(validate_oauth(oauth, Utc::now()).is_ok());
+    }
+
+    /// The credential store holds the bare OAuth object; the file wraps it.
+    /// Both have to parse.
+    #[test]
+    fn both_the_wrapped_and_bare_shapes_parse() {
+        let wrapped =
+            parse_credentials(r#"{"claudeAiOauth":{"accessToken":"a","scopes":["user:profile"]}}"#)
+                .unwrap();
+        assert_eq!(wrapped.access_token, "a");
+        let bare = parse_credentials(r#"{"accessToken":"b","scopes":["user:profile"]}"#).unwrap();
+        assert_eq!(bare.access_token, "b");
     }
 }

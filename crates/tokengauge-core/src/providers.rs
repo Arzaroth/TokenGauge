@@ -315,7 +315,30 @@ fn file_auth_status(path: PathBuf, hint: &'static str) -> AuthStatus {
 }
 
 fn claude_auth() -> AuthStatus {
-    file_auth_status(claude_credentials_path(), "run `claude` to sign in")
+    // Validate, don't stat: a hollow `.credentials.json` - present but with an
+    // emptied token, what Claude Code leaves when the desktop app owns auth -
+    // exists on disk and a bare `path.exists()` would call it a green tick next
+    // to a credential every fetch rejects. This checks the same sources the
+    // fetcher does (env, file, keychain/Credential Manager) without a network
+    // call, so `--doctor` says what the bar will actually see.
+    match claude::credential_status(Utc::now()) {
+        Ok(source) => AuthStatus {
+            ok: true,
+            detail: match source {
+                ".credentials.json" => claude_credentials_path().display().to_string(),
+                other => other.to_string(),
+            },
+            hint: "",
+        },
+        // The message already names the fix (`claude` / `claude setup-token`),
+        // so no separate hint - the doctor prints "detail - hint" and a second
+        // "run claude" reads as a stutter.
+        Err(e) => AuthStatus {
+            ok: false,
+            detail: e.to_string(),
+            hint: "",
+        },
+    }
 }
 
 fn codex_auth() -> AuthStatus {

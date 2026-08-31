@@ -31,5 +31,14 @@ http = { version = "1", optional = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }
 
+# Claude Code's OS credential store: the macOS keychain and the Windows
+# Credential Manager. Per-target and native-only so Linux pulls no
+# secret-service / dbus stack - there Claude keeps the token in the file.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+
 [features]
 self-update = ["dep:self_update", "dep:http"]

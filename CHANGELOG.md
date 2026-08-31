@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Panel tooltips line up again on Plasma, GNOME and the Windows tray.** The
+  sub-tables a tooltip carries - a day's split by model and by device, a model's
+  split by device - are padded to a monospace grid by the panel spec, but those
+  three surfaces drew them in their toolkit's proportional font, so the token
+  and cost columns landed wherever the labels happened to end. All three now
+  render tooltip text in a monospace face, as the waybar tooltip already did.
+
 ## [0.28.0] - 2026-08-31
 
 ### Added

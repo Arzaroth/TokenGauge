@@ -522,6 +522,17 @@ mod win {
         }
     }
 
+    /// The spec pads its sub-tables with spaces, so a tooltip only lines up in
+    /// a monospace face; egui's default hover text is proportional.
+    fn hover_tooltip(response: &egui::Response, tooltip: &str) {
+        if tooltip.is_empty() {
+            return;
+        }
+        response.clone().on_hover_ui(|ui| {
+            ui.label(RichText::new(tooltip).monospace());
+        });
+    }
+
     /// Label and value on one line, a full-width bar under it, then the reset
     /// note and the pace badge.
     fn meter_row(ui: &mut egui::Ui, row: &tokengauge_core::PanelRow) {
@@ -591,9 +602,7 @@ mod win {
             egui::FontId::monospace(12.0),
             color,
         );
-        if !row.tooltip.is_empty() {
-            response.on_hover_text(&row.tooltip);
-        }
+        hover_tooltip(&response, &row.tooltip);
     }
 
     /// Label and value on one line; a badge and a suffix drop to a caption line
@@ -633,9 +642,7 @@ mod win {
         // The suffix is the spec's ellipsized copy for surfaces that cannot
         // wrap; the tooltip carries the whole sentence, and the sync detail is
         // the row that actually needs it.
-        if !row.tooltip.is_empty() {
-            line.response.on_hover_text(&row.tooltip);
-        }
+        hover_tooltip(&line.response, &row.tooltip);
     }
 
     fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) {

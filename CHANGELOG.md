@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Claude credentials are read from three sources, not one.** The token was
+  read only from `~/.claude/.credentials.json`. Claude Code 2.1.x moved it into
+  the OS credential store on macOS (keychain) and leaves that file a stub, and
+  the Windows desktop app delegates auth over IPC and writes a stub too - so on
+  both, TokenGauge held a hollow file and reported the provider as dead while it
+  was live. It now tries, in order, the `TOKENGAUGE_CLAUDE_OAUTH_TOKEN`
+  override, the file, and the OS credential store (macOS keychain / Windows
+  Credential Manager), taking the first that is *usable* rather than the first
+  that is *present*, so a stub file no longer shadows a good keychain entry.
+  The store read is gated to macOS and Windows, so the Linux build pulls no
+  secret-service / dbus stack.
+- **`--doctor` runs on Windows.** The diagnostic lived in the waybar binary,
+  which is Linux-only, so the users with no bar, no daemon and no `--json` were
+  exactly the ones who could not run one - and answering "why is my panel
+  frozen" took a screenshot, a binary size comparison and five rounds of
+  guessing. The report moved to `tokengauge-core` and `tokengauge-tui --doctor`
+  prints it. The `tokengauge` binary passes its own sections in (bar wiring,
+  the click-action launcher, fleet sync) so its output is unchanged, order
+  included, and the Linux-shaped checks - `notify-send`, `xdg-open`, the
+  desktop frontends - are omitted rather than reported as failures on a
+  platform that has no such thing.
+- **The doctor says where the snapshot is, and whether that path means what it
+  says.** A `cache_file` left over from another OS - `/tmp/tokengauge-usage.json`
+  in a Windows config - is rooted but carries no drive, so Windows resolves it
+  against whichever drive happens to be current and writes the snapshot
+  somewhere nobody looks. On the machine that prompted this it read as the file
+  never having been written at all. The Filesystem section now prints the
+  resolved path and fails a `cache_file` that is not absolute, without creating
+  the directory it has just called wrong.
+
+### Fixed
+
+- **A hollow credential file says "not signed in", not "expired".** A
+  `.credentials.json` with every key present but the token values emptied - what
+  Claude Code leaves when the desktop app owns auth or a login lapses - was
+  reported as an expired token, sending the user to re-run a login that does not
+  repopulate that file. It now reads as not signed in and points at
+  `claude setup-token`, the supported way to hand a tool its own token.
+- **`--doctor`'s credential check validates instead of stat-ing.** It reported a
+  green tick whenever `.credentials.json` existed, even a hollow one every fetch
+  rejects. It now checks the same sources the fetcher does, without a network
+  call, so the Credentials line says what the bar will actually see.
+- **The credential reader honours `CLAUDE_CONFIG_DIR`.** The transcript reader
+  already did; the credential reader did not, so a user who relocated `~/.claude`
+  had their costs read from the new directory and their credential looked for in
+  the old one.
+
 ## [0.27.0] - 2026-08-31
 
 ### Added

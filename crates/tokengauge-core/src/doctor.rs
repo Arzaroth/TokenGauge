@@ -42,9 +42,10 @@ pub enum DoctorLine {
 /// a bar it does not have.
 pub fn handle_doctor(
     config_path: &Path,
+    version: &str,
     extras: impl Fn(&TokenGaugeConfig) -> Vec<DoctorLine>,
 ) -> i32 {
-    render(&doctor_lines(config_path, extras))
+    render(&doctor_lines(config_path, version, extras))
 }
 
 pub fn render(lines: &[DoctorLine]) -> i32 {
@@ -124,6 +125,11 @@ pub fn failures(lines: &[DoctorLine]) -> usize {
 /// find out.
 pub fn doctor_lines(
     config_path: &Path,
+    // The version of the binary that invoked the doctor, not the core crate's
+    // own. They move together under one workspace bump, but the report is about
+    // the tool the user ran - and it is the frontends section that compares a
+    // desktop frontend's version against it.
+    version: &str,
     extras: impl Fn(&TokenGaugeConfig) -> Vec<DoctorLine>,
 ) -> Vec<DoctorLine> {
     let lines: std::cell::RefCell<Vec<DoctorLine>> = std::cell::RefCell::new(Vec::new());
@@ -469,7 +475,7 @@ pub fn doctor_lines(
 
     section("Updates");
     record(DoctorCheck {
-        label: format!("installed version: {}", env!("CARGO_PKG_VERSION")),
+        label: format!("installed version: {version}"),
         ok: true,
         detail: String::new(),
     });
@@ -503,7 +509,7 @@ pub fn doctor_lines(
     {
         section("Desktop frontends");
         use crate::frontend;
-        let binary = env!("CARGO_PKG_VERSION");
+        let binary = version;
         let present = frontend::installed();
         if present.is_empty() {
             record(DoctorCheck {
@@ -571,7 +577,7 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(&path, "refresh_secs = \"not a number\"\n").expect("write");
 
-        let lines = doctor_lines(&path, |_| Vec::new());
+        let lines = doctor_lines(&path, "0.0.0-test", |_| Vec::new());
         assert!(
             failures(&lines) > 0,
             "a config that will not parse is a fault"
@@ -620,7 +626,7 @@ mod tests {
         )
         .expect("write");
 
-        let lines = doctor_lines(&path, |_| Vec::new());
+        let lines = doctor_lines(&path, "0.0.0-test", |_| Vec::new());
         assert!(
             lines.iter().any(|line| matches!(
                 line,
@@ -651,13 +657,16 @@ mod tests {
         std::fs::write(
             &path,
             format!(
-                "refresh_secs = 600\ncache_file = \"{}\"\n[providers]\n",
+                // ccusage off so the Cost source section makes no subprocess
+                // call - the test is about section order, not about what a
+                // machine happens to have on PATH.
+                "refresh_secs = 600\nccusage_enabled = false\ncache_file = \"{}\"\n[providers]\n",
                 dir.join("usage.json").display()
             ),
         )
         .expect("write");
 
-        let lines = doctor_lines(&path, |_| Vec::new());
+        let lines = doctor_lines(&path, "0.0.0-test", |_| Vec::new());
         let shown = visible(&lines);
         assert!(matches!(shown.first(), Some(DoctorLine::Heading(_))));
         assert!(

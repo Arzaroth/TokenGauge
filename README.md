@@ -38,7 +38,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 
 All providers are read-only: TokenGauge never refreshes a token. Codex refreshes its own. For CLI-backed credentials, re-run the respective CLI (`claude`, `kimi`, `grok login`) when a token expires. For env-key providers, update the variable instead: `KIMI_CODE_API_KEY` for Kimi (when set, it takes precedence over the CLI token) and `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`) for GLM, which has no sign-in CLI.
 
-- **Claude**: read from `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`), then the macOS keychain / Windows Credential Manager entry Claude Code writes (`Claude Code-credentials`), whichever holds a usable token. If the credential lives somewhere unreadable - the Windows desktop app delegates auth over IPC and leaves only a stub file - run `claude setup-token` and it writes a real token back to that file, or set `TOKENGAUGE_CLAUDE_OAUTH_TOKEN` directly.
+- **Claude**: three sources, tried in order, taking the first that holds a *usable* token - the `TOKENGAUGE_CLAUDE_OAUTH_TOKEN` env override, then `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`), then the macOS keychain / Windows Credential Manager entry Claude Code writes (`Claude Code-credentials`). "First usable, not first present" matters because Claude Code 2.1.x moved the token into the keychain on macOS and the Windows desktop app delegates auth over IPC, both leaving the file a stub. If nothing readable holds a token, run `claude setup-token` (it writes a real one back to the file) or set `TOKENGAUGE_CLAUDE_OAUTH_TOKEN`.
 - **Kimi** (kimi.com/code): reuses the `kimi` CLI token, or set `KIMI_CODE_API_KEY`. `KIMI_CODE_HOME` overrides the CLI home.
 - **Grok** (x.ai build): reads the `grok login` token. `GROK_HOME` overrides the auth directory.
 - **GLM** (z.ai / zcode.z.ai): the GLM Coding Plan has no local credential file, so set `Z_AI_API_KEY` (the same key you use for `ANTHROPIC_AUTH_TOKEN`). Set `Z_AI_API_HOST=open.bigmodel.cn` for the China BigModel region, or `Z_AI_QUOTA_URL` to override the full quota endpoint.
@@ -359,11 +359,13 @@ to print a grouped checklist:
 Config        config loads
 Credentials   Claude / Codex sign-in present
 Cost source   native vs ccusage, price table, unpriced models
-Dependencies  notify-send, xdg-open on PATH (ccusage optional)
+Dependencies  ccusage runner (notify-send + xdg-open on Linux)
 Filesystem    resolved snapshot path + cache directory writable
 Providers     enabled list + per-provider live fetch result
-Bar wiring    module wired in ~/.config/waybar/config.jsonc
+Bar wiring    module wired in config.jsonc      (tokengauge, Linux only)
+Fleet sync    key + per-device status           (tokengauge, Linux only)
 Updates       installed version, update available
+Desktop UIs   Plasma / GNOME / Omarchy versions (tokengauge, Linux only)
 ```
 
 Exit 0 if all pass, 1 if any fails - CI-friendly.

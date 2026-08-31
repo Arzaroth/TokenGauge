@@ -23,7 +23,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **Threshold notifications**: `notify-send` alerts at 50/80/95% (configurable) - one-shot per threshold, resets on window roll-over
 - **Daemon mode**: optional long-lived process for near-instant waybar polls, background notifications, and SIGHUP config reload
 - **Self-update**: `tokengauge --update` pulls the arch-matching build from GitHub releases; the daemon checks periodically and notifies, and the desktop frontends expose an **Update** button
-- **`--doctor`**: diagnostic checklist for credentials, cost source (including a native-vs-ccusage cross-check), notifications, providers, waybar wiring, click action launcher
+- **`--doctor`**: diagnostic checklist for credentials, cost source (including a native-vs-ccusage cross-check), notifications, providers, waybar wiring, click action launcher - on every platform, via `tokengauge --doctor` or `tokengauge-tui --doctor`
 - **CSS tier classes**: waybar text class flips to `tokengauge-warn` / `tokengauge-crit` past usage thresholds for theme-driven coloring
 
 ## Supported Providers
@@ -31,13 +31,14 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 | Provider | Type | Config | Credentials |
 |----------|------|--------|-------------|
 | Codex | OAuth | `codex = true` | `$CODEX_HOME/auth.json` (`codex` CLI) |
-| Claude | OAuth | `claude = true` | `~/.claude/.credentials.json` (`claude` CLI) |
+| Claude | OAuth | `claude = true` | `~/.claude/.credentials.json` (`claude` CLI), macOS keychain / Windows Credential Manager, or `TOKENGAUGE_CLAUDE_OAUTH_TOKEN` |
 | Kimi | CLI / API key | `kimi = true` | `~/.kimi-code/credentials/kimi-code.json` or `KIMI_CODE_API_KEY` |
 | Grok | CLI | `grok = true` | `~/.grok/auth.json` (`grok login`) |
 | GLM | API key | `glm = true` | `Z_AI_API_KEY` env (legacy `ZAI_API_TOKEN`) |
 
 All providers are read-only: TokenGauge never refreshes a token. Codex refreshes its own. For CLI-backed credentials, re-run the respective CLI (`claude`, `kimi`, `grok login`) when a token expires. For env-key providers, update the variable instead: `KIMI_CODE_API_KEY` for Kimi (when set, it takes precedence over the CLI token) and `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`) for GLM, which has no sign-in CLI.
 
+- **Claude**: read from `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`), then the macOS keychain / Windows Credential Manager entry Claude Code writes (`Claude Code-credentials`), whichever holds a usable token. If the credential lives somewhere unreadable - the Windows desktop app delegates auth over IPC and leaves only a stub file - run `claude setup-token` and it writes a real token back to that file, or set `TOKENGAUGE_CLAUDE_OAUTH_TOKEN` directly.
 - **Kimi** (kimi.com/code): reuses the `kimi` CLI token, or set `KIMI_CODE_API_KEY`. `KIMI_CODE_HOME` overrides the CLI home.
 - **Grok** (x.ai build): reads the `grok login` token. `GROK_HOME` overrides the auth directory.
 - **GLM** (z.ai / zcode.z.ai): the GLM Coding Plan has no local credential file, so set `Z_AI_API_KEY` (the same key you use for `ANTHROPIC_AUTH_TOKEN`). Set `Z_AI_API_HOST=open.bigmodel.cn` for the China BigModel region, or `Z_AI_QUOTA_URL` to override the full quota endpoint.
@@ -351,18 +352,27 @@ threshold notifications are untouched.
 
 ## Diagnostics
 
-Run `tokengauge --doctor` to print a grouped checklist:
+Run `tokengauge --doctor` (Linux) or `tokengauge-tui --doctor` (any platform)
+to print a grouped checklist:
 
 ```
 Config        config loads
 Credentials   Claude / Codex sign-in present
+Cost source   native vs ccusage, price table, unpriced models
 Dependencies  notify-send, xdg-open on PATH (ccusage optional)
-Filesystem    cache directory writable
+Filesystem    resolved snapshot path + cache directory writable
 Providers     enabled list + per-provider live fetch result
-Waybar        module wired in ~/.config/waybar/config.jsonc
+Bar wiring    module wired in ~/.config/waybar/config.jsonc
+Updates       installed version, update available
 ```
 
 Exit 0 if all pass, 1 if any fails - CI-friendly.
+
+The report itself lives in `tokengauge-core`, so it is the same on every
+platform. The `tokengauge` binary adds the sections only it can answer for -
+bar wiring, the click-action launcher and fleet sync - and the Linux-only
+checks (`notify-send`, `xdg-open`, the desktop frontends) are omitted on
+Windows rather than reported as failures.
 
 ## Updates
 

@@ -19,7 +19,7 @@
 use serde::Serialize;
 
 use crate::sync::DeviceCost;
-use crate::{CostInfo, ModelCost, ProviderRow, format_tokens};
+use crate::{CostInfo, DayModelCost, ModelCost, ProviderRow, format_tokens};
 
 /// Colour tier for a row, resolved from the value rather than from a palette -
 /// each frontend maps these onto its own theme.
@@ -484,6 +484,9 @@ fn day_rows(cost: &CostInfo) -> Vec<PanelRow> {
                 exact_tokens(day.tokens),
                 day.usd
             );
+            if let Some(split) = model_breakdown(&day.by_model) {
+                r.tooltip.push_str(&split);
+            }
             if let Some(split) = device_breakdown(&day.by_device) {
                 r.tooltip.push_str(&split);
             }
@@ -517,37 +520,70 @@ fn model_rows(cost: &CostInfo) -> Vec<PanelRow> {
         .collect()
 }
 
-/// Which machines a day or a model came from, under the figure it splits.
-///
-/// `by_device` is empty unless the fleet has more than one machine in it, and
-/// that decision lives in `fetch::attach_fleet` rather than here: a split of one
-/// restates the row it hangs off.
-fn device_breakdown(devices: &[DeviceCost]) -> Option<String> {
-    if devices.is_empty() {
+/// One row of a tooltip sub-table: a label, its tokens, its spend, and a note
+/// hung off the end (empty for most of them).
+type BreakdownRow = (String, String, String, &'static str);
+
+/// A titled sub-table under the figure it splits, or None when there is nothing
+/// to split it by.
+fn breakdown(title: &str, rows: &[BreakdownRow]) -> Option<String> {
+    if rows.is_empty() {
         return None;
     }
     // Columns, not a sentence: the tooltips render in a monospace face, and
     // unpadded fields only line up when the label and token widths happen to
     // cancel out, which reads as broken on the day they stop.
-    let rows: Vec<(&str, String, String)> = devices
-        .iter()
-        .map(|d| (d.label.as_str(), format_tokens(d.tokens), money(d.usd)))
-        .collect();
-    let width = |f: fn(&(&str, String, String)) -> usize| rows.iter().map(f).max().unwrap_or(0);
+    let width = |f: fn(&BreakdownRow) -> usize| rows.iter().map(f).max().unwrap_or(0);
     let (lw, tw, mw) = (
         width(|r| r.0.chars().count()),
         width(|r| r.1.chars().count()),
         width(|r| r.2.chars().count()),
     );
 
-    let mut out = String::from("\n\nBy device");
-    for ((label, tokens, usd), device) in rows.iter().zip(devices) {
-        out.push_str(&format!("\n{label:<lw$}  {tokens:>tw$}  ·  {usd:>mw$}"));
-        if device.partial {
-            out.push_str("  · partial");
-        }
+    let mut out = format!("\n\n{title}");
+    for (label, tokens, usd, note) in rows {
+        out.push_str(&format!(
+            "\n{label:<lw$}  {tokens:>tw$}  ·  {usd:>mw$}{note}"
+        ));
     }
     Some(out)
+}
+
+/// Which machines a day or a model came from.
+///
+/// `by_device` is empty unless the fleet has more than one machine in it, and
+/// that decision lives in `fetch::attach_fleet` rather than here: a split of one
+/// restates the row it hangs off.
+fn device_breakdown(devices: &[DeviceCost]) -> Option<String> {
+    let rows: Vec<BreakdownRow> = devices
+        .iter()
+        .map(|d| {
+            (
+                d.label.clone(),
+                format_tokens(d.tokens),
+                money(d.usd),
+                if d.partial { "  · partial" } else { "" },
+            )
+        })
+        .collect();
+    breakdown("By device", &rows)
+}
+
+/// Which models spent a day, under the day it splits. Capped and ordered by
+/// `DayModelCost::top` before it ever reaches here.
+fn model_breakdown(models: &[DayModelCost]) -> Option<String> {
+    let rows: Vec<BreakdownRow> = models
+        .iter()
+        .map(|m| {
+            (
+                model_label(&m.model),
+                format_tokens(m.tokens),
+                money(m.usd),
+                "",
+            )
+        })
+        .collect();
+    breakdown("By model", &rows)
 }
 
 fn model_tooltip(m: &ModelCost) -> String {
@@ -795,12 +831,14 @@ mod tests {
                     usd: 1.0,
                     tokens: 500,
                     by_device: Vec::new(),
+                    by_model: Vec::new(),
                 },
                 DayCost {
                     date: "2026-08-22".into(),
                     usd: 2.0,
                     tokens: 1000,
                     by_device: Vec::new(),
+                    by_model: Vec::new(),
                 },
             ],
         }
@@ -1074,6 +1112,49 @@ mod tests {
             .clone();
         assert!(model.tooltip.contains("By device"), "{}", model.tooltip);
         assert!(model.tooltip.contains("desktop"), "{}", model.tooltip);
+    }
+
+    #[test]
+    fn a_day_tooltip_names_the_models_that_spent_it() {
+        let mut c = cost();
+        let today = c.weekly_history.last_mut().expect("a day");
+        today.by_device = split();
+        today.by_model = DayModelCost::top(vec![
+            DayModelCost {
+                model: "claude-opus-5".into(),
+                usd: 1.2,
+                tokens: 600,
+            },
+            DayModelCost {
+                model: "claude-haiku-4-5-20251001".into(),
+                usd: 0.05,
+                tokens: 400,
+            },
+        ]);
+        let mut r = row();
+        r.cost = Some(c);
+        let spec = panel_spec(&r);
+
+        let tooltip = spec
+            .iter()
+            .find(|s| s.id == "tokens_by_day")
+            .expect("days")
+            .rows
+            .last()
+            .expect("today")
+            .tooltip
+            .clone();
+
+        // The panel's own model labels, in the columns the fleet split already
+        // uses, and above it: what spent the day before where it was spent.
+        assert!(
+            tooltip.contains("By model\nOpus 5     600  ·  $1.20\nHaiku 4.5  400  ·  $0.05"),
+            "{tooltip}"
+        );
+        assert!(
+            tooltip.find("By model") < tooltip.find("By device"),
+            "{tooltip}"
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "arzaroth.tokengauge",
   "name": "TokenGauge",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "author": "Arzaroth",
   "license": "MIT",
   "description": "Token usage, limits, pace, and cost for Claude, Codex, Kimi, Grok, and GLM in an Omarchy bar panel.",

@@ -330,27 +330,39 @@ pub fn fetch_costs(config: &TokenGaugeConfig, enabled: &[&str]) -> NativeCostRep
 ///
 /// Peer buckets arrive as synthetic events, so `build_report` sees one kind of
 /// input and needs to know nothing about any of this.
+///
+/// `sync::refresh` runs either way, because the durable store it maintains is
+/// what history is read from and is the only record of a day once a CLI rotates
+/// its transcript away. Sync gates the cycle, not the store.
 fn native_costs(
     config: &TokenGaugeConfig,
     today: chrono::NaiveDate,
     timeout: Duration,
 ) -> NativeCostReport {
-    if !config.sync.enabled {
-        return cost::fetch_native(&config.cache_file, timeout, today);
+    // Once, before the first fetch leaves the store holding a fortnight: read
+    // back as far as the store can hold, so the first history chart is worth
+    // opening instead of a week of bars on an empty year.
+    if !crate::statefiles::backfill_done(&config.cache_file) {
+        sync::backfill(config, today);
     }
+
     let (mut events, since) = cost::read_window(today);
     let outcome = sync::refresh(config, &events, since);
     events.extend(outcome.events);
 
     let (mut report, prices) = cost::rate_with_prices(&events, &config.cache_file, timeout, today);
-    attach_fleet(
-        &mut report,
-        &outcome.store,
-        &prices,
-        today,
-        &sync::local_device_id(config),
-        sync::note(&outcome.status, config.refresh_secs, now_ms()),
-    );
+    // Only a fleet gets a per-device split: the presence of `by_device` is what
+    // tells a reader the figures above cover more than this machine.
+    if config.sync.enabled {
+        attach_fleet(
+            &mut report,
+            &outcome.store,
+            &prices,
+            today,
+            &sync::local_device_id(config),
+            sync::note(&outcome.status, config.refresh_secs, now_ms()),
+        );
+    }
     report.sync = outcome.status;
     report
 }

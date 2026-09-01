@@ -351,6 +351,28 @@ pub fn notify_state_path(cache_file: &Path) -> PathBuf {
     parent.join("tokengauge-notify-state.json")
 }
 
+/// Marks that the one-time history backfill has been attempted.
+///
+/// Its presence is the whole state, and it is written whether the read found
+/// anything or not: a machine with no transcripts to backfill must not re-walk
+/// the whole tree on every fetch forever looking for them.
+pub fn backfill_marker_path(cache_file: &Path) -> PathBuf {
+    let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
+    parent.join("tokengauge-backfilled")
+}
+
+pub fn backfill_done(cache_file: &Path) -> bool {
+    backfill_marker_path(cache_file).exists()
+}
+
+pub fn mark_backfilled(cache_file: &Path) {
+    let path = backfill_marker_path(cache_file);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    fs::write(&path, chrono::Utc::now().to_rfc3339()).ok();
+}
+
 pub fn read_notify_state(path: &Path) -> NotifyState {
     let Ok(contents) = fs::read_to_string(path) else {
         return NotifyState::default();

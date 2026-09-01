@@ -361,18 +361,39 @@ fn absorbing_the_same_contribution_twice_does_not_double_it() {
 }
 
 #[test]
-fn sync_that_is_off_reads_nothing_and_writes_nothing() {
+fn sync_that_is_off_keeps_the_store_and_touches_no_transport() {
     let root = scratch("off");
     let mut config = config(&root);
     config.sync.enabled = false;
     let since = Utc::now().with_timezone(&chrono::Local).date_naive();
 
     let outcome = sync::refresh(&config, &[event(1, 10, 1)], since);
-    let (peers, status) = (outcome.events, outcome.status);
-    assert!(peers.is_empty());
-    assert!(!status.enabled);
-    assert!(objects(&root).is_empty());
-    assert!(!sync::store::store_path(&config.cache_file).exists());
+    assert!(
+        outcome.events.is_empty(),
+        "there are no peers to take events from"
+    );
+    assert!(!outcome.status.enabled);
+    assert!(
+        objects(&root).is_empty(),
+        "sync that is off publishes nothing and reads nobody"
+    );
+
+    // The store is not sync's own bookkeeping, it is the durable record that
+    // history is read from. Gating it on `[sync] enabled` left every machine
+    // that never turned sync on with no past to look at.
+    assert!(
+        sync::store::store_path(&config.cache_file).exists(),
+        "the store is kept whether or not sync is on"
+    );
+    let (store, error) = sync::store::load(&config.cache_file);
+    assert_eq!(error, None);
+    let own: u64 = store
+        .devices
+        .values()
+        .flat_map(|slice| &slice.buckets)
+        .map(|bucket| bucket.tokens.output)
+        .sum();
+    assert_eq!(own, 10, "this machine's own tokens are in it");
 }
 
 #[test]

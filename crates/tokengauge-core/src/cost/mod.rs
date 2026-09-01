@@ -224,6 +224,22 @@ pub fn read_window(today: NaiveDate) -> (Vec<UsageEvent>, NaiveDate) {
     (read_events_from(&Roots::discover(), since), since)
 }
 
+/// Every transcript day the store could still hold, for the one-time backfill.
+///
+/// Far wider than [`read_window`] and far slower with it: reaching back a year
+/// defeats the mtime filter [`jsonl_files`] leans on, so this opens most of the
+/// tree where a fetch opens a handful of files. It exists because a fetch only
+/// ever reads back to the start of the month, which would leave a new store
+/// holding a fortnight no matter how much history the CLIs actually kept.
+///
+/// Run once, behind [`crate::statefiles::backfill_done`]. Never on a poll.
+pub fn read_history(today: NaiveDate) -> (Vec<UsageEvent>, NaiveDate) {
+    let since = today
+        .checked_sub_days(Days::new(crate::sync::STORE_RETENTION_DAYS as u64))
+        .unwrap_or(today);
+    (read_events_from(&Roots::discover(), since), since)
+}
+
 /// Rate a set of events, wherever they were read.
 pub fn rate(
     events: &[UsageEvent],

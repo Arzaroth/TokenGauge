@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A per-user MSI for Windows.** There was no way to uninstall TokenGauge:
   `install.ps1` copied binaries and appended to `PATH`, and nothing took either
-  back. `tokengauge-<version>-windows-x86_64.msi` is now a release asset, a
+  back. `tokengauge-<version>-win64.msi` is now a release asset, a
   per-user install needing no administrator rights, that puts the binaries where
   the script and the self-updater already expect them, manages the `PATH` entry
   through MSI so uninstall removes it, registers a Start Menu entry, and offers

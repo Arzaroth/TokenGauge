@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A model the price table has never heard of no longer reads as $0 for a
+  day.** The table is served for 24h without asking, so a model released after
+  the last download was counted, rated at nothing, and indistinguishable in the
+  panel from a day that cost nothing - Claude Fable 5.1 landed mid-window and
+  every machine showed its tokens beside $0.00. Tokens with no price are now
+  proof the table is behind, the way a window that has reset is proof the
+  snapshot is, and they buy one download outside the freshness window. Asked
+  once per set, so a model upstream will never carry - a local model, or a
+  provider sold under a namespace `vendor_prefixes` misses - cannot turn every
+  fetch into a re-download; a download that failed records nothing, so an
+  offline machine retries rather than burning its one ask.
+- **The vendored price table caught up with upstream.** Claude Fable 5.1, Kimi
+  K2.7 Code, the Grok 4.20 family and GLM 5.2 / 5.3 Flash are priced on a cold
+  or offline machine now, and 21 Grok prices that had moved were refreshed.
+
 ## [0.29.1] - 2026-09-01
 
 ### Fixed

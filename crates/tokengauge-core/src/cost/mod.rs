@@ -231,11 +231,32 @@ pub fn rate(
     timeout: Duration,
     today: NaiveDate,
 ) -> NativeCostReport {
+    rate_with_prices(events, cache_file, timeout, today).0
+}
+
+/// [`rate`], handing back the table it rated against.
+///
+/// The fleet split has to be built from the same prices as the rows it hangs
+/// off, and the table that rated them is not the one [`pricing::load`] returned
+/// whenever a counted model went unpriced and bought a refetch.
+pub fn rate_with_prices(
+    events: &[UsageEvent],
+    cache_file: &Path,
+    timeout: Duration,
+    today: NaiveDate,
+) -> (NativeCostReport, pricing::PriceTable) {
     if events.is_empty() {
-        return NativeCostReport::default();
+        return (NativeCostReport::default(), pricing::PriceTable::default());
     }
     let prices = pricing::load(cache_file, timeout, true);
-    build_report(events, &prices, today)
+    let report = build_report(events, &prices, today);
+    match pricing::refetch_for_unpriced(cache_file, &report.unpriced, timeout) {
+        Some(fresh) => {
+            let report = build_report(events, &fresh, today);
+            (report, fresh)
+        }
+        None => (report, prices),
+    }
 }
 
 /// Where each reader looks.

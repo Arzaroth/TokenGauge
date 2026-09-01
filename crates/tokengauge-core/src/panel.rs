@@ -1339,12 +1339,85 @@ mod tests {
     /// ones do not, and a kind they quietly skip renders as a heading with
     /// nothing under it. Pin it here rather than discovering it on a desktop
     /// nobody in CI is running.
-    #[test]
-    fn every_panel_frontend_handles_every_section_kind() {
+    /// Every source file of one frontend, by directory and extension.
+    ///
+    /// By directory rather than by file: a hardcoded path stops proving
+    /// anything the moment the code moves to a sibling module, which it did
+    /// once already.
+    fn frontend_sources(id: &str, dir: &str, extension: &str) -> Vec<String> {
         let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(std::path::Path::parent)
             .expect("workspace root");
+        let root = repo.join(dir);
+        let mut sources = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(next) = stack.pop() {
+            let entries = std::fs::read_dir(&next)
+                .unwrap_or_else(|e| panic!("{id}: cannot read {}: {e}", next.display()));
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == extension) {
+                    sources.push(
+                        std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                            panic!("{id}: cannot read {}: {e}", path.display())
+                        }),
+                    );
+                }
+            }
+        }
+        assert!(
+            !sources.is_empty(),
+            "{id}: no .{extension} sources under {} - the path has gone stale",
+            root.display()
+        );
+        sources
+    }
+
+    /// The second screen's backstop, and the record of why waybar is not in it.
+    ///
+    /// The test above covers the panel; this covers the history screen, which
+    /// the compiler cannot check on three of these five either. Waybar is
+    /// deliberately absent: its tooltip is a hover surface with no second
+    /// screen and no way to gain one, so a waybar user's history is the TUI,
+    /// which left-click has opened since long before there was any history to
+    /// open it for. That is a decision, not a gap - if it is ever revisited,
+    /// this is the list to add it to.
+    #[test]
+    fn every_frontend_with_a_second_screen_draws_the_history_series() {
+        let frontends = [
+            ("tray", "crates/tokengauge-tray/src", "rs"),
+            ("tui", "crates/tokengauge-tui/src", "rs"),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+            ),
+            ("gnome", "gnome/tokengauge@arzaroth.github.io", "js"),
+            ("quickshell", "omarchy/arzaroth.tokengauge", "qml"),
+        ];
+
+        for (id, dir, extension) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            // The three fields a screen cannot draw the chart without: the
+            // ranges it offers, the steps it plots, and their heights.
+            for needle in ["history", "series", "points", "fraction"] {
+                assert!(
+                    sources.iter().any(|src| src.contains(needle)),
+                    "{id} ({dir}) never reads `{needle}` - it is not drawing the \
+                     history series the core resolved"
+                );
+            }
+        }
+    }
+
+    /// Every frontend that draws the panel draws every kind of section in it.
+    ///
+    /// The backstop for the QML and JS frontends the compiler cannot check.
+    #[test]
+    fn every_panel_frontend_handles_every_section_kind() {
         // Each frontend is named by its *directory* and the extensions its
         // sources use, not by one file. A hardcoded path stops proving
         // anything the moment the code moves to a sibling module - which it
@@ -1373,28 +1446,7 @@ mod tests {
         ];
 
         for (id, dir, extension, prefix) in frontends {
-            let root = repo.join(dir);
-            let mut sources = Vec::new();
-            let mut stack = vec![root.clone()];
-            while let Some(next) = stack.pop() {
-                let entries = std::fs::read_dir(&next)
-                    .unwrap_or_else(|e| panic!("{id}: cannot read {}: {e}", next.display()));
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        stack.push(path);
-                    } else if path.extension().is_some_and(|e| e == extension) {
-                        sources.push(std::fs::read_to_string(&path).unwrap_or_else(|e| {
-                            panic!("{id}: cannot read {}: {e}", path.display())
-                        }));
-                    }
-                }
-            }
-            assert!(
-                !sources.is_empty(),
-                "{id}: no .{extension} sources under {} - the path has gone stale",
-                root.display()
-            );
+            let sources = frontend_sources(id, dir, extension);
 
             for kind in ["meters", "bars", "rows"] {
                 let needle = if prefix == "SectionKind::" {

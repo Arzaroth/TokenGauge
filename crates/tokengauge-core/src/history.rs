@@ -127,7 +127,10 @@ pub struct HistorySeries {
 }
 
 /// Every range, resolved once, plus what qualifies the figures.
-#[derive(Debug, Clone, Serialize)]
+///
+/// `Default` is an empty panel rather than a missing one, so a frontend can
+/// hold one in a row it builds before it has read the store.
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct HistoryPanel {
     pub series: Vec<HistorySeries>,
     /// How far back the store actually holds anything, in words.
@@ -177,6 +180,29 @@ pub fn history_panel(
         covers: covers(store, offset),
         notes,
     }
+}
+
+/// [`history_panel`] against the local clock.
+///
+/// For a frontend with no reason to hold a chrono type of its own - the tray
+/// would have taken the whole crate as a dependency to name a `NaiveDate`. A
+/// caller resolving several providers at once should still use
+/// [`history_panel`] with one clock reading, so they cannot straddle midnight.
+pub fn history_panel_now(
+    store: &FleetStore,
+    provider: &str,
+    prices: &PriceTable,
+    archive: &PriceArchive,
+) -> HistoryPanel {
+    let now = chrono::Local::now();
+    history_panel(
+        store,
+        provider,
+        now.date_naive(),
+        *now.offset(),
+        prices,
+        archive,
+    )
 }
 
 fn build_series(

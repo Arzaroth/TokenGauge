@@ -702,6 +702,12 @@ pub fn money(value: f64) -> String {
     if !value.is_finite() {
         return "-".to_string();
     }
+    // Summing an empty iterator of `f64` gives **-0.0**: the standard library
+    // folds from the IEEE additive identity, which has to be negative zero so
+    // that adding it preserves the sign of everything else. A period with
+    // nothing in it therefore formats as "$-0.00", which reads as a number
+    // somebody got wrong. `-0.0 == 0.0` is true, so this catches both.
+    let value = if value == 0.0 { 0.0 } else { value };
     if value.abs() >= 100.0 {
         format!("${}", value.round() as i64)
     } else {
@@ -1427,6 +1433,17 @@ mod tests {
         assert_eq!(money(99.994), "$99.99");
         assert_eq!(money(312.21), "$312");
         assert_eq!(money(f64::NAN), "-");
+    }
+
+    #[test]
+    fn money_never_prints_a_signed_zero() {
+        // What an empty period actually produces: `[].sum::<f64>()` is -0.0,
+        // and "$-0.00" on a chart reads as a bug rather than as nothing spent.
+        let nothing: f64 = [].iter().sum();
+        assert!(nothing.is_sign_negative(), "the identity is -0.0");
+        assert_eq!(money(nothing), "$0.00");
+        assert_eq!(money(-0.0), "$0.00");
+        assert_eq!(money(0.0), "$0.00");
     }
 
     #[test]

@@ -12,6 +12,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 
 - **Waybar module**: bar + percentage per provider with brand-colored icons, and a pango-markup tooltip that *is* the waybar panel - every section below, drawn with text bars
 - **TUI dashboard** (ratatui): per-provider sidebar, Session / Weekly / Sonnet-only / Tertiary windows, Extra usage rates, cost breakdown
+- **Spend history**: a second screen with 30 days, 90 days or 12 months as a chart, on every frontend that has room for one. Past months are rated at the prices that were in effect, not at today's. See [Spend history](#spend-history).
 - **Fleet sync**: add up tokens and cost across every machine you code on. One encrypted object per machine, moved through a folder your sync tool already handles or an S3-compatible bucket. No service to run, no account to make. See [Fleet sync](#fleet-sync).
 - **One panel, five surfaces**: the waybar tooltip, the KDE Plasma applet, the GNOME extension, the Quickshell widget and the Windows tray window all render the same sections in the same order - LIMITS, COST, TOKENS BY DAY, TOKENS BY MODEL, TOKENS BY DEVICE - from a single layout resolved in `tokengauge-core`. See [CLAUDE.md](CLAUDE.md) for the parity rule.
 - **KDE Plasma 6 applet**: native panel widget (QML plasmoid) - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
@@ -88,6 +89,7 @@ terminal TUI. The waybar panel itself is the tooltip - hover the module.
 | `u` | Open active provider's usage dashboard |
 | `s` | Open active provider's status page |
 | `S` | Fleet sync setup |
+| `H` | Spend history (`h` / `l` / Tab cycle the range, `q` / `Esc` back) |
 | `q` / `Esc` | Quit |
 
 ## Configuration
@@ -122,6 +124,70 @@ down, and asks a provider for new percentages only once the snapshot has aged
 past `refresh_secs`. Raising it makes the numbers older, never the clock.
 
 `ccusage` is auto-detected on PATH (preferring a global install, then `bunx`, then `npx`).
+
+## Spend history
+
+The panel says what you have spent today, this week and this month. History says
+what came before: 30 days, 90 days or 12 months, as a chart.
+
+It is a second screen, not another panel section - a year of bars does not
+belong above the limit gauges:
+
+| Frontend | How to open it |
+|----------|----------------|
+| TUI | `H`, then `h` / `l` / Tab to change range |
+| KDE Plasma | the chart button in the popup toolbar |
+| GNOME | the chart button in the popup header |
+| Omarchy | `.`, or the chart button (digits `1`-`3` pick a range) |
+| Windows tray | the **History** button in the flyout header |
+| Waybar | none - left-click opens the TUI, which has it |
+
+Waybar's tooltip is a hover surface with no second screen and no way to gain
+one, so a waybar user's history is the TUI that left-click has always opened.
+
+### Where the numbers come from
+
+Nowhere new. TokenGauge already kept a durable table of token buckets for 400
+days, because once a CLI rotates a transcript away that table is the only record
+of the day. It used to be built only when fleet sync was on; it is now kept
+either way.
+
+On its first run TokenGauge reads back through every transcript still on disk to
+fill it, so the first chart is worth opening instead of showing a fortnight. That
+read is slow and happens exactly once. `tokengauge --backfill` forces it again,
+which is what to reach for after restoring transcripts from a backup.
+
+Buckets stay hourly for 35 days and are then rolled up to one per day, which is
+all a history chart reads and keeps the file from becoming a megabyte rewritten
+on every fetch.
+
+### Past months are priced as they were
+
+Money is tokens times a price table, so rating a year against *today's* table
+would let a past month restate itself every time LiteLLM moved a number - and
+over the last year `xai/grok-4` lost 6x of its output cost. TokenGauge ships a
+small archive of per-month price overrides, built from LiteLLM's own git history,
+and rates each bucket at the prices that were in effect.
+
+The archive carries only prices a vendor actually changed. Most of what moves in
+that table is a *missing field being filled in* - `claude-sonnet-4-5` had no 1h
+cache-write price for its first year, and every read of it undercounted by about
+a quarter as a result - and for those, today's entry is the better answer for a
+past month too. `tokengauge --doctor` says how far back the archive reaches;
+anything older is rated at today's prices.
+
+### Exporting it
+
+```bash
+tokengauge --export                        # CSV to stdout
+tokengauge --export json --since 2026-06-01
+```
+
+One row per day, provider, model and device, with the token split beside the
+money it was rated from. It goes through the same walk the chart does, so it
+drops the same double-read days and cannot disagree with what you see.
+
+The design notes are in [docs/history.md](docs/history.md).
 
 ## Fleet sync
 

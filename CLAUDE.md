@@ -237,6 +237,50 @@ gates two things: fleet sync, which buckets per-call events and so has nothing t
 publish without one, and `--doctor`'s drift check, which excuses a provider only
 ccusage can see. Flip it when a reader lands, or the reader ships without either.
 
+## History is a second screen, and the store is not sync's
+
+`crates/tokengauge-core/src/history.rs` resolves 30 days, 90 days and 12 months
+of spend into finished strings, fractions and tones - the same contract as
+`panel.rs`, but drawn on a **second screen** behind a toggle rather than in the
+panel's scroll. A year of bars does not belong above the limit gauges.
+
+Five frontends draw it, each with its own chart primitive. **Waybar draws none,
+deliberately**: its tooltip is a hover surface that cannot have a second screen,
+so a waybar user's history is the TUI that left-click has always opened.
+`panel::tests::every_frontend_with_a_second_screen_draws_the_history_series`
+records that decision and is the list to add waybar to if it is ever revisited.
+
+The data is the fleet store, which is **no longer gated on `[sync] enabled`**.
+It always was the only record of a day once a CLI rotates its transcript away;
+building it only for sync users meant a machine that syncs with nobody had no
+past. Sync now gates the cycle only - publishing, pulling, peer events, and the
+`by_device` split whose presence is what says the figures cover more than this
+machine. The gate that actually mattered was a level above `sync::refresh`, in
+`fetch.rs::native_costs`.
+
+Three invariants are easy to regress:
+
+- **`HOURLY_RETENTION_DAYS` (35) must stay above the widest re-read (31) and at
+  or above `WIRE_RETENTION_DAYS`.** `upsert_local` replaces buckets from `from`
+  on, so a rolled-up bucket at or after that mark would be landed beside rather
+  than replaced and the day would count twice. Both bounds are
+  `const _: () = assert!(...)` beside the constant, not tests.
+- **A rolled-up day bucket sits at midday UTC.** At midnight `Hour::date_at`
+  reads it as the previous date for every reader west of the meridian.
+- **The price archive carries only prices a vendor moved.** Most of what changes
+  in LiteLLM's table is a missing field being filled in - `claude-sonnet-4-5`
+  had no 1h cache-write price for a year - and for those today's entry is the
+  *better* answer for a past month, so a model the archive omits keeps it.
+  `scripts/make-prices.py` builds both files; mirror any `attribute_price_key`
+  change there as before.
+
+The first fetch runs a one-time deep read (`cost::read_history`) behind
+`tokengauge-backfilled`, because a fetch's window reaches back only to the start
+of the month and the feature would otherwise ship empty for a year. It defeats
+the mtime filter `jsonl_files` leans on, so it must never run on a poll.
+
+Design notes in `docs/history.md`, vocabulary in `CONTEXT.md`.
+
 ## The binary is `tokengauge`, the crate is not
 
 `crates/tokengauge-waybar` still builds the shared backend every frontend shells

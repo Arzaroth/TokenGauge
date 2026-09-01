@@ -80,6 +80,7 @@ pub use theme::*;
 pub use cost::{CostSource, NativeCostReport};
 pub use history::{
     HISTORY_RANGES, HistoryPanel, HistoryPoint, HistoryRange, HistorySeries, history_panel,
+    history_panel_now,
 };
 pub use pace::{PaceStage, UsagePace};
 pub use panel::{PanelRow, Section, SectionKind, Tone, panel_spec};

@@ -82,6 +82,52 @@ function barFill(fraction, radius, styleClass, style) {
     return area;
 }
 
+// Cairo wants components and the snapshot's theme carries hex strings.
+function hexToRgb(hex) {
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || ''));
+    if (!m)
+        return [1, 1, 1];
+    return [parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255];
+}
+
+// The history chart. Drawn rather than laid out for the same reason `barFill`
+// is: the repaint runs with the width the popup actually gave the row, and a
+// chart sized from a `notify::width` handler is a frame behind its allocation.
+function historyChart(points, colorFor, height) {
+    const area = new St.DrawingArea({
+        style_class: 'tokengauge-history-chart',
+        x_expand: true,
+        height,
+    });
+    area.connect('repaint', () => {
+        const [width, h] = area.get_surface_size();
+        const n = points.length;
+        if (n === 0 || width <= 0 || h <= 0)
+            return;
+        // Wide steps get a gap between them; ninety days of bars have none to
+        // spare.
+        const gap = n <= 12 ? 2 : (n <= 31 ? 1 : 0);
+        const w = Math.max(1, (width - gap * (n - 1)) / n);
+        const cr = area.get_context();
+        points.forEach((point, i) => {
+            const fraction = Math.max(0, Math.min(1, Number(point.fraction) || 0));
+            // A floor of one pixel: a step that spent a little must never draw
+            // as a step that spent nothing.
+            const barHeight = fraction > 0 ? Math.max(1, fraction * h) : 0;
+            if (barHeight <= 0)
+                return;
+            const [r, g, b] = hexToRgb(colorFor(point));
+            // The step in progress is short because it is not over, so it is
+            // drawn as unfinished rather than as a fall.
+            cr.setSourceRGBA(r, g, b, point.partial ? 0.45 : 1);
+            cr.rectangle(i * (w + gap), h - barHeight, w, barHeight);
+            cr.fill();
+        });
+        cr.$dispose();
+    });
+    return area;
+}
+
 // St has no tooltip of its own, and the panel spec fills `tooltip` for every
 // row whose line is an abbreviation of what it carries: a day's exact tokens,
 // a model's split by device, the whole sync sentence behind its badge. The
@@ -133,6 +179,11 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         // Empty means nothing chosen, so the pin still leads.
         this._selectedProviderId = '';
         this._updating = false;
+        // The history screen is a second screen over the panel: a year of bars
+        // does not belong above the limit gauges. Every range is already on the
+        // row, so cycling one is a re-render rather than another `--json`.
+        this._historyOpen = false;
+        this._historyRange = 0;
         this._cancellable = null;
         this._requestId = 0;
         this._timeoutId = 0;
@@ -521,16 +572,75 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
         this._content.add_child(this._providerCard(row));
 
-        // The core hands over an ordered list of sections, each naming its own
-        // kind; one builder per kind draws it. A new section in the core
-        // appears here with no edit to this file.
-        for (const section of row.panel || [])
-            this._content.add_child(this._section(section));
+        if (this._historyOpen) {
+            this._content.add_child(this._historyScreen(row));
+        } else {
+            // The core hands over an ordered list of sections, each naming its
+            // own kind; one builder per kind draws it. A new section in the
+            // core appears here with no edit to this file.
+            for (const section of row.panel || [])
+                this._content.add_child(this._section(section));
 
-        this._content.add_child(this._pinSection());
+            this._content.add_child(this._pinSection());
+        }
 
         if (row.updated)
             this._content.add_child(label(`${_('Updated')} ${row.updated}`, 'tokengauge-footer'));
+    }
+
+    /// The history screen. Every string comes off the row; the chart is the
+    /// only part this file decides.
+    _historyScreen(row) {
+        const history = row.history || {};
+        const screen = box(true, {style_class: 'tokengauge-section', x_expand: true});
+        screen.add_child(label(_('History'), 'tokengauge-section-title'));
+
+        const series = Array.isArray(history.series) ? history.series : [];
+        const index = Math.min(this._historyRange, Math.max(0, series.length - 1));
+
+        const strip = box(false, {style_class: 'tokengauge-tabs', x_expand: true});
+        series.forEach((entry, at) => {
+            const button = new St.Button({
+                style_class: at === index
+                    ? 'tokengauge-tab tokengauge-tab-active' : 'tokengauge-tab',
+                label: entry.label,
+                can_focus: true,
+            });
+            button.connect('clicked', () => {
+                this._historyRange = at;
+                this._render();
+            });
+            strip.add_child(button);
+        });
+        screen.add_child(strip);
+
+        const current = series[index];
+        if (!current) {
+            screen.add_child(label(_('No history yet.'), 'tokengauge-dim'));
+            return screen;
+        }
+
+        screen.add_child(label(
+            `${current.total_usd}  ·  ${current.total_tokens} ${_('tokens')}` +
+            `  ·  ${_('avg')} ${current.average_usd}`,
+            'tokengauge-card-title'));
+
+        if (current.empty) {
+            screen.add_child(label(_('Nothing spent in this range.'), 'tokengauge-dim'));
+        } else {
+            screen.add_child(historyChart(current.points, p => this._toneColor(p.tone), 96));
+            const edges = box(false, {x_expand: true});
+            edges.add_child(label(current.points[0].full_label, 'tokengauge-footer'));
+            edges.add_child(spacer());
+            edges.add_child(label(
+                current.points[current.points.length - 1].full_label, 'tokengauge-footer'));
+            screen.add_child(edges);
+        }
+
+        const notes = [history.covers].concat(history.notes || []).filter(Boolean).join('  ·  ');
+        if (notes)
+            screen.add_child(label(notes, 'tokengauge-footer'));
+        return screen;
     }
 
     _iconButton(iconName, tooltip, onClick) {
@@ -554,6 +664,13 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             () => {
                 this.menu.close();
                 this._action('--open=dashboard');
+            }));
+        header.add_child(this._iconButton(
+            this._historyOpen ? 'go-previous-symbolic' : 'org.gnome.Settings-usage-symbolic',
+            this._historyOpen ? _('Back to the panel') : _('History'),
+            () => {
+                this._historyOpen = !this._historyOpen;
+                this._render();
             }));
         header.add_child(this._iconButton('folder-remote-symbolic', _('Set up fleet sync'),
             () => {

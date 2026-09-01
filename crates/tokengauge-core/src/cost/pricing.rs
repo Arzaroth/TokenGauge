@@ -6,12 +6,13 @@
 //! (`model_prices_and_context_window.json`), cached beside the snapshot and
 //! backed by a vendored copy so a cold, offline machine still shows a figure.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
+use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use super::TokenCounts;
@@ -23,6 +24,10 @@ const LITELLM_URL: &str =
 /// Prices for the models TokenGauge can attribute, sliced out of the full
 /// LiteLLM table (3176 entries, 1.8MB) at vendor time.
 const VENDORED_PRICES: &str = include_str!("prices.json");
+
+/// Per-month overrides for the models whose price a vendor actually moved,
+/// sliced the same way. See [`PriceArchive`].
+const VENDORED_ARCHIVE: &str = include_str!("price-archive.json");
 
 /// How long a downloaded table is served before a refresh is attempted. Prices
 /// change on the order of months; the fetch only exists so a new model gets a
@@ -204,9 +209,85 @@ impl PriceTable {
             .find_map(|candidate| self.models.get(candidate))
     }
 
+    /// This table as it stood in `month` (`YYYY-MM`), for rating history.
+    ///
+    /// A model the archive says nothing about keeps the price it has here, and
+    /// that is the deliberate half. Most of what moves in LiteLLM's table is a
+    /// *missing field being filled in* rather than a vendor changing anything:
+    /// `claude-sonnet-4-5` carried no 1h cache-write price for its first year,
+    /// so every read of it fell back to the 5m price and undercounted by a
+    /// quarter under a cache-heavy mix. The 1h price was always what it is now,
+    /// only unrecorded, so today's entry is the better answer for a past month
+    /// too. Only a price a vendor really moved - `xai/grok-4` losing 6x of its
+    /// output cost - belongs in the archive, and that is what
+    /// `scripts/make-prices.py` puts there.
+    pub fn as_of(&self, archive: &PriceArchive, month: &str) -> PriceTable {
+        let Some(overrides) = archive.months.get(month) else {
+            return self.clone();
+        };
+        let mut models = self.models.clone();
+        models.extend(overrides.iter().map(|(name, price)| (name.clone(), *price)));
+        PriceTable { models }
+    }
+
     fn to_json(&self) -> String {
         serde_json::to_string_pretty(&self.models).unwrap_or_else(|_| "{}".into())
     }
+}
+
+/// What models cost in months gone by, as a sparse overlay on [`PriceTable`].
+///
+/// Vendored rather than fetched. It is generated from LiteLLM's own git history
+/// by `scripts/make-prices.py` at release time, because rating a year of
+/// history over the network would mean a request per month on a cold machine,
+/// and a month that is over does not change its mind.
+///
+/// Months after the release that vendored it carry no overrides and are rated
+/// at today's prices, which is what every figure did before this existed.
+#[derive(Debug, Clone, Default)]
+pub struct PriceArchive {
+    /// `YYYY-MM` to the models whose price that month was not the current one.
+    months: BTreeMap<String, HashMap<String, ModelPrice>>,
+}
+
+impl PriceArchive {
+    fn from_json(raw: &str) -> Result<Self> {
+        let months = serde_json::from_str(raw).context("price archive was not valid JSON")?;
+        Ok(Self { months })
+    }
+
+    pub fn vendored() -> Self {
+        Self::from_json(VENDORED_ARCHIVE).expect("vendored price archive parses")
+    }
+
+    /// The oldest month it can rate at a historical price. Anything before this
+    /// is rated at today's, which `--doctor` says out loud rather than leaving
+    /// a silently re-priced year on the chart.
+    pub fn earliest(&self) -> Option<&str> {
+        self.months.keys().next().map(String::as_str)
+    }
+
+    pub fn months(&self) -> usize {
+        self.months.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.months.is_empty()
+    }
+}
+
+/// The vendored archive, parsed once.
+///
+/// Every render of a history pane wants it, and re-parsing 90 KiB of JSON on
+/// each one to answer a question whose answer is compiled in would be silly.
+pub fn archive() -> &'static PriceArchive {
+    static ARCHIVE: std::sync::OnceLock<PriceArchive> = std::sync::OnceLock::new();
+    ARCHIVE.get_or_init(PriceArchive::vendored)
+}
+
+/// The archive's key for a date: `YYYY-MM`.
+pub fn month_key(date: NaiveDate) -> String {
+    format!("{:04}-{:02}", date.year(), date.month())
 }
 
 /// Where the downloaded table is cached: beside the snapshot, like every other

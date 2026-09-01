@@ -45,6 +45,7 @@ pub mod fetch;
 pub mod fmt;
 mod glm;
 mod grok;
+pub mod history;
 mod kimi;
 pub mod launch;
 pub mod pace;
@@ -77,6 +78,9 @@ pub use statefiles::*;
 pub use theme::*;
 
 pub use cost::{CostSource, NativeCostReport};
+pub use history::{
+    HISTORY_RANGES, HistoryPanel, HistoryPoint, HistoryRange, HistorySeries, history_panel,
+};
 pub use pace::{PaceStage, UsagePace};
 pub use panel::{PanelRow, Section, SectionKind, Tone, panel_spec};
 pub use sync::config::{

@@ -342,8 +342,7 @@ fn native_costs(
     let outcome = sync::refresh(config, &events, since);
     events.extend(outcome.events);
 
-    let prices = cost::pricing::load(&config.cache_file, timeout, true);
-    let mut report = cost::build_report(&events, &prices, today);
+    let (mut report, prices) = cost::rate_with_prices(&events, &config.cache_file, timeout, today);
     attach_fleet(
         &mut report,
         &outcome.store,

@@ -276,6 +276,59 @@ impl PriceSource {
     }
 }
 
+/// Where the models already asked about are remembered, so one is asked once.
+fn missed_path(cache_file: &Path) -> PathBuf {
+    cache_file
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("tokengauge-prices-missed.json")
+}
+
+/// Ask upstream again when a model was counted but not priced.
+///
+/// A table inside its freshness window is served without asking, so a model
+/// released after the last download reads as $0 for up to [`PRICE_TTL`] -
+/// counted, rated at nothing, and indistinguishable in the panel from a day
+/// that cost nothing. Tokens with no price are proof the table is behind, the
+/// way a window that has reset is proof the snapshot is, so they buy one
+/// download outside the window.
+///
+/// One, and once per set: a model upstream will never carry - a local model, or
+/// a provider sold under a namespace [`vendor_prefixes`] misses - is unpriced
+/// on every fetch, and asking each time would re-download the table every
+/// `refresh_secs` forever. The set that came back unpriced is recorded, and an
+/// identical one is not asked about twice. A download that failed records
+/// nothing, so an offline machine retries rather than burning its one ask.
+pub fn refetch_for_unpriced(
+    cache_file: &Path,
+    unpriced: &[String],
+    timeout: Duration,
+) -> Option<PriceTable> {
+    if unpriced.is_empty() {
+        return None;
+    }
+    let path = missed_path(cache_file);
+    let asked: Vec<String> = fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+    if asked == unpriced {
+        return None;
+    }
+    let table = download(timeout).ok()?;
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = crate::write_atomic(&price_cache_path(cache_file), table.to_json().as_bytes());
+    let _ = crate::write_atomic(
+        &path,
+        serde_json::to_string(unpriced)
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+    Some(table)
+}
+
 /// Load the price table: fresh cache, else a download, else a stale cache, else
 /// the vendored copy. Never fails - an outdated price is a better answer than
 /// no cost at all, and an unpriced model is reported rather than shown as $0.
@@ -526,6 +579,41 @@ mod tests {
         assert!(!table.is_empty(), "a stale table is still served");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The bound that keeps the retry from becoming a download loop: a model
+    /// upstream will never carry comes back unpriced on every fetch, and only
+    /// the first one asks.
+    #[test]
+    fn an_unpriced_set_is_only_asked_about_once() {
+        let cache = scratch("asked-once");
+        let missed = missed_path(&cache);
+        fs::write(&missed, r#"["claude-not-a-model-9"]"#).expect("marker");
+        let unpriced = vec!["claude-not-a-model-9".to_string()];
+        assert!(refetch_for_unpriced(&cache, &unpriced, Duration::from_millis(1)).is_none());
+    }
+
+    #[test]
+    fn a_priced_read_asks_nothing() {
+        let cache = scratch("asks-nothing");
+        assert!(refetch_for_unpriced(&cache, &[], Duration::from_millis(1)).is_none());
+        assert!(!missed_path(&cache).exists());
+    }
+
+    /// A download that did not answer must not burn the one ask, or an offline
+    /// machine never picks the price up at all.
+    #[test]
+    fn a_failed_ask_is_not_recorded() {
+        let cache = scratch("failed-ask");
+        let missed = missed_path(&cache);
+        fs::write(&missed, r#"["claude-old-gap"]"#).expect("marker");
+        let unpriced = vec!["claude-new-gap".to_string()];
+        // A 1ms timeout cannot complete, online or off.
+        assert!(refetch_for_unpriced(&cache, &unpriced, Duration::from_millis(1)).is_none());
+        assert_eq!(
+            fs::read_to_string(&missed).expect("marker survives"),
+            r#"["claude-old-gap"]"#
+        );
     }
 
     #[test]

@@ -88,7 +88,11 @@ fn publish_peer(root: &Path, key: &FleetKey, tokens: u64) {
         tz_offset_minutes: 0,
         covers_from: Hour::containing(Utc::now()).minus_days(30),
         providers: vec!["claude".into()],
-        buckets: bucketize(&[event(50, tokens, 0xfeed)]),
+        // Now, not 50 hours ago: the tokens_by_device split is month-to-date
+        // (cost::window_start reaches back only to the 1st), so a fixed
+        // hours-ago offset drops out of the window on the first days of a
+        // month - which is what made this fixture flake overnight into Sep 1.
+        buckets: bucketize(&[event(0, tokens, 0xfeed)]),
         days: Vec::new(),
     };
 
@@ -412,7 +416,11 @@ fn a_peers_buckets_reach_the_panel_rows() {
     sync::store_key(&config.cache_file, &key, true).expect("key");
     publish_peer(&root, &key, 4242);
 
-    let local = vec![event(2, 1000, 1)];
+    // Also now, not 2 hours ago: same month-window reason as the peer above -
+    // in the first hours of a month a 2-hours-ago local event falls into last
+    // month and drops out of the by_device split, and then neither machine
+    // appears.
+    let local = vec![event(0, 1000, 1)];
     let outcome = sync::refresh(&config, &local, since);
 
     let mut events = local.clone();

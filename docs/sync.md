@@ -243,8 +243,18 @@ redacts them.
 
 ## 6. When it runs
 
-The daemon owns sync. Frontends never touch it - the existing rule holds: a
-frontend never reads a credential, a cache file, or a provider endpoint.
+The daemon owns sync wherever one is running, and the rule frontends keep is
+narrower than it reads: the QML and the JavaScript never touch a credential, a
+cache file or a provider endpoint - the binary they invoke does. Which process
+that binary runs as is the whole question. `--json` therefore asks the daemon
+over the socket instead of fetching in its own subprocess: a credential exported
+through `environment.d` reaches the systemd unit and not a panel spawned by the
+compositor, and the fetch that ran there wrote its missing-credential error into
+the shared snapshot.
+
+Where no daemon runs, that subprocess is the only process there is, and it does
+sync itself - so `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` have to be
+visible to whatever launches the panel, not only to the unit.
 
 On each cycle that rebuilds costs, before `write_cache_full`:
 

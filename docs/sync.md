@@ -244,7 +244,13 @@ redacts them.
 ## 6. When it runs
 
 The daemon owns sync. Frontends never touch it - the existing rule holds: a
-frontend never reads a credential, a cache file, or a provider endpoint.
+frontend never reads a credential, a cache file, or a provider endpoint. That
+is why `--json` asks the daemon rather than fetching in the frontend's own
+subprocess: credentials exported through `environment.d` reach the systemd unit
+and not a panel spawned by the compositor, and a fetch that ran there wrote its
+missing-credential error into the shared snapshot. On a machine with no daemon
+the frontend's subprocess is the only process there is, so `AWS_ACCESS_KEY_ID`
+and `AWS_SECRET_ACCESS_KEY` have to be visible to whatever launches the panel.
 
 On each cycle that rebuilds costs, before `write_cache_full`:
 

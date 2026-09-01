@@ -83,9 +83,22 @@ fn run_update(config: Option<PathBuf>, check_only: bool) -> Result<()> {
     let current = update::current_version();
     println!("Current version: {current}");
     println!("Checking for updates...");
-    let installed = update::apply(&config.cache_file)?;
-    if update::version_gt(&installed, current) {
-        println!("Updated to {installed}. Restart TokenGauge to load it.");
+    let applied = update::apply_full(&config.cache_file)?;
+    if applied.installer_launched {
+        // The installer is replacing this executable, so there is nothing to
+        // wait for and nowhere to wait from: returning here is what lets it.
+        println!(
+            "Installing {} through the Windows installer. Quit TokenGauge if it \
+             asks, then start it again from the Start Menu.",
+            applied.version
+        );
+        return Ok(());
+    }
+    if update::version_gt(&applied.version, current) {
+        println!(
+            "Updated to {}. Restart TokenGauge to load it.",
+            applied.version
+        );
     } else {
         println!("Already up to date ({current}).");
     }

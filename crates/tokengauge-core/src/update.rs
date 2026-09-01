@@ -295,9 +295,23 @@ fn latest_release() -> Result<self_update::update::Release> {
         .context("failed to fetch releases from GitHub")?;
     releases
         .into_iter()
-        .find(|r| r.asset_for(target, None).is_some())
+        .find(|r| r.asset_for(target, Some(ARCHIVE_SUFFIX)).is_some())
         .ok_or_else(|| anyhow!("no release with a {target} asset found"))
 }
+
+/// Distinguishes the binary archive from the other assets a release carries.
+///
+/// `asset_for` matches by substring, so with only the archive published,
+/// `None` was unambiguous. The Windows MSI shares the platform in its name,
+/// which is why it is *not* named `windows-x86_64`: every updater already
+/// shipped asks for `None` and takes whichever asset the API returns first, so
+/// an MSI that matched would be handed to the zip extractor on machines whose
+/// binaries cannot be changed any more. New builds say which one they want;
+/// old ones are protected by the asset name.
+#[cfg(target_os = "windows")]
+const ARCHIVE_SUFFIX: &str = ".zip";
+#[cfg(not(target_os = "windows"))]
+const ARCHIVE_SUFFIX: &str = ".tar.gz";
 
 /// Query GitHub, recompute availability, and persist the cached status. The
 /// `notified` guard is preserved across calls.
@@ -324,6 +338,11 @@ pub fn check(cache_file: &Path) -> Result<UpdateStatus> {
 pub struct Applied {
     pub version: String,
     pub frontends: Vec<FrontendOutcome>,
+    /// Windows, MSI installs only: the upgrade was handed to `msiexec` and is
+    /// running now. Nothing has been replaced yet, and the caller must exit
+    /// promptly, because one of the files the installer is about to replace is
+    /// the executable running this code.
+    pub installer_launched: bool,
 }
 
 pub fn apply(cache_file: &Path) -> Result<String> {
@@ -338,10 +357,19 @@ pub fn apply_full(cache_file: &Path) -> Result<Applied> {
         return Ok(Applied {
             version: current.to_string(),
             frontends: Vec::new(),
+            installer_launched: false,
         });
     }
+    // An MSI install has MSI as the owner of what is on disk. Replacing the
+    // binaries underneath it would leave Windows describing a version that is
+    // no longer installed, and a later MSI comparing against it.
+    #[cfg(windows)]
+    if msi_product_code().is_some() {
+        return msi_upgrade(&release, cache_file);
+    }
+
     let asset = release
-        .asset_for(target, None)
+        .asset_for(target, Some(ARCHIVE_SUFFIX))
         .ok_or_else(|| anyhow!("release {} has no {target} asset", release.version))?;
 
     let exe = std::env::current_exe().context("cannot resolve current executable")?;
@@ -460,7 +488,146 @@ pub fn apply_full(cache_file: &Path) -> Result<Applied> {
     Ok(Applied {
         version: release.version,
         frontends,
+        installer_launched: false,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Add/Remove Programs, after an in-place update
+// ---------------------------------------------------------------------------
+
+/// Registry path holding the marker the MSI writes.
+#[cfg(windows)]
+const MSI_MARKER_KEY: &str = r"HKCU\Software\TokenGauge";
+
+/// The ProductCode of the MSI that installed this copy, if one did.
+///
+/// MSI names the Add/Remove Programs entry by a code that changes with every
+/// release, so the installer records the current one at a path that does not.
+/// Its presence is also the only reliable answer to "was this installed by the
+/// MSI", which decides how an upgrade is applied.
+#[cfg(windows)]
+fn msi_product_code() -> Option<String> {
+    read_registry_value(MSI_MARKER_KEY, "ProductCode").filter(|code| is_product_code(code))
+}
+
+/// Hand the upgrade to `msiexec`, so Windows keeps describing what is on disk.
+///
+/// This returns while the installer is still running, and it has to: the
+/// package replaces `tokengauge-tui.exe`, which is the file this process is
+/// executing. MSI cannot replace a locked file without scheduling a reboot, so
+/// the caller exits and the installer proceeds into a directory nobody holds
+/// open.
+#[cfg(windows)]
+fn msi_upgrade(release: &self_update::update::Release, cache_file: &Path) -> Result<Applied> {
+    let asset = release
+        .assets
+        .iter()
+        .find(|a| a.name.ends_with(".msi"))
+        .ok_or_else(|| {
+            anyhow!(
+                "release {} has no .msi asset; download it from the releases page",
+                release.version
+            )
+        })?;
+
+    // Not the install directory: this process exits before the installer is
+    // finished, so nothing here can clean up after it, and debris in the
+    // install directory is what a self-updating MSI install must not leave.
+    let tmp = std::env::temp_dir().join("tokengauge-update");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp)
+        .with_context(|| format!("cannot create staging dir {}", tmp.display()))?;
+    let package = tmp.join(&asset.name);
+
+    let f = std::fs::File::create(&package)
+        .with_context(|| format!("cannot create {}", package.display()))?;
+    self_update::Download::from_url(&asset.download_url)
+        .set_header(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("application/octet-stream"),
+        )
+        .show_progress(true)
+        .download_to(f)
+        .context("download failed")?;
+
+    // `/qb` rather than `/qn`: a per-user install needs no elevation, but it
+    // does need somewhere to say so when a file is in use, and a silent
+    // install that hit that would schedule a reboot without telling anyone.
+    std::process::Command::new("msiexec")
+        .args(["/i", &package.to_string_lossy(), "/qb"])
+        .spawn()
+        .context("failed to launch msiexec")?;
+
+    let mut status = read_update_status(cache_file).unwrap_or_default();
+    status.current = release.version.clone();
+    status.latest = Some(release.version.clone());
+    status.available = false;
+    status.notified = None;
+    status.checked_ms = now_ms();
+    let _ = write_update_status(cache_file, &status);
+
+    Ok(Applied {
+        version: release.version.clone(),
+        frontends: Vec::new(),
+        installer_launched: true,
+    })
+}
+
+#[cfg(windows)]
+fn read_registry_value(key: &str, name: &str) -> Option<String> {
+    let out = no_window(std::process::Command::new("reg"))
+        .args(["query", key, "/v", name])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_reg_value(&String::from_utf8_lossy(&out.stdout), name)
+}
+
+/// `reg.exe` from a GUI process would flash a console window; the tray reaches
+/// this through the update command it spawns.
+#[cfg(windows)]
+fn no_window(mut cmd: std::process::Command) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+/// Pull one value out of `reg query` output, whose shape is
+/// `    <name>    REG_SZ    <value>` under a key heading.
+///
+/// Not `#[cfg(windows)]`: the parsing is where the mistakes live, and a test
+/// that only runs on the release runner is a test nobody sees fail.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_reg_value(output: &str, name: &str) -> Option<String> {
+    output
+        .lines()
+        .find_map(|line| {
+            // The name must end at whitespace, or `ProductCodeOther` answers
+            // for `ProductCode`.
+            let rest = line.trim_start().strip_prefix(name)?;
+            let rest = rest.strip_prefix(char::is_whitespace)?.trim_start();
+            let (kind, value) = rest.split_once(char::is_whitespace)?;
+            kind.starts_with("REG_").then(|| value.trim().to_string())
+        })
+        .filter(|value| !value.is_empty())
+}
+
+/// A registry-shaped GUID, `{8-4-4-4-12}`. The value is user-writable, and it
+/// is about to name a registry key.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn is_product_code(value: &str) -> bool {
+    let Some(inner) = value
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+    else {
+        return false;
+    };
+    inner.split('-').map(str::len).eq([8usize, 4, 4, 4, 12])
+        && inner.chars().all(|c| c == '-' || c.is_ascii_hexdigit())
 }
 
 /// Download the release matching `version` and install one frontend from it,
@@ -484,7 +651,7 @@ pub fn install_frontends(
         .find(|r| r.version.trim_start_matches('v') == wanted)
         .ok_or_else(|| anyhow!("no release v{wanted} to install frontends from"))?;
     let asset = release
-        .asset_for(arch_target()?, None)
+        .asset_for(arch_target()?, Some(ARCHIVE_SUFFIX))
         .ok_or_else(|| anyhow!("release {} has no asset for this platform", release.version))?;
 
     let exe = std::env::current_exe().context("cannot resolve current executable")?;
@@ -534,7 +701,43 @@ pub fn install_frontends(
 
 #[cfg(test)]
 mod tests {
-    use super::version_gt;
+    use super::{is_product_code, parse_reg_value, version_gt};
+
+    /// What `reg query HKCU\Software\TokenGauge /v ProductCode` prints.
+    const REG_OUTPUT: &str = "\r\nHKEY_CURRENT_USER\\Software\\TokenGauge\r\n    ProductCode    REG_SZ    {65FCF132-513F-451A-9317-8FD51AE7A2E3}\r\n\r\n";
+
+    #[test]
+    fn a_registry_value_is_read_out_of_reg_query_output() {
+        assert_eq!(
+            parse_reg_value(REG_OUTPUT, "ProductCode").as_deref(),
+            Some("{65FCF132-513F-451A-9317-8FD51AE7A2E3}")
+        );
+    }
+
+    #[test]
+    fn a_longer_name_does_not_answer_for_the_one_asked_for() {
+        let out = "    ProductCodeOther    REG_SZ    {nope}\r\n";
+        assert_eq!(parse_reg_value(out, "ProductCode"), None);
+    }
+
+    #[test]
+    fn a_missing_or_empty_value_reads_as_absent() {
+        assert_eq!(parse_reg_value("", "ProductCode"), None);
+        assert_eq!(
+            parse_reg_value("    ProductCode    REG_SZ    \r\n", "ProductCode"),
+            None
+        );
+    }
+
+    #[test]
+    fn only_a_guid_is_allowed_to_name_a_registry_key() {
+        assert!(is_product_code("{65FCF132-513F-451A-9317-8FD51AE7A2E3}"));
+        // No braces, wrong group lengths, and a non-hex character.
+        assert!(!is_product_code("65FCF132-513F-451A-9317-8FD51AE7A2E3"));
+        assert!(!is_product_code("{65FCF132-513F-451A-9317-8FD51AE7A2E}"));
+        assert!(!is_product_code("{65FCF132-513F-451A-9317-8FD51AE7A2EZ}"));
+        assert!(!is_product_code(r"{..\..\Run}"));
+    }
 
     #[test]
     fn version_compare() {

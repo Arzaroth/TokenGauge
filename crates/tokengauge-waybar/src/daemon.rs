@@ -730,6 +730,7 @@ mod tests {
             ..Default::default()
         };
         let payload = ProviderPayload {
+            stale_reason: None,
             provider: "claude".into(),
             version: None,
             source: None,

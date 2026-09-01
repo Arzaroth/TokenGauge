@@ -142,6 +142,7 @@ pub struct Section {
 /// Section ids in canonical order. A frontend that renders the panel renders
 /// these, in this order, skipping the ones the spec omits for lack of data.
 pub const SECTION_IDS: &[&str] = &[
+    "status",
     "limits",
     "cost",
     "tokens_by_day",
@@ -169,6 +170,17 @@ pub struct SyncNote {
 /// rather than emitted empty, so a frontend can render the list blindly.
 pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
     let mut out = Vec::new();
+
+    // First, because it says whether to believe anything under it.
+    let status = status_rows(row);
+    if !status.is_empty() {
+        out.push(Section {
+            id: "status",
+            title: "STATUS",
+            kind: SectionKind::Rows,
+            rows: status,
+        });
+    }
 
     let limits = limit_rows(row);
     if !limits.is_empty() {
@@ -301,6 +313,41 @@ pub fn ago(then_ms: i64, now_ms: i64) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+/// Why the figures below are frozen, when they are.
+///
+/// A stale row is last-good cache served after a failed fetch, and the failure
+/// that caused it is dropped from the error list so the bar does not also show
+/// it. Without this section a panel says `stale` and nothing else, which is the
+/// same thing whether the network blipped once or a credential expired weeks
+/// ago and no fetch has succeeded since.
+fn status_rows(row: &ProviderRow) -> Vec<PanelRow> {
+    if !row.stale {
+        return Vec::new();
+    }
+    let age = row
+        .updated_iso
+        .as_deref()
+        .and_then(|iso| chrono::DateTime::parse_from_rfc3339(iso).ok())
+        .map(|at| ago(at.timestamp_millis(), crate::now_ms()))
+        .unwrap_or_default();
+
+    let reason = row
+        .stale_reason
+        .as_deref()
+        .filter(|r| !r.is_empty())
+        .unwrap_or("the last live fetch failed");
+
+    let mut r = PanelRow::new("Stale", age);
+    r.badge = ellipsize(reason, 72);
+    r.badge_tone = Tone::Warn;
+    r.tooltip = format!("Showing the last figures that arrived.\n{reason}");
+    vec![r]
+}
+
+// ---------------------------------------------------------------------------
 // Limits
 // ---------------------------------------------------------------------------
 
@@ -313,11 +360,18 @@ fn limit_rows(row: &ProviderRow) -> Vec<PanelRow> {
         let mut r = PanelRow::new(label, format!("{used}%"));
         r.fraction = Some(f64::from(used) / 100.0);
         r.tone = Tone::for_percent(used);
-        // A window with a percentage but no reset time has started counting
-        // and has nowhere to reset to yet. Say so here rather than in one
-        // frontend, or the other four render the line blank.
+        // A window at 0% with no reset time has nowhere to reset to because
+        // nothing has started it. Say so here rather than in one frontend, or
+        // the other four render the line blank. Above 0% the same missing
+        // reset means the opposite - the window is counting and the provider
+        // is not saying when it ends - and "not started" beside a full bar is
+        // the sentence that reads as broken.
         r.footnote = if reset == "—" || reset.is_empty() {
-            "not started".to_string()
+            if used == 0 {
+                "not started".to_string()
+            } else {
+                String::new()
+            }
         } else {
             format!("Resets {reset}")
         };
@@ -739,6 +793,7 @@ mod tests {
 
     fn row() -> ProviderRow {
         ProviderRow {
+            stale_reason: None,
             provider: "Claude".into(),
             session_used: Some(31),
             session_window_minutes: Some(300),
@@ -848,8 +903,36 @@ mod tests {
     fn sections_follow_canonical_order() {
         let mut r = row();
         r.cost = Some(cost());
+        r.stale = true;
+        r.stale_reason = Some("Claude token expired".into());
         let ids: Vec<&str> = panel_spec(&r).iter().map(|s| s.id).collect();
         assert_eq!(ids, SECTION_IDS);
+    }
+
+    #[test]
+    fn a_stale_row_leads_with_why_and_a_fresh_one_has_no_status_section() {
+        let mut r = row();
+        r.stale = true;
+        r.stale_reason = Some("Claude token expired - run `claude` to log in".into());
+        let spec = panel_spec(&r);
+        assert_eq!(spec[0].id, "status");
+        assert_eq!(spec[0].kind, SectionKind::Rows);
+        assert_eq!(spec[0].rows[0].label, "Stale");
+        assert_eq!(
+            spec[0].rows[0].badge,
+            "Claude token expired - run `claude` to log in"
+        );
+        assert_eq!(spec[0].rows[0].badge_tone, Tone::Warn);
+
+        // A restore written before the reason was recorded still says what it
+        // knows rather than dropping the section.
+        r.stale_reason = None;
+        assert_eq!(
+            panel_spec(&r)[0].rows[0].badge,
+            "the last live fetch failed"
+        );
+
+        assert!(panel_spec(&row()).iter().all(|s| s.id != "status"));
     }
 
     #[test]
@@ -1018,7 +1101,13 @@ mod tests {
         // A window with no reset time reads the same on every surface.
         let mut no_reset = row();
         no_reset.session_reset = "—".into();
+        no_reset.session_used = Some(0);
         assert_eq!(panel_spec(&no_reset)[0].rows[0].footnote, "not started");
+
+        // Counting, but the provider is not saying when it ends. "not started"
+        // under a full bar is the sentence that reads as broken.
+        no_reset.session_used = Some(100);
+        assert_eq!(panel_spec(&no_reset)[0].rows[0].footnote, "");
     }
 
     #[test]

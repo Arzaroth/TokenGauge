@@ -269,6 +269,10 @@ fn apply_stale_fallback(
         } else {
             payloads.extend(cached.into_iter().map(|mut payload| {
                 payload.stale = true;
+                // The error is about to be dropped, and it is the only record
+                // of why these figures stopped moving. A cached payload can
+                // already carry an older reason; this round's is the true one.
+                payload.stale_reason = Some(err.message.clone());
                 payload
             }));
             false // drop the error, we have last-good data
@@ -530,6 +534,7 @@ mod tests {
     #[test]
     fn apply_stale_fallback_serves_last_good_and_keeps_uncovered_errors() {
         let good_claude = ProviderPayload {
+            stale_reason: None,
             provider: "claude".into(),
             version: None,
             source: None,
@@ -560,6 +565,7 @@ mod tests {
     #[test]
     fn apply_stale_fallback_skips_providers_with_a_live_payload() {
         let cached = ProviderPayload {
+            stale_reason: None,
             provider: "claude".into(),
             version: None,
             source: None,
@@ -573,6 +579,7 @@ mod tests {
         // claude already has a live payload this round plus an error for a
         // sibling sub-payload; a stale clone must not be added (no dup row).
         let mut payloads = vec![ProviderPayload {
+            stale_reason: None,
             provider: "claude".into(),
             version: None,
             source: None,
@@ -601,6 +608,7 @@ mod tests {
         // Provider with two cached payloads (e.g. two accounts/windows).
         let previous = vec![
             ProviderPayload {
+                stale_reason: None,
                 provider: "claude".into(),
                 version: None,
                 source: Some("oauth".into()),
@@ -610,6 +618,7 @@ mod tests {
                 stale: false,
             },
             ProviderPayload {
+                stale_reason: None,
                 provider: "claude".into(),
                 version: None,
                 source: Some("cli".into()),

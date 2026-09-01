@@ -86,6 +86,11 @@ pub struct ProviderPayload {
     /// live fetch failed. Set by `fetch_all_providers`, not by the fetchers.
     #[serde(default)]
     pub stale: bool,
+    /// The failure that made this payload stale, kept because the error it
+    /// came from is dropped once a fallback covers it. Rewritten on every
+    /// restore, so it always names the fetch that failed most recently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_reason: Option<String>,
 }
 
 impl ProviderPayload {
@@ -311,6 +316,7 @@ mod tests {
     #[test]
     fn provider_payload_has_error_true() {
         let payload = ProviderPayload {
+            stale_reason: None,
             provider: "test".to_string(),
             version: None,
             source: None,
@@ -329,6 +335,7 @@ mod tests {
     #[test]
     fn provider_payload_has_error_false() {
         let payload = ProviderPayload {
+            stale_reason: None,
             provider: "test".to_string(),
             version: None,
             source: None,

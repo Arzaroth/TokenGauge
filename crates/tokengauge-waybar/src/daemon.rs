@@ -118,16 +118,25 @@ pub(crate) fn socket_path(cache_file: &Path) -> PathBuf {
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub(crate) enum SocketCommand {
     Snapshot,
+    /// The `--json` snapshot, rendered by the daemon. A daemon that predates
+    /// this variant fails to parse the line and hangs up without replying,
+    /// which the caller reads as "no daemon" and falls back on.
+    Json,
     Subscribe,
     Refresh,
-    Rotate { direction: String },
-    Open { target: String },
+    Rotate {
+        direction: String,
+    },
+    Open {
+        target: String,
+    },
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum SocketReply {
     Snapshot { output: WaybarOutput },
+    Json { snapshot: serde_json::Value },
     Update { output: WaybarOutput },
     Ack,
     Error { message: String },
@@ -161,6 +170,33 @@ pub(crate) fn try_get_snapshot(config: &TokenGaugeConfig) -> Result<String> {
     let reply: SocketReply = serde_json::from_str(buf.trim())?;
     match reply {
         SocketReply::Snapshot { output } => Ok(serde_json::to_string(&output)?),
+        SocketReply::Error { message } => Err(anyhow::anyhow!(message)),
+        _ => Err(anyhow::anyhow!("unexpected reply from daemon")),
+    }
+}
+
+/// The daemon's answer to `--json`, for the same reason `try_get_snapshot`
+/// exists: the process that renders must not be the process that fetches.
+///
+/// `--json` used to do its own `maybe_refresh`, so whichever desktop frontend
+/// polled first after the snapshot went stale ran the fetch as a child of the
+/// compositor. That child has the compositor's environment, and sync
+/// credentials arriving through `environment.d` reach the systemd unit and
+/// nothing else - the fetch then wrote "no S3 access key" into the snapshot
+/// every frontend reads.
+pub(crate) fn try_get_json(config: &TokenGaugeConfig) -> Result<String> {
+    let mut stream = connect_socket(config).map_err(|e| anyhow::anyhow!(e))?;
+    let line = serde_json::to_string(&SocketCommand::Json)?;
+    writeln!(stream, "{line}")?;
+    stream.flush()?;
+    let mut reader = BufReader::new(&stream);
+    let mut buf = String::new();
+    if reader.read_line(&mut buf)? == 0 {
+        anyhow::bail!("daemon closed the connection");
+    }
+    let reply: SocketReply = serde_json::from_str(buf.trim())?;
+    match reply {
+        SocketReply::Json { snapshot } => Ok(serde_json::to_string(&snapshot)?),
         SocketReply::Error { message } => Err(anyhow::anyhow!(message)),
         _ => Err(anyhow::anyhow!("unexpected reply from daemon")),
     }
@@ -412,6 +448,17 @@ pub(crate) fn dlog(tag: &str, msg: &str) {
     eprintln!("[{ts}] [{tag}] {msg}");
 }
 
+/// How often the wait between fetches re-asks `cache_is_stale`.
+///
+/// Age is not the only way a snapshot goes stale: a window that resets
+/// mid-cycle invalidates the percentages beside it at an instant no timer wakes
+/// for. Sleeping `refresh_secs` in one go left the daemon blind to that, so the
+/// first process to notice was a frontend polling `--json` every 30s - and it
+/// then fetched in the frontend's own environment. The daemon has to be the one
+/// that notices, or delegating `--json` to it just trades a wrong-environment
+/// fetch for no fetch at all.
+const STALE_TICK: Duration = Duration::from_secs(15);
+
 pub(crate) fn daemon_fetch_loop(
     state: Arc<Mutex<DaemonState>>,
     config: Arc<Mutex<TokenGaugeConfig>>,
@@ -428,7 +475,30 @@ pub(crate) fn daemon_fetch_loop(
             let msg = panic_message(&payload);
             dlog("fetch", &format!("panic recovered: {msg}"));
         }
-        thread::sleep(Duration::from_secs(snapshot.refresh_secs.max(10)));
+        wait_for_next_fetch(&snapshot, STALE_TICK);
+    }
+}
+
+/// Sleep out `refresh_secs`, waking early once the snapshot this fetch just
+/// wrote has gone stale.
+///
+/// A snapshot that reads as stale immediately after a fetch is one the fetch
+/// could not write - an unwritable state directory, a provider set nothing
+/// covers. Waking early on that would fetch every tick forever, so the early
+/// wake is armed only by a fetch that landed.
+fn wait_for_next_fetch(config: &TokenGaugeConfig, tick: Duration) {
+    let armed = !cache_is_stale(config);
+    let full = Duration::from_secs(config.refresh_secs.max(10));
+    let deadline = std::time::Instant::now() + full;
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        thread::sleep(tick.min(remaining));
+        if armed && cache_is_stale(config) {
+            return;
+        }
     }
 }
 
@@ -520,6 +590,13 @@ pub(crate) fn handle_client(
         SocketCommand::Snapshot => {
             let output = current_snapshot(&state, &config);
             let reply = SocketReply::Snapshot { output };
+            writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
+            stream.flush()?;
+        }
+        SocketCommand::Json => {
+            let (rows, errors) = rows_from_cache(&config);
+            let snapshot = json_snapshot(&config, &rows, &errors);
+            let reply = SocketReply::Json { snapshot };
             writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
             stream.flush()?;
         }
@@ -798,6 +875,120 @@ mod tests {
         }
         server.join().unwrap().unwrap();
         let _ = std::fs::remove_file(&sock);
+    }
+
+    /// `--json` delegating to the daemon is only worth anything if the daemon
+    /// answers with the same object the standalone path prints: every non-Rust
+    /// frontend parses it.
+    #[test]
+    fn socket_json_renders_the_snapshot_from_the_cache() {
+        use std::collections::HashMap;
+        use tokengauge_core::{
+            ProviderPayload, ProvidersConfig, UsageSnapshot, UsageWindow, write_cache_full,
+        };
+
+        let dir = unique_test_dir("json-socket");
+        let cache = dir.join("cache.json");
+        let mut config = test_config(cache.clone());
+        config.providers = ProvidersConfig {
+            claude: Some(true),
+            ..Default::default()
+        };
+        let payload = ProviderPayload {
+            stale_reason: None,
+            provider: "claude".into(),
+            version: None,
+            source: None,
+            usage: Some(UsageSnapshot {
+                primary: Some(UsageWindow {
+                    used_percent: Some(36),
+                    reset_description: None,
+                    resets_at: Some((chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339()),
+                    window_minutes: Some(300),
+                }),
+                secondary: None,
+                tertiary: None,
+                updated_at: None,
+                login_method: None,
+                extra_rate_windows: Vec::new(),
+            }),
+            credits: None,
+            error: None,
+            stale: false,
+        };
+        write_cache_full(
+            &cache,
+            &[payload],
+            &[],
+            &HashMap::new(),
+            &config.providers,
+            None,
+        )
+        .unwrap();
+
+        let state = test_state("BASELINE_TEXT");
+        let (sock, server) = spawn_one_shot_server(&cache, state, config);
+        let reply = send_recv(&sock, &SocketCommand::Json);
+        match reply {
+            SocketReply::Json { snapshot } => {
+                for key in ["version", "rows", "errors", "enabled", "revision_file"] {
+                    assert!(snapshot.get(key).is_some(), "missing {key}: {snapshot}");
+                }
+                let rows = snapshot["rows"].as_array().expect("rows");
+                assert_eq!(rows.len(), 1, "{snapshot}");
+                assert_eq!(rows[0]["provider"], "Claude");
+                assert!(rows[0].get("panel").is_some(), "no panel spec on the row");
+            }
+            other => panic!("unexpected reply: {other:?}"),
+        }
+        server.join().unwrap().unwrap();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    /// The rollover case: the snapshot goes stale between fetches, at an
+    /// instant `refresh_secs` does not line up with. The daemon has to notice
+    /// it, because since `--json` is served from here no frontend will.
+    #[test]
+    fn the_fetch_wait_wakes_early_once_the_snapshot_goes_stale() {
+        use std::collections::HashMap;
+        use tokengauge_core::write_cache_full;
+
+        let dir = unique_test_dir("fetch-wait-wake");
+        let cache = dir.join("cache.json");
+        let config = test_config(cache.clone());
+        write_cache_full(&cache, &[], &[], &HashMap::new(), &config.providers, None).unwrap();
+
+        let doomed = cache.clone();
+        let killer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            std::fs::remove_file(&doomed).expect("remove the snapshot");
+        });
+        let started = std::time::Instant::now();
+        wait_for_next_fetch(&config, Duration::from_millis(25));
+        killer.join().unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "waited out refresh_secs ({}s) instead of waking on staleness",
+            started.elapsed().as_secs(),
+        );
+    }
+
+    /// And the guard on that: a fetch that could not write leaves the snapshot
+    /// stale on entry, and waking early on it would refetch every tick.
+    #[test]
+    fn the_fetch_wait_does_not_spin_when_the_fetch_wrote_nothing() {
+        let dir = unique_test_dir("fetch-wait-spin");
+        let config = test_config(dir.join("never-written.json"));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            wait_for_next_fetch(&config, Duration::from_millis(25));
+            let _ = tx.send(());
+        });
+        assert!(
+            rx.recv_timeout(Duration::from_millis(500)).is_err(),
+            "woke early on a snapshot that was stale before the wait began",
+        );
     }
 
     #[test]

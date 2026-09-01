@@ -23,12 +23,27 @@ use tokengauge_core::{
 use crate::*;
 
 /// Emit the full snapshot as one JSON object for non-waybar frontends (KDE
-/// Plasma applet, etc.). Uses maybe_refresh so a standalone plasmoid (no daemon
-/// or waybar keeping the cache warm) still refetches when the cache is stale
-/// instead of serving it forever. Each row is enriched with the display label,
-/// brand SVG path, glyph, and brand colour so the QML frontend needs no
-/// provider knowledge.
+/// Plasma applet, etc.). Each row is enriched with the display label, brand SVG
+/// path, glyph, and brand colour so the QML frontend needs no provider
+/// knowledge.
+///
+/// The daemon answers if it is up, exactly as `emit_bar` does, and for a
+/// sharper reason than sparing a duplicate fetch: the fallback below refetches
+/// when the snapshot is stale, and this process is a child of whatever spawned
+/// the frontend. The daemon's environment is the systemd unit's - which is
+/// where `environment.d` puts sync credentials - while a panel's is the
+/// compositor's, and the fetch that ran there wrote its missing-credential
+/// error into the snapshot every other frontend reads.
+///
+/// The fallback stays because a standalone plasmoid on a machine with no
+/// daemon still has to get numbers, and there the environment is the only one
+/// there is.
 pub(crate) fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
+    if let Ok(snapshot) = try_get_json(config) {
+        println!("{snapshot}");
+        return Ok(());
+    }
+
     let (payloads, errors, costs) = maybe_refresh(config)?;
     let rows = payload_to_rows_with_costs(payloads, &costs);
     println!(

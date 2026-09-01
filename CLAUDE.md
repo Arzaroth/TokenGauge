@@ -118,6 +118,18 @@ rather than replaying the output it rendered at its last fetch. None of that
 asks a provider anything - `cache_is_stale()` alone decides that, which is why a
 render can be cheap and frequent while a fetch stays rare.
 
+**Who does the fetch matters as much as when.** `--json` asks the daemon over
+the socket and only fetches in-process when there is no daemon to ask, because a
+frontend's subprocess inherits the *compositor's* environment while the daemon
+inherits the systemd unit's - and `environment.d`, where an S3 sync credential
+usually lives, reaches the second and not the first. A frontend that fetched
+wrote its own missing-credential error into the snapshot every other frontend
+reads. The other half of that rule is in the daemon: its wait between fetches
+re-checks `cache_is_stale()` every 15s rather than sleeping `refresh_secs`
+blind, because a window resetting mid-cycle makes the snapshot stale at an
+instant no timer wakes for, and the frontend polling every 30s used to be the
+only thing that noticed.
+
 `--set-provider` fetches before it returns, because frontends run
 `--set-provider && --json` in one subprocess and the `--json` has to see the new
 provider. The daemon's SIGHUP reload then finds a snapshot that already covers
@@ -293,7 +305,8 @@ still catch schema mistakes.
   `cargo clippy -p tokengauge-tray`, then revert both. eframe and tray-icon do
   build on Linux.
 - A running `tokengauge --daemon` (the installed binary in
-  `~/.local/bin`) serves the bar and tooltip over
+  `~/.local/bin`) serves the bar, the tooltip and `--json` over
   `<cache_file parent>/tokengauge.sock`, so a freshly built binary invoked with
-  no flags proxies to the **old** daemon. To exercise new tooltip code, point
-  `--config` at a copy of the config whose `cache_file` lives elsewhere.
+  no flags - or with `--json` - proxies to the **old** daemon. To exercise new
+  tooltip or panel code, point `--config` at a copy of the config whose
+  `cache_file` lives elsewhere.

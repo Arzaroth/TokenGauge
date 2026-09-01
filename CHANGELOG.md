@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Spend history, on a screen of its own.** Every panel stopped at a rolling
+  week and the current month, so "what did June cost" had no answer anywhere in
+  the tool. There is now a history screen behind a button on the Plasma applet,
+  the GNOME extension, the Omarchy widget and the Windows tray, and behind `H`
+  in the TUI, drawing 30 days, 90 days or 12 months as a chart. Waybar has none
+  and is not meant to: its tooltip is a hover surface with no second screen, and
+  left-click has opened the TUI since long before there was any history to open
+  it for.
+- **The durable store is kept whether or not fleet sync is on.** The 400-day
+  table of token buckets was built only when `[sync] enabled`, so a machine that
+  syncs with nobody had no past to look at - even though the store is the only
+  record of a day once a CLI rotates its transcript away. It is now maintained
+  on every fetch, and sync gates only publishing, pulling and the per-device
+  split.
+- **A one-time backfill, so history starts full.** A fetch reads back only to
+  the start of the month, which would have left the first chart showing a
+  fortnight however many months of transcripts were on disk. TokenGauge now
+  reads as far back as the store can hold, once, before its first fetch. On the
+  machine this was written on that was 15.4B tokens reaching back to June.
+  `--backfill` forces it again, for transcripts restored from a backup.
+- **A past month is rated at a past month's prices.** History is stored as
+  tokens, so rating a year against today's table meant a past month restated
+  itself whenever LiteLLM moved a number - and over the last year `xai/grok-4`
+  lost 6x of its output cost. A vendored archive of per-month overrides, built
+  from LiteLLM's own git history, now rates each bucket at the prices that were
+  in effect. It carries only prices a vendor really moved: most of what changes
+  in that table is a missing field being filled in, and for those today's entry
+  is the better answer for a past month too.
+- **`--export [csv|json] [--since DATE]`** writes the store out as one row per
+  day, provider, model and device, with the token split beside the money it was
+  rated from.
+- **A `--doctor` section for history**: whether the store read, how far back it
+  holds anything, whether the backfill has run, and how far the price archive
+  reaches.
+
+### Fixed
+
+- **A period with nothing in it no longer reads `$-0.00`.** Summing an empty
+  iterator of `f64` gives negative zero - the standard library folds from the
+  IEEE additive identity, which has to be negative so that adding it preserves
+  the sign of everything else - and the money formatter passed that straight
+  through. Every empty history range showed it, and any cost row summing an
+  empty range could have.
 ## [0.29.3] - 2026-09-02
 
 ### Security

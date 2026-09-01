@@ -72,8 +72,41 @@ _Avoid_: share, export, payload
 **Fleet store**:
 The local table of buckets keyed by device and hour, covering every device
 including this one. The durable record; transcripts and contributions are its
-inputs.
+inputs. Kept whether or not sync is on - with sync off the fleet is just this
+machine, and the store is what history is read from.
 _Avoid_: peer cache, merge cache
+
+### History
+
+**Series**:
+One range of spend, resolved as an ordered list of steps with no gaps. The unit
+a chart draws.
+_Avoid_: dataset, chart data
+
+**Step**:
+One bar of a series: a day or a month, carrying finished display strings, a
+fraction and a tone.
+_Avoid_: point, bucket, sample
+
+**Range**:
+How far back a series reaches and what it steps by - 30 days, 90 days, 12
+months. The thing the pane's selector switches.
+_Avoid_: period, window (a window is a provider's rate limit)
+
+**Partial step**:
+The step still in progress. Marked so a chart does not end on a cliff the reader
+takes for a collapse.
+_Avoid_: current, incomplete, today
+
+**Price archive**:
+Per-month overrides for the models whose price a vendor actually moved, so a
+past month is rated at a past month's prices.
+_Avoid_: price history, old prices
+
+**Backfill**:
+The one-time deep read of every transcript still on disk, filling the store with
+history a fetch's window never reaches.
+_Avoid_: import, initial sync, catch-up
 
 **Sync key**:
 The symmetric secret shared by every device in a fleet. Possession of it is

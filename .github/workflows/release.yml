@@ -174,11 +174,34 @@ jobs:
           Copy-Item target/x86_64-pc-windows-msvc/release/tokengauge-tray.exe dist/
           Compress-Archive -Path dist/tokengauge-tui.exe,dist/tokengauge-tray.exe -DestinationPath "dist/tokengauge-$safe-windows-x86_64.zip" -Force
 
+      # The per-user MSI, for install and uninstall through Settings > Apps.
+      # The zip stays the primary asset: an unsigned MSI trips SmartScreen,
+      # while `install.ps1` does not.
+      #
+      # `win64`, deliberately not `windows-x86_64`: every updater already
+      # shipped picks its download by substring and would happily hand this
+      # package to the zip extractor. See ARCHIVE_SUFFIX in update.rs.
+      - name: Build MSI
+        shell: pwsh
+        env:
+          REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          $safe = $env:REF_NAME -replace '[^A-Za-z0-9._-]', '_'
+          # ProductVersion is numeric only: no leading v, no pre-release suffix.
+          $msiVersion = ($safe -replace '^v', '') -replace '[-+].*$', ''
+          dotnet tool install --global wix --version 5.0.2
+          # The tool directory is not on PATH until a new shell.
+          $env:PATH = "$env:PATH;$env:USERPROFILE\.dotnet\tools"
+          wix build -arch x64 -d Version=$msiVersion -d BinDir=dist `
+            -o "dist/tokengauge-$safe-win64.msi" packaging/windows/tokengauge.wxs
+
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: tokengauge-windows-x86_64
-          path: dist/tokengauge-*-windows-x86_64.zip
+          path: |
+            dist/tokengauge-*-windows-x86_64.zip
+            dist/tokengauge-*-win64.msi
           if-no-files-found: error
 
   release:
@@ -220,3 +243,4 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.msi

@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Per-user MSI for the Windows binaries. Built by the release workflow with
+  WiX 5: `wix build -d Version=... -d BinDir=... tokengauge.wxs`.
+
+  It installs into the same directory `scripts\install.ps1` uses. That is not a
+  coincidence and must stay true: the self-updater replaces the binaries beside
+  the running one, so an MSI that installed somewhere else would leave two
+  copies of TokenGauge on disk, only one of which ever updates.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="TokenGauge"
+      Manufacturer="Arzaroth"
+      Version="$(Version)"
+      UpgradeCode="65fcf132-513f-451a-9317-8fd51ae7a2e3"
+      Scope="perUser"
+      Compressed="yes"
+      Language="1033">
+
+    <SummaryInformation
+        Description="TokenGauge - AI coding usage and cost meter"
+        Manufacturer="Arzaroth" />
+
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of TokenGauge is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Arzaroth/TokenGauge" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="TokenGaugeFolder" Name="TokenGauge">
+        <Directory Id="INSTALLFOLDER" Name="bin" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="TokenGauge" Level="1" AllowAbsent="no">
+      <ComponentGroupRef Id="Binaries" />
+      <ComponentGroupRef Id="Registration" />
+    </Feature>
+
+    <!--
+      Off unless asked for: `msiexec /i TokenGauge.msi ADDLOCAL=Main,RunAtLogin`.
+      An installer that adds itself to startup without being asked is the thing
+      users uninstall.
+    -->
+    <Feature Id="RunAtLogin" Title="Start TokenGauge at login" Level="1000">
+      <ComponentGroupRef Id="Startup" />
+    </Feature>
+
+    <ComponentGroup Id="Binaries" Directory="INSTALLFOLDER">
+      <Component Id="TuiExe" Guid="*">
+        <File Id="TuiExeFile" Source="$(BinDir)\tokengauge-tui.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="TrayExe" Guid="*">
+        <File Id="TrayExeFile" Source="$(BinDir)\tokengauge-tray.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="Registration" Directory="INSTALLFOLDER">
+      <!--
+        A shortcut's keypath has to be a registry value, not the file it points
+        at: the file belongs to another component, and MSI resolves a
+        component's installed state from its keypath alone.
+      -->
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut
+            Id="TokenGaugeStartMenu"
+            Directory="ProgramMenuFolder"
+            Name="TokenGauge"
+            Description="AI coding usage and cost meter"
+            Target="[INSTALLFOLDER]tokengauge-tray.exe"
+            WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue
+            Root="HKCU" Key="Software\TokenGauge" Name="StartMenuShortcut"
+            Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <!--
+        Part="last" appends to the user's PATH and, unlike the append
+        `install.ps1` does by hand, MSI takes it back out on uninstall.
+      -->
+      <Component Id="PathEntry" Guid="*">
+        <Environment
+            Id="PathBin" Name="PATH" Value="[INSTALLFOLDER]"
+            Action="set" Part="last" System="no" Permanent="no" />
+        <RegistryValue
+            Root="HKCU" Key="Software\TokenGauge" Name="PathEntry"
+            Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <!--
+        How the self-updater finds the Add/Remove Programs entry to keep its
+        version honest after replacing the binaries in place. MSI
+        names that entry by ProductCode, which changes with every release, so
+        the current one is recorded at a path that does not.
+      -->
+      <Component Id="InstallMarker" Guid="*">
+        <RegistryValue
+            Root="HKCU" Key="Software\TokenGauge" Name="ProductCode"
+            Type="string" Value="[ProductCode]" KeyPath="yes" />
+        <RegistryValue
+            Root="HKCU" Key="Software\TokenGauge" Name="InstallLocation"
+            Type="string" Value="[INSTALLFOLDER]" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="Startup" Directory="INSTALLFOLDER">
+      <Component Id="StartupShortcut" Guid="*">
+        <Shortcut
+            Id="TokenGaugeStartup"
+            Directory="StartupFolder"
+            Name="TokenGauge"
+            Description="AI coding usage and cost meter"
+            Target="[INSTALLFOLDER]tokengauge-tray.exe"
+            Arguments="--hidden"
+            WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue
+            Root="HKCU" Key="Software\TokenGauge" Name="StartupShortcut"
+            Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Package>
+</Wix>

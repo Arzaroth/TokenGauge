@@ -1,20 +1,20 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Install the TokenGauge TUI on Windows 10/11.
+    Install TokenGauge on Windows 10/11.
 
 .DESCRIPTION
     Downloads the latest (or a specified) TokenGauge Windows release, installs
-    tokengauge-tui.exe into a user-writable directory, adds that directory to
-    your user PATH, and seeds a default config at %APPDATA%\tokengauge\config.toml.
+    tokengauge-tui.exe and the system-tray GUI tokengauge-tray.exe into a
+    user-writable directory, adds that directory to your user PATH, puts
+    TokenGauge in the Start Menu, and seeds a default config at
+    %APPDATA%\tokengauge\config.toml.
 
-    This script installs only the TUI. The system-tray GUI (tokengauge-tray) is
-    a separate binary - build it with `cargo build --release -p tokengauge-tray`
-    (see the README's "Tray GUI" section). The Waybar module, KDE Plasma applet,
-    GNOME extension and Quickshell widget are Linux-only. Usage limits are fetched natively over
-    HTTP; sign in to the `codex` and/or `claude` CLIs so TokenGauge can read
-    their OAuth credentials. ccusage (needs Node.js/Bun on PATH) then adds
-    cost/token detail.
+    The Waybar module, KDE Plasma applet, GNOME extension and Quickshell widget
+    are Linux-only. Usage limits are fetched natively over HTTP; sign in to the
+    `codex` and/or `claude` CLIs so TokenGauge can read their OAuth
+    credentials. ccusage (needs Node.js/Bun on PATH) then adds cost/token
+    detail.
 
 .PARAMETER Repo
     GitHub repo to install from. Default: Arzaroth/TokenGauge.
@@ -23,10 +23,13 @@
     Release tag to install (e.g. v0.8.0). Default: the latest release.
 
 .PARAMETER InstallDir
-    Where to place tokengauge-tui.exe. Default: %LOCALAPPDATA%\TokenGauge\bin.
+    Where to place the binaries. Default: %LOCALAPPDATA%\TokenGauge\bin.
 
 .PARAMETER NoPath
     Do not modify the user PATH.
+
+.PARAMETER RunAtLogin
+    Also start the tray GUI at login (a shortcut in the Startup folder).
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\install.ps1
@@ -39,7 +42,8 @@ param(
     [string]$Repo = $(if ($env:TOKENGAUGE_REPO) { $env:TOKENGAUGE_REPO } else { 'Arzaroth/TokenGauge' }),
     [string]$Version = '',
     [string]$InstallDir = $(if ($env:TOKENGAUGE_INSTALL_DIR) { $env:TOKENGAUGE_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'TokenGauge\bin' }),
-    [switch]$NoPath
+    [switch]$NoPath,
+    [switch]$RunAtLogin
 )
 
 $ErrorActionPreference = 'Stop'
@@ -90,19 +94,29 @@ try {
 
     Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
 
-    $exe = Get-ChildItem -Path $tmp -Recurse -Filter 'tokengauge-tui.exe' | Select-Object -First 1
-    if (-not $exe) {
-        throw "tokengauge-tui.exe not found inside $asset"
-    }
-
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    try {
-        Copy-Item -Path $exe.FullName -Destination (Join-Path $InstallDir 'tokengauge-tui.exe') -Force
-    } catch {
-        throw "Couldn't write tokengauge-tui.exe to $InstallDir - it may be running. " +
-              "Close it (and the tray app) and re-run. ($($_.Exception.Message))"
+
+    # Both binaries: the TUI is the command line, the tray is the GUI most
+    # Windows users actually run. Releases before the tray existed carry only
+    # the TUI, so a missing tray binary is a warning rather than a failure.
+    $installed = @{}
+    foreach ($name in @('tokengauge-tui.exe', 'tokengauge-tray.exe')) {
+        $exe = Get-ChildItem -Path $tmp -Recurse -Filter $name | Select-Object -First 1
+        if (-not $exe) {
+            if ($name -eq 'tokengauge-tui.exe') { throw "$name not found inside $asset" }
+            Write-Warned "$name is not in $asset - this release predates the tray GUI"
+            continue
+        }
+        $dest = Join-Path $InstallDir $name
+        try {
+            Copy-Item -Path $exe.FullName -Destination $dest -Force
+        } catch {
+            throw "Couldn't write $name to $InstallDir - it may be running. " +
+                  "Close it (and the tray app) and re-run. ($($_.Exception.Message))"
+        }
+        $installed[$name] = $dest
+        Write-Good "Installed $name to $InstallDir"
     }
-    Write-Good "Installed tokengauge-tui.exe to $InstallDir"
 } finally {
     Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -122,6 +136,45 @@ if (-not $NoPath) {
         Write-Good "Added $InstallDir to your user PATH (restart terminals to pick it up)"
     } else {
         Write-Info "$InstallDir already on your user PATH"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Start Menu entry, and optionally start the tray at login
+# ---------------------------------------------------------------------------
+# The tray GUI has no taskbar button and no console, so without a shortcut the
+# only way to launch it is to type its path.
+$trayExe = $installed['tokengauge-tray.exe']
+if ($trayExe) {
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+
+        $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+        New-Item -ItemType Directory -Force -Path $startMenu | Out-Null
+        $link = $shell.CreateShortcut((Join-Path $startMenu 'TokenGauge.lnk'))
+        $link.TargetPath = $trayExe
+        $link.WorkingDirectory = $InstallDir
+        $link.Description = 'TokenGauge usage meter (system tray)'
+        $link.Save()
+        Write-Good "Added TokenGauge to the Start Menu"
+
+        $startup = [Environment]::GetFolderPath('Startup')
+        $startupLink = Join-Path $startup 'TokenGauge.lnk'
+        if ($RunAtLogin) {
+            $auto = $shell.CreateShortcut($startupLink)
+            $auto.TargetPath = $trayExe
+            # Start in the tray with nothing on screen; a panel that opens
+            # itself on every login is not what run-at-login is for.
+            $auto.Arguments = '--hidden'
+            $auto.WorkingDirectory = $InstallDir
+            $auto.Description = 'TokenGauge usage meter (system tray)'
+            $auto.Save()
+            Write-Good "TokenGauge will start at login"
+        } else {
+            Write-Info "Re-run with -RunAtLogin to start the tray automatically"
+        }
+    } catch {
+        Write-Warned "Couldn't create shortcuts ($($_.Exception.Message)). Launch the tray from $trayExe"
     }
 }
 
@@ -167,4 +220,7 @@ if ($NoPath) {
     Write-Good "Done. Run it with:  & `"$(Join-Path $InstallDir 'tokengauge-tui.exe')`""
 } else {
     Write-Good "Done. Run it with:  tokengauge-tui"
+}
+if ($trayExe) {
+    Write-Good "Or open the tray GUI from the Start Menu (TokenGauge)."
 }

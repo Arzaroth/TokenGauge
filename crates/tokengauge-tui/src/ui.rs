@@ -871,6 +871,7 @@ mod tests {
         }))
         .expect("cost");
         ProviderRow {
+            stale_reason: None,
             provider: "claude".into(),
             session_used: Some(31),
             session_window_minutes: None,

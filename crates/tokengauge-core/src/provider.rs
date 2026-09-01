@@ -116,6 +116,7 @@ impl ProviderPayload {
     /// knows a fetch failed. A fetcher with credits sets `credits` after.
     pub(crate) fn live(provider: &str, source: &str, usage: UsageSnapshot) -> Self {
         Self {
+            stale_reason: None,
             provider: provider.to_string(),
             version: None,
             source: Some(source.to_string()),

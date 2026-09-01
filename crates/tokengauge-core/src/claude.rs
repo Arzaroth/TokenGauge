@@ -526,6 +526,7 @@ fn to_payload(
     }
 
     Ok(ProviderPayload {
+        stale_reason: None,
         provider: "claude".to_string(),
         version: None,
         source: Some("oauth".to_string()),

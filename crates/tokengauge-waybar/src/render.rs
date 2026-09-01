@@ -588,6 +588,7 @@ pub(crate) mod tests {
 
     pub(crate) fn sample_row(provider: &str) -> ProviderRow {
         ProviderRow {
+            stale_reason: None,
             provider: provider.to_string(),
             session_used: Some(67),
             session_window_minutes: Some(300),
@@ -650,6 +651,7 @@ pub(crate) mod tests {
     fn format_provider_card_missing_reset_renders_not_started() {
         let mut row = sample_row("Codex");
         row.weekly_reset = "—".to_string();
+        row.weekly_used = Some(0);
         let card = format_provider_card(&row);
         assert!(card.contains("not started"));
         assert!(!card.contains("Resets —"));

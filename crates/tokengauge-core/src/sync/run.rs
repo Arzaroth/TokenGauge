@@ -20,8 +20,14 @@ pub struct SyncOutcome {
     pub store: FleetStore,
 }
 
-/// Run a cycle and return the peer events `build_report` should see alongside
-/// the caller's own.
+/// Keep the durable store current, and - when sync is on - run a cycle and
+/// return the peer events `build_report` should see alongside the caller's own.
+///
+/// The store is maintained either way. It is the only record of a day once the
+/// CLI has rotated its transcript away, and history is read from it on a
+/// machine that syncs with nobody; gating it on `[sync] enabled` meant a user
+/// who never turned sync on had no past to look at. What sync gates is the
+/// cycle: publishing, pulling, and the peer events below.
 ///
 /// Never fails: a transport that is down leaves the durable store in place and
 /// the failure in the status, because blanking the totals would be a lie in the
@@ -35,13 +41,6 @@ pub fn refresh(
         enabled: config.sync.enabled,
         ..Default::default()
     };
-    if !config.sync.enabled {
-        return SyncOutcome {
-            events: Vec::new(),
-            status,
-            store: FleetStore::default(),
-        };
-    }
 
     let now = Utc::now();
     let from = window_hour(since);
@@ -52,15 +51,26 @@ pub fn refresh(
     status.error = store_error;
     store.upsert_local(&device, from, local_events, now.timestamp_millis());
 
-    if let Err(e) = cycle(config, &device, &mut store, now, &mut status) {
+    if config.sync.enabled
+        && let Err(e) = cycle(config, &device, &mut store, now, &mut status)
+    {
         // A store that would not parse is the more serious of the two, so it
         // keeps the slot if it already claimed it.
         status.error.get_or_insert(format!("{e:#}"));
     }
 
+    store.compact(now, i64::from(config.sync.retention_days));
     store.prune(now);
     if let Err(e) = store::save(&config.cache_file, &store) {
         status.error.get_or_insert(format!("{e:#}"));
+    }
+
+    if !config.sync.enabled {
+        return SyncOutcome {
+            events: Vec::new(),
+            status,
+            store,
+        };
     }
 
     status.last_pull_ms = store.last_pull_ms;
@@ -92,6 +102,47 @@ pub fn refresh(
 /// This machine's device id, for attributing the local row.
 pub fn local_device_id(config: &TokenGaugeConfig) -> String {
     crate::device_identity(&config.cache_file).machine_id
+}
+
+/// What the one-time backfill found.
+#[derive(Debug, Clone)]
+pub struct BackfillOutcome {
+    pub events: usize,
+    /// The oldest day it looked for, which is the store's whole reach.
+    pub since: NaiveDate,
+    pub error: Option<String>,
+}
+
+/// Fill the store from every transcript still on disk, once.
+///
+/// A fetch reads back only to the start of the month, so a store created today
+/// holds a fortnight however many months of transcripts the CLIs kept. Without
+/// this, history would be empty on the day it shipped and take a year to become
+/// worth opening. With it, a machine that has been coding since last autumn has
+/// last autumn on the chart the first time it draws one.
+///
+/// Slow by construction - see [`crate::cost::read_history`] - so it is called
+/// behind [`crate::statefiles::backfill_done`] and never on a poll.
+pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome {
+    let (events, since) = crate::cost::read_history(today);
+    let now = Utc::now();
+    let identity = crate::device_identity(&config.cache_file);
+    let device = DeviceRecord::new(&identity, &config.sync.label);
+
+    let (mut store, mut error) = store::load(&config.cache_file);
+    store.upsert_local(&device, window_hour(since), &events, now.timestamp_millis());
+    store.compact(now, i64::from(config.sync.retention_days));
+    store.prune(now);
+    if let Err(e) = store::save(&config.cache_file, &store) {
+        error.get_or_insert(format!("{e:#}"));
+    }
+    crate::statefiles::mark_backfilled(&config.cache_file);
+
+    BackfillOutcome {
+        events: events.len(),
+        since,
+        error,
+    }
 }
 
 fn cycle(

@@ -5,19 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.29.1] - 2026-09-01
 
 ### Fixed
 
-- **Claude Fable 5.1 is rated instead of counted at $0.** The price table is
-  LiteLLM's, and LiteLLM had not keyed the model yet, so every source - a fresh
-  download included - had no price for it and a day spent on Fable 5.1 read as
-  $0 rather than as a gap. Prices Anthropic has published but upstream has not
-  picked up are now carried in `INTERIM_PRICES` and consulted only when the
-  loaded table has nothing, so an upstream entry always wins and a test fails
-  once one lands. Rating the point release at Fable 5 was not the fix: it bills
-  a cache read at 0.025x base input where every other model bills 0.1x, and a
-  cache-heavy day comes out a third too high.
 - **A frontend's `--json` no longer fetches on its own, so sync credentials
   stop vanishing.** `--json` did its own `maybe_refresh`, so whichever desktop
   frontend polled first after the snapshot went stale ran the fetch as a child

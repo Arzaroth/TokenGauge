@@ -1,7 +1,7 @@
 {
   "uuid": "tokengauge@arzaroth.github.io",
   "name": "TokenGauge",
-  "version-name": "0.29.0",
+  "version-name": "0.29.1",
   "description": "Panel indicator for Claude / Codex / Kimi / Grok / GLM usage limits and cost. Reads its data from the tokengauge-waybar binary, sharing the same config, cache, and daemon as the Waybar module.",
   "shell-version": [
     "45",

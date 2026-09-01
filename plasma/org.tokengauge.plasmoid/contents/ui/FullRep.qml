@@ -15,7 +15,38 @@ Item {
     Layout.preferredHeight: Kirigami.Units.gridUnit * 32
 
     property bool settingsOpen: false
+    property bool historyOpen: false
+    // Which range the history pane is showing, as an index into its series.
+    // Every range is already on the row, so cycling one is a rebind rather
+    // than another `--json`.
+    property int historyRange: 0
+
+    // Settings and history are both second screens over the panel, and exactly
+    // one of the three is up at a time. A year of bars does not belong above
+    // the limit gauges, which is why history is a screen rather than a section.
+    readonly property bool showPanel: !full.settingsOpen && !full.historyOpen
+
+    function openScreen(which) {
+        full.settingsOpen = which === "settings"
+        full.historyOpen = which === "history"
+    }
+
     readonly property var row: root.rows.length > 0 ? root.rows[root.selectedIndex] : null
+    readonly property var history: full.row && full.row.history ? full.row.history : null
+    readonly property var historySeries: full.history && Array.isArray(full.history.series)
+                                         && full.history.series.length > 0
+        ? full.history.series[Math.min(full.historyRange, full.history.series.length - 1)]
+        : null
+
+    // `toneColor` maps `normal` onto the dim text colour, which is right for a
+    // badge and wrong for a chart fill: it would draw every complete step in
+    // the same grey as the note under it. A frontend maps a tone onto its own
+    // palette, and for a filled bar this one's `normal` is the accent.
+    function chartColor(point) {
+        return String(point.tone) === "normal"
+            ? Kirigami.Theme.highlightColor
+            : root.toneColor(point.tone)
+    }
     // The core's own list, never a guess: a hardcoded fallback here silently
     // hid every provider added since it was written.
     readonly property var oauthProviders: root.snapshot.providers || []
@@ -254,12 +285,20 @@ Item {
                 onClicked: root.action("--refresh")
             }
             PlasmaComponents.ToolButton {
+                icon.name: "view-statistics"
+                display: QQC2.AbstractButton.IconOnly
+                text: i18n("History")
+                checkable: true
+                checked: full.historyOpen
+                onClicked: full.openScreen(full.historyOpen ? "panel" : "history")
+            }
+            PlasmaComponents.ToolButton {
                 icon.name: "configure"
                 display: QQC2.AbstractButton.IconOnly
                 text: i18n("Settings")
                 checkable: true
                 checked: full.settingsOpen
-                onClicked: full.settingsOpen = !full.settingsOpen
+                onClicked: full.openScreen(full.settingsOpen ? "panel" : "settings")
             }
         }
 
@@ -303,7 +342,7 @@ Item {
         Flow {
             Layout.fillWidth: true
             spacing: Kirigami.Units.smallSpacing
-            visible: !full.settingsOpen && root.rows.length > 0
+            visible: full.showPanel && root.rows.length > 0
             Repeater {
                 model: root.rows
                 PlasmaComponents.Button {
@@ -333,14 +372,14 @@ Item {
                 // ---- provider card ----
                 PlasmaComponents.Label {
                     textFormat: Text.PlainText
-                    visible: !full.settingsOpen && full.row === null
+                    visible: full.showPanel && full.row === null
                     text: i18n("No provider data yet.")
                     opacity: 0.7
                 }
 
                 RowLayout {
                     Layout.fillWidth: true
-                    visible: !full.settingsOpen && full.row !== null
+                    visible: full.showPanel && full.row !== null
                     Image {
                         visible: full.row && full.row.icon_svg && status === Image.Ready
                         source: full.row && full.row.icon_svg ? "file://" + full.row.icon_svg : ""
@@ -377,7 +416,7 @@ Item {
                 // naming its own kind; one delegate per kind draws it. A new
                 // section in the core appears here with no edit to this file.
                 Repeater {
-                    model: !full.settingsOpen && full.row && Array.isArray(full.row.panel)
+                    model: full.showPanel && full.row && Array.isArray(full.row.panel)
                            ? full.row.panel : []
 
                     ColumnLayout {
@@ -407,11 +446,121 @@ Item {
                     }
                 }
 
+                // ---- history screen ----
+                // The series are resolved in the core, every range at once, so
+                // this draws a chart and formats nothing.
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: full.historyOpen
+                    spacing: Kirigami.Units.smallSpacing
+
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: Kirigami.Units.smallSpacing
+                        Repeater {
+                            model: full.historyOpen && full.history ? full.history.series : []
+                            PlasmaComponents.Button {
+                                required property int index
+                                required property var modelData
+                                text: modelData.label
+                                checkable: true
+                                checked: index === full.historyRange
+                                highlighted: checked
+                                onClicked: full.historyRange = index
+                            }
+                        }
+                    }
+
+                    PlasmaComponents.Label {
+                        Layout.fillWidth: true
+                        visible: full.historySeries !== null
+                        text: full.historySeries
+                            ? full.historySeries.total_usd + "  ·  "
+                              + full.historySeries.total_tokens + " tokens"
+                              + "  ·  avg " + full.historySeries.average_usd
+                            : ""
+                        elide: Text.ElideRight
+                    }
+
+                    PlasmaComponents.Label {
+                        Layout.fillWidth: true
+                        visible: full.historySeries !== null && full.historySeries.empty
+                        text: i18n("Nothing spent in this range.")
+                        opacity: 0.7
+                    }
+
+                    Canvas {
+                        id: historyChart
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: Kirigami.Units.gridUnit * 8
+                        visible: full.historySeries !== null && !full.historySeries.empty
+                        readonly property var points: full.historySeries && !full.historySeries.empty
+                                                      ? full.historySeries.points : []
+                        onPointsChanged: requestPaint()
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.reset()
+                            var n = points.length
+                            if (n === 0)
+                                return
+                            // Wide steps get a gap between them; ninety days of
+                            // bars do not have the room to spare.
+                            var gap = n <= 12 ? 2 : (n <= 31 ? 1 : 0)
+                            var w = Math.max(1, (width - gap * (n - 1)) / n)
+                            for (var i = 0; i < n; i++) {
+                                var p = points[i]
+                                // A floor of one pixel: a step that spent
+                                // something must never draw as a step that
+                                // spent nothing.
+                                var h = p.fraction > 0
+                                    ? Math.max(1, p.fraction * height)
+                                    : 0
+                                ctx.fillStyle = full.chartColor(p)
+                                // The step in progress is short because it is
+                                // not over, so it is drawn as unfinished
+                                // rather than as a fall.
+                                ctx.globalAlpha = p.partial ? 0.45 : 1.0
+                                ctx.fillRect(i * (w + gap), height - h, w, h)
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: historyChart.visible
+                        PlasmaComponents.Label {
+                            text: full.historySeries && full.historySeries.points.length > 0
+                                ? full.historySeries.points[0].label : ""
+                            opacity: 0.6
+                            font: Kirigami.Theme.smallFont
+                        }
+                        Item { Layout.fillWidth: true }
+                        PlasmaComponents.Label {
+                            text: full.historySeries && full.historySeries.points.length > 0
+                                ? full.historySeries.points[full.historySeries.points.length - 1].label
+                                : ""
+                            opacity: 0.6
+                            font: Kirigami.Theme.smallFont
+                        }
+                    }
+
+                    PlasmaComponents.Label {
+                        Layout.fillWidth: true
+                        visible: full.historyOpen && full.history
+                        wrapMode: Text.WordWrap
+                        opacity: 0.6
+                        font: Kirigami.Theme.smallFont
+                        text: full.history
+                            ? [full.history.covers].concat(full.history.notes || []).join(" — ")
+                            : ""
+                    }
+                }
+
                 PlasmaComponents.Label {
                     textFormat: Text.PlainText
                     Layout.fillWidth: true
                     horizontalAlignment: Text.AlignRight
-                    visible: !full.settingsOpen && full.row && full.row.updated
+                    visible: full.showPanel && full.row && full.row.updated
                     opacity: 0.5
                     font: Kirigami.Theme.smallFont
                     text: full.row && full.row.updated ? i18n("Updated %1", full.row.updated) : ""

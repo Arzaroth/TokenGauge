@@ -57,10 +57,10 @@ mod win {
 
     use eframe::egui::{self, Color32, ProgressBar, RichText, ViewportCommand};
     use tokengauge_core::{
-        PROVIDERS, ProviderRow, Section, SectionKind, Tone, config_set_oauth_provider,
-        config_set_primary, default_config_path, fetch_all_providers, load_config, panel_spec,
-        payload_to_rows_with_costs, read_cache_full, retain_enabled, write_cache_full,
-        write_default_config,
+        HistoryPanel, PROVIDERS, ProviderRow, Section, SectionKind, TokenGaugeConfig, Tone,
+        config_set_oauth_provider, config_set_primary, default_config_path, fetch_all_providers,
+        load_config, panel_spec, payload_to_rows_with_costs, read_cache_full, retain_enabled,
+        write_cache_full, write_default_config,
     };
     use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem};
     use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -105,9 +105,54 @@ mod win {
         session_used: Option<u8>,
         weekly_used: Option<u8>,
         panel: Vec<Section>,
+        /// Every range, resolved by the core. The second screen behind the
+        /// History button draws one of these and formats none of it.
+        history: HistoryPanel,
     }
 
-    fn to_row(r: &ProviderRow) -> Row {
+    /// The two files a history panel is resolved from, read once per rebuild.
+    ///
+    /// Once, not once per provider: both are files, there are five providers,
+    /// and this runs every fifteen seconds while the flyout is open.
+    struct HistoryInputs {
+        store: tokengauge_core::sync::FleetStore,
+        prices: tokengauge_core::cost::pricing::PriceTable,
+        /// A store that would not parse. Carried onto every panel rather than
+        /// swallowed: an empty chart that should not be empty has to say why.
+        note: Option<String>,
+    }
+
+    impl HistoryInputs {
+        fn load(config: &TokenGaugeConfig) -> Self {
+            let (store, note) = tokengauge_core::sync::store::load(&config.cache_file);
+            // Never over the network: this is a render, not a fetch.
+            let prices = tokengauge_core::cost::pricing::load(
+                &config.cache_file,
+                std::time::Duration::from_secs(config.ccusage_timeout_secs),
+                false,
+            );
+            Self {
+                store,
+                prices,
+                note,
+            }
+        }
+
+        fn panel(&self, provider: &str) -> HistoryPanel {
+            let mut panel = tokengauge_core::history_panel_now(
+                &self.store,
+                provider,
+                &self.prices,
+                tokengauge_core::cost::pricing::archive(),
+            );
+            if let Some(note) = &self.note {
+                panel.notes.push(note.clone());
+            }
+            panel
+        }
+    }
+
+    fn to_row(r: &ProviderRow, history: &HistoryInputs) -> Row {
         Row {
             provider: r.provider.clone(),
             plan: r.plan_label.clone(),
@@ -116,6 +161,7 @@ mod win {
             session_used: r.session_used,
             weekly_used: r.weekly_used,
             panel: panel_spec(r),
+            history: history.panel(&r.provider),
         }
     }
 
@@ -161,6 +207,11 @@ mod win {
         action_tx: mpsc::Sender<Action>,
         selected: usize,
         settings_open: bool,
+        /// The history screen, and which range it is showing. A second screen
+        /// over the panel like the settings pane: exactly one of the three is
+        /// up at a time.
+        history_open: bool,
+        history_range: usize,
         quit: Arc<AtomicBool>,
         tray: TrayIcon,
         _items: Vec<MenuItem>,
@@ -272,6 +323,8 @@ mod win {
                 action_tx,
                 selected: 0,
                 settings_open: false,
+                history_open: false,
+                history_range: 0,
                 quit,
                 tray,
                 _items: vec![show_i, refresh_i, sync_i, update_i, quit_i],
@@ -410,6 +463,27 @@ mod win {
                             .min_size(egui::vec2(0.0, 26.0));
                             if ui.add(gear).clicked() {
                                 self.settings_open = !self.settings_open;
+                                if self.settings_open {
+                                    self.history_open = false;
+                                }
+                            }
+                            // No glyph on this one. egui's bundled fonts carry
+                            // the gear and the refresh arrow above, but not the
+                            // chart emoji, and a tofu box in the header is the
+                            // bug the cost trend badge already shipped once.
+                            let history = egui::Button::new(
+                                RichText::new("History")
+                                    .strong()
+                                    .color(if self.history_open { DARK } else { SUB }),
+                            )
+                            .fill(if self.history_open { BLUE } else { CARD })
+                            .corner_radius(6)
+                            .min_size(egui::vec2(0.0, 26.0));
+                            if ui.add(history).clicked() {
+                                self.history_open = !self.history_open;
+                                if self.history_open {
+                                    self.settings_open = false;
+                                }
                             }
                             let btn = egui::Button::new(
                                 RichText::new("\u{27f3} Refresh").strong().color(DARK),
@@ -450,6 +524,11 @@ mod win {
 
                             if self.settings_open {
                                 self.settings_pane(ui, &snap);
+                            } else if self.history_open {
+                                self.provider_tabs(ui, &snap);
+                                if let Some(row) = snap.rows.get(self.selected) {
+                                    self.history_pane(ui, row);
+                                }
                             } else {
                                 self.provider_tabs(ui, &snap);
                                 if let Some(row) = snap.rows.get(self.selected) {
@@ -545,6 +624,84 @@ mod win {
             ui.add_space(8.0);
         }
 
+        /// The history screen: a year of spend, as a chart.
+        ///
+        /// Every string is the core's; the chart is the only part egui decides.
+        fn history_pane(&mut self, ui: &mut egui::Ui, row: &Row) {
+            let history = row.history.clone();
+            if self.history_range >= history.series.len() {
+                self.history_range = 0;
+            }
+            card(ui, |ui| {
+                ui.label(RichText::new("HISTORY").small().strong().color(SUB));
+                ui.add_space(6.0);
+
+                ui.horizontal_wrapped(|ui| {
+                    for (at, series) in history.series.iter().enumerate() {
+                        let selected = at == self.history_range;
+                        let chip = egui::Button::new(
+                            RichText::new(series.label).strong().color(if selected {
+                                DARK
+                            } else {
+                                SUB
+                            }),
+                        )
+                        .fill(if selected { BLUE } else { CARD })
+                        .corner_radius(6);
+                        if ui.add(chip).clicked() {
+                            self.history_range = at;
+                        }
+                    }
+                });
+
+                let Some(series) = history.series.get(self.history_range) else {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("No history yet").color(SUB));
+                    return;
+                };
+
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(format!(
+                        "{}  \u{b7}  {} tokens  \u{b7}  avg {}",
+                        series.total_usd, series.total_tokens, series.average_usd
+                    ))
+                    .color(TEXT),
+                );
+
+                if series.empty {
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new("Nothing spent in this range")
+                            .small()
+                            .color(SUB),
+                    );
+                } else {
+                    ui.add_space(8.0);
+                    draw_history_chart(ui, series);
+                    ui.horizontal(|ui| {
+                        if let (Some(first), Some(last)) =
+                            (series.points.first(), series.points.last())
+                        {
+                            ui.label(RichText::new(&first.label).small().color(SUB));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(RichText::new(&last.label).small().color(SUB));
+                                },
+                            );
+                        }
+                    });
+                }
+
+                ui.add_space(6.0);
+                let mut notes = vec![history.covers.clone()];
+                notes.extend(history.notes.iter().cloned());
+                ui.label(RichText::new(notes.join("  \u{b7}  ")).small().color(SUB));
+            });
+            ui.add_space(8.0);
+        }
+
         /// Provider toggles and the bar pin - the same two controls the other
         /// frontends put behind their gear button.
         fn settings_pane(&mut self, ui: &mut egui::Ui, snap: &Snapshot) {
@@ -608,6 +765,56 @@ mod win {
                 });
             });
             ui.add_space(8.0);
+        }
+    }
+
+    /// The bars, painted rather than laid out: egui has no bar chart, and a
+    /// row of widgets would carry spacing rules this does not want.
+    fn draw_history_chart(ui: &mut egui::Ui, series: &tokengauge_core::HistorySeries) {
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 110.0),
+            egui::Sense::hover(),
+        );
+        let n = series.points.len();
+        if n == 0 || rect.width() <= 0.0 {
+            return;
+        }
+        let painter = ui.painter_at(rect);
+        // Wide steps get a gap; ninety days of bars have none to spare.
+        let gap: f32 = if n <= 12 {
+            2.0
+        } else if n <= 31 {
+            1.0
+        } else {
+            0.0
+        };
+        let width = ((rect.width() - gap * (n as f32 - 1.0)) / n as f32).max(1.0);
+        for (i, point) in series.points.iter().enumerate() {
+            let fraction = point.fraction.clamp(0.0, 1.0) as f32;
+            // A floor of one pixel: a step that spent a little must never draw
+            // as a step that spent nothing.
+            let height = if fraction > 0.0 {
+                (fraction * rect.height()).max(1.0)
+            } else {
+                0.0
+            };
+            if height <= 0.0 {
+                continue;
+            }
+            let x = rect.left() + i as f32 * (width + gap);
+            let bar = egui::Rect::from_min_size(
+                egui::pos2(x, rect.bottom() - height),
+                egui::vec2(width, height),
+            );
+            let colour = tone_color(point.tone);
+            // The step in progress is short because it is not over, so it is
+            // drawn as unfinished rather than as a fall.
+            let colour = if point.partial {
+                colour.gamma_multiply(0.45)
+            } else {
+                colour
+            };
+            painter.rect_filled(bar, 0.0, colour);
         }
     }
 
@@ -1053,9 +1260,10 @@ mod win {
         };
         let (mut payloads, mut errors, costs) = cached.into_parts();
         retain_enabled(&mut payloads, &mut errors, &config.providers);
+        let history = HistoryInputs::load(&config);
         let rows = payload_to_rows_with_costs(payloads, &costs)
             .iter()
-            .map(to_row)
+            .map(|r| to_row(r, &history))
             .collect();
         let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
         s.rows = rows;
@@ -1102,9 +1310,10 @@ mod win {
                         .iter()
                         .map(|e| format!("{}: {}", e.provider, e.message))
                         .collect();
+                    let history = HistoryInputs::load(&config);
                     let rows = payload_to_rows_with_costs(result.payloads, &result.costs)
                         .iter()
-                        .map(to_row)
+                        .map(|r| to_row(r, &history))
                         .collect();
                     let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
                     s.rows = rows;

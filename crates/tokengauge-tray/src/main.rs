@@ -21,10 +21,23 @@ fn main() {
 
 #[cfg(windows)]
 fn main() -> eframe::Result<()> {
+    // A flyout, not a window: no title bar, no taskbar button, above whatever
+    // it is opened over, and placed against the tray icon that opened it. It
+    // used to be an ordinary decorated window sized 500x440, which is why it
+    // read as an application someone had left running rather than as a panel.
+    //
+    // `--hidden` starts in the tray with nothing on screen, which is what the
+    // run-at-login shortcut passes: a panel that opens itself on every login is
+    // the one thing a tray app must not do.
+    let hidden = std::env::args().any(|arg| arg == "--hidden");
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([500.0, 440.0])
-            .with_min_inner_size([380.0, 260.0])
+            .with_inner_size([win::PANEL_WIDTH, win::PANEL_HEIGHT])
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_taskbar(false)
+            .with_always_on_top()
+            .with_visible(!hidden)
             .with_title("TokenGauge"),
         ..Default::default()
     };
@@ -68,6 +81,17 @@ mod win {
     const RED: Color32 = Color32::from_rgb(0xf3, 0x8b, 0xa8);
     const DARK: Color32 = Color32::from_rgb(0x11, 0x11, 0x1b);
 
+    /// Flyout size in points. Fixed: it is anchored to the tray icon, so a
+    /// user resizing it would only move it away from what it points at.
+    pub(crate) const PANEL_WIDTH: f32 = 420.0;
+    pub(crate) const PANEL_HEIGHT: f32 = 600.0;
+    /// Gap between the flyout and both the tray icon and the screen edges.
+    const PANEL_MARGIN: f32 = 8.0;
+    /// A tray click that lands within this of the panel hiding itself is the
+    /// same click: Windows blurs the panel before delivering it. Reopening
+    /// then makes the icon impossible to close the panel with.
+    const REOPEN_GRACE: Duration = Duration::from_millis(400);
+
     /// A rendered provider row. The panel body is resolved by the core, so this
     /// window draws the same sections in the same order as every other
     /// frontend; only the chrome around them is egui's own.
@@ -107,6 +131,23 @@ mod win {
         primary: String,
     }
 
+    /// What the tray thread and the UI thread have to agree on to make the
+    /// window behave like a flyout.
+    #[derive(Default)]
+    struct Flyout {
+        /// The tray icon's rectangle in physical pixels, set by a click and
+        /// consumed by the next frame, which is the only place that can move
+        /// the window.
+        anchor: Option<(f64, f64, f64, f64)>,
+        /// The panel has held focus since it was last shown. Losing focus only
+        /// means "the user clicked away" once it has been focused at all -
+        /// otherwise the window would dismiss itself before it appeared.
+        focused_once: bool,
+        /// When it last dismissed itself, so the click that dismissed it does
+        /// not immediately bring it back.
+        hidden_at: Option<Instant>,
+    }
+
     /// A config mutation from the settings pane, applied on the fetch thread so
     /// the UI never blocks on a file write.
     enum Action {
@@ -126,6 +167,7 @@ mod win {
         last_tip: String,
         cfg_path: std::path::PathBuf,
         last_cache_poll: Instant,
+        flyout: Arc<Mutex<Flyout>>,
     }
 
     /// The tray menu's ids, bundled so the event loop takes one of them rather
@@ -142,11 +184,28 @@ mod win {
         pub fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, DynErr> {
             let ctx = cc.egui_ctx.clone();
 
+            // egui keeps `↑` and `↓` - the arrows the cost trend badge is
+            // written with - in Hack alone, and puts Hack in the monospace
+            // family only. Every proportional string carrying one drew a tofu
+            // box until Hack became the proportional family's last fallback.
+            let mut fonts = egui::FontDefinitions::default();
+            if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                family.push("Hack".to_owned());
+            }
+            ctx.set_fonts(fonts);
+
             let mut visuals = egui::Visuals::dark();
             visuals.panel_fill = BG;
             visuals.window_fill = BG;
             visuals.override_text_color = Some(TEXT);
-            ctx.set_visuals(visuals);
+            // `set_visuals` writes the style of the *current* theme only. On a
+            // machine running Windows in light mode this window kept its
+            // hardcoded dark fills and drew every string without an explicit
+            // colour in the light theme's near-black, which is most of what
+            // "the UI is broken" turned out to mean.
+            ctx.set_theme(egui::ThemePreference::Dark);
+            ctx.set_visuals_of(egui::Theme::Dark, visuals.clone());
+            ctx.set_visuals_of(egui::Theme::Light, visuals);
 
             let shared = Arc::new(Mutex::new(Snapshot::default()));
             let (action_tx, action_rx) = mpsc::channel::<Action>();
@@ -189,12 +248,15 @@ mod win {
 
             let quit = Arc::new(AtomicBool::new(false));
 
+            let flyout = Arc::new(Mutex::new(Flyout::default()));
+
             // Handle tray/menu events on their own thread so they work even
             // while the window is hidden (the egui loop may not tick then).
             {
                 let ctx = ctx.clone();
                 let action_tx = action_tx.clone();
                 let quit = quit.clone();
+                let flyout = flyout.clone();
                 let ids = MenuIds {
                     show: show_i.id().clone(),
                     refresh: refresh_i.id().clone(),
@@ -202,7 +264,7 @@ mod win {
                     update: update_i.id().clone(),
                     quit: quit_i.id().clone(),
                 };
-                thread::spawn(move || tray_event_loop(ctx, action_tx, quit, ids));
+                thread::spawn(move || tray_event_loop(ctx, action_tx, quit, ids, flyout));
             }
 
             Ok(Self {
@@ -216,6 +278,7 @@ mod win {
                 last_tip: String::new(),
                 cfg_path: cfg_path_for_app,
                 last_cache_poll: Instant::now(),
+                flyout,
             })
         }
 
@@ -240,6 +303,30 @@ mod win {
                 return;
             }
             load_from_cache(&self.shared, &self.cfg_path);
+        }
+
+        /// Move the panel to the tray icon a click came from, and dismiss it
+        /// when the user clicks away or presses Escape - the two things that
+        /// close a tray flyout and that a decorated window got for free from
+        /// its title bar.
+        fn track_flyout(&mut self, ctx: &egui::Context) {
+            let mut flyout = self.flyout.lock().unwrap_or_else(|e| e.into_inner());
+
+            if let Some(rect) = flyout.anchor.take() {
+                place_flyout(ctx, rect);
+            }
+
+            let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+            if focused {
+                flyout.focused_once = true;
+            }
+            let dismissed = ctx.input(|i| i.key_pressed(egui::Key::Escape))
+                || (!focused && flyout.focused_once);
+            if dismissed {
+                flyout.focused_once = false;
+                flyout.hidden_at = Some(Instant::now());
+                ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+            }
         }
 
         /// Reflect the latest usage in the tray icon (peak %) and tooltip.
@@ -269,6 +356,7 @@ mod win {
                 .unwrap_or_else(|e| e.into_inner())
                 .clone();
             self.sync_tray(&snap);
+            self.track_flyout(ctx);
 
             // On real quit, let the close proceed so run_native returns and
             // TrayApp/TrayIcon drop cleanly (removing the tray icon). Otherwise
@@ -301,6 +389,17 @@ mod win {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("TokenGauge").size(22.0).strong().color(BLUE));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // The flyout has no title bar, so the only way back
+                            // to the tray other than clicking away is here.
+                            let close = egui::Button::new(
+                                RichText::new("\u{d7}").size(16.0).strong().color(SUB),
+                            )
+                            .fill(CARD)
+                            .corner_radius(6)
+                            .min_size(egui::vec2(26.0, 26.0));
+                            if ui.add(close).on_hover_text("Hide (Esc)").clicked() {
+                                ui.ctx().send_viewport_cmd(ViewportCommand::Visible(false));
+                            }
                             let gear = egui::Button::new(
                                 RichText::new("\u{2699} Settings")
                                     .strong()
@@ -545,9 +644,13 @@ mod win {
                 [110.0, 18.0],
                 egui::Label::new(RichText::new(&row.label).color(SUB)),
             );
+            // Full width, like the bar rows below it. A bar pinned at 220pt
+            // left the limits section ending halfway across a panel whose
+            // other sections ran to the edge.
+            let width = ui.available_width();
             ui.add(
                 ProgressBar::new((row.fraction.unwrap_or(0.0) as f32).clamp(0.0, 1.0))
-                    .desired_width(220.0)
+                    .desired_width(width)
                     .corner_radius(6)
                     .fill(fill)
                     .text(RichText::new(&row.value).small().strong().color(DARK)),
@@ -792,6 +895,47 @@ mod win {
         ctx.request_repaint();
     }
 
+    /// Put the panel against the tray icon it was opened from: centred on the
+    /// icon and above it, which is where the taskbar is on all but a minority
+    /// of setups. When there is no room above (a taskbar at the top), it drops
+    /// below the icon instead, and either way it is kept on the monitor.
+    ///
+    /// The icon rectangle arrives in physical pixels and every viewport command
+    /// speaks points, so nothing here is right on a scaled display without the
+    /// conversion.
+    fn place_flyout(ctx: &egui::Context, (x, y, w, h): (f64, f64, f64, f64)) {
+        let ppp = ctx.pixels_per_point().max(0.1);
+        let size = ctx
+            .input(|i| i.viewport().outer_rect.map(|r| r.size()))
+            .unwrap_or(egui::vec2(PANEL_WIDTH, PANEL_HEIGHT));
+
+        let icon_center_x = ((x + w / 2.0) as f32) / ppp;
+        let icon_top = (y as f32) / ppp;
+        let icon_bottom = ((y + h) as f32) / ppp;
+
+        let mut pos = egui::pos2(
+            icon_center_x - size.x / 2.0,
+            icon_top - size.y - PANEL_MARGIN,
+        );
+        if pos.y < PANEL_MARGIN {
+            pos.y = icon_bottom + PANEL_MARGIN;
+        }
+        if let Some(monitor) = ctx.input(|i| i.viewport().monitor_size) {
+            pos.x = pos.x.clamp(
+                PANEL_MARGIN,
+                (monitor.x - size.x - PANEL_MARGIN).max(PANEL_MARGIN),
+            );
+            pos.y = pos.y.clamp(
+                PANEL_MARGIN,
+                (monitor.y - size.y - PANEL_MARGIN).max(PANEL_MARGIN),
+            );
+        } else {
+            pos.x = pos.x.max(PANEL_MARGIN);
+            pos.y = pos.y.max(PANEL_MARGIN);
+        }
+        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos));
+    }
+
     /// Open the TUI on its sync screen.
     ///
     /// The TUI is spawned directly rather than through `--sync-setup`, whose
@@ -826,6 +970,7 @@ mod win {
         action_tx: mpsc::Sender<Action>,
         quit: Arc<AtomicBool>,
         ids: MenuIds,
+        flyout: Arc<Mutex<Flyout>>,
     ) {
         let menu_rx = MenuEvent::receiver();
         let tray_rx = TrayIconEvent::receiver();
@@ -838,7 +983,16 @@ mod win {
                 } else if ev.id == ids.sync {
                     spawn_sync_setup();
                 } else if ev.id == ids.update {
+                    // Quit as well: this binary is one of the two the update
+                    // replaces. An MSI install goes through msiexec, which
+                    // cannot replace a file this process holds open and would
+                    // stop to ask about it; and even on the in-place path a
+                    // tray left running keeps executing the old code until it
+                    // is restarted anyway.
                     spawn_update();
+                    quit.store(true, Ordering::SeqCst);
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                    ctx.request_repaint();
                 } else if ev.id == ids.quit {
                     // Ask the app to close so Drop runs (removes the tray icon)
                     // instead of exiting the process abruptly.
@@ -850,9 +1004,31 @@ mod win {
             while let Ok(ev) = tray_rx.try_recv() {
                 if let TrayIconEvent::Click {
                     button: MouseButton::Left,
+                    rect,
                     ..
                 } = ev
                 {
+                    let mut flyout = flyout.lock().unwrap_or_else(|e| e.into_inner());
+                    // Windows blurs the panel before it delivers the click that
+                    // caused the blur, so the panel has already dismissed
+                    // itself by now. Reopening it here would make the icon a
+                    // button that can only ever open.
+                    if flyout
+                        .hidden_at
+                        .is_some_and(|at| at.elapsed() < REOPEN_GRACE)
+                    {
+                        flyout.hidden_at = None;
+                        continue;
+                    }
+                    flyout.hidden_at = None;
+                    flyout.focused_once = false;
+                    flyout.anchor = Some((
+                        rect.position.x,
+                        rect.position.y,
+                        f64::from(rect.size.width),
+                        f64::from(rect.size.height),
+                    ));
+                    drop(flyout);
                     show_window(&ctx);
                 }
             }

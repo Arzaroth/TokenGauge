@@ -5,22 +5,61 @@
 //! Regenerated every cycle it would forget its own history twelve times a year,
 //! and asymmetrically, since peers keep what the writer lost.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::contribution::{
-    Bucket, Contribution, DayDigest, DeviceRecord, SCHEMA_VERSION, bucketize, day_digests,
-    intern_provider, sort_key, syncable,
+    Bucket, Contribution, DayDigest, DeviceRecord, Granularity, SCHEMA_VERSION,
+    WIRE_RETENTION_DAYS, bucketize, day_digests, intern_provider, sort_key, syncable,
 };
 use super::hour::Hour;
-use crate::cost::UsageEvent;
-use crate::cost::pricing::PriceTable;
+use crate::cost::pricing::{PriceArchive, PriceTable, month_key};
+use crate::cost::{TokenCounts, UsageEvent};
+
+/// The calendar step a history series advances by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    Day,
+    Month,
+}
+
+impl Step {
+    fn key(self, date: NaiveDate) -> String {
+        match self {
+            Step::Day => date.to_string(),
+            Step::Month => month_key(date),
+        }
+    }
+}
 
 /// Days of buckets the local store keeps. Once a CLI rotates a transcript away
 /// the store holds the only record of that day, and a bucket is small.
 pub const STORE_RETENTION_DAYS: i64 = 400;
+
+/// Days of buckets kept at hour granularity. Past this a bucket is rolled up
+/// into one per UTC day, provider and model: an hourly year is most of a
+/// megabyte rewritten on every fetch, and nothing reading history that far back
+/// reads the hour.
+///
+/// Must stay wider than the widest window [`crate::cost::read_window`] re-reads
+/// (31 days, on the last day of a month) and no narrower than the wire
+/// retention. Narrower than the first and a re-read would land beside a
+/// rolled-up copy of the same tokens instead of replacing it; narrower than the
+/// second and a contribution would carry a granularity no peer has been sent
+/// before.
+pub const HOURLY_RETENTION_DAYS: i64 = 35;
+
+// Both halves of that, checked at compile time rather than left to a test that
+// would only fail once someone had already shipped the change.
+//
+// `upsert_local` replaces this device's buckets from `from` on, and the widest
+// window `cost::read_window` asks for is the last day of a month, 30 days back.
+// A rolled-up bucket at or after that mark would be landed beside rather than
+// replaced on the next re-read, and the day would count twice.
+const _: () = assert!(HOURLY_RETENTION_DAYS > 31);
+const _: () = assert!(HOURLY_RETENTION_DAYS >= WIRE_RETENTION_DAYS);
 
 /// What one device has contributed, as this machine holds it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -46,6 +85,18 @@ pub struct Overlap {
     /// The one whose buckets are counted. Both sides pick the same id without
     /// having to agree on anything.
     pub kept: String,
+}
+
+/// One day of one model on one device, for `--export`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportRow {
+    pub date: NaiveDate,
+    pub provider: String,
+    pub model: String,
+    pub device: String,
+    pub tokens: TokenCounts,
+    pub total_tokens: u64,
+    pub usd: f64,
 }
 
 /// One device's share of a period, for the `tokens_by_device` section.
@@ -254,6 +305,42 @@ impl FleetStore {
                 Some(existing) => existing.max(floor),
                 None => floor,
             });
+        }
+    }
+
+    /// Roll buckets older than `hourly_days` into one per UTC day, provider and
+    /// model, and leave everything newer at the hour.
+    ///
+    /// Idempotent, because a day bucket rolls up to itself: it is already the
+    /// only bucket for its date and it is re-emitted at the same hour.
+    pub fn compact(&mut self, now: DateTime<Utc>, hourly_days: i64) {
+        let floor = Hour::containing(now).minus_days(hourly_days.max(HOURLY_RETENTION_DAYS));
+        for slice in self.devices.values_mut() {
+            let mut rolled: BTreeMap<(NaiveDate, String, String), TokenCounts> = BTreeMap::new();
+            let mut kept: Vec<Bucket> = Vec::with_capacity(slice.buckets.len());
+            for bucket in slice.buckets.drain(..) {
+                if bucket.hour >= floor {
+                    kept.push(bucket);
+                    continue;
+                }
+                rolled
+                    .entry((bucket.hour.utc_date(), bucket.provider, bucket.model))
+                    .or_default()
+                    .add(&bucket.tokens);
+            }
+            kept.extend(
+                rolled
+                    .into_iter()
+                    .map(|((date, provider, model), tokens)| Bucket {
+                        hour: Hour::midday(date),
+                        provider,
+                        model,
+                        granularity: Granularity::Day,
+                        tokens,
+                    }),
+            );
+            kept.sort_by(sort_key);
+            slice.buckets = kept;
         }
     }
 
@@ -468,6 +555,116 @@ impl FleetStore {
             .collect();
         rows.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.label.cmp(&b.label)));
         rows
+    }
+
+    /// One day of one model on one device, as `--export` writes it.
+    ///
+    /// Folded to a day rather than left at the hour, because past
+    /// [`HOURLY_RETENTION_DAYS`] half the store has no hour left to report and
+    /// a column that is exact for a month and rounded for a year is worse than
+    /// one that is honest throughout.
+    pub fn export_rows(
+        &self,
+        since: Option<NaiveDate>,
+        offset: FixedOffset,
+        prices: &PriceTable,
+        archive: &PriceArchive,
+    ) -> Vec<ExportRow> {
+        let dropped = self.dropped_days();
+        let mut tables: HashMap<String, PriceTable> = HashMap::new();
+        let mut folded: BTreeMap<(NaiveDate, String, String, String), (TokenCounts, f64)> =
+            BTreeMap::new();
+        for (id, slice) in &self.devices {
+            let device = slice.device.display().to_string();
+            for bucket in &slice.buckets {
+                if is_dropped(&dropped, bucket, id) {
+                    continue;
+                }
+                let date = bucket.hour.date_at(offset);
+                if since.is_some_and(|from| date < from) {
+                    continue;
+                }
+                let month = month_key(date);
+                let table = tables
+                    .entry(month.clone())
+                    .or_insert_with(|| prices.as_of(archive, &month));
+                let entry = folded
+                    .entry((
+                        date,
+                        bucket.provider.clone(),
+                        bucket.model.clone(),
+                        device.clone(),
+                    ))
+                    .or_default();
+                entry.0.add(&bucket.tokens);
+                if let Some(price) = table.get(&bucket.model) {
+                    entry.1 += price.cost(&bucket.tokens);
+                }
+            }
+        }
+        folded
+            .into_iter()
+            .map(
+                |((date, provider, model, device), (tokens, usd))| ExportRow {
+                    date,
+                    provider,
+                    model,
+                    device,
+                    total_tokens: tokens.total(),
+                    tokens,
+                    usd,
+                },
+            )
+            .collect()
+    }
+
+    /// Tokens and dollars per calendar step over a local-calendar range.
+    ///
+    /// The same buckets and the same dropped-day rule as [`Self::device_totals`],
+    /// which is why it lives beside it: a history chart that counted a
+    /// double-read day the section above it drops would disagree with the row
+    /// it zooms out from.
+    ///
+    /// Each bucket is rated at the prices of *its own* month rather than
+    /// today's. That is the difference between a chart that stays put and one
+    /// that quietly rewrites its past every time LiteLLM moves a number.
+    pub fn totals_by_step(
+        &self,
+        provider: &str,
+        range: (NaiveDate, NaiveDate),
+        offset: FixedOffset,
+        step: Step,
+        prices: &PriceTable,
+        archive: &PriceArchive,
+    ) -> BTreeMap<String, (u64, f64)> {
+        let (from, to) = range;
+        let dropped = self.dropped_days();
+        let mut tables: HashMap<String, PriceTable> = HashMap::new();
+        let mut out: BTreeMap<String, (u64, f64)> = BTreeMap::new();
+        for (id, slice) in &self.devices {
+            for bucket in &slice.buckets {
+                if !bucket.provider.eq_ignore_ascii_case(provider) {
+                    continue;
+                }
+                if is_dropped(&dropped, bucket, id) {
+                    continue;
+                }
+                let date = bucket.hour.date_at(offset);
+                if date < from || date > to {
+                    continue;
+                }
+                let month = month_key(date);
+                let table = tables
+                    .entry(month.clone())
+                    .or_insert_with(|| prices.as_of(archive, &month));
+                let entry = out.entry(step.key(date)).or_default();
+                entry.0 += bucket.tokens.total();
+                if let Some(price) = table.get(&bucket.model) {
+                    entry.1 += price.cost(&bucket.tokens);
+                }
+            }
+        }
+        out
     }
 }
 
@@ -944,5 +1141,96 @@ mod tests {
             direct.costs["claude"].monthly_tokens,
             round_tripped.costs["claude"].monthly_tokens,
         );
+    }
+
+    #[test]
+    fn compacting_rolls_old_hours_into_days_and_keeps_recent_ones() {
+        let now = hour("2026-08-25T12").start();
+        let old = hour("2026-01-14T03");
+        let mut store = FleetStore::default();
+        store.upsert_local(
+            &device("a"),
+            old,
+            &[
+                event("claude", "m", old, 100, Some(1)),
+                event("claude", "m", hour("2026-01-14T09"), 200, Some(2)),
+                event("claude", "m", hour("2026-01-15T09"), 400, Some(3)),
+                event("claude", "m", hour("2026-08-24T09"), 800, Some(4)),
+            ],
+            0,
+        );
+        assert_eq!(store.devices["a"].buckets.len(), 4);
+
+        store.compact(now, WIRE_RETENTION_DAYS);
+
+        let buckets = &store.devices["a"].buckets;
+        assert_eq!(buckets.len(), 3, "the two January hours became one day");
+        assert_eq!(
+            tokens_for(&store, "a"),
+            1500,
+            "rolling up moves tokens, it does not lose them"
+        );
+        let january: Vec<&Bucket> = buckets
+            .iter()
+            .filter(|b| b.granularity == Granularity::Day)
+            .collect();
+        assert_eq!(january.len(), 2, "both January days rolled up");
+        assert_eq!(
+            january[0].tokens.total(),
+            300,
+            "the 14th's two hours summed"
+        );
+        assert!(
+            buckets
+                .iter()
+                .any(|b| b.granularity == Granularity::Hour && b.tokens.total() == 800),
+            "yesterday is still an hour"
+        );
+    }
+
+    #[test]
+    fn compacting_twice_changes_nothing_the_second_time() {
+        let now = hour("2026-08-25T12").start();
+        let old = hour("2026-01-14T03");
+        let mut store = FleetStore::default();
+        store.upsert_local(
+            &device("a"),
+            old,
+            &[
+                event("claude", "m", old, 100, Some(1)),
+                event("claude", "m", hour("2026-01-14T09"), 200, Some(2)),
+            ],
+            0,
+        );
+
+        store.compact(now, WIRE_RETENTION_DAYS);
+        let once = store.devices["a"].buckets.clone();
+        store.compact(now, WIRE_RETENTION_DAYS);
+        assert_eq!(
+            once, store.devices["a"].buckets,
+            "a day bucket rolls up to itself"
+        );
+    }
+
+    #[test]
+    fn a_rolled_up_day_reads_as_the_same_date_either_side_of_utc() {
+        // A day bucket has no hour left to place it by, so it sits at midday.
+        // At midnight it would have read as the previous date for every reader
+        // west of UTC, moving a year of history one day left in Montreal.
+        let now = hour("2026-08-25T12").start();
+        let mut store = FleetStore::default();
+        store.upsert_local(
+            &device("a"),
+            hour("2026-01-14T03"),
+            &[event("claude", "m", hour("2026-01-14T03"), 100, Some(1))],
+            0,
+        );
+        store.compact(now, WIRE_RETENTION_DAYS);
+
+        let bucket = &store.devices["a"].buckets[0];
+        let paris = FixedOffset::east_opt(2 * 3600).expect("offset");
+        let montreal = FixedOffset::west_opt(5 * 3600).expect("offset");
+        assert_eq!(bucket.hour.date_at(paris).to_string(), "2026-01-14");
+        assert_eq!(bucket.hour.date_at(montreal).to_string(), "2026-01-14");
     }
 }

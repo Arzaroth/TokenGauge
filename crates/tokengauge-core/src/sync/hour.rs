@@ -47,6 +47,19 @@ impl Hour {
         Self(self.0 - days * 24)
     }
 
+    /// Where a bucket rolled up to a whole day sits.
+    ///
+    /// Midday rather than midnight: a day bucket has no hour left to place it
+    /// by, and [`Self::date_at`] would read a midnight one as the previous date
+    /// for every reader west of UTC.
+    pub fn midday(date: NaiveDate) -> Self {
+        let at = date
+            .and_hms_opt(12, 0, 0)
+            .map(|naive| naive.and_utc())
+            .unwrap_or_default();
+        Self::containing(at)
+    }
+
     pub fn parse(text: &str) -> Option<Self> {
         let naive =
             NaiveDateTime::parse_from_str(&format!("{text}:00:00"), "%Y-%m-%dT%H:%M:%S").ok()?;

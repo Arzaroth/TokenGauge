@@ -25,12 +25,15 @@ pub use contribution::{
 };
 pub use crypto::{FleetKey, OpenError, key_path, load_key, store_key};
 pub use fleet::{
-    DeviceCost, DeviceSlice, FleetStore, KeyChange, ObjectState, Overlap, STORE_RETENTION_DAYS,
+    DeviceCost, DeviceSlice, ExportRow, FleetStore, HOURLY_RETENTION_DAYS, KeyChange, ObjectState,
+    Overlap, STORE_RETENTION_DAYS, Step,
 };
 pub use hour::Hour;
 pub use report::{
     DeviceLine, DeviceStatus, Finding, OverlapNote, SkippedObject, SyncReport, SyncStatus,
     describe, findings, note,
 };
-pub use run::{SyncOutcome, forget, local_device_id, refresh, test_round_trip};
+pub use run::{
+    BackfillOutcome, SyncOutcome, backfill, forget, local_device_id, refresh, test_round_trip,
+};
 pub use transport::{PeerEntry, Transport};

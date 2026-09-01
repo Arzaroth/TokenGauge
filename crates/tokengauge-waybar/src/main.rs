@@ -1,5 +1,6 @@
 mod daemon;
 mod doctor;
+mod export;
 mod render;
 mod snapshot;
 mod sync_cli;
@@ -129,6 +130,27 @@ pub struct Args {
     /// Open the TUI on its sync screen, in a terminal.
     #[arg(long)]
     sync_setup: bool,
+    /// Write the history store to stdout: one row per day, provider and model.
+    /// `csv` when given no value, or `json`.
+    #[arg(long, value_enum, value_name = "FORMAT", num_args = 0..=1, default_missing_value = "csv")]
+    export: Option<ExportFormat>,
+    /// Oldest day `--export` includes, as `YYYY-MM-DD`. Defaults to everything
+    /// the store still holds.
+    #[arg(long, value_name = "DATE")]
+    since: Option<String>,
+    /// Re-read every transcript still on disk into the history store. This runs
+    /// once by itself, before the first fetch; the flag forces it again, which
+    /// is what to reach for after restoring a machine's transcripts from a
+    /// backup.
+    #[arg(long)]
+    backfill: bool,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ExportFormat {
+    #[default]
+    Csv,
+    Json,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -166,6 +188,8 @@ enum Action {
     SetPrimary(String),
     CheckUpdate,
     InstallFrontend(String),
+    Export(ExportFormat),
+    Backfill,
     Update,
     Refresh,
     Rotate(RotateDir),
@@ -225,6 +249,12 @@ impl Action {
         }
         if let Some(spec) = &args.install_frontend {
             add!("--install-frontend", Action::InstallFrontend(spec.clone()));
+        }
+        if let Some(format) = args.export {
+            add!("--export", Action::Export(format));
+        }
+        if args.backfill {
+            add!("--backfill", Action::Backfill);
         }
         if args.update {
             add!("--update", Action::Update);
@@ -296,6 +326,8 @@ fn main() -> Result<()> {
         Action::SetPrimary(name) => handle_set_primary(&config, &config_path, &name),
         Action::CheckUpdate => handle_check_update(&config),
         Action::InstallFrontend(spec) => handle_install_frontend(&spec),
+        Action::Export(format) => export::run(&config, format, args.since.as_deref()),
+        Action::Backfill => handle_backfill(&config),
         Action::Update => handle_update(&config),
         Action::Refresh => {
             // The daemon owns the sentinel while it is up, so ask it first and
@@ -491,6 +523,20 @@ fn report_frontend_skew(binary: &str) {
             ),
         }
     }
+}
+
+/// Re-read every transcript into the history store, and say what came back.
+///
+/// The first fetch does this by itself. The flag is for the second time it is
+/// wanted: transcripts restored from a backup, or a store thrown away.
+fn handle_backfill(config: &TokenGaugeConfig) -> Result<()> {
+    let today = chrono::Local::now().date_naive();
+    let outcome = tokengauge_core::sync::backfill(config, today);
+    if let Some(error) = outcome.error {
+        anyhow::bail!("{error}");
+    }
+    println!("read {} calls back to {}", outcome.events, outcome.since);
+    Ok(())
 }
 
 fn handle_install_frontend(spec: &str) -> Result<()> {

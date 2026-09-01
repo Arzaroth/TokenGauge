@@ -68,6 +68,22 @@ pub(crate) fn json_snapshot(
         .map(|p| p.to_string())
         .collect();
 
+    // History is resolved here, on every render, rather than stored in the
+    // snapshot. Its steps are relative to today, so a panel that rebuilt them
+    // only when it refetched would draw yesterday's calendar for the same
+    // reason a reset countdown stopped counting down. Reading the store and the
+    // cached price table is local work; `allow_network: false` is what keeps a
+    // render from ever turning into a fetch.
+    let (store, store_error) = tokengauge_core::sync::store::load(&config.cache_file);
+    let prices = tokengauge_core::cost::pricing::load(
+        &config.cache_file,
+        std::time::Duration::from_secs(config.ccusage_timeout_secs),
+        false,
+    );
+    let archive = tokengauge_core::cost::pricing::archive();
+    let now = chrono::Local::now();
+    let (today, offset) = (now.date_naive(), *now.offset());
+
     let row_values: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
@@ -100,6 +116,23 @@ pub(crate) fn json_snapshot(
                 map.insert(
                     "panel".into(),
                     serde_json::to_value(tokengauge_core::panel_spec(r)).unwrap_or_default(),
+                );
+                // The second screen: every range resolved, so switching one is
+                // a click in an open pane rather than another `--json`.
+                let mut history = tokengauge_core::history_panel(
+                    &store,
+                    &r.provider,
+                    today,
+                    offset,
+                    &prices,
+                    archive,
+                );
+                if let Some(error) = &store_error {
+                    history.notes.push(error.clone());
+                }
+                map.insert(
+                    "history".into(),
+                    serde_json::to_value(&history).unwrap_or_default(),
                 );
                 // Extra windows get the same badge-string treatment, so a
                 // frontend renders every gauge's projection the same way.
@@ -503,12 +536,33 @@ mod tests {
             "session_pace",
             "weekly_pace",
             "panel",
+            "history",
             "bar",
             "dashboard_url",
             "status_url",
         ] {
             assert!(keys.contains(&key), "row key `{key}` is gone: {keys:?}");
         }
+
+        // Every range is carried, so a frontend switches one without another
+        // `--json`. A missing id is a selector with a dead button on it.
+        let ranges: Vec<&str> = snapshot["rows"][0]["history"]["series"]
+            .as_array()
+            .map(|series| {
+                series
+                    .iter()
+                    .filter_map(|s| s["id"].as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            ranges,
+            tokengauge_core::HISTORY_RANGES
+                .iter()
+                .map(|r| r.id())
+                .collect::<Vec<_>>(),
+            "the history pane's ranges are not all on the row"
+        );
 
         // The panel is the whole content contract; a row that carries an empty
         // one draws nothing anywhere.

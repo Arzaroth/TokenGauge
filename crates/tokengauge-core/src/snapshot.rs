@@ -262,6 +262,7 @@ mod tests {
 
     fn payload_resetting_at(resets_at: Option<&str>) -> ProviderPayload {
         ProviderPayload {
+            stale_reason: None,
             provider: "claude".into(),
             version: None,
             source: None,
@@ -318,6 +319,7 @@ mod tests {
     #[test]
     fn retain_enabled_drops_disabled_providers_from_cache() {
         let payload = |name: &str| ProviderPayload {
+            stale_reason: None,
             provider: name.into(),
             version: None,
             source: None,
@@ -448,6 +450,7 @@ mod tests {
     #[test]
     fn cached_data_full_format() {
         let payload = ProviderPayload {
+            stale_reason: None,
             provider: "claude".to_string(),
             version: Some("2.0".to_string()),
             source: None,
@@ -481,6 +484,7 @@ mod tests {
     #[test]
     fn cached_data_legacy_format() {
         let payload = ProviderPayload {
+            stale_reason: None,
             provider: "claude".to_string(),
             version: None,
             source: None,

@@ -248,8 +248,14 @@ pub fn rate_with_prices(
     if events.is_empty() {
         return (NativeCostReport::default(), pricing::PriceTable::default());
     }
-    let prices = pricing::load(cache_file, timeout, true);
+    let (prices, source) = pricing::load_with_source(cache_file, timeout, true);
     let report = build_report(events, &prices, today);
+    // Only a table served out of the cache is worth asking about. The other
+    // three either just downloaded or just failed to, and asking again in the
+    // same breath would fetch the same two megabytes twice.
+    if source != pricing::PriceSource::Fresh {
+        return (report, prices);
+    }
     match pricing::refetch_for_unpriced(cache_file, &report.unpriced, timeout) {
         Some(fresh) => {
             let report = build_report(events, &fresh, today);

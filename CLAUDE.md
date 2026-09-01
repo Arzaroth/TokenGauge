@@ -79,7 +79,8 @@ of them decide it.
 The snapshot lives at `$XDG_STATE_HOME/tokengauge/tokengauge-usage.json`
 (`cache_file`), and every other state file is derived from its **parent**: the
 daemon socket, the refresh sentinel, the selected provider, the notify state,
-`tokengauge-prices.json`, and `tokengauge-revision`. It is state, not cache: it
+`tokengauge-prices.json`, `tokengauge-prices-missed.json`, and
+`tokengauge-revision`. It is state, not cache: it
 holds the only record of past days' tokens and costs.
 
 `cache_is_stale()` in core is the single fetch-or-serve decision. A snapshot is

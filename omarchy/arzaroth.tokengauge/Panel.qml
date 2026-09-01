@@ -50,6 +50,26 @@ Panel {
   readonly property bool alarming: !!headline && (Number(headline.fraction) || 0) >= 0.9
 
   property bool settingsOpen: false
+  property bool historyOpen: false
+  // Which range the history screen is showing. Every range is already on the
+  // row, so cycling one is a rebind rather than another `--json`.
+  property int historyRange: 0
+
+  // Settings and history are both second screens over the panel, and exactly
+  // one of the three is up at a time. A year of bars does not belong above the
+  // limit gauges, which is why history is a screen rather than a section.
+  readonly property bool showPanel: !root.settingsOpen && !root.historyOpen
+
+  function openScreen(which) {
+    root.settingsOpen = which === "settings"
+    root.historyOpen = which === "history"
+  }
+
+  readonly property var history: provider && provider.history ? provider.history : null
+  readonly property var historySeries: history && Array.isArray(history.series)
+                                       && history.series.length > 0
+    ? history.series[Math.min(root.historyRange, history.series.length - 1)]
+    : null
   property real wheelAccumulator: 0
 
   // The frontend's own read failure - a binary that vanished, a snapshot that
@@ -100,6 +120,12 @@ Panel {
     if (url === "") return
     if (bar) bar.run("xdg-open " + JSON.stringify(url))
     else Quickshell.execDetached(["xdg-open", url])
+  }
+
+  function selectHistoryRange(index) {
+    var series = root.history && Array.isArray(root.history.series) ? root.history.series : []
+    if (index >= 0 && index < series.length)
+      root.historyRange = index
   }
 
   function selectProvider(index) {
@@ -425,7 +451,11 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         if (t === "r" || t === "R") usage.refreshNow()
-        else if (t === ",") root.settingsOpen = !root.settingsOpen
+        else if (t === ",") root.openScreen(root.settingsOpen ? "panel" : "settings")
+        // `.` next to `,`: h and l already move between providers, so the
+        // obvious letter was taken.
+        else if (t === ".") root.openScreen(root.historyOpen ? "panel" : "history")
+        else if (root.historyOpen && /^[1-9]$/.test(t)) root.selectHistoryRange(Number(t) - 1)
         else if (root.settingsOpen && (t === "p" || t === "P")) root.cyclePin()
         else if (root.settingsOpen && (t === "y" || t === "Y")) usage.openSyncSetup()
         else if (root.settingsOpen && /^[1-9]$/.test(t)) root.toggleProviderAt(Number(t) - 1)
@@ -551,13 +581,24 @@ Panel {
             }
 
             trailingControl: Component {
-              PanelActionButton {
-                iconText: "󰒓"
-                tooltipText: "Settings"
-                foreground: root.settingsOpen ? Color.accent : root.dim
-                hoverColor: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.settingsOpen = !root.settingsOpen
+              Row {
+                spacing: Style.space(8)
+                PanelActionButton {
+                  iconText: "󰄨"
+                  tooltipText: "History  ."
+                  foreground: root.historyOpen ? Color.accent : root.dim
+                  hoverColor: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: root.openScreen(root.historyOpen ? "panel" : "history")
+                }
+                PanelActionButton {
+                  iconText: "󰒓"
+                  tooltipText: "Settings  ,"
+                  foreground: root.settingsOpen ? Color.accent : root.dim
+                  hoverColor: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: root.openScreen(root.settingsOpen ? "panel" : "settings")
+                }
               }
             }
           }
@@ -629,7 +670,7 @@ Panel {
             Column {
               required property var modelData
               width: parent ? parent.width : 0
-              visible: !root.settingsOpen
+              visible: root.showPanel
               height: visible ? implicitHeight : 0
               spacing: modelData.kind === "meters" ? Style.space(10)
                      : modelData.kind === "bars" ? Style.space(4)
@@ -777,6 +818,136 @@ Panel {
             }
           }
 
+
+          // ---------- History ----------
+          // Every range is resolved in the core and carried on the row, so
+          // this draws a chart and formats none of it.
+          PanelSectionHeader {
+            visible: root.historyOpen
+            width: parent.width
+            text: "HISTORY"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          Column {
+            width: parent.width
+            visible: root.historyOpen
+            height: visible ? implicitHeight : 0
+            spacing: Style.space(8)
+
+            Row {
+              spacing: Style.space(10)
+              Repeater {
+                model: root.historyOpen && root.history ? root.history.series : []
+
+                Text {
+                  required property int index
+                  required property var modelData
+                  text: modelData.label
+                  color: index === root.historyRange ? root.foreground : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.historyRange = parent.index
+                  }
+                }
+              }
+            }
+
+            Text {
+              width: parent.width
+              visible: root.historySeries !== null
+              text: root.historySeries
+                ? root.historySeries.total_usd + "  ·  "
+                  + root.historySeries.total_tokens + " tokens  ·  avg "
+                  + root.historySeries.average_usd
+                : ""
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              elide: Text.ElideRight
+            }
+
+            Text {
+              width: parent.width
+              visible: root.historySeries !== null && root.historySeries.empty
+              text: "Nothing spent in this range."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Canvas {
+              id: historyChart
+              width: parent.width
+              height: Style.space(120)
+              visible: root.historySeries !== null && !root.historySeries.empty
+              readonly property var points: root.historySeries && !root.historySeries.empty
+                                            ? root.historySeries.points : []
+              onPointsChanged: requestPaint()
+              onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+                var n = points.length
+                if (n === 0)
+                  return
+                // Wide steps get a gap; ninety days of bars have none to spare.
+                var gap = n <= 12 ? 2 : (n <= 31 ? 1 : 0)
+                var w = Math.max(1, (width - gap * (n - 1)) / n)
+                for (var i = 0; i < n; i++) {
+                  var p = points[i]
+                  // A floor of one pixel: a step that spent a little must never
+                  // draw as a step that spent nothing.
+                  var h = p.fraction > 0 ? Math.max(1, p.fraction * height) : 0
+                  ctx.fillStyle = root.toneColor(p.tone)
+                  // The step in progress is short because it is not over, so it
+                  // is drawn as unfinished rather than as a fall.
+                  ctx.globalAlpha = p.partial ? 0.45 : 1.0
+                  ctx.fillRect(i * (w + gap), height - h, w, h)
+                }
+              }
+            }
+
+            Item {
+              width: parent.width
+              visible: historyChart.visible
+              height: firstStep.implicitHeight
+
+              Text {
+                id: firstStep
+                anchors.left: parent.left
+                text: root.historySeries && root.historySeries.points.length > 0
+                  ? root.historySeries.points[0].label : ""
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              Text {
+                anchors.right: parent.right
+                text: root.historySeries && root.historySeries.points.length > 0
+                  ? root.historySeries.points[root.historySeries.points.length - 1].label
+                  : ""
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Text {
+              width: parent.width
+              visible: root.history !== null
+              text: root.history
+                ? [root.history.covers].concat(root.history.notes || []).join("  ·  ")
+                : ""
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+          }
 
           // ---------- Settings ----------
           PanelSectionHeader {

@@ -524,13 +524,31 @@ own.
 ### Install
 
 **Quick install (PowerShell):** downloads the latest release, installs
-`tokengauge-tui.exe`, adds it to your user `PATH`, and writes a default config:
+`tokengauge-tui.exe` and `tokengauge-tray.exe`, adds them to your user `PATH`,
+puts the tray GUI in the Start Menu, and writes a default config:
 
 ```powershell
 irm https://raw.githubusercontent.com/Arzaroth/TokenGauge/master/scripts/install.ps1 | iex
 ```
 
 Or run a local checkout with `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`.
+Add `-RunAtLogin` to start the tray GUI with Windows.
+
+**MSI (uninstallable from Settings > Apps):** download
+`tokengauge-<version>-win64.msi` from
+[GitHub Releases](https://github.com/Arzaroth/TokenGauge/releases) and run it.
+It is a per-user install and needs no administrator rights: it puts the same two
+binaries in `%LOCALAPPDATA%\TokenGauge\bin`, adds that directory to your `PATH`
+and **removes it again on uninstall**, and registers a Start Menu entry. To also
+start the tray at login:
+
+```powershell
+msiexec /i tokengauge-<version>-win64.msi ADDLOCAL=Main,RunAtLogin
+```
+
+The MSI is unsigned, so Windows SmartScreen warns on first run and the Run
+button sits behind **More info**; the PowerShell one-liner above trips nothing.
+Both installers use the same directory, so switching between them is safe.
 
 **Manual:**
 
@@ -572,17 +590,19 @@ cargo build --release -p tokengauge-tui
 ### Tray GUI (`tokengauge-tray`)
 
 Prefer a window over the terminal? `tokengauge-tray` is a Windows system-tray
-app (egui) that shows per-provider **Session / Weekly** usage bars and reset
-times in a small window, backed by a tray icon. It shares the same config and
-cache as the TUI and refreshes in the background.
+app (egui) that draws the same panel every other frontend draws - limits, cost,
+tokens by day and by model - in a flyout anchored to its tray icon, backed by an
+icon showing the current peak percentage. It shares the same config and cache as
+the TUI and refreshes in the background. `scripts\install.ps1` installs it; to
+build it yourself:
 
 ```powershell
 cargo build --release -p tokengauge-tray
 .\target\release\tokengauge-tray.exe
 ```
 
-- Left-click the tray icon (near the clock) to show the window; closing the
-  window hides it back to the tray.
+- Left-click the tray icon (near the clock) to open the panel over it; click
+  away, press `Esc`, or use the `×` button to send it back to the tray.
 - Right-click the tray icon for **Show / Refresh now / Update TokenGauge / Quit**
   (**Update** runs `tokengauge-tui --update`; restart the tray afterward).
 - It reads the same OAuth credentials as the TUI, so sign in to the `codex`

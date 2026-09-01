@@ -40,7 +40,12 @@ frontend implements exactly three primitives and loops:
 | `Rows` | label, value, tinted `badge`, dim `suffix` on one line, no bar. The cost figures. |
 
 Canonical sections, in order (`panel::SECTION_IDS`), each dropped when it has no
-data: `limits`, `cost`, `tokens_by_day`, `tokens_by_model`, `tokens_by_device`.
+data: `status`, `limits`, `cost`, `tokens_by_day`, `tokens_by_model`,
+`tokens_by_device`. `status` is how a stale row says why - the fetch error that
+`apply_stale_fallback` drops rides on the payload as `stale_reason` and is
+rendered as a section rather than as a per-frontend badge, because a `stale`
+chip on its own is the same word whether the network blipped once or a
+credential expired weeks ago.
 
 Adding a section means editing `panel.rs` and nothing else. Adding a *kind*
 means touching all six frontends - `panel::tests::every_panel_frontend_handles_every_section_kind`
@@ -234,6 +239,40 @@ Two things that are not the binary and must not be renamed with it:
 already have) and the `[waybar]` config section, which really is Waybar-specific.
 `signal_daemon_reload()` matches `tokengauge(-waybar)? --daemon`, because a
 daemon started before the rename is the same process to reload.
+
+## Windows installs itself three ways, into one directory
+
+`scripts/install.ps1`, `packaging/windows/tokengauge.wxs` and
+`update::apply_full` all write to `%LOCALAPPDATA%\TokenGauge\bin`. That is a
+contract, not a coincidence: the updater replaces the binaries *beside the
+running one*, so an installer that chose a different directory would leave two
+copies on disk and only one of them would ever update. A user with a stray
+binary above that folder is exactly how a July build survived twenty releases.
+
+The MSI is per-user (`Scope="perUser"`), which is what lets it install without
+elevation and manage the `PATH` entry through `<Environment>` so uninstall takes
+it back. It records its `ProductCode` under `HKCU\Software\TokenGauge`, and that
+marker is what `--update` reads to decide *how* to upgrade: with it, the upgrade
+goes through `msiexec` so MSI stays the owner of what is on disk; without it,
+the binaries are replaced in place as before. Replacing them underneath MSI is
+the thing to avoid - Windows would keep describing a version nobody is running,
+a repair would restore the old one, and the next MSI would compare against it.
+
+`msi_upgrade` returns while the installer is still running, and has to: the
+package replaces the executable calling it. That is why the caller exits
+promptly and why the tray quits when it launches an update.
+
+**Adding a release asset is a compatibility event.** `asset_for` matches by
+substring, so every updater already shipped takes whatever asset happens to
+match first. The MSI is named `win64`, not `windows-x86_64`, purely so old
+updaters cannot see it; new ones ask for `ARCHIVE_SUFFIX` explicitly. Name the
+next Windows asset carelessly and you break `--update` on machines whose
+binaries you can no longer change.
+
+WiX only runs properly on Windows, so the `.wxs` is compiled in CI's
+`build-windows` job as well as the release one. Do not trust a build of it on
+Linux: it reports false errors on plain `Directory/@Name` values, though it does
+still catch schema mistakes.
 
 ## Conventions
 

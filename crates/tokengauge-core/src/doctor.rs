@@ -414,6 +414,66 @@ pub fn doctor_lines(
         });
     }
 
+    // History
+    //
+    // The store is the only record of a day once the CLI has rotated its
+    // transcript away, so an empty or unreadable one is a year of chart that
+    // will never come back - worth a line of its own rather than a blank chart
+    // and no explanation.
+    section("History");
+    let (store, store_error) = crate::sync::store::load(&cfg.cache_file);
+    let store_path = crate::sync::store::store_path(&cfg.cache_file);
+    match store_error {
+        Some(error) => record(DoctorCheck {
+            label: format!("store: {}", store_path.display()),
+            ok: false,
+            detail: error,
+        }),
+        None => {
+            let buckets: usize = store.devices.values().map(|d| d.buckets.len()).sum();
+            let covers = store
+                .devices
+                .values()
+                .filter_map(|d| d.covers_from)
+                .min()
+                .map(|hour| hour.utc_date().to_string());
+            record(DoctorCheck {
+                label: format!("store: {}", store_path.display()),
+                ok: buckets > 0,
+                detail: match (&covers, buckets) {
+                    (_, 0) => "empty - nothing has been read into it yet".into(),
+                    (Some(from), n) => format!("{n} buckets, back to {from}"),
+                    (None, n) => format!("{n} buckets"),
+                },
+            });
+        }
+    }
+    let backfilled = crate::statefiles::backfill_done(&cfg.cache_file);
+    record(DoctorCheck {
+        label: "transcripts backfilled".into(),
+        ok: backfilled,
+        detail: if backfilled {
+            String::new()
+        } else {
+            "not yet - the next fetch does it once, or run `tokengauge --backfill`".into()
+        },
+    });
+    // A month older than the archive is rated at today's prices, which is not
+    // wrong so much as unstated: a chart whose past silently re-prices itself
+    // should say so somewhere.
+    let archive = crate::cost::pricing::archive();
+    record(DoctorCheck {
+        label: "price history".into(),
+        ok: !archive.is_empty(),
+        detail: match archive.earliest() {
+            Some(from) => format!(
+                "{} months, back to {from}; anything older is rated at today's prices",
+                archive.months()
+            ),
+            None => "none compiled in - every month is rated at today's prices".into(),
+        },
+    });
+
     // Providers
     section("Providers");
     let enabled = cfg.providers.enabled_providers();

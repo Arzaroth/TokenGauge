@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A per-user MSI for Windows.** There was no way to uninstall TokenGauge:
+  `install.ps1` copied binaries and appended to `PATH`, and nothing took either
+  back. `tokengauge-<version>-windows-x86_64.msi` is now a release asset, a
+  per-user install needing no administrator rights, that puts the binaries where
+  the script and the self-updater already expect them, manages the `PATH` entry
+  through MSI so uninstall removes it, registers a Start Menu entry, and offers
+  run-at-login as an opt-in feature (`ADDLOCAL=Main,RunAtLogin`). It is built
+  and validated on the Windows runner in both CI and the release workflow. The
+  zip and `install.ps1` stay the recommended path: the MSI is unsigned, so it
+  trips SmartScreen where the script does not.
+- **`--update` upgrades an MSI install through MSI.** Replacing the binaries
+  underneath the installer would leave Windows describing a version that is not
+  on disk, a repair restoring the old one, and a later MSI comparing against a
+  version nobody is running. When the marker key the MSI writes is present,
+  `--update` now downloads the `.msi` and hands the upgrade to `msiexec`
+  instead. It returns while the installer runs, because the package replaces
+  the executable running the update, and the tray quits when it starts one for
+  the same reason. A zip or `install.ps1` install has no marker and keeps the
+  in-place path unchanged.
+
+- **A panel says why its figures are frozen.** A provider whose fetch fails
+  serves its last good payload with a `stale` badge, and the error that caused
+  it was dropped on the floor - so the badge was the whole explanation, whether
+  the network blipped once or a credential expired weeks ago. The failure now
+  rides on the payload and `panel.rs` turns it into a STATUS section above the
+  limits: how old the figures are, and what the last fetch said. It comes off
+  the panel spec, so all six frontends carry it.
+
+### Fixed
+
+- **The updater picks its download by name, not by luck.** `asset_for` matches
+  a release asset by substring, and with only one asset per platform passing no
+  filter was unambiguous. Adding a second Windows asset made it a coin toss
+  decided by whatever order GitHub returns, and losing it means handing an MSI
+  to the zip extractor. New builds ask for the archive explicitly, and the MSI
+  is published as `win64` rather than `windows-x86_64` so the updaters already
+  in the wild cannot match it at all.
+- **The tray GUI is a tray panel, not a window.** It was an ordinary decorated,
+  resizable window that opened wherever Windows put it. It is now a flyout:
+  undecorated, no taskbar button, always on top, anchored to the tray icon it
+  was opened from, and dismissed by clicking away, pressing `Esc` or the new `×`
+  button. The limit bars stretch to the panel width instead of stopping at a
+  fixed 220pt, which left the LIMITS section ending halfway across.
+- **The tray GUI was drawing light-theme text on its dark panel.** `set_visuals`
+  applies to the current egui theme only, so on a machine running Windows in
+  light mode every string without an explicit colour - the provider name, every
+  cost figure - was painted in the light theme's near-black over the panel's
+  hardcoded dark fills. The palette is now installed on both themes.
+- **`↑` and `↓` rendered as tofu boxes in the tray GUI.** egui bundles those
+  arrows in Hack alone and puts Hack in the monospace family only, so the cost
+  trend badge boxed on every proportional surface. Hack is now the proportional
+  family's last fallback.
+- **A limit at 100% no longer says "not started".** The panel wrote that
+  footnote whenever a window had no reset time, which is right at 0% and
+  self-contradictory above it. A counting window whose reset the provider does
+  not report now says nothing rather than the opposite of what the bar shows.
+- **`install.ps1` installs the tray GUI.** It only ever copied
+  `tokengauge-tui.exe`, so the Windows GUI had to be unzipped by hand and had
+  no way to be launched but its full path. It now installs both binaries, adds
+  a Start Menu entry, and takes `-RunAtLogin` to start the tray with Windows.
 ## [0.28.1] - 2026-08-31
 
 ### Fixed

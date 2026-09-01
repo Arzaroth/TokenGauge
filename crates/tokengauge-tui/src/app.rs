@@ -41,6 +41,8 @@ pub enum Overlay {
     /// Boxed: a `SyncView` carries a whole config, and `AppState` is cloned
     /// around the draw loop.
     Sync(Box<crate::sync_view::SyncView>),
+    /// Boxed for the same reason: a resolved panel holds every range's points.
+    History(Box<crate::history_view::HistoryView>),
 }
 
 impl AppState {
@@ -139,6 +141,20 @@ impl App {
         )));
     }
 
+    /// Open the history screen on whichever provider is in front.
+    ///
+    /// Nothing to open with no rows: the store may well hold a year, but the
+    /// screen is scoped to a provider and there is none to scope it to.
+    pub fn open_history(&mut self) {
+        let Some(row) = self.state.rows.get(self.state.active_tab) else {
+            return;
+        };
+        self.state.overlay = Overlay::History(Box::new(crate::history_view::HistoryView::open(
+            self.config_override.clone(),
+            &row.provider,
+        )));
+    }
+
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         while !self.should_quit {
             self.poll_refresh();
@@ -226,6 +242,14 @@ impl App {
                 }
                 return Ok(());
             }
+            // Like the sync screen, this one owns `q`: it is a screen the user
+            // backs out of, not one they quit the app from.
+            Overlay::History(history) => {
+                if !history.on_key(key) {
+                    self.state.overlay = Overlay::None;
+                }
+                return Ok(());
+            }
             Overlay::Help => {
                 if should_exit(key) {
                     self.should_quit = true;
@@ -260,6 +284,7 @@ impl App {
             KeyCode::Char('u') => self.open_active_url(OpenWhich::Dashboard),
             KeyCode::Char('s') => self.open_active_url(OpenWhich::Status),
             KeyCode::Char('S') => self.open_sync(),
+            KeyCode::Char('H') => self.open_history(),
             _ => {}
         }
         Ok(())

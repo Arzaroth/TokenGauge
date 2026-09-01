@@ -1,4 +1,5 @@
 mod app;
+mod history_view;
 mod refresh;
 mod sync_view;
 mod theme;

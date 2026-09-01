@@ -42,6 +42,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, is_refreshing: bool) {
         // Full screen: the panel underneath is drawn and then covered, which is
         // wasteful but keeps the layout code in one place.
         Overlay::Sync(sync) => sync.render(frame, area),
+        Overlay::History(history) => history.render(frame, area),
         Overlay::Help => render_help_popup(frame, area),
         Overlay::None => {}
     }
@@ -779,6 +780,7 @@ fn render_help_popup(frame: &mut Frame, area: Rect) {
         binding_line("u", "open provider dashboard", key, desc),
         binding_line("s", "open provider status page", key, desc),
         binding_line("S", "fleet sync setup", key, desc),
+        binding_line("H", "spend history", key, desc),
         binding_line("?", "toggle this help", key, desc),
         binding_line("q / esc", "quit", key, desc),
         Line::from(""),

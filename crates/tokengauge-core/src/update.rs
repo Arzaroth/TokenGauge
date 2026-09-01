@@ -365,7 +365,7 @@ pub fn apply_full(cache_file: &Path) -> Result<Applied> {
     // no longer installed, and a later MSI comparing against it.
     #[cfg(windows)]
     if msi_product_code().is_some() {
-        return msi_upgrade(&release, cache_file);
+        return msi_upgrade(&release);
     }
 
     let asset = release
@@ -519,7 +519,7 @@ fn msi_product_code() -> Option<String> {
 /// the caller exits and the installer proceeds into a directory nobody holds
 /// open.
 #[cfg(windows)]
-fn msi_upgrade(release: &self_update::update::Release, cache_file: &Path) -> Result<Applied> {
+fn msi_upgrade(release: &self_update::update::Release) -> Result<Applied> {
     let asset = release
         .assets
         .iter()
@@ -559,14 +559,13 @@ fn msi_upgrade(release: &self_update::update::Release, cache_file: &Path) -> Res
         .spawn()
         .context("failed to launch msiexec")?;
 
-    let mut status = read_update_status(cache_file).unwrap_or_default();
-    status.current = release.version.clone();
-    status.latest = Some(release.version.clone());
-    status.available = false;
-    status.notified = None;
-    status.checked_ms = now_ms();
-    let _ = write_update_status(cache_file, &status);
-
+    // Deliberately not touching the cached update status here: msiexec runs
+    // asynchronously and may fail or be cancelled, so recording "now on the new
+    // version, no update available" would hide a still-pending upgrade until
+    // something else re-checked. The next check settles it honestly - the
+    // installed binary reports the new version if it worked, the same available
+    // update if it did not. The in-place path writes the status because there
+    // the replacement has already succeeded by the time it returns.
     Ok(Applied {
         version: release.version.clone(),
         frontends: Vec::new(),

@@ -93,10 +93,38 @@ pub struct ExportRow {
     pub date: NaiveDate,
     pub provider: String,
     pub model: String,
+    /// The stable id. Two machines can share a label or a hostname, so this is
+    /// what the rows are actually kept apart by.
+    pub device_id: String,
+    /// The label or hostname, for a human reading the file.
     pub device: String,
     pub tokens: TokenCounts,
     pub total_tokens: u64,
-    pub usd: f64,
+    /// `None` when the model has no price in the table for its month. A gap,
+    /// never a zero: `$0.00` beside a million tokens reads as free usage.
+    pub usd: Option<f64>,
+}
+
+/// The local calendar date a bucket belongs to.
+///
+/// An hourly bucket knows its hour, so it converts. A **day** bucket does not:
+/// it *is* a whole UTC day, rolled up by [`FleetStore::compact`] and parked at
+/// midday. Converting that to a local date would invent precision it no longer
+/// has, and past UTC+12 it invents the wrong one - at UTC+14 midday on the 14th
+/// reads as the 15th, so a whole day's tokens land on the wrong date in
+/// Kiritimati and nowhere else.
+/// What an export row is folded on: date, provider, model, device **id**.
+type ExportKey = (NaiveDate, String, String, String);
+
+/// What accumulates under one [`ExportKey`]. The money is `None` once any
+/// bucket in the group had no price.
+type ExportTotals = (TokenCounts, Option<f64>);
+
+fn bucket_date(bucket: &Bucket, offset: FixedOffset) -> NaiveDate {
+    match bucket.granularity {
+        Granularity::Hour => bucket.hour.date_at(offset),
+        Granularity::Day => bucket.hour.utc_date(),
+    }
 }
 
 /// One device's share of a period, for the `tokens_by_device` section.
@@ -529,7 +557,10 @@ impl FleetStore {
                     if is_dropped(&dropped, bucket, id) {
                         continue;
                     }
-                    let date = bucket.hour.date_at(offset);
+                    // Month-to-date today, so every bucket here is still
+                    // hourly - but a wider range would reach the rolled-up
+                    // ones, and this is the rule for those.
+                    let date = bucket_date(bucket, offset);
                     if date < from || date > to {
                         continue;
                     }
@@ -572,15 +603,16 @@ impl FleetStore {
     ) -> Vec<ExportRow> {
         let dropped = self.dropped_days();
         let mut tables: HashMap<String, PriceTable> = HashMap::new();
-        let mut folded: BTreeMap<(NaiveDate, String, String, String), (TokenCounts, f64)> =
-            BTreeMap::new();
+        // Keyed by device *id*, never by its display name: a label is user-set
+        // and a hostname is not unique either, so folding on one silently
+        // merges two machines that happen to share it into a single row.
+        let mut folded: BTreeMap<ExportKey, ExportTotals> = BTreeMap::new();
         for (id, slice) in &self.devices {
-            let device = slice.device.display().to_string();
             for bucket in &slice.buckets {
                 if is_dropped(&dropped, bucket, id) {
                     continue;
                 }
-                let date = bucket.hour.date_at(offset);
+                let date = bucket_date(bucket, offset);
                 if since.is_some_and(|from| date < from) {
                     continue;
                 }
@@ -593,28 +625,42 @@ impl FleetStore {
                         date,
                         bucket.provider.clone(),
                         bucket.model.clone(),
-                        device.clone(),
+                        id.clone(),
                     ))
-                    .or_default();
+                    .or_insert((TokenCounts::default(), Some(0.0)));
                 entry.0.add(&bucket.tokens);
-                if let Some(price) = table.get(&bucket.model) {
-                    entry.1 += price.cost(&bucket.tokens);
+                // A group is one model on one date, so it is priced or it is
+                // not - and an unpriced model has to reach the file as a gap
+                // rather than as a row claiming the tokens were free.
+                match table.get(&bucket.model) {
+                    Some(price) => {
+                        if let Some(usd) = entry.1.as_mut() {
+                            *usd += price.cost(&bucket.tokens);
+                        }
+                    }
+                    None => entry.1 = None,
                 }
             }
         }
         folded
             .into_iter()
-            .map(
-                |((date, provider, model, device), (tokens, usd))| ExportRow {
+            .map(|((date, provider, model, device_id), (tokens, usd))| {
+                let device = self
+                    .devices
+                    .get(&device_id)
+                    .map(|slice| slice.device.display().to_string())
+                    .unwrap_or_else(|| device_id.clone());
+                ExportRow {
                     date,
                     provider,
                     model,
+                    device_id,
                     device,
                     total_tokens: tokens.total(),
                     tokens,
                     usd,
-                },
-            )
+                }
+            })
             .collect()
     }
 
@@ -649,7 +695,7 @@ impl FleetStore {
                 if is_dropped(&dropped, bucket, id) {
                     continue;
                 }
-                let date = bucket.hour.date_at(offset);
+                let date = bucket_date(bucket, offset);
                 if date < from || date > to {
                     continue;
                 }
@@ -1210,6 +1256,100 @@ mod tests {
             once, store.devices["a"].buckets,
             "a day bucket rolls up to itself"
         );
+    }
+
+    #[test]
+    fn a_rolled_up_day_keeps_its_date_past_the_dateline() {
+        // Midday placement fixes every offset inside +/-12, and UTC+14 is
+        // outside it: 2026-01-14T12:00Z is already the 15th in Kiritimati. A
+        // day bucket *is* a UTC day and has no hour left to localise, so the
+        // readers take its UTC date rather than converting.
+        let now = hour("2026-08-25T12").start();
+        let mut store = FleetStore::default();
+        store.upsert_local(
+            &device("a"),
+            hour("2026-01-14T03"),
+            &[event("claude", "m", hour("2026-01-14T03"), 100, Some(1))],
+            0,
+        );
+        store.compact(now, WIRE_RETENTION_DAYS);
+        let bucket = &store.devices["a"].buckets[0];
+        assert_eq!(bucket.granularity, Granularity::Day);
+
+        let kiritimati = FixedOffset::east_opt(14 * 3600).expect("offset");
+        assert_eq!(
+            bucket.hour.date_at(kiritimati).to_string(),
+            "2026-01-15",
+            "the raw conversion is what would have gone wrong"
+        );
+        assert_eq!(
+            super::bucket_date(bucket, kiritimati).to_string(),
+            "2026-01-14",
+            "the reader keeps the day it was rolled up from"
+        );
+
+        // And the totals agree with it, which is the part a user sees.
+        let totals = store.totals_by_step(
+            "claude",
+            ("2026-01-01".parse().expect("date"), now.date_naive()),
+            kiritimati,
+            Step::Day,
+            &PriceTable::vendored(),
+            &PriceArchive::vendored(),
+        );
+        assert!(totals.contains_key("2026-01-14"), "{totals:?}");
+    }
+
+    #[test]
+    fn two_devices_sharing_a_label_stay_two_rows() {
+        // `display()` falls back to the hostname and neither is unique, so
+        // folding an export on it merges two machines into one row.
+        let at = hour("2026-08-24T09");
+        let mut store = FleetStore::default();
+        // Distinct dedup keys, or the two devices read as one transcript tree
+        // seen twice and `dropped_days` folds them on purpose.
+        for (id, key) in [("a", 1u64), ("b", 2)] {
+            let mut record = device(id);
+            record.label = "laptop".into();
+            store.upsert_local(&record, at, &[event("claude", "m", at, 100, Some(key))], 0);
+        }
+        let rows = store.export_rows(
+            None,
+            FixedOffset::east_opt(0).expect("offset"),
+            &PriceTable::vendored(),
+            &PriceArchive::vendored(),
+        );
+        assert_eq!(rows.len(), 2, "one row per device: {rows:?}");
+        assert_eq!(rows[0].device, "laptop");
+        assert_eq!(rows[1].device, "laptop");
+        assert_ne!(rows[0].device_id, rows[1].device_id);
+    }
+
+    #[test]
+    fn an_unpriced_model_exports_no_money_rather_than_none_spent() {
+        let at = hour("2026-08-24T09");
+        let mut store = FleetStore::default();
+        store.upsert_local(
+            &device("a"),
+            at,
+            &[event(
+                "claude",
+                "not-a-model-anyone-prices",
+                at,
+                100,
+                Some(1),
+            )],
+            0,
+        );
+        let rows = store.export_rows(
+            None,
+            FixedOffset::east_opt(0).expect("offset"),
+            &PriceTable::vendored(),
+            &PriceArchive::vendored(),
+        );
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].total_tokens > 0, "the tokens are still counted");
+        assert_eq!(rows[0].usd, None, "an unpriced model is a gap, not a zero");
     }
 
     #[test]

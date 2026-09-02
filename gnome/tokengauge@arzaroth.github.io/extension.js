@@ -647,7 +647,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return screen;
     }
 
-    _iconButton(iconName, tooltip, onClick) {
+    _iconButton(iconName, tooltip, onClick, hint) {
         const button = new St.Button({
             style_class: 'tokengauge-icon-button',
             child: new St.Icon({icon_name: iconName, icon_size: 16}),
@@ -655,7 +655,10 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         });
         button.accessible_name = tooltip;
         button.connect('clicked', onClick);
-        return button;
+        // The accessible name is what a screen reader says; `hint` is what a
+        // pointer gets, for the buttons whose worth depends on something the
+        // icon cannot show.
+        return hint ? attachTooltip(button, `${tooltip}\n${hint}`) : button;
     }
 
     _header() {
@@ -663,7 +666,8 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         header.add_child(label('TokenGauge', 'tokengauge-title'));
         header.add_child(spacer());
         header.add_child(this._iconButton('view-refresh-symbolic', _('Refresh'),
-            () => this._action('--refresh')));
+            () => this._action('--refresh'),
+            this._row?.refresh_hint));
         header.add_child(this._iconButton('web-browser-symbolic', _('Open dashboard'),
             () => {
                 this.menu.close();

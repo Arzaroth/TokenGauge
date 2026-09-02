@@ -83,6 +83,7 @@ pub(crate) fn json_snapshot(
     let archive = tokengauge_core::cost::pricing::archive();
     let now = chrono::Local::now();
     let (today, offset) = (now.date_naive(), *now.offset());
+    let now_ms = now.timestamp_millis();
 
     let row_values: Vec<serde_json::Value> = rows
         .iter()
@@ -103,6 +104,13 @@ pub(crate) fn json_snapshot(
                         .unwrap_or(serde_json::Value::Null),
                 );
                 map.insert("glyph".into(), icon.glyph.into());
+                // What the refresh control says on hover. Resolved on every
+                // render like the reset countdowns, for the same reason: the
+                // age it states keeps moving after the fetch that produced it.
+                map.insert(
+                    "refresh_hint".into(),
+                    tokengauge_core::refresh_hint(r.updated_iso.as_deref(), now_ms).into(),
+                );
                 map.insert("color".into(), icon.color_hex.into());
                 let pace_badge = |pace: Option<UsagePace>| {
                     pace.map(|p| serde_json::Value::from(p.badge()))
@@ -531,6 +539,7 @@ mod tests {
             "label",
             "glyph",
             "color",
+            "refresh_hint",
             "icon_svg",
             "window_labels",
             "session_pace",

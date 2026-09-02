@@ -9,8 +9,7 @@
 use serde::Serialize;
 use tokengauge_core::{
     PanelRow, ProviderFetchError, ProviderRow, Section, SectionKind, Theme, TokenGaugeConfig, Tone,
-    WaybarWindow, format_updated_relative, provider_icon, read_waybar_state, theme,
-    waybar_state_path,
+    WaybarWindow, provider_icon, read_waybar_state, theme, waybar_state_path,
 };
 
 pub(crate) fn theme_palette() -> (
@@ -386,16 +385,16 @@ pub(crate) fn format_header(row: &ProviderRow) -> String {
 pub(crate) fn format_provider_card(row: &ProviderRow) -> String {
     let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
 
-    let updated_line = row
-        .updated_iso
-        .as_deref()
-        .and_then(format_updated_relative)
-        .map(|rel| {
-            format!(
-                "  <span foreground=\"{dim}\">Updated {}</span>",
-                pango_escape(&rel)
-            )
-        });
+    // Waybar has no refresh button - its tooltip is the hover surface - so the
+    // sentence the other five put behind one is a line here, where a right
+    // click is the refresh.
+    let updated_line = Some(format!(
+        "  <span foreground=\"{dim}\">{}</span>",
+        pango_escape(&tokengauge_core::refresh_hint(
+            row.updated_iso.as_deref(),
+            tokengauge_core::now_ms()
+        ))
+    ));
 
     // The tooltip is waybar's panel, so it draws the same sections in the same
     // order as every other panel. The header and the input hints below are the

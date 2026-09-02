@@ -101,6 +101,9 @@ mod win {
         plan: Option<String>,
         stale: bool,
         updated: String,
+        /// What the Refresh button says on hover, resolved by the core on every
+        /// rebuild - the age in it keeps moving after the fetch that wrote it.
+        refresh_hint: String,
         /// Kept out of `panel` because the tray icon needs the raw number.
         session_used: Option<u8>,
         weekly_used: Option<u8>,
@@ -158,6 +161,10 @@ mod win {
             plan: r.plan_label.clone(),
             stale: r.stale,
             updated: r.updated.clone(),
+            refresh_hint: tokengauge_core::refresh_hint(
+                r.updated_iso.as_deref(),
+                tokengauge_core::now_ms(),
+            ),
             session_used: r.session_used,
             weekly_used: r.weekly_used,
             panel: panel_spec(r),
@@ -491,7 +498,11 @@ mod win {
                             .fill(BLUE)
                             .corner_radius(6)
                             .min_size(egui::vec2(0.0, 26.0));
-                            if ui.add(btn).clicked() {
+                            let mut btn = ui.add(btn);
+                            if let Some(row) = snap.rows.get(self.selected) {
+                                btn = btn.on_hover_text(row.refresh_hint.as_str());
+                            }
+                            if btn.clicked() {
                                 let _ = self.action_tx.send(Action::Refresh);
                             }
                             if snap.fetching {

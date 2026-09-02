@@ -83,7 +83,7 @@ pub use history::{
     history_panel_now,
 };
 pub use pace::{PaceStage, UsagePace};
-pub use panel::{PanelRow, Section, SectionKind, Tone, panel_spec};
+pub use panel::{PanelRow, Section, SectionKind, Tone, panel_spec, refresh_hint};
 pub use sync::config::{
     SyncConfig, SyncDirConfig, SyncProvidersConfig, SyncS3Config, SyncTransportKind,
     config_set_sync_dir, config_set_sync_enabled, config_set_sync_label, config_set_sync_provider,

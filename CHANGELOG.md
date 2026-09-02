@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A refresh control says when the figures under it arrived.** Hovering it
+  now reads `Last refreshed 3m ago - 14:32` on the Plasma, GNOME, Omarchy and
+  tray panels; waybar, which has no button to hover, carries the same sentence
+  as a tooltip line, and the TUI header shows it in place of its own count.
+
+### Fixed
+
+- **The TUI header dated the wrong thing.** It measured how long the *process*
+  had gone since its last fetch, and a fetch that finds the snapshot fresh
+  serves the cache - so it read "updated just now" over figures ten minutes
+  old. It reads the payload's own instant now, like every other surface.
+
 ## [0.30.2] - 2026-09-02
 
 ### Fixed

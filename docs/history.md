@@ -63,7 +63,17 @@ for that case *today's* entry is the better answer for a past month too.
 
 The two are indistinguishable from the table alone, so the archive carries
 overrides **only for prices a vendor really moved**, and a model it says nothing
-about keeps today's price. `scripts/make-prices.py` builds it by walking
+about keeps today's price.
+
+That rule is enforced **field by field**, which is easy to get wrong and
+expensive when you do. An override that replaced a whole `ModelPrice` would zero
+every field the historical table happened not to list, and the first archive
+built that way was missing `cache_read_input_token_cost` from 124 model-months -
+cache reads being most of the token volume in a coding session, that rated most
+of a year at a fraction of itself. `PriceOverride` is therefore sparse and
+merges onto today's entry, and
+`pricing::tests::the_vendored_archive_never_restates_a_current_price` fails if
+the generator ever goes back to comparing whole entries. `scripts/make-prices.py` builds it by walking
 LiteLLM's own git history: 13 months, ~670 overrides, ~90 KiB, vendored into the
 binary rather than fetched, because a month that is over does not change its mind
 and a cold machine should not need a request per month to rate a year.

@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the sign of everything else - and the money formatter passed that straight
   through. Every empty history range showed it, and any cost row summing an
   empty range could have.
+
 ## [0.29.3] - 2026-09-02
 
 ### Security

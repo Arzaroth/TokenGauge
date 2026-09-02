@@ -471,6 +471,18 @@ Item {
                         }
                     }
 
+                    // No provider row at all, or a snapshot written by a daemon
+                    // older than this widget, which carries no `history` field.
+                    // Without this the screen hides the panel and draws nothing,
+                    // which reads as the widget having broken.
+                    PlasmaComponents.Label {
+                        Layout.fillWidth: true
+                        textFormat: Text.PlainText
+                        visible: full.historySeries === null
+                        text: i18n("No history yet.")
+                        opacity: 0.7
+                    }
+
                     PlasmaComponents.Label {
                         Layout.fillWidth: true
                         textFormat: Text.PlainText

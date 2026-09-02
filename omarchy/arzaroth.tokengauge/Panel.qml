@@ -858,6 +858,20 @@ Panel {
               }
             }
 
+            // No provider row at all, or a snapshot written by a daemon older
+            // than this widget, which carries no `history` field. Without this
+            // the screen hides the panel and draws nothing, which reads as the
+            // widget having broken.
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              visible: root.historySeries === null
+              text: "No history yet."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
             Text {
               textFormat: Text.PlainText
               width: parent.width

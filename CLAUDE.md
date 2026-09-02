@@ -68,6 +68,21 @@ a colour. Each frontend maps it onto its own palette - the Omarchy widget
 deliberately collapses `good`/`warn` onto the bar foreground, because omarchy
 themes carry a foreground and an urgent colour and nothing between them.
 
+### Chrome that is still content
+
+The refresh control is chrome - every toolkit draws its own - but what it says
+on hover is not. `panel::refresh_hint` turns a row's `updated_iso` into the one
+sentence all six read, carried to the JSON frontends as `refresh_hint` on each
+row and asserted by `panel::tests::every_frontend_says_when_it_last_refreshed`.
+It is resolved per render for the same reason a reset countdown is: the age in
+it keeps moving after the fetch that wrote the payload. Waybar has no button to
+hover, so its tooltip carries the sentence as a line.
+
+The instant is the *payload's*, never the process's. The TUI header measured
+`Instant::elapsed` since its own last fetch and so read "updated just now" over
+a snapshot ten minutes old - a refresh that finds the snapshot fresh serves the
+cache, and that is still a refresh as far as the process is concerned.
+
 ### Rows the spec drops
 
 A window the provider does not report (`used: None`) and a `placeholder: true`

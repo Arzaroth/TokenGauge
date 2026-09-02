@@ -301,6 +301,37 @@ fn device_tooltip(device: &DeviceCost, now_ms: i64) -> String {
     lines.join("\n")
 }
 
+/// What a refresh control says on hover: when the figures it offers to replace
+/// arrived.
+///
+/// A refresh button is worth pressing only in proportion to how old the panel
+/// under it already is, and every frontend used to answer that on its own terms
+/// or not at all - the TUI header measured the *process's* last fetch, which
+/// reads "just now" over a snapshot ten minutes old, because serving the cache
+/// is still a refresh as far as the process is concerned. The instant here is
+/// the payload's own, so it says when the numbers arrived rather than when
+/// something last asked for them.
+pub fn refresh_hint(updated_iso: Option<&str>, now_ms: i64) -> String {
+    let Some(at) = updated_iso.and_then(|iso| chrono::DateTime::parse_from_rfc3339(iso).ok())
+    else {
+        return "Last refresh unknown".to_string();
+    };
+    let at = at.with_timezone(&chrono::Local);
+    // The clock alone answers "when" for anything today; past midnight it needs
+    // the date, or "14:32" is a time on an unnamed day.
+    let same_day = chrono::DateTime::from_timestamp_millis(now_ms)
+        .is_some_and(|now| now.with_timezone(&chrono::Local).date_naive() == at.date_naive());
+    let stamp = if same_day {
+        at.format("%H:%M")
+    } else {
+        at.format("%-d %b %H:%M")
+    };
+    format!(
+        "Last refreshed {} · {stamp}",
+        ago(at.timestamp_millis(), now_ms)
+    )
+}
+
 /// Relative time for a device row, for `--sync-status` and for the TUI.
 pub fn ago(then_ms: i64, now_ms: i64) -> String {
     let seconds = ((now_ms - then_ms) / 1000).max(0);
@@ -1413,6 +1444,38 @@ mod tests {
         }
     }
 
+    /// Every frontend says when it last refreshed.
+    ///
+    /// Five of the six put the sentence behind their refresh control: hovering
+    /// the button that would replace the figures is where the age of those
+    /// figures belongs. Waybar has no button to hover - its tooltip *is* the
+    /// hover surface - so it carries the same sentence as a line, and a right
+    /// click is still the refresh.
+    #[test]
+    fn every_frontend_says_when_it_last_refreshed() {
+        let frontends = [
+            ("waybar", "crates/tokengauge-waybar/src", "rs"),
+            ("tray", "crates/tokengauge-tray/src", "rs"),
+            ("tui", "crates/tokengauge-tui/src", "rs"),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+            ),
+            ("gnome", "gnome/tokengauge@arzaroth.github.io", "js"),
+            ("quickshell", "omarchy/arzaroth.tokengauge", "qml"),
+        ];
+
+        for (id, dir, extension) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            assert!(
+                sources.iter().any(|src| src.contains("refresh_hint")),
+                "{id} ({dir}) never reads `refresh_hint` - it is formatting the \
+                 last refresh itself, or not saying it at all"
+            );
+        }
+    }
+
     /// Every frontend that draws the panel draws every kind of section in it.
     ///
     /// The backstop for the QML and JS frontends the compiler cannot check.
@@ -1466,6 +1529,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_refresh_control_says_how_old_the_figures_under_it_are() {
+        let now = crate::now_ms();
+        let iso = chrono::DateTime::from_timestamp_millis(now - 180_000)
+            .expect("a timestamp")
+            .to_rfc3339();
+        let hint = refresh_hint(Some(&iso), now);
+        assert!(hint.starts_with("Last refreshed 3m ago \u{b7} "), "{hint}");
+
+        // A payload with no instant of its own - a snapshot written before
+        // 0.21 - says so rather than claiming a time it does not have.
+        assert_eq!(refresh_hint(None, now), "Last refresh unknown");
+        assert_eq!(refresh_hint(Some("yesterday"), now), "Last refresh unknown");
+    }
+
+    #[test]
+    fn a_refresh_from_another_day_carries_its_date() {
+        let now = crate::now_ms();
+        let iso = chrono::DateTime::from_timestamp_millis(now - 2 * 86_400_000)
+            .expect("a timestamp")
+            .to_rfc3339();
+        let hint = refresh_hint(Some(&iso), now);
+        assert!(hint.starts_with("Last refreshed 2d ago \u{b7} "), "{hint}");
+        // "14:32" alone is a time on an unnamed day, so the stamp gains a date
+        // once the refresh is not today's.
+        let stamp = hint.split(" \u{b7} ").nth(1).expect("a stamp");
+        assert!(stamp.contains(' '), "no date in `{stamp}`");
     }
 
     #[test]

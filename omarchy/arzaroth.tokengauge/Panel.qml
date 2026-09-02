@@ -585,7 +585,9 @@ Panel {
                 spacing: Style.space(8)
                 PanelActionButton {
                   iconText: "󰑐"
-                  tooltipText: "Refresh  r"
+                  tooltipText: root.provider && root.provider.refresh_hint
+                    ? "Refresh  r\n" + root.provider.refresh_hint
+                    : "Refresh  r"
                   enabled: !usage.loading
                   foreground: root.dim
                   hoverColor: root.foreground

@@ -73,14 +73,17 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing:
                 .add_modifier(Modifier::BOLD),
         )
     } else {
-        let secs = state.last_refresh.elapsed().as_secs();
-        let label = match secs {
-            0..=5 => "just now".to_string(),
-            6..=59 => format!("{secs}s ago"),
-            60..=3599 => format!("{}m ago", secs / 60),
-            _ => format!("{}h ago", secs / 3600),
-        };
-        Span::styled(format!("updated {label}"), Style::default().fg(dim()))
+        // The row's own instant, not this process's last fetch: a refresh that
+        // found the snapshot fresh enough serves the cache, and measuring from
+        // it read "just now" over figures ten minutes old.
+        let hint = tokengauge_core::refresh_hint(
+            state
+                .rows
+                .get(state.active_tab)
+                .and_then(|r| r.updated_iso.as_deref()),
+            tokengauge_core::now_ms(),
+        );
+        Span::styled(hint, Style::default().fg(dim()))
     };
 
     let provider_count = state.rows.len();

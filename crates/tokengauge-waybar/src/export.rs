@@ -107,7 +107,9 @@ fn write_csv(out: &mut impl Write, rows: &[tokengauge_core::sync::ExportRow]) ->
 /// untouched for anything parsing the data rather than opening it.
 fn csv_field(value: &str) -> String {
     let formula = value.starts_with(['=', '+', '-', '@', '\t', '\r']);
-    let quoted = value.contains([',', '"', '\n']) || formula;
+    // A bare CR ends a record for a strict RFC 4180 reader just as LF does, so
+    // it has to be quoted wherever it sits, not only when it leads.
+    let quoted = value.contains([',', '"', '\n', '\r']) || formula;
     if !quoted {
         return value.to_string();
     }
@@ -211,6 +213,15 @@ mod tests {
             !body.contains(",=cmd") && !body.contains(",@SUM"),
             "a bare formula reached the file: {body}"
         );
+    }
+
+    #[test]
+    fn a_bare_carriage_return_does_not_end_the_record() {
+        // A strict RFC 4180 reader ends a record on CR as readily as on LF, so
+        // it has to be quoted wherever it sits and not only when it leads.
+        assert_eq!(csv_field("one\rtwo"), "\"one\rtwo\"");
+        assert_eq!(csv_field("one\ntwo"), "\"one\ntwo\"");
+        assert_eq!(csv_field("ordinary"), "ordinary");
     }
 
     #[test]

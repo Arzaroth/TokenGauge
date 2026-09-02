@@ -277,7 +277,8 @@ pub(super) fn read_file(
     // in from the first one seen rather than dropped.
     let mut pending: Vec<usize> = Vec::new();
     // A headless row need not carry a timestamp of its own; it belongs to the
-    // last row that did. Its ordinal within the file is what tells two
+    // last line that did, whatever kind of line that was - an exec rollout
+    // opens with `turn_context` and can bill before any usage row is seen. Its ordinal within the file is what tells two
     // otherwise identical calls apart, and it has to be stable across runs
     // because fleet sync dedupes on the key built from it.
     let mut last_at: Option<DateTime<Utc>> = None;
@@ -287,6 +288,9 @@ pub(super) fn read_file(
         let Ok(record) = serde_json::from_str::<Record>(line) else {
             continue;
         };
+        if let Ok(at) = record.timestamp.parse::<DateTime<Utc>>() {
+            last_at = Some(at);
+        }
         let Some(payload) = record.payload.as_ref() else {
             let Ok(bare) = serde_json::from_str::<BareRow>(line) else {
                 continue;
@@ -299,10 +303,17 @@ pub(super) fn read_file(
             if tokens.total() == 0 {
                 continue;
             }
-            let Some(at) = bare.timestamp.parse::<DateTime<Utc>>().ok().or(last_at) else {
+            // Absent is inherited; malformed is not. Filing a call under the
+            // day of the row before it is a guess, and the rollout reader
+            // drops an unparseable timestamp rather than guessing too.
+            let at = if bare.timestamp.trim().is_empty() {
+                last_at
+            } else {
+                bare.timestamp.parse::<DateTime<Utc>>().ok()
+            };
+            let Some(at) = at else {
                 continue;
             };
-            last_at = Some(at);
             let date = at.with_timezone(&Local).date_naive();
             if date < since {
                 continue;
@@ -382,7 +393,6 @@ pub(super) fn read_file(
         let Ok(timestamp) = record.timestamp.parse::<DateTime<Utc>>() else {
             continue;
         };
-        last_at = Some(timestamp);
         let date = timestamp.with_timezone(&Local).date_naive();
         if date < since {
             continue;
@@ -693,6 +703,29 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].tokens.input, 40);
         assert_eq!(events[0].tokens.output, 5);
+    }
+
+    #[test]
+    fn a_headless_row_inherits_the_day_of_any_line_that_carried_one() {
+        // The anchor is the last line with a timestamp, not the last billed
+        // row: an exec rollout opens with `turn_context`, so the first call
+        // can be the one with no timestamp of its own.
+        let bare = r#"{"result":{"usage":{"input_tokens":5,"output_tokens":1}}}"#;
+        let events = read(&format!("{CONTEXT}\n{bare}\n"));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].tokens.input, 5);
+    }
+
+    #[test]
+    fn a_headless_row_with_a_malformed_timestamp_is_dropped() {
+        // Not the same as carrying none: a date that failed to parse says
+        // nothing about which day the call belongs to, and the row before it
+        // is not an answer.
+        let stamped = r#"{"timestamp":"2026-05-11T06:18:00.000Z","usage":{"input_tokens":7,"output_tokens":3}}"#;
+        let bad = r#"{"timestamp":"not-a-date","usage":{"input_tokens":5,"output_tokens":1}}"#;
+        let events = read(&format!("{CONTEXT}\n{stamped}\n{bad}\n"));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].tokens.input, 7);
     }
 
     #[test]

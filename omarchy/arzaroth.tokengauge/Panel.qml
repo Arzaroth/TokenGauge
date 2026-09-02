@@ -842,6 +842,7 @@ Panel {
                 model: root.historyOpen && root.history ? root.history.series : []
 
                 Text {
+                  textFormat: Text.PlainText
                   required property int index
                   required property var modelData
                   text: modelData.label
@@ -858,6 +859,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               width: parent.width
               visible: root.historySeries !== null
               text: root.historySeries
@@ -872,6 +874,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               width: parent.width
               visible: root.historySeries !== null && root.historySeries.empty
               text: "Nothing spent in this range."
@@ -917,6 +920,7 @@ Panel {
               height: firstStep.implicitHeight
 
               Text {
+                textFormat: Text.PlainText
                 id: firstStep
                 anchors.left: parent.left
                 text: root.historySeries && root.historySeries.points.length > 0
@@ -926,6 +930,7 @@ Panel {
                 font.pixelSize: Style.font.caption
               }
               Text {
+                textFormat: Text.PlainText
                 anchors.right: parent.right
                 text: root.historySeries && root.historySeries.points.length > 0
                   ? root.historySeries.points[root.historySeries.points.length - 1].label
@@ -937,6 +942,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               width: parent.width
               visible: root.history !== null
               text: root.history

@@ -276,6 +276,12 @@ impl Action {
                 flags.join(", ")
             );
         }
+        // `--since` modifies `--export` and nothing else. Ignoring it in silence
+        // is how someone runs `--since 2026-01-01 --json`, gets the whole
+        // snapshot, and believes it was narrowed.
+        if args.since.is_some() && args.export.is_none() {
+            anyhow::bail!("--since only applies to --export");
+        }
         Ok(asked.pop().map(|(_, action)| action).unwrap_or(Action::Bar))
     }
 }
@@ -711,6 +717,19 @@ mod tests {
         let mut full = vec!["tokengauge"];
         full.extend_from_slice(argv);
         Action::from_args(&Args::parse_from(full))
+    }
+
+    #[test]
+    fn since_without_export_is_refused_rather_than_ignored() {
+        let error = match action_for(&["--since", "2026-01-01", "--json"]) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("--since was silently dropped"),
+        };
+        assert!(error.contains("--since"), "{error}");
+        assert!(
+            action_for(&["--export", "--since", "2026-01-01"]).is_ok(),
+            "--since belongs with --export"
+        );
     }
 
     /// The precedence used to be the order of an if-chain nobody had written

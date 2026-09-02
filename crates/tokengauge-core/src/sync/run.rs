@@ -133,10 +133,18 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
     store.upsert_local(&device, window_hour(since), &events, now.timestamp_millis());
     store.compact(now, i64::from(config.sync.retention_days));
     store.prune(now);
-    if let Err(e) = store::save(&config.cache_file, &store) {
-        error.get_or_insert(format!("{e:#}"));
+    // The marker records that the work *landed*, not that it was attempted. A
+    // read that found nothing still marks - a machine with no transcripts must
+    // not re-walk the tree on every fetch forever - but a store that would not
+    // save has kept none of it, and marking there would leave history
+    // permanently empty with the one expensive read that could fill it already
+    // spent.
+    match store::save(&config.cache_file, &store) {
+        Ok(()) => crate::statefiles::mark_backfilled(&config.cache_file),
+        Err(e) => {
+            error.get_or_insert(format!("{e:#}"));
+        }
     }
-    crate::statefiles::mark_backfilled(&config.cache_file);
 
     BackfillOutcome {
         events: events.len(),

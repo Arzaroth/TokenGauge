@@ -473,6 +473,7 @@ Item {
 
                     PlasmaComponents.Label {
                         Layout.fillWidth: true
+                        textFormat: Text.PlainText
                         visible: full.historySeries !== null
                         text: full.historySeries
                             ? full.historySeries.total_usd + "  ·  "
@@ -484,6 +485,7 @@ Item {
 
                     PlasmaComponents.Label {
                         Layout.fillWidth: true
+                        textFormat: Text.PlainText
                         visible: full.historySeries !== null && full.historySeries.empty
                         text: i18n("Nothing spent in this range.")
                         opacity: 0.7
@@ -529,6 +531,7 @@ Item {
                         Layout.fillWidth: true
                         visible: historyChart.visible
                         PlasmaComponents.Label {
+                            textFormat: Text.PlainText
                             text: full.historySeries && full.historySeries.points.length > 0
                                 ? full.historySeries.points[0].label : ""
                             opacity: 0.6
@@ -536,6 +539,7 @@ Item {
                         }
                         Item { Layout.fillWidth: true }
                         PlasmaComponents.Label {
+                            textFormat: Text.PlainText
                             text: full.historySeries && full.historySeries.points.length > 0
                                 ? full.historySeries.points[full.historySeries.points.length - 1].label
                                 : ""
@@ -546,6 +550,7 @@ Item {
 
                     PlasmaComponents.Label {
                         Layout.fillWidth: true
+                        textFormat: Text.PlainText
                         visible: full.historyOpen && full.history
                         wrapMode: Text.WordWrap
                         opacity: 0.6

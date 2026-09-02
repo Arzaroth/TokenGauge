@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The history chart's day axis was unreadable.** A 30-day chart gives each
+  bar about three columns and the tick under it read `%-d %b`, so "4 Aug"
+  arrived truncated to "4 A" and the axis came out as
+  `4 A5 A6 A7 A8 A9 A10 11 12`. A day tick is the day number now, which fits;
+  the whole date was always on `full_label`, which is what the axis ends and
+  the tooltips use - the Plasma, Omarchy and tray captions now read it there
+  rather than repeating the tick.
+
 ## [0.30.0] - 2026-09-02
 
 ### Added

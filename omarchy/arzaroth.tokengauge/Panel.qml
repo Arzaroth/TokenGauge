@@ -938,7 +938,7 @@ Panel {
                 id: firstStep
                 anchors.left: parent.left
                 text: root.historySeries && root.historySeries.points.length > 0
-                  ? root.historySeries.points[0].label : ""
+                  ? root.historySeries.points[0].full_label : ""
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -947,7 +947,7 @@ Panel {
                 textFormat: Text.PlainText
                 anchors.right: parent.right
                 text: root.historySeries && root.historySeries.points.length > 0
-                  ? root.historySeries.points[root.historySeries.points.length - 1].label
+                  ? root.historySeries.points[root.historySeries.points.length - 1].full_label
                   : ""
                 color: root.dim
                 font.family: root.fontFamily

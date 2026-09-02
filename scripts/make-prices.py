@@ -191,6 +191,27 @@ def build_archive(current):
     return archive
 
 
+def write_pair(files):
+    """Write every file, or leave every one of them as it was.
+
+    Each is staged beside its target and renamed only once all of them have
+    been written, so a failure part-way through cannot leave a half-updated
+    pair behind. Two renames are not one atomic step, but the window is a
+    syscall rather than a network walk.
+    """
+    staged = []
+    try:
+        for path, payload in files:
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n")
+            staged.append((tmp, path))
+        for tmp, path in staged:
+            tmp.replace(path)
+    finally:
+        for tmp, _ in staged:
+            tmp.unlink(missing_ok=True)
+
+
 def main():
     current = slice_table(get_json(RAW.format(ref="main")))
 
@@ -207,9 +228,14 @@ def main():
     print(f"building {ARCHIVE_MONTHS} months of price history", file=sys.stderr)
     archive = build_archive(current)
 
-    OUT.write_text(json.dumps(current, indent=1) + "\n")
+    # Staged and renamed rather than written in place. The two files are one
+    # artefact - an override means nothing without the baseline it was measured
+    # against - and a write that fails on the second would otherwise leave a
+    # fresh table beside a stale archive, which is the state this whole ordering
+    # exists to avoid.
+    write_pair([(OUT, current), (ARCHIVE_OUT, archive)])
+
     print(f"wrote {len(current)} entries to {OUT}", file=sys.stderr)
-    ARCHIVE_OUT.write_text(json.dumps(archive, indent=1, sort_keys=True) + "\n")
     total = sum(len(v) for v in archive.values())
     size = ARCHIVE_OUT.stat().st_size
     print(

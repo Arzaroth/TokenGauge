@@ -127,7 +127,7 @@ impl HistoryView {
             .title(format!(" History — {} ", self.label));
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        if inner.height < 6 || inner.width < 20 {
+        if inner.height < 7 || inner.width < 20 {
             return;
         }
 
@@ -135,7 +135,9 @@ impl HistoryView {
             Constraint::Length(1), // range selector
             Constraint::Length(1), // totals
             Constraint::Min(4),    // chart
-            Constraint::Length(1), // notes
+            // Two lines: coverage and a note can both be true at once, and a
+            // store that would not parse is the one that must not be cut off.
+            Constraint::Length(2), // notes
             Constraint::Length(1), // keys
         ])
         .split(inner);
@@ -195,11 +197,16 @@ impl HistoryView {
     }
 
     fn notes_line(&self) -> Paragraph<'_> {
-        let mut text = self.panel.covers.clone();
-        if let Some(note) = self.panel.notes.first() {
-            text = format!("{text} — {note}");
-        }
-        Paragraph::new(Line::from(Span::styled(text, Style::default().fg(dim()))))
+        // Every note, not the first: a store that would not parse and a range
+        // older than the price archive are both true at once, and the one that
+        // got dropped was whichever came second.
+        let mut parts = vec![self.panel.covers.clone()];
+        parts.extend(self.panel.notes.iter().cloned());
+        Paragraph::new(Line::from(Span::styled(
+            parts.join(" — "),
+            Style::default().fg(dim()),
+        )))
+        .wrap(ratatui::widgets::Wrap { trim: true })
     }
 
     fn render_chart(&self, frame: &mut Frame, area: Rect) {

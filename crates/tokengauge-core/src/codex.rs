@@ -26,6 +26,8 @@ const REFRESH_URL: &str = "https://auth.openai.com/oauth/token";
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const WHOAMI_URL: &str = "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami";
 const REFRESH_AFTER: ChronoDuration = ChronoDuration::days(8);
+/// How long a token has to stay valid for the current fetch to rely on it.
+const EXPIRY_MARGIN: ChronoDuration = ChronoDuration::minutes(5);
 
 // ---------------------------------------------------------------------------
 // Credentials + refresh + write-back
@@ -87,9 +89,56 @@ fn read_auth(path: &Path) -> Result<AuthFile> {
     serde_json::from_str(&data).context("auth.json was invalid")
 }
 
-/// Codex has no expiry field; upstream refreshes purely on `last_refresh` age
-/// (the access token JWT lives 10 days, so the 8-day rule keeps a 2-day margin).
-fn needs_refresh(last_refresh: Option<&str>, now: DateTime<Utc>) -> bool {
+/// Base64url, unpadded, which is how a JWT segment is encoded. Written out
+/// because this is the only base64 in the crate and the alternative is a
+/// dependency for twenty lines. `+` and `/` are accepted too, so a token
+/// encoded with the standard alphabet still reads.
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    fn sextet(b: u8) -> Option<u32> {
+        Some(match b {
+            b'A'..=b'Z' => u32::from(b - b'A'),
+            b'a'..=b'z' => u32::from(b - b'a') + 26,
+            b'0'..=b'9' => u32::from(b - b'0') + 52,
+            b'-' | b'+' => 62,
+            b'_' | b'/' => 63,
+            _ => return None,
+        })
+    }
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for byte in s.bytes().filter(|b| *b != b'=') {
+        acc = (acc << 6) | sextet(byte)?;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// When a JWT access token says it dies. `None` for an opaque or malformed
+/// token, which is the signal to fall back to the age rule rather than to
+/// treat the credential as bad.
+fn jwt_expiry(token: &str) -> Option<DateTime<Utc>> {
+    let claims: Value = serde_json::from_slice(&base64_decode(token.split('.').nth(1)?)?).ok()?;
+    DateTime::from_timestamp(claims.get("exp")?.as_i64()?, 0)
+}
+
+/// Codex writes no expiry field of its own, so the access token is the only
+/// thing that knows when it dies. Its `exp` claim decides, and `last_refresh`
+/// age is the fallback for a token that carries no claim (the JWT lives 10
+/// days, so the 8-day rule keeps a 2-day margin).
+///
+/// Reading the claim is what keeps a valid session valid. On age alone, a
+/// token refreshed once and then left alone for nine days is refreshed alone -
+/// and a refresh spends a rotating refresh token that the server can reject,
+/// which turns a credential that still works into "run `codex`".
+fn needs_refresh(last_refresh: Option<&str>, access_token: &str, now: DateTime<Utc>) -> bool {
+    if let Some(expires_at) = jwt_expiry(access_token) {
+        // A token that dies mid-request is as good as dead.
+        return now + EXPIRY_MARGIN >= expires_at;
+    }
     match last_refresh.and_then(|s| DateTime::parse_from_rfc3339(s).ok()) {
         Some(ts) => now.signed_duration_since(ts.with_timezone(&Utc)) > REFRESH_AFTER,
         None => true,
@@ -316,13 +365,21 @@ fn ensure_access_token(timeout: Duration) -> Result<Credential> {
     let Some(tokens) = auth.tokens.take() else {
         return non_oauth_credential(auth, timeout);
     };
-    if !needs_refresh(auth.last_refresh.as_deref(), Utc::now()) {
+    if !needs_refresh(
+        auth.last_refresh.as_deref(),
+        &tokens.access_token,
+        Utc::now(),
+    ) {
         return Ok(oauth(tokens));
     }
 
-    // ponytail: try_lock, not lock. The 8d refresh rule leaves ~2d of JWT
-    // margin, so the loser of the race just uses its current token. std
-    // releases the lock on process death, so no TTL is needed.
+    // ponytail: try_lock, not lock. The loser of the race serves the token it
+    // already holds rather than waiting on the winner. Now that the `exp`
+    // claim decides rather than the 8-day age rule, the margin behind that is
+    // minutes rather than days, so the loser can serve a token already past
+    // it - which costs one failed fetch, where blocking would cost every
+    // frontend the refresh's latency. std releases the lock on process death,
+    // so no TTL is needed.
     let lock = File::options()
         .create(true)
         .truncate(false)
@@ -347,7 +404,11 @@ fn ensure_access_token(timeout: Duration) -> Result<Credential> {
     let Some(fresh_tokens) = fresh.tokens.take() else {
         return non_oauth_credential(fresh, timeout);
     };
-    if !needs_refresh(fresh.last_refresh.as_deref(), Utc::now()) {
+    if !needs_refresh(
+        fresh.last_refresh.as_deref(),
+        &fresh_tokens.access_token,
+        Utc::now(),
+    ) {
         return Ok(oauth(fresh_tokens)); // the winner already refreshed
     }
     let Some(refresh_token) = fresh_tokens.refresh_token.clone().filter(|t| !t.is_empty()) else {
@@ -829,13 +890,55 @@ mod tests {
 
     #[test]
     fn needs_refresh_by_age() {
+        // An opaque token carries no claim, so the age rule decides.
         let now = Utc::now();
         let ago = |d: i64| (now - ChronoDuration::days(d)).to_rfc3339();
-        assert!(!needs_refresh(Some(&ago(7)), now));
-        assert!(!needs_refresh(Some(&ago(8)), now)); // exactly 8d, not yet over
-        assert!(needs_refresh(Some(&ago(9)), now));
-        assert!(needs_refresh(None, now));
-        assert!(needs_refresh(Some("not-a-date"), now));
+        assert!(!needs_refresh(Some(&ago(7)), "opaque", now));
+        assert!(!needs_refresh(Some(&ago(8)), "opaque", now)); // exactly 8d, not yet over
+        assert!(needs_refresh(Some(&ago(9)), "opaque", now));
+        assert!(needs_refresh(None, "opaque", now));
+        assert!(needs_refresh(Some("not-a-date"), "opaque", now));
+    }
+
+    /// A JWT carrying `exp`, the shape Codex writes into `auth.json`.
+    fn jwt(exp: i64) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let claims = format!(r#"{{"exp":{exp}}}"#);
+        let mut payload = String::new();
+        for chunk in claims.as_bytes().chunks(3) {
+            let mut buf = [0u8; 3];
+            buf[..chunk.len()].copy_from_slice(chunk);
+            let n = u32::from_be_bytes([0, buf[0], buf[1], buf[2]]);
+            for i in 0..chunk.len() + 1 {
+                payload.push(ALPHABET[((n >> (18 - 6 * i)) & 0x3f) as usize] as char);
+            }
+        }
+        format!("header.{payload}.signature")
+    }
+
+    #[test]
+    fn a_live_access_token_outlives_the_age_rule() {
+        let now = Utc::now();
+        let ago = |d: i64| (now - ChronoDuration::days(d)).to_rfc3339();
+        let live = jwt((now + ChronoDuration::days(2)).timestamp());
+
+        // The bug: a session refreshed nine days ago whose token is still
+        // good. Refreshing it spends a rotating refresh token for nothing, and
+        // a rejected one reads as "not logged in".
+        assert!(!needs_refresh(Some(&ago(9)), &live, now));
+        assert!(!needs_refresh(None, &live, now));
+
+        // An expired claim refreshes however recent the last refresh was, and
+        // so does one that dies inside the margin.
+        let dead = jwt((now - ChronoDuration::hours(1)).timestamp());
+        let dying = jwt((now + ChronoDuration::minutes(1)).timestamp());
+        assert!(needs_refresh(Some(&ago(1)), &dead, now));
+        assert!(needs_refresh(Some(&ago(1)), &dying, now));
+
+        // A malformed payload is not a claim: the age rule decides, rather
+        // than the credential reading as bad.
+        assert!(!needs_refresh(Some(&ago(1)), "header.!!!.sig", now));
+        assert!(needs_refresh(Some(&ago(9)), "header.!!!.sig", now));
     }
 
     #[test]

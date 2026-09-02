@@ -70,11 +70,13 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             PlasmaComponents.Label {
+                textFormat: Text.PlainText
                 text: modelData.label
                 Layout.fillWidth: true
                 elide: Text.ElideRight
             }
             PlasmaComponents.Label {
+                textFormat: Text.PlainText
                 text: modelData.value
                 color: root.toneColor(modelData.tone)
                 font.bold: true
@@ -100,12 +102,14 @@ Item {
             spacing: Kirigami.Units.smallSpacing
             visible: String(modelData.footnote || "") !== "" || String(modelData.badge || "") !== ""
             PlasmaComponents.Label {
+                textFormat: Text.PlainText
                 text: modelData.footnote
                 visible: text !== ""
                 opacity: 0.7
                 font: Kirigami.Theme.smallFont
             }
             PlasmaComponents.Label {
+                textFormat: Text.PlainText
                 text: modelData.badge
                 visible: text !== ""
                 color: root.toneColor(modelData.badge_tone)
@@ -142,12 +146,14 @@ Item {
             anchors.rightMargin: Kirigami.Units.smallSpacing
             PlasmaComponents.Label {
                 id: barLabel
+                textFormat: Text.PlainText
                 text: modelData.label
                 font.bold: modelData.emphasized === true
                 elide: Text.ElideRight
                 Layout.fillWidth: true
             }
             PlasmaComponents.Label {
+                textFormat: Text.PlainText
                 text: full.joinValue(modelData)
                 font.family: "monospace"
                 font.bold: modelData.emphasized === true
@@ -172,12 +178,13 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             PlasmaComponents.Label {
+                textFormat: Text.PlainText
                 text: keyRow.modelData.label
                 opacity: 0.85
                 elide: Text.ElideRight
                 Layout.fillWidth: true
             }
-            PlasmaComponents.Label { text: keyRow.modelData.value; font.family: "monospace" }
+            PlasmaComponents.Label { textFormat: Text.PlainText; text: keyRow.modelData.value; font.family: "monospace" }
         }
 
         // Beside the label the two of them leave a sentence fighting over what
@@ -191,6 +198,7 @@ Item {
 
             PlasmaComponents.Label {
                 id: keyBadge
+                textFormat: Text.PlainText
                 text: keyRow.modelData.badge
                 visible: text !== ""
                 color: root.toneColor(keyRow.modelData.badge_tone)
@@ -200,6 +208,7 @@ Item {
 
             PlasmaComponents.Label {
                 id: keySuffix
+                textFormat: Text.PlainText
                 // The separator divides a badge from a suffix, so a row with no
                 // badge must not open on one.
                 text: String(keyRow.modelData.suffix || "") === ""
@@ -256,6 +265,7 @@ Item {
 
         // error banner
         PlasmaComponents.Label {
+            textFormat: Text.PlainText
             Layout.fillWidth: true
             visible: root.lastError !== "" || (root.snapshot.errors || []).length > 0
             wrapMode: Text.WordWrap
@@ -270,6 +280,7 @@ Item {
             Layout.fillWidth: true
             visible: root.updateAvailable
             PlasmaComponents.Label {
+                textFormat: Text.PlainText
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: root.snapshot.theme && root.snapshot.theme.green ? root.snapshot.theme.green : "#a6e3a1"
@@ -321,6 +332,7 @@ Item {
 
                 // ---- provider card ----
                 PlasmaComponents.Label {
+                    textFormat: Text.PlainText
                     visible: !full.settingsOpen && full.row === null
                     text: i18n("No provider data yet.")
                     opacity: 0.7
@@ -345,6 +357,7 @@ Item {
                             text: full.row ? (full.row.label || full.row.provider) : ""
                         }
                         PlasmaComponents.Label {
+                            textFormat: Text.PlainText
                             visible: full.row && (full.row.plan_label || full.row.source)
                             text: full.row ? [full.row.plan_label, full.row.source].filter(Boolean).join(" · ") : ""
                             opacity: 0.7
@@ -352,6 +365,7 @@ Item {
                         }
                     }
                     PlasmaComponents.Label {
+                        textFormat: Text.PlainText
                         visible: full.row && full.row.stale
                         text: i18n("stale")
                         color: root.snapshot.theme && root.snapshot.theme.yellow ? root.snapshot.theme.yellow : "#f9e2af"
@@ -373,6 +387,7 @@ Item {
 
                         Kirigami.Separator { Layout.fillWidth: true }
                         PlasmaComponents.Label {
+                            textFormat: Text.PlainText
                             text: modelData.title
                             font.bold: true
                             opacity: 0.85
@@ -393,6 +408,7 @@ Item {
                 }
 
                 PlasmaComponents.Label {
+                    textFormat: Text.PlainText
                     Layout.fillWidth: true
                     horizontalAlignment: Text.AlignRight
                     visible: !full.settingsOpen && full.row && full.row.updated
@@ -403,6 +419,7 @@ Item {
 
                 // ---- settings pane ----
                 PlasmaComponents.Label {
+                    textFormat: Text.PlainText
                     visible: full.settingsOpen
                     text: i18n("OAuth providers")
                     font.bold: true
@@ -421,6 +438,7 @@ Item {
                     visible: full.settingsOpen
                 }
                 PlasmaComponents.Label {
+                    textFormat: Text.PlainText
                     visible: full.settingsOpen
                     text: i18n("Fleet sync")
                     font.bold: true
@@ -432,6 +450,7 @@ Item {
                     onClicked: root.openSyncSetup()
                 }
                 PlasmaComponents.Label {
+                    textFormat: Text.PlainText
                     Layout.fillWidth: true
                     visible: full.settingsOpen
                     wrapMode: Text.WordWrap
@@ -443,6 +462,7 @@ Item {
                     visible: full.settingsOpen
                 }
                 PlasmaComponents.Label {
+                    textFormat: Text.PlainText
                     visible: full.settingsOpen
                     text: i18n("Pin to bar")
                     font.bold: true
@@ -467,6 +487,7 @@ Item {
                     visible: full.settingsOpen
                 }
                 PlasmaComponents.Label {
+                    textFormat: Text.PlainText
                     visible: full.settingsOpen
                     opacity: 0.5
                     font: Kirigami.Theme.smallFont

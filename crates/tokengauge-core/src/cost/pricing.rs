@@ -226,7 +226,12 @@ impl PriceTable {
             return self.clone();
         };
         let mut models = self.models.clone();
-        models.extend(overrides.iter().map(|(name, price)| (name.clone(), *price)));
+        for (name, over) in overrides {
+            // A model the archive carries but the current table does not is one
+            // LiteLLM has since dropped; there is nothing to merge onto.
+            let base = models.get(name).copied().unwrap_or_default();
+            models.insert(name.clone(), over.apply(base));
+        }
         PriceTable { models }
     }
 
@@ -246,8 +251,48 @@ impl PriceTable {
 /// at today's prices, which is what every figure did before this existed.
 #[derive(Debug, Clone, Default)]
 pub struct PriceArchive {
-    /// `YYYY-MM` to the models whose price that month was not the current one.
-    months: BTreeMap<String, HashMap<String, ModelPrice>>,
+    /// `YYYY-MM` to the models carrying a field the vendor has since moved.
+    months: BTreeMap<String, HashMap<String, PriceOverride>>,
+}
+
+/// A past price, field by field, as a sparse overlay on [`ModelPrice`].
+///
+/// Sparse rather than whole, and that is the load-bearing part. An entry that
+/// replaced the current price outright would *zero* every field the historical
+/// table did not carry - and LiteLLM fills gaps in late, so
+/// `cache_read_input_token_cost` was absent from 124 model-months in the first
+/// archive built this way. Cache reads are most of the token volume in a coding
+/// session, so a whole-entry override quietly rated most of a year's bill at a
+/// fraction of itself.
+///
+/// A field absent here therefore means "the vendor never moved this, use
+/// today's", which is also the rule the module documents: only a price that
+/// really changed belongs in the archive.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+pub struct PriceOverride {
+    #[serde(default, rename = "input_cost_per_token")]
+    input: Option<f64>,
+    #[serde(default, rename = "output_cost_per_token")]
+    output: Option<f64>,
+    #[serde(default, rename = "cache_creation_input_token_cost")]
+    cache_write_5m: Option<f64>,
+    #[serde(default, rename = "cache_creation_input_token_cost_above_1hr")]
+    cache_write_1h: Option<f64>,
+    #[serde(default, rename = "cache_read_input_token_cost")]
+    cache_read: Option<f64>,
+}
+
+impl PriceOverride {
+    /// This override laid over the price in effect today.
+    fn apply(&self, base: ModelPrice) -> ModelPrice {
+        ModelPrice {
+            input: self.input.unwrap_or(base.input),
+            output: self.output.unwrap_or(base.output),
+            cache_write_5m: self.cache_write_5m.unwrap_or(base.cache_write_5m),
+            cache_write_1h: self.cache_write_1h.unwrap_or(base.cache_write_1h),
+            cache_read: self.cache_read.unwrap_or(base.cache_read),
+        }
+    }
 }
 
 impl PriceArchive {
@@ -450,6 +495,61 @@ pub fn load_with_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_override_moves_only_the_fields_it_names() {
+        // The archive used to carry whole entries, which zeroed every field the
+        // historical table happened not to list - and LiteLLM fills gaps in
+        // late, so `cache_read_input_token_cost` was absent from 124
+        // model-months. Cache reads are most of a coding session's tokens, so
+        // that quietly rated most of a year at a fraction of itself.
+        let base = PriceTable::from_json(
+            r#"{"claude-x": {"input_cost_per_token": 1e-6,
+                             "output_cost_per_token": 2e-6,
+                             "cache_read_input_token_cost": 3e-7}}"#,
+        )
+        .expect("base table");
+        let archive =
+            PriceArchive::from_json(r#"{"2026-01": {"claude-x": {"input_cost_per_token": 5e-6}}}"#)
+                .expect("archive");
+
+        let price = *base
+            .as_of(&archive, "2026-01")
+            .get("claude-x")
+            .expect("model");
+        assert_eq!(price.input, 5e-6, "the field the archive names moves");
+        assert_eq!(price.output, 2e-6, "a field it does not name keeps today's");
+        assert_eq!(price.cache_read, 3e-7, "cache reads are not zeroed");
+
+        let untouched = *base
+            .as_of(&archive, "2026-05")
+            .get("claude-x")
+            .expect("model");
+        assert_eq!(
+            untouched.input, 1e-6,
+            "a month the archive says nothing about is today's table"
+        );
+    }
+
+    #[test]
+    fn the_vendored_archive_never_restates_a_current_price() {
+        // An override equal to today's value is dead weight, and a sign the
+        // generator has gone back to comparing whole entries.
+        let table = PriceTable::vendored();
+        let archive = PriceArchive::vendored();
+        for (month, models) in &archive.months {
+            for (name, over) in models {
+                let Some(current) = table.models.get(name) else {
+                    continue;
+                };
+                assert_ne!(
+                    over.apply(*current),
+                    *current,
+                    "{month}/{name}: override restates the current price"
+                );
+            }
+        }
+    }
 
     #[test]
     fn vendored_table_covers_the_models_in_use() {

@@ -23,6 +23,7 @@ const COLUMNS: &[&str] = &[
     "date",
     "provider",
     "model",
+    "device_id",
     "device",
     "input",
     "output",
@@ -74,10 +75,11 @@ fn write_csv(out: &mut impl Write, rows: &[tokengauge_core::sync::ExportRow]) ->
     for row in rows {
         writeln!(
             out,
-            "{},{},{},{},{},{},{},{},{},{},{:.6}",
+            "{},{},{},{},{},{},{},{},{},{},{},{}",
             row.date,
             csv_field(&row.provider),
             csv_field(&row.model),
+            csv_field(&row.device_id),
             csv_field(&row.device),
             row.tokens.input,
             row.tokens.output,
@@ -85,7 +87,10 @@ fn write_csv(out: &mut impl Write, rows: &[tokengauge_core::sync::ExportRow]) ->
             row.tokens.cache_write_1h,
             row.tokens.cache_read,
             row.total_tokens,
-            row.usd,
+            // An unpriced model leaves the cell empty rather than writing
+            // `0.000000`: summing the column then reads as a gap, which is what
+            // it is, instead of as a day that cost nothing.
+            row.usd.map(|usd| format!("{usd:.6}")).unwrap_or_default(),
         )?;
     }
     out.flush()?;
@@ -94,11 +99,23 @@ fn write_csv(out: &mut impl Write, rows: &[tokengauge_core::sync::ExportRow]) ->
 
 /// A device label is user-set and a model id is upstream's, so neither is
 /// guaranteed to be free of commas or quotes.
+///
+/// A leading `=`, `+`, `-` or `@` is also a formula to Excel and LibreOffice,
+/// and quoting does not stop them: a spreadsheet is the whole point of the CSV,
+/// so a field that starts with one is prefixed with an apostrophe, which those
+/// two read as "this is text" and drop again on display. `--export json` is
+/// untouched for anything parsing the data rather than opening it.
 fn csv_field(value: &str) -> String {
-    if value.contains([',', '"', '\n']) {
-        format!("\"{}\"", value.replace('"', "\"\""))
+    let formula = value.starts_with(['=', '+', '-', '@', '\t', '\r']);
+    let quoted = value.contains([',', '"', '\n']) || formula;
+    if !quoted {
+        return value.to_string();
+    }
+    let escaped = value.replace('"', "\"\"");
+    if formula {
+        format!("\"'{escaped}\"")
     } else {
-        value.to_string()
+        format!("\"{escaped}\"")
     }
 }
 
@@ -110,6 +127,7 @@ fn write_json(out: &mut impl Write, rows: &[tokengauge_core::sync::ExportRow]) -
                 "date": row.date.to_string(),
                 "provider": row.provider,
                 "model": row.model,
+                "device_id": row.device_id,
                 "device": row.device,
                 "input": row.tokens.input,
                 "output": row.tokens.output,
@@ -136,6 +154,7 @@ mod tests {
             date: "2026-08-25".parse().expect("date"),
             provider: "claude".into(),
             model: model.into(),
+            device_id: "abc123".into(),
             device: device.into(),
             tokens: tokengauge_core::cost::TokenCounts {
                 input: 1,
@@ -145,7 +164,7 @@ mod tests {
                 cache_read: 5,
             },
             total_tokens: 15,
-            usd: 1.5,
+            usd: Some(1.5),
         }
     }
 
@@ -162,6 +181,35 @@ mod tests {
             header.len(),
             body.len(),
             "a row has to carry one field per column"
+        );
+    }
+
+    #[test]
+    fn an_unpriced_model_leaves_the_money_cell_empty() {
+        // Never `0.000000`: a row claiming a million tokens cost nothing is
+        // worse than a row admitting it does not know.
+        let mut unpriced = row("mystery-model", "desk");
+        unpriced.usd = None;
+        let mut out = Vec::new();
+        write_csv(&mut out, &[unpriced]).expect("csv");
+        let text = String::from_utf8(out).expect("utf8");
+        let body = text.lines().nth(1).expect("a row");
+        assert!(body.ends_with(",15,"), "the usd cell is empty: {body}");
+        assert!(!body.contains("0.000000"), "{body}");
+    }
+
+    #[test]
+    fn a_field_that_would_be_a_formula_is_neutralised() {
+        // A device label is typed by the user and reaches a spreadsheet.
+        let mut out = Vec::new();
+        write_csv(&mut out, &[row("=cmd|'/c calc'!A1", "@SUM(1)")]).expect("csv");
+        let text = String::from_utf8(out).expect("utf8");
+        let body = text.lines().nth(1).expect("a row");
+        assert!(body.contains("\"'=cmd"), "{body}");
+        assert!(body.contains("\"'@SUM(1)\""), "{body}");
+        assert!(
+            !body.contains(",=cmd") && !body.contains(",@SUM"),
+            "a bare formula reached the file: {body}"
         );
     }
 

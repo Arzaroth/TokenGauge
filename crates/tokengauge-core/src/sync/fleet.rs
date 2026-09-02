@@ -5,7 +5,7 @@
 //! Regenerated every cycle it would forget its own history twelve times a year,
 //! and asymmetrically, since peers keep what the writer lost.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -113,6 +113,18 @@ pub struct ExportRow {
 /// has, and past UTC+12 it invents the wrong one - at UTC+14 midday on the 14th
 /// reads as the 15th, so a whole day's tokens land on the wrong date in
 /// Kiritimati and nowhere else.
+/// One walk of the buckets, per calendar step.
+#[derive(Debug, Default)]
+pub struct StepTotals {
+    /// Tokens and dollars, keyed by the step's own key.
+    pub steps: BTreeMap<String, (u64, f64)>,
+    /// Models with tokens in the range and no price for their month. Their
+    /// tokens are in the totals above and their money is not, so whatever
+    /// draws these totals has to say so rather than let a short bar imply a
+    /// cheap month.
+    pub unpriced: BTreeSet<String>,
+}
+
 /// What an export row is folded on: date, provider, model, device **id**.
 type ExportKey = (NaiveDate, String, String, String);
 
@@ -682,11 +694,11 @@ impl FleetStore {
         step: Step,
         prices: &PriceTable,
         archive: &PriceArchive,
-    ) -> BTreeMap<String, (u64, f64)> {
+    ) -> StepTotals {
         let (from, to) = range;
         let dropped = self.dropped_days();
         let mut tables: HashMap<String, PriceTable> = HashMap::new();
-        let mut out: BTreeMap<String, (u64, f64)> = BTreeMap::new();
+        let mut out = StepTotals::default();
         for (id, slice) in &self.devices {
             for bucket in &slice.buckets {
                 if !bucket.provider.eq_ignore_ascii_case(provider) {
@@ -703,10 +715,17 @@ impl FleetStore {
                 let table = tables
                     .entry(month.clone())
                     .or_insert_with(|| prices.as_of(archive, &month));
-                let entry = out.entry(step.key(date)).or_default();
+                let entry = out.steps.entry(step.key(date)).or_default();
                 entry.0 += bucket.tokens.total();
-                if let Some(price) = table.get(&bucket.model) {
-                    entry.1 += price.cost(&bucket.tokens);
+                match table.get(&bucket.model) {
+                    Some(price) => entry.1 += price.cost(&bucket.tokens),
+                    // Counted, not rated. Collected rather than swallowed: the
+                    // bar is drawn from the money, so a step carrying one of
+                    // these is shorter than it was, and a step carrying only
+                    // these draws as nothing at all beside a real token count.
+                    None => {
+                        out.unpriced.insert(bucket.model.clone());
+                    }
                 }
             }
         }
@@ -1297,7 +1316,7 @@ mod tests {
             &PriceTable::vendored(),
             &PriceArchive::vendored(),
         );
-        assert!(totals.contains_key("2026-01-14"), "{totals:?}");
+        assert!(totals.steps.contains_key("2026-01-14"), "{totals:?}");
     }
 
     #[test]

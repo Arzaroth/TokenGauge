@@ -160,12 +160,26 @@ pub fn history_panel(
     prices: &PriceTable,
     archive: &PriceArchive,
 ) -> HistoryPanel {
+    let mut unpriced = std::collections::BTreeSet::new();
     let series = HISTORY_RANGES
         .iter()
-        .map(|range| build_series(store, provider, *range, today, offset, prices, archive))
+        .map(|range| {
+            let (series, missing) =
+                build_series(store, provider, *range, today, offset, prices, archive);
+            unpriced.extend(missing);
+            series
+        })
         .collect();
 
     let mut notes = Vec::new();
+    // A bar is drawn from the money, so a model with no price makes its step
+    // shorter than it was - and a step carrying nothing else draws as flat
+    // beside a real token count, which reads as a month that cost nothing
+    // rather than one nobody can price. `--doctor` already names these; the
+    // chart has to say it too, because the chart is where the gap is visible.
+    if !unpriced.is_empty() {
+        notes.push(unpriced_note(&unpriced));
+    }
     if let (Some(earliest), Some(oldest)) = (archive.earliest(), month_starts(today, 12).first()) {
         let oldest_key = crate::cost::pricing::month_key(*oldest);
         if oldest_key.as_str() < earliest {
@@ -205,6 +219,19 @@ pub fn history_panel_now(
     )
 }
 
+/// The models with no price, named, and capped so one bad price table cannot
+/// turn the note into the panel.
+fn unpriced_note(unpriced: &std::collections::BTreeSet<String>) -> String {
+    const SHOWN: usize = 3;
+    let names: Vec<&str> = unpriced.iter().take(SHOWN).map(String::as_str).collect();
+    let listed = match unpriced.len().saturating_sub(SHOWN) {
+        0 => names.join(", "),
+        rest => format!("{} and {rest} more", names.join(", ")),
+    };
+    format!("no price for {listed}: their tokens are counted, their cost is not")
+}
+
+/// The series, and the models it could not rate.
 fn build_series(
     store: &FleetStore,
     provider: &str,
@@ -213,14 +240,15 @@ fn build_series(
     offset: FixedOffset,
     prices: &PriceTable,
     archive: &PriceArchive,
-) -> HistorySeries {
+) -> (HistorySeries, std::collections::BTreeSet<String>) {
     let step = range.step();
     let starts: Vec<NaiveDate> = match step {
         Step::Day => day_starts(today, range.count()),
         Step::Month => month_starts(today, range.count()),
     };
     let from = starts.first().copied().unwrap_or(today);
-    let totals = store.totals_by_step(provider, (from, today), offset, step, prices, archive);
+    let walk = store.totals_by_step(provider, (from, today), offset, step, prices, archive);
+    let totals = walk.steps;
 
     let peak = totals.values().map(|(_, usd)| *usd).fold(0.0_f64, f64::max);
     let last = starts.len().saturating_sub(1);
@@ -271,7 +299,7 @@ fn build_series(
         0.0
     };
 
-    HistorySeries {
+    let series = HistorySeries {
         id: range.id(),
         label: range.label(),
         points,
@@ -279,7 +307,8 @@ fn build_series(
         total_tokens: format_tokens(total_tokens),
         average_usd: money(average),
         empty: total_tokens == 0,
-    }
+    };
+    (series, walk.unpriced)
 }
 
 /// The `count` days ending today, oldest first.
@@ -488,6 +517,64 @@ mod tests {
         assert!(
             panel.series.iter().all(|s| !s.points.is_empty()),
             "the steps still exist, they are just all zero"
+        );
+    }
+
+    #[test]
+    fn a_model_with_no_price_is_named_rather_than_left_to_a_flat_bar() {
+        // The bar is drawn from the money, so an unpriced model draws as a
+        // month that cost nothing beside a real token count. The tokens still
+        // count; the panel says why the money does not match them.
+        let store = store_with(vec![Bucket {
+            hour: Hour::parse("2026-08-20T12").expect("hour"),
+            provider: "claude".into(),
+            model: "a-model-nobody-prices".into(),
+            granularity: Granularity::Hour,
+            tokens: crate::cost::TokenCounts {
+                input: 1_000_000,
+                ..Default::default()
+            },
+        }]);
+        let panel = history_panel(
+            &store,
+            "claude",
+            day("2026-08-25"),
+            utc(),
+            &PriceTable::vendored(),
+            &PriceArchive::vendored(),
+        );
+
+        let note = panel
+            .notes
+            .iter()
+            .find(|n| n.contains("no price"))
+            .unwrap_or_else(|| panic!("nothing said so: {:?}", panel.notes));
+        assert!(note.contains("a-model-nobody-prices"), "{note}");
+        assert!(note.contains("tokens are counted"), "{note}");
+
+        let series = &panel.series[0];
+        assert!(
+            !series.empty,
+            "the tokens are real even if the money is not"
+        );
+        assert_eq!(series.total_usd, "$0.00");
+    }
+
+    #[test]
+    fn a_priced_range_says_nothing_about_prices() {
+        let store = store_with(vec![bucket("2026-08-20", 1000)]);
+        let panel = history_panel(
+            &store,
+            "claude",
+            day("2026-08-25"),
+            utc(),
+            &PriceTable::vendored(),
+            &PriceArchive::vendored(),
+        );
+        assert!(
+            !panel.notes.iter().any(|n| n.contains("no price")),
+            "a fully priced range must not carry the caveat: {:?}",
+            panel.notes
         );
     }
 

@@ -175,6 +175,11 @@ one product rather than five.
   flag.
 - **Per-project history** would fall out of "cost by project" above, but needs
   the project key on `UsageEvent` first.
-- **The history screens have never been looked at.** Five of them shipped with
-  render tests and CI lint but no human eyes; the tray's could not even be
-  compiled on the machine that wrote it.
+- **Two of the five history screens have still not been looked at.** The TUI,
+  Plasma and Omarchy were checked after 0.30.0 shipped, and three real defects
+  came straight out of it: an unreadable day axis, the current step drawn as a
+  grey ghost, and charts leaving a third of the popup empty. Tests, clippy,
+  qmllint and three review rounds had all been green on every one of them,
+  because none of those render a chart. **GNOME and the Windows tray remain
+  unseen**, and the tray cannot be compiled on a Linux machine at all - so its
+  chart has never been drawn by anything.

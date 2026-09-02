@@ -900,7 +900,8 @@ Panel {
             Canvas {
               id: historyChart
               width: parent.width
-              height: Style.space(120)
+              // At 120 the chart left most of the popup empty under it.
+              height: Style.space(170)
               visible: root.historySeries !== null && !root.historySeries.empty
               readonly property var points: root.historySeries && !root.historySeries.empty
                                             ? root.historySeries.points : []
@@ -919,9 +920,12 @@ Panel {
                   // A floor of one pixel: a step that spent a little must never
                   // draw as a step that spent nothing.
                   var h = p.fraction > 0 ? Math.max(1, p.fraction * height) : 0
-                  ctx.fillStyle = root.toneColor(p.tone)
-                  // The step in progress is short because it is not over, so it
-                  // is drawn as unfinished rather than as a fall.
+                  // The step in progress carries the dim tone *and* the
+                  // reduced alpha below; taking both drew it as a grey ghost
+                  // that read as chrome rather than as this month so far. The
+                  // alpha is the signal, the fill stays the series colour.
+                  ctx.fillStyle = String(p.tone) === "critical"
+                    ? root.urgent : root.foreground
                   ctx.globalAlpha = p.partial ? 0.45 : 1.0
                   ctx.fillRect(i * (w + gap), height - h, w, h)
                 }

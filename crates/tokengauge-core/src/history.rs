@@ -93,9 +93,10 @@ impl HistoryRange {
 pub struct HistoryPoint {
     /// `2026-07-14` for a day, `2026-07` for a month. Matches the store's key.
     pub key: String,
-    /// Short enough for an axis tick.
+    /// Short enough for an axis tick under a single bar: a day number, or a
+    /// month's short name. Anything longer arrives truncated on a dense chart.
     pub label: String,
-    /// Unambiguous, for a tooltip.
+    /// Unambiguous, for a tooltip or an axis end where there is room.
     pub full_label: String,
     pub usd: String,
     pub tokens: String,
@@ -264,8 +265,13 @@ fn build_series(
             let (tokens, usd) = totals.get(&key).copied().unwrap_or((0, 0.0));
             let partial = at == last;
             HistoryPoint {
+                // An axis tick, and it has to fit *one bar*. A 30-day chart
+                // gives each bar about three columns, so "4 Aug" arrives
+                // truncated to "4 A" and the axis reads as noise. The day
+                // number alone fits and is unambiguous in a run of them;
+                // `full_label` carries the rest for edges and tooltips.
                 label: match step {
-                    Step::Day => date.format("%-d %b").to_string(),
+                    Step::Day => date.format("%-d").to_string(),
                     Step::Month => date.format("%b").to_string(),
                 },
                 full_label: match step {
@@ -415,6 +421,41 @@ mod tests {
         let spent: Vec<&HistoryPoint> = series.points.iter().filter(|p| p.fraction > 0.0).collect();
         assert_eq!(spent.len(), 1, "one day carried tokens");
         assert_eq!(spent[0].key, "2026-08-20");
+    }
+
+    #[test]
+    fn an_axis_label_fits_under_a_single_bar() {
+        // A 30-day chart gives each bar about three columns, so a day label of
+        // "4 Aug" arrived truncated to "4 A" and the axis read as noise:
+        // "4 A5 A6 A7 A8 A9 A10 11 12". The tick has to fit one bar; the whole
+        // date lives on `full_label`, which is what the axis ends and the
+        // tooltips use.
+        let store = store_with(vec![bucket("2026-08-20", 1000)]);
+        let panel = history_panel(
+            &store,
+            "claude",
+            day("2026-08-25"),
+            utc(),
+            &PriceTable::vendored(),
+            &PriceArchive::vendored(),
+        );
+        for series in &panel.series {
+            let width = if series.id == "12m" { 3 } else { 2 };
+            for point in &series.points {
+                assert!(
+                    point.label.chars().count() <= width,
+                    "{}: `{}` does not fit {width} columns",
+                    series.id,
+                    point.label
+                );
+                assert!(
+                    point.full_label.chars().count() > point.label.chars().count(),
+                    "{}: `{}` says no more than the tick does",
+                    series.id,
+                    point.full_label
+                );
+            }
+        }
     }
 
     #[test]

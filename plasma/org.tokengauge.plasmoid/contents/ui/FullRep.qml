@@ -545,7 +545,7 @@ Item {
                         PlasmaComponents.Label {
                             textFormat: Text.PlainText
                             text: full.historySeries && full.historySeries.points.length > 0
-                                ? full.historySeries.points[0].label : ""
+                                ? full.historySeries.points[0].full_label : ""
                             opacity: 0.6
                             font: Kirigami.Theme.smallFont
                         }
@@ -553,7 +553,7 @@ Item {
                         PlasmaComponents.Label {
                             textFormat: Text.PlainText
                             text: full.historySeries && full.historySeries.points.length > 0
-                                ? full.historySeries.points[full.historySeries.points.length - 1].label
+                                ? full.historySeries.points[full.historySeries.points.length - 1].full_label
                                 : ""
                             opacity: 0.6
                             font: Kirigami.Theme.smallFont

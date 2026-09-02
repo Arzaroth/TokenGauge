@@ -683,11 +683,11 @@ mod win {
                         if let (Some(first), Some(last)) =
                             (series.points.first(), series.points.last())
                         {
-                            ui.label(RichText::new(&first.label).small().color(SUB));
+                            ui.label(RichText::new(&first.full_label).small().color(SUB));
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    ui.label(RichText::new(&last.label).small().color(SUB));
+                                    ui.label(RichText::new(&last.full_label).small().color(SUB));
                                 },
                             );
                         }

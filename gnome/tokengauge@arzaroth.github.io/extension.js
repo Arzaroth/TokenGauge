@@ -628,7 +628,11 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         if (current.empty) {
             screen.add_child(label(_('Nothing spent in this range.'), 'tokengauge-dim'));
         } else {
-            screen.add_child(historyChart(current.points, p => this._toneColor(p.tone), 96));
+            // The fill stays the series colour: `partial` already carries the
+            // "in progress" signal as reduced alpha, and taking the dim tone
+            // as well drew that step as a ghost rather than as data.
+            const fill = p => (p.tone === 'critical' ? this._theme().red : this._theme().neutral);
+            screen.add_child(historyChart(current.points, fill, 140));
             const edges = box(false, {x_expand: true});
             edges.add_child(label(current.points[0].full_label, 'tokengauge-footer'));
             edges.add_child(spacer());

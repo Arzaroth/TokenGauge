@@ -42,10 +42,15 @@ Item {
     // badge and wrong for a chart fill: it would draw every complete step in
     // the same grey as the note under it. A frontend maps a tone onto its own
     // palette, and for a filled bar this one's `normal` is the accent.
+    //
+    // The step in progress carries the dim tone *and* gets reduced alpha below,
+    // and taking both drew it as a grey ghost that read as chrome rather than
+    // as this month's spend so far. The alpha is the signal; the fill stays the
+    // series colour.
     function chartColor(point) {
-        return String(point.tone) === "normal"
-            ? Kirigami.Theme.highlightColor
-            : root.toneColor(point.tone)
+        return String(point.tone) === "critical"
+            ? root.toneColor(point.tone)
+            : Kirigami.Theme.highlightColor
     }
     // The core's own list, never a guess: a hardcoded fallback here silently
     // hid every provider added since it was written.
@@ -506,7 +511,11 @@ Item {
                     Canvas {
                         id: historyChart
                         Layout.fillWidth: true
-                        Layout.preferredHeight: Kirigami.Units.gridUnit * 8
+                        // The history screen has only a range strip, a totals
+                        // line and two captions besides this, so at eight grid
+                        // units the chart left a third of the popup empty
+                        // underneath it.
+                        Layout.preferredHeight: Kirigami.Units.gridUnit * 12
                         visible: full.historySeries !== null && !full.historySeries.empty
                         readonly property var points: full.historySeries && !full.historySeries.empty
                                                       ? full.historySeries.points : []

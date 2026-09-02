@@ -772,7 +772,7 @@ mod win {
     /// row of widgets would carry spacing rules this does not want.
     fn draw_history_chart(ui: &mut egui::Ui, series: &tokengauge_core::HistorySeries) {
         let (rect, _) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), 110.0),
+            egui::vec2(ui.available_width(), 150.0),
             egui::Sense::hover(),
         );
         let n = series.points.len();
@@ -806,7 +806,14 @@ mod win {
                 egui::pos2(x, rect.bottom() - height),
                 egui::vec2(width, height),
             );
-            let colour = tone_color(point.tone);
+            // The fill stays the series colour; `partial` below carries the
+            // "in progress" signal on its own. Taking the dim tone as well
+            // drew that step as a ghost rather than as this month so far.
+            let colour = if point.tone == Tone::Critical {
+                RED
+            } else {
+                BLUE
+            };
             // The step in progress is short because it is not over, so it is
             // drawn as unfinished rather than as a fall.
             let colour = if point.partial {

@@ -181,6 +181,7 @@ Panel {
 
       Text {
         id: labelText
+        textFormat: Text.PlainText
         anchors.left: parent.left
         text: meterRow.label
         color: meterRow.emphasized ? root.foreground : root.dim
@@ -190,6 +191,7 @@ Panel {
       }
 
       Text {
+        textFormat: Text.PlainText
         anchors.right: parent.right
         text: meterRow.value
         color: meterRow.emphasized ? root.foreground : root.dim
@@ -239,6 +241,7 @@ Panel {
       spacing: Style.space(6)
 
       Text {
+        textFormat: Text.PlainText
         text: meterRow.footnote
         visible: text !== ""
         color: root.dim
@@ -247,6 +250,7 @@ Panel {
       }
 
       Text {
+        textFormat: Text.PlainText
         text: meterRow.badge
         visible: text !== ""
         color: meterRow.badgeColor
@@ -291,6 +295,7 @@ Panel {
 
     Text {
       id: rowLabel
+      textFormat: Text.PlainText
       text: tableRow.label
       color: root.foreground
       font.family: root.fontFamily
@@ -306,6 +311,7 @@ Panel {
 
     Text {
       id: rowValue
+      textFormat: Text.PlainText
       text: tableRow.value
       color: tableRow.emphasized ? root.foreground : root.dim
       font.family: root.fontFamily
@@ -461,6 +467,7 @@ Panel {
               spacing: Style.space(10)
 
               Text {
+                textFormat: Text.PlainText
                 width: parent.width - updateButton.width - parent.spacing
                 anchors.verticalCenter: parent.verticalCenter
                 text: usage.updateStatus && usage.updateStatus.latest
@@ -532,6 +539,7 @@ Panel {
 
                 // The bar glyph stands in while the logo is missing or failed.
                 Text {
+                  textFormat: Text.PlainText
                   anchors.centerIn: parent
                   visible: heroMarkImage.status !== Image.Ready
                   text: root.provider ? String(root.provider.glyph || "") : ""
@@ -556,6 +564,7 @@ Panel {
 
           // ---------- Error banner ----------
           Text {
+            textFormat: Text.PlainText
             visible: root.errorText !== ""
             width: parent.width
             text: root.errorText
@@ -569,6 +578,7 @@ Panel {
           // dim for the same reason the banner is: the panel otherwise reads as
           // current.
           Text {
+            textFormat: Text.PlainText
             visible: !!root.provider && root.provider.stale === true
             width: parent.width
             text: "Showing last known values"
@@ -578,6 +588,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             visible: !root.provider && root.errorText === ""
             width: parent.width
             topPadding: Style.space(24)
@@ -680,6 +691,7 @@ Panel {
 
                       Text {
                         id: rowLabelText
+                        textFormat: Text.PlainText
                         anchors.left: parent.left
                         text: keyRow.modelData.label
                         color: root.dim
@@ -688,6 +700,7 @@ Panel {
                       }
 
                       Text {
+                        textFormat: Text.PlainText
                         anchors.right: parent.right
                         text: keyRow.modelData.value
                         color: root.foreground
@@ -712,6 +725,7 @@ Panel {
 
                         Text {
                           id: rowBadgeText
+                          textFormat: Text.PlainText
                           visible: text !== ""
                           text: root.present(keyRow.modelData.badge)
                           color: root.toneColor(keyRow.modelData.badge_tone)
@@ -721,6 +735,7 @@ Panel {
 
                         Text {
                           id: rowSuffixText
+                          textFormat: Text.PlainText
                           visible: text !== ""
                           // The trend badge carries an arrow, which falls back
                           // to a font with taller metrics; top-aligned in a Row
@@ -788,6 +803,7 @@ Panel {
                 required property int index
 
                 Text {
+                  textFormat: Text.PlainText
                   anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
                   text: (parent.index < 9 ? (parent.index + 1) + "  " : "") + root.providerLabel(modelData)
@@ -839,6 +855,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             visible: root.settingsOpen
             width: parent.width
             topPadding: Style.space(4)
@@ -850,6 +867,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             visible: root.settingsOpen
             width: parent.width
             wrapMode: Text.WordWrap
@@ -873,6 +891,7 @@ Panel {
             model: usage.errors
 
             Text {
+              textFormat: Text.PlainText
               required property var modelData
               width: parent.width
               text: String(modelData.provider || "") + ": " + String(modelData.message || "")

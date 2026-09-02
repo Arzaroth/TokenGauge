@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Panel text is drawn as text, not as markup.** A QML `Text` with no
+  `textFormat` is `Text.AutoText`: Qt inspects the string, promotes anything
+  that looks like markup to rich text, and rich text fetches
+  `<img src="http://...">` while it lays the label out. Every string the panel
+  draws comes from outside - a window title and a model name off a provider's
+  API, a model id out of a transcript, the text of a fetch error - so one `<`
+  in any of them was enough to make the desktop issue an unauthenticated
+  request with nothing clicked. The Omarchy widget and the Plasma applet now
+  declare `textFormat: Text.PlainText` on every label they draw. The Waybar
+  tooltip already escaped its Pango markup and the GNOME extension renders none,
+  so neither was affected.
+
+### Fixed
+
+- **A one-shot `codex exec` run is counted.** A headless Codex run writes no
+  rollout envelope: the usage rides on the line itself, one row per call under
+  whichever field names the serving API used. The reader only understood the
+  interactive shape, so every `codex exec` session contributed nothing to the
+  cost panel.
+- **Codex cache reads are priced as cache reads whichever field carries them.**
+  Some Codex builds report the cached subset of the input as
+  `cache_read_input_tokens` rather than `cached_input_tokens`. The reader knew
+  only the second name, so on those builds the whole prompt was billed at the
+  fresh-input rate - the token counts stayed right, which is why nothing caught
+  it, and the cost ran high by roughly the cache hit rate.
+- **A Codex reading written out of order no longer bills its span twice.** The
+  session's running total is the baseline for the next delta, and a snapshot
+  restating an earlier state was allowed to become that baseline. Nothing was
+  billed for the stale row itself, but the reading after it then charged the
+  whole span again from the lowered mark.
+- **A Codex session that is still valid is no longer refreshed on age alone.**
+  `auth.json` carries no expiry, so the token was refreshed once its
+  `last_refresh` passed eight days regardless of whether it had expired. The
+  access token's own `exp` claim now decides, with the age rule kept as the
+  fallback for a token that carries no claim. A refresh spends a rotating
+  refresh token, and a rejected one reported a working credential as
+  "run `codex`".
+
 ## [0.29.2] - 2026-09-01
 
 ### Fixed

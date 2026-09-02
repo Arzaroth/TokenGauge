@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **A refresh control says when the figures under it arrived.** Hovering it
-  now reads `Last refreshed 3m ago - 14:32` on the Plasma, GNOME, Omarchy and
+  now reads `Last refreshed 3m ago · 14:32` on the Plasma, GNOME, Omarchy and
   tray panels; waybar, which has no button to hover, carries the same sentence
   as a tooltip line, and the TUI header shows it in place of its own count.
 

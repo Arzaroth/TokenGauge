@@ -127,7 +127,11 @@ impl HistoryView {
             .title(format!(" History — {} ", self.label));
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        if inner.height < 7 || inner.width < 20 {
+        // The rows the layout below asks for: range, totals, four of chart,
+        // two of notes, keys. Below that the solver starts squeezing the
+        // chart's `Min(4)` and the pane draws as overlapping fragments, so
+        // nothing is better. Keep this in step with the constraints.
+        if inner.height < 9 || inner.width < 20 {
             return;
         }
 

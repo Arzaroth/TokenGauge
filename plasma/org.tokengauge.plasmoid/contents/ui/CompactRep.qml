@@ -60,6 +60,7 @@ MouseArea {
 
         // Glyph fallback when no SVG is installed / available.
         PlasmaComponents.Label {
+            textFormat: Text.PlainText
             visible: !logo.visible && compact.row
             text: compact.row ? (compact.row.glyph || "") : ""
             color: compact.row ? (compact.row.color || Kirigami.Theme.textColor) : Kirigami.Theme.textColor
@@ -69,6 +70,7 @@ MouseArea {
         }
 
         PlasmaComponents.Label {
+            textFormat: Text.PlainText
             visible: Plasmoid.configuration.showPercentInPanel
             text: compact.bar.percent === null || compact.bar.percent === undefined
                 ? "—" : compact.bar.percent + "%"

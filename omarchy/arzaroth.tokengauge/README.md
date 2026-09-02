@@ -57,6 +57,7 @@ and Fireworks. Both can sit in the bar at once; drop theirs with
   (mouse 8) = status page, scroll = previous / next provider. The same set the
   Waybar module binds, minus its rotate-and-persist: scrolling here moves the
   panel's own selection and leaves `config.toml` alone.
+- Panel header: refresh, history, settings.
 - Panel: `h`/`l` switch provider, `j`/`k` scroll, `r` or Enter refresh, `u` and
   `s` open the active provider's usage dashboard and status page, `,` toggles
   the settings pane, Tab moves to the neighboring bar panel, Esc closes.

@@ -584,6 +584,15 @@ Panel {
               Row {
                 spacing: Style.space(8)
                 PanelActionButton {
+                  iconText: "󰑐"
+                  tooltipText: "Refresh  r"
+                  enabled: !usage.loading
+                  foreground: root.dim
+                  hoverColor: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: usage.refreshNow()
+                }
+                PanelActionButton {
                   iconText: "󰄨"
                   tooltipText: "History  ."
                   foreground: root.historyOpen ? Color.accent : root.dim

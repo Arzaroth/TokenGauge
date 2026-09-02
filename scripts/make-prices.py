@@ -120,8 +120,13 @@ def slice_table(table):
 
 
 def month_starts(count):
-    """The first of each of the `count` months before this one, oldest first."""
-    cursor = datetime.date.today().replace(day=1)
+    """The first of each of the `count` months before this one, oldest first.
+
+    UTC, because `COMMITS` selects by a UTC boundary. Taking the local date
+    would, for a few hours either side of a month start, ask for a month the
+    commit walk then resolves to the wrong side of.
+    """
+    cursor = datetime.datetime.now(datetime.timezone.utc).date().replace(day=1)
     out = []
     for _ in range(count):
         cursor = (cursor - datetime.timedelta(days=1)).replace(day=1)
@@ -133,8 +138,30 @@ def next_month(date):
     return (date.replace(day=28) + datetime.timedelta(days=8)).replace(day=1)
 
 
+def overrides_for(current, historical):
+    """Only the fields the vendor actually moved.
+
+    A field the historical table did not carry is **not** an override. LiteLLM
+    fills gaps in late, and the value it eventually recorded was almost always
+    true all along - `claude-sonnet-4-5` carried no 1h cache-write price for its
+    first year, and every read of it fell back to the 5m price. Recording that
+    absence would make `PriceTable::as_of` zero the field instead, and
+    `cache_read_input_token_cost` was missing from 124 model-months the first
+    time this archive was built entry-at-a-time. Cache reads are most of the
+    token volume in a coding session.
+
+    A model missing from `current` entirely is one LiteLLM has since dropped, so
+    every field it had is an override.
+    """
+    return {
+        field: was
+        for field, was in historical.items()
+        if current.get(field) != was
+    }
+
+
 def build_archive(current):
-    """Per-month overrides for models whose price was not what it is today.
+    """Per-month overrides for prices that were not what they are today.
 
     A month is represented by the table at its **end**, which is the one most
     likely to carry the model at all. A price that moved mid-month is therefore
@@ -150,9 +177,11 @@ def build_archive(current):
             print(f"  {label}: no commit found, skipped", file=sys.stderr)
             continue
         table = slice_table(get_json(RAW.format(ref=commits[0]["sha"])))
-        overrides = {
-            name: price for name, price in table.items() if current.get(name) != price
-        }
+        overrides = {}
+        for name, historical in table.items():
+            fields = overrides_for(current.get(name, {}), historical)
+            if fields:
+                overrides[name] = fields
         if overrides:
             archive[label] = overrides
         print(
@@ -171,11 +200,15 @@ def main():
         if count == 0:
             sys.exit(f"no {provider} models survived the filter - check attribute()")
 
-    OUT.write_text(json.dumps(current, indent=1) + "\n")
-    print(f"wrote {len(current)} entries to {OUT}", file=sys.stderr)
-
+    # Both are built before either is written. The archive walk is a dozen
+    # network calls and any of them can fail; writing the current table first
+    # would leave a fresh `prices.json` beside an archive built against the
+    # previous one, and every override in it aimed at the wrong baseline.
     print(f"building {ARCHIVE_MONTHS} months of price history", file=sys.stderr)
     archive = build_archive(current)
+
+    OUT.write_text(json.dumps(current, indent=1) + "\n")
+    print(f"wrote {len(current)} entries to {OUT}", file=sys.stderr)
     ARCHIVE_OUT.write_text(json.dumps(archive, indent=1, sort_keys=True) + "\n")
     total = sum(len(v) for v in archive.values())
     size = ARCHIVE_OUT.stat().st_size

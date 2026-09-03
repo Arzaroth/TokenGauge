@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Updating broke the GNOME extension.** The payload ships the settings schema
+  as XML and the compiled blob is built on the machine that runs it, but only
+  `scripts/install-gnome.sh` ever compiled it - so `--update`, which replaces
+  the extension directory wholesale, deleted `gschemas.compiled` and never put
+  it back, and `--install-frontend gnome` had never written one at all. GNOME
+  switches to the extension's own schema source the moment a `schemas/`
+  directory exists, so the extension then failed at every enable with
+  `Failed to open file ".../gschemas.compiled"` and sat in error in the
+  Extensions app. Both paths compile the schema now, on the staged copy, so a
+  machine without `glib-compile-schemas` keeps the install it had instead of
+  gaining a broken one.
+- **`--doctor` called a broken GNOME extension up to date.** It read the
+  version out of `metadata.json` and stopped there, which an extension with
+  uncompiled schemas answers perfectly well. It now says when the schemas are
+  not compiled, and how to fix it.
+
 ## [0.30.3] - 2026-09-02
 
 ### Added

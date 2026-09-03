@@ -599,6 +599,17 @@ pub fn doctor_lines(
                     detail: format!("tokengauge --install-frontend {}", f.id),
                 }),
             }
+            // A version that reads fine says nothing about whether the desktop
+            // can load it: an install from before the schemas were compiled
+            // left the right `metadata.json` beside a schema directory GNOME
+            // fails on, and reported itself as up to date the whole time.
+            if !f.schemas_ready() {
+                record(DoctorCheck {
+                    label: format!("{} settings schemas are not compiled", f.label),
+                    ok: false,
+                    detail: format!("tokengauge --install-frontend {}", f.id),
+                });
+            }
         }
     }
 

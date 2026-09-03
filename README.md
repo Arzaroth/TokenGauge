@@ -404,6 +404,11 @@ The script builds the release binaries, installs the provider logos to
 its GSettings schema, and enables it. Reload the shell afterwards - Alt+F2 then
 `r` on Xorg, or log out and back in on Wayland.
 
+`tokengauge --install-frontend gnome` and `tokengauge --update` install the
+same extension and compile the schema too, so both need `glib-compile-schemas`
+on `PATH` (Debian/Ubuntu: `libglib2.0-bin`); without it they refuse rather than
+leave an extension GNOME cannot enable.
+
 The panel button shows the pinned provider's brand icon and usage percent;
 scroll it to cycle providers, middle-click to force a refresh, left-click for
 the popup (provider tabs, tier-coloured usage bars with reset + pace, cost

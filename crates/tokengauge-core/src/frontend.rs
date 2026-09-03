@@ -62,6 +62,9 @@ pub struct Frontend {
     /// Directory name the payload lands in; the id its desktop expects.
     pub artifact: &'static str,
     version_source: VersionSource,
+    /// Ships GSettings schemas, which are XML in the payload and a compiled
+    /// blob at runtime. See [`compile_schemas`].
+    gsettings_schemas: bool,
     pub restart: Restart,
 }
 
@@ -72,6 +75,7 @@ pub const FRONTENDS: &[Frontend] = &[
         payload: "plasma/org.tokengauge.plasmoid",
         artifact: "org.tokengauge.plasmoid",
         version_source: VersionSource::PlasmaMetadata,
+        gsettings_schemas: false,
         restart: Restart::Cheap("kquitapp6 plasmashell && kstart plasmashell"),
     },
     Frontend {
@@ -80,6 +84,7 @@ pub const FRONTENDS: &[Frontend] = &[
         payload: "gnome/tokengauge@arzaroth.github.io",
         artifact: "tokengauge@arzaroth.github.io",
         version_source: VersionSource::GnomeMetadata,
+        gsettings_schemas: true,
         restart: Restart::Session(
             "log out and back in, then: gnome-extensions enable tokengauge@arzaroth.github.io",
         ),
@@ -90,6 +95,7 @@ pub const FRONTENDS: &[Frontend] = &[
         payload: "omarchy/arzaroth.tokengauge",
         artifact: "arzaroth.tokengauge",
         version_source: VersionSource::ManifestVersion,
+        gsettings_schemas: false,
         restart: Restart::Cheap("omarchy-restart-shell"),
     },
 ];
@@ -216,6 +222,11 @@ impl Frontend {
                 .with_context(|| format!("cannot stage {} into {}", self.label, staged.display()));
         }
 
+        if let Err(e) = compile_schemas(self, &staged) {
+            let _ = std::fs::remove_dir_all(&staged);
+            return Err(e);
+        }
+
         // Move the old install aside rather than deleting it, so a rename that
         // fails leaves something on disk. Deleting first and then unstaging on
         // failure - which is what this did - left zero copies of a frontend the
@@ -235,6 +246,17 @@ impl Frontend {
         Ok(dest.to_path_buf())
     }
 
+    /// Whether the installed copy is in a state its desktop can load. Only
+    /// GSettings schemas can be half-installed this way; everything else is
+    /// covered by the directory being there at all.
+    pub fn schemas_ready(&self) -> bool {
+        self.dest_dir().is_none_or(|d| self.schemas_ready_in(&d))
+    }
+
+    fn schemas_ready_in(&self, dir: &Path) -> bool {
+        !self.gsettings_schemas || dir.join("schemas/gschemas.compiled").is_file()
+    }
+
     /// Locate this frontend's payload under an archive root or a checkout.
     pub fn payload_in(&self, source_root: &Path) -> Option<PathBuf> {
         let archived = source_root.join(ARCHIVE_ROOT).join(self.payload);
@@ -249,6 +271,50 @@ impl Frontend {
 /// Every frontend already present on this machine.
 pub fn installed() -> Vec<&'static Frontend> {
     FRONTENDS.iter().filter(|f| f.is_installed()).collect()
+}
+
+/// Compile the GSettings schemas the payload ships as XML.
+///
+/// The compiled blob is built on the machine it runs on and so is not in the
+/// repository or the archive, and `install_into` replaces the whole directory -
+/// so an install that skipped this left the schema directory with the XML and
+/// nothing else. That is worse than shipping no schemas at all: GNOME's
+/// `Extension.getSettings()` switches to `Gio.SettingsSchemaSource
+/// .new_from_directory` the moment `schemas/` exists, which then fails on the
+/// missing `gschemas.compiled` and puts the extension in error at every enable.
+///
+/// Run on the staged copy, so a machine without the compiler keeps the install
+/// it already had instead of gaining a broken one.
+fn compile_schemas(frontend: &Frontend, staged: &Path) -> Result<()> {
+    if !frontend.gsettings_schemas {
+        return Ok(());
+    }
+    let schemas = staged.join("schemas");
+    if !schemas.is_dir() {
+        bail!(
+            "{} ships GSettings schemas but {} has none",
+            frontend.label,
+            staged.display()
+        );
+    }
+    let out = std::process::Command::new("glib-compile-schemas")
+        .arg(&schemas)
+        .output()
+        .with_context(|| {
+            format!(
+                "cannot run glib-compile-schemas, which {} needs - install the glib2 tools \
+                 (Debian/Ubuntu: libglib2.0-bin)",
+                frontend.label
+            )
+        })?;
+    if !out.status.success() {
+        bail!(
+            "glib-compile-schemas failed on {}: {}",
+            schemas.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
 }
 
 fn copy_dir(src: &Path, dest: &Path) -> Result<()> {
@@ -289,6 +355,56 @@ mod tests {
         for f in FRONTENDS {
             assert!(f.dest_dir().is_some(), "{} has no destination", f.id);
         }
+    }
+
+    /// The payload ships the schema XML and nothing else, because the compiled
+    /// blob is built on the machine that runs it. An install that left it that
+    /// way produced an extension GNOME refuses to enable - `getSettings()`
+    /// takes the `new_from_directory` branch as soon as `schemas/` exists and
+    /// then fails on the missing file - which is what `--update` did to every
+    /// GNOME user from 0.19.0, and what `--install-frontend gnome` had never
+    /// once got right.
+    #[test]
+    fn a_gnome_install_compiles_its_schemas() {
+        let tmp = std::env::temp_dir().join(format!(
+            "tg-frontend-schemas-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let gnome = find("gnome").unwrap();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root");
+        let dest = tmp.join("extensions").join(gnome.artifact);
+
+        let installed = gnome.install_into(repo, &dest);
+        if crate::launch::which("glib-compile-schemas").is_none() {
+            // Nothing to compile with: refusing is the whole point, so the
+            // working install a user already had is still there afterwards.
+            assert!(
+                installed.is_err(),
+                "an install that cannot compile must fail"
+            );
+            assert!(!dest.exists(), "and must not leave a broken copy behind");
+        } else {
+            installed.expect("install");
+            assert!(
+                gnome.schemas_ready_in(&dest),
+                "the installed extension has no compiled schemas"
+            );
+            assert!(
+                dest.join("metadata.json").is_file(),
+                "the payload landed too"
+            );
+        }
+
+        // A frontend with no schemas is ready wherever it is - the check must
+        // not turn into a file that the Plasma applet is now expected to grow.
+        assert!(find("plasma").unwrap().schemas_ready_in(&dest));
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// The old install must survive a failed replacement. This deleted the

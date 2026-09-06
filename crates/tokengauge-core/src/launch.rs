@@ -142,4 +142,27 @@ mod tests {
             "{sync}"
         );
     }
+
+    /// `which` is the doctor's PATH walk as well as this module's, so it has to
+    /// answer for a name that is not there rather than for the directory entry
+    /// that happens to share it.
+    #[test]
+    fn which_finds_a_binary_on_path_and_nothing_else() {
+        assert!(which("sh").is_some(), "sh is on PATH on every unix");
+        assert!(which("tokengauge-no-such-binary").is_none());
+    }
+
+    /// An empty command is what `tui_command` returns when it found no
+    /// terminal at all. Handing that to `sh -c` runs a shell that does nothing
+    /// and reports success, which is a click that silently did nothing.
+    #[test]
+    fn a_command_that_resolved_to_nothing_is_not_spawned() {
+        assert!(!spawn_shell(""));
+        assert!(!spawn_shell("   "));
+        assert!(!spawn_shell_with_config(
+            "  ",
+            Path::new("/tmp/tokengauge.toml")
+        ));
+        assert!(spawn_shell("exit 0"), "a real command still spawns");
+    }
 }

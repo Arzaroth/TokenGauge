@@ -204,3 +204,129 @@ pub fn config_set_sync_provider(path: &Path, name: &str, enabled: bool) -> Resul
         ensure_subtable(sync, "providers")[&name] = toml_edit::value(enabled);
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with(tag: &str, contents: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "tg-sync-config-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, contents).expect("write");
+        path
+    }
+
+    fn reload(path: &Path) -> SyncConfig {
+        crate::load_config(Some(path.to_path_buf()))
+            .expect("the setup screen must leave a config that still parses")
+            .sync
+    }
+
+    /// Everything the setup screen can change goes through these, and each one
+    /// has to survive being read back - a writer that produces a config the
+    /// loader then rejects breaks the whole file, not just its own field.
+    #[test]
+    fn every_field_the_setup_screen_writes_reads_back() {
+        let path = config_with("writers", "refresh_secs = 600\n");
+
+        config_set_sync_enabled(&path, true).expect("enabled");
+        config_set_sync_label(&path, "laptop").expect("label");
+        config_set_sync_transport(&path, "S3").expect("transport is case-folded");
+        config_set_sync_dir(&path, "  /srv/fleet  ").expect("dir");
+        config_set_sync_s3(&path, "bucket", " tokens ").expect("bucket");
+        config_set_sync_s3(&path, "endpoint", "https://s3.example").expect("endpoint");
+        config_set_sync_provider(&path, "Claude", false).expect("provider");
+
+        let sync = reload(&path);
+        assert!(sync.enabled);
+        assert_eq!(sync.label, "laptop");
+        assert_eq!(sync.transport, SyncTransportKind::S3);
+        assert_eq!(sync.dir.path, PathBuf::from("/srv/fleet"));
+        assert_eq!(sync.s3.bucket, "tokens");
+        assert_eq!(sync.s3.endpoint, "https://s3.example");
+        assert_eq!(sync.providers.claude, Some(false));
+        assert!(
+            sync.unknown.is_empty() && sync.s3.unknown.is_empty(),
+            "a writer that lands a key the loader does not know is a typo the doctor will report"
+        );
+
+        let _ = std::fs::remove_dir_all(path.parent().expect("temp dir"));
+    }
+
+    /// A hand-written config may spell a section as an inline table. Replacing
+    /// it with an empty one would silently drop whatever else the user had put
+    /// in it.
+    #[test]
+    fn an_inline_section_is_promoted_rather_than_replaced() {
+        let path = config_with(
+            "inline",
+            "[sync]\nenabled = true\nproviders = { claude = false }\n",
+        );
+
+        config_set_sync_provider(&path, "codex", false).expect("provider");
+
+        let sync = reload(&path);
+        assert_eq!(sync.providers.codex, Some(false));
+        assert_eq!(
+            sync.providers.claude,
+            Some(false),
+            "the field that was already in the inline table was dropped"
+        );
+
+        let _ = std::fs::remove_dir_all(path.parent().expect("temp dir"));
+    }
+
+    /// The setup screen passes user input straight through, so a value it does
+    /// not know has to come back as an error rather than land in the file and
+    /// take sync down quietly.
+    #[test]
+    fn a_value_the_writers_do_not_know_never_reaches_the_file() {
+        let path = config_with("refused", "refresh_secs = 600\n");
+        let before = std::fs::read_to_string(&path).expect("read");
+
+        let transport = config_set_sync_transport(&path, "ftp").expect_err("unknown transport");
+        assert!(transport.to_string().contains("expected dir or s3"));
+
+        let secret = config_set_sync_s3(&path, "secret_access_key", "hunter2")
+            .expect_err("credentials are not settable");
+        assert!(
+            secret.to_string().contains("AWS_SECRET_ACCESS_KEY"),
+            "the error has to say where a credential does belong: {secret}"
+        );
+
+        let provider =
+            config_set_sync_provider(&path, "glm", true).expect_err("glm has no transcript reader");
+        assert!(provider.to_string().contains("no transcript reader"));
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            before,
+            "a refused write must not have touched the config"
+        );
+
+        let _ = std::fs::remove_dir_all(path.parent().expect("temp dir"));
+    }
+
+    /// The named fields are overrides, not an allow-list: a provider that
+    /// gains a transcript reader syncs without anyone remembering this struct.
+    #[test]
+    fn a_provider_with_a_reader_syncs_unless_it_is_turned_off() {
+        let all = SyncProvidersConfig::default();
+        assert_eq!(
+            all.resolve(&["claude", "codex", "kimi", "glm"]),
+            vec!["claude", "codex", "kimi"],
+            "glm has no reader, so it has nothing to bucket"
+        );
+
+        let off = SyncProvidersConfig {
+            claude: Some(false),
+            ..SyncProvidersConfig::default()
+        };
+        assert_eq!(off.resolve(&["Claude", "Codex"]), vec!["codex"]);
+    }
+}

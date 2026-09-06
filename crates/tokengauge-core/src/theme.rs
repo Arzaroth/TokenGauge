@@ -186,6 +186,81 @@ mod tests {
         assert_eq!(t.color_for_percent(80), t.red);
     }
 
+    /// Every tier has a colour and no two share one, which is what makes a
+    /// tone readable as a tone rather than as whatever the palette happened to
+    /// leave unset.
+    #[test]
+    fn every_tone_maps_onto_a_distinct_colour() {
+        for theme in [Theme::catppuccin(), Theme::nord(), Theme::gruvbox()] {
+            let colors = [
+                theme.color_for_tone(Tone::Good),
+                theme.color_for_tone(Tone::Warn),
+                theme.color_for_tone(Tone::Critical),
+                theme.color_for_tone(Tone::Dim),
+                theme.color_for_tone(Tone::Normal),
+            ];
+            for c in colors {
+                assert!(parse_hex_rgb(c).is_some(), "{c} is not #RRGGBB");
+            }
+            let mut sorted = colors.to_vec();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(sorted.len(), colors.len(), "two tiers share a colour");
+        }
+    }
+
+    /// The preset names come out of a config file, so an unknown one has to
+    /// resolve to something rather than fail the load - and an override is
+    /// per-field, not a replacement for the preset.
+    #[test]
+    fn an_override_wins_over_the_preset_and_an_unknown_preset_falls_back() {
+        let nord = ThemeConfig {
+            preset: "NORD".into(),
+            ..ThemeConfig::default()
+        }
+        .resolve();
+        assert_eq!(nord.green, Theme::nord().green, "the preset is case-folded");
+
+        let gruvbox = ThemeConfig {
+            preset: "gruvbox".into(),
+            ..ThemeConfig::default()
+        }
+        .resolve();
+        assert_eq!(gruvbox.red, Theme::gruvbox().red);
+
+        let unknown = ThemeConfig {
+            preset: "solarized".into(),
+            ..ThemeConfig::default()
+        }
+        .resolve();
+        assert_eq!(unknown.green, GREEN_HEX, "an unknown preset is catppuccin");
+
+        let overridden = ThemeConfig {
+            preset: "nord".into(),
+            green: Some("#00ff00".into()),
+            ..ThemeConfig::default()
+        }
+        .resolve();
+        assert_eq!(overridden.green, "#00ff00");
+        assert_eq!(
+            overridden.red,
+            Theme::nord().red,
+            "one override does not drop the rest of the preset"
+        );
+    }
+
+    /// `install_theme` leaks so existing `&'static Theme` references survive a
+    /// daemon reload; what a caller must see is the new palette from the next
+    /// `theme()` on.
+    #[test]
+    fn an_installed_theme_replaces_the_default() {
+        assert_eq!(theme().green, GREEN_HEX);
+        install_theme(Theme::gruvbox());
+        assert_eq!(theme().green, Theme::gruvbox().green);
+        install_theme(Theme::catppuccin());
+        assert_eq!(theme().green, GREEN_HEX);
+    }
+
     #[test]
     fn parse_hex_rgb_works() {
         assert_eq!(parse_hex_rgb("#a6e3a1"), Some((0xa6, 0xe3, 0xa1)));

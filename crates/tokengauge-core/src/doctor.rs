@@ -761,4 +761,242 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "tg-doctor-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    /// A config the doctor can be run against without it asking anything of a
+    /// provider, of ccusage, or of the network: no provider enabled means no
+    /// live fetch. Single-quoted TOML literal because a Windows temp path's
+    /// backslashes are invalid escapes in a double-quoted one, and a config
+    /// that fails to parse falls back to the default - which has providers on.
+    fn quiet_config(dir: &Path) -> std::path::PathBuf {
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "refresh_secs = 600\nccusage_enabled = false\ncache_file = '{}'\n[providers]\n",
+                dir.join("usage.json").display()
+            ),
+        )
+        .expect("write");
+        path
+    }
+
+    fn check<'a>(lines: &'a [DoctorLine], prefix: &str) -> Option<&'a DoctorCheck> {
+        lines.iter().find_map(|line| match line {
+            DoctorLine::Check(c) if c.label.starts_with(prefix) => Some(c),
+            _ => None,
+        })
+    }
+
+    fn position(lines: &[DoctorLine], want: &str) -> Option<usize> {
+        lines.iter().position(|line| match line {
+            DoctorLine::Heading(h) => *h == want,
+            DoctorLine::Check(c) => c.label == want,
+        })
+    }
+
+    /// The exit code is what a script acts on, so it has to be a verdict on the
+    /// whole report rather than a count that happens to be zero.
+    #[test]
+    fn the_exit_code_says_only_whether_anything_failed() {
+        let passing = vec![
+            DoctorLine::Heading("Config"),
+            DoctorLine::Check(DoctorCheck {
+                label: "config loads".into(),
+                ok: true,
+                detail: String::new(),
+            }),
+        ];
+        assert_eq!(failures(&passing), 0);
+        assert_eq!(render(&passing), 0);
+
+        let failing = vec![
+            DoctorLine::Heading("Config"),
+            DoctorLine::Check(DoctorCheck {
+                label: "config loads".into(),
+                ok: false,
+                detail: "expected a number".into(),
+            }),
+            DoctorLine::Check(DoctorCheck {
+                label: "cache directory writable".into(),
+                ok: false,
+                detail: String::new(),
+            }),
+        ];
+        assert_eq!(failures(&failing), 2);
+        assert_eq!(render(&failing), 1);
+    }
+
+    /// `visible` drops the heading and nothing else - a section that came out
+    /// empty is not a reason to swallow the checks after it.
+    #[test]
+    fn an_empty_section_loses_its_heading_and_nothing_else() {
+        let lines = vec![
+            DoctorLine::Heading("Config"),
+            DoctorLine::Heading("Credentials"),
+            DoctorLine::Check(DoctorCheck {
+                label: "claude credentials".into(),
+                ok: true,
+                detail: String::new(),
+            }),
+            DoctorLine::Heading("Updates"),
+        ];
+
+        let shown = visible(&lines);
+        assert_eq!(shown.len(), 2, "only the two bare headings go");
+        assert!(matches!(shown[0], DoctorLine::Heading("Credentials")));
+        assert!(matches!(shown[1], DoctorLine::Check(_)));
+    }
+
+    /// A hint next to a check that passed is noise, and the doctor walks PATH
+    /// itself rather than shelling out to `which` - which it would then have
+    /// reported as the missing binary.
+    #[test]
+    fn a_binary_check_carries_its_hint_only_when_the_binary_is_missing() {
+        let missing = check_binary(
+            "tokengauge-no-such-binary",
+            "nothing in particular",
+            "install it",
+        );
+        assert!(!missing.ok);
+        assert_eq!(missing.detail, "install it");
+        assert!(missing.label.contains("tokengauge-no-such-binary"));
+        assert!(missing.label.contains("nothing in particular"));
+
+        #[cfg(unix)]
+        {
+            let present = check_binary("sh", "shell", "install a shell");
+            assert!(present.ok, "sh is on PATH on every unix");
+            assert!(present.detail.is_empty());
+        }
+    }
+
+    /// serde drops a key it does not recognise without a word, so a line left
+    /// in the file by an older release goes on doing nothing and looking like
+    /// it works. The doctor is the only thing that can say it is dead.
+    #[test]
+    fn a_removed_config_key_is_reported_rather_than_ignored() {
+        let dir = temp_dir("unknown-key");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "refresh_secs = 600\nccusage_enabled = false\ncodexbar_bin = \"codexbar\"\ncache_file = '{}'\n[providers]\n",
+                dir.join("usage.json").display()
+            ),
+        )
+        .expect("write");
+
+        let lines = doctor_lines(&path, "0.0.0-test", |_| Vec::new());
+        let reported = check(&lines, "unknown config key `codexbar_bin`")
+            .expect("a dead config line has to be named");
+        assert!(!reported.ok);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The store is the only record of a day once a CLI has rotated its
+    /// transcript away, so an empty one is a year of chart that will never come
+    /// back - a fault with a line of its own rather than a blank chart.
+    #[test]
+    fn an_empty_history_store_is_a_fault_not_a_blank_chart() {
+        let dir = temp_dir("history");
+        let path = quiet_config(&dir);
+
+        let lines = doctor_lines(&path, "0.0.0-test", |_| Vec::new());
+        let store = check(&lines, "store:").expect("the store gets a line");
+        assert!(!store.ok);
+        assert!(store.detail.contains("empty"), "detail: {}", store.detail);
+
+        let backfill = check(&lines, "transcripts backfilled").expect("backfill gets a line");
+        assert!(!backfill.ok);
+        assert!(backfill.detail.contains("--backfill"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Opening a panel must never trigger a network call, so the update line is
+    /// read back from the status file the release check wrote - and with no
+    /// file it says so rather than reporting a machine as up to date.
+    #[test]
+    fn the_update_line_is_read_from_the_status_file_never_fetched() {
+        let dir = temp_dir("updates");
+        let path = quiet_config(&dir);
+        let cache = dir.join("usage.json");
+
+        let lines = doctor_lines(&path, "0.0.0-test", |_| Vec::new());
+        assert!(check(&lines, "no update check yet").is_some());
+
+        crate::write_update_status(
+            &cache,
+            &crate::UpdateStatus {
+                current: "0.0.0-test".into(),
+                latest: Some("9.9.9".into()),
+                available: true,
+                ..Default::default()
+            },
+        )
+        .expect("write status");
+        let lines = doctor_lines(&path, "0.0.0-test", |_| Vec::new());
+        let available = check(&lines, "update available").expect("an update is reported");
+        assert!(available.detail.contains("9.9.9"));
+        assert!(available.ok, "an available update is news, not a fault");
+
+        crate::write_update_status(
+            &cache,
+            &crate::UpdateStatus {
+                current: "9.9.9".into(),
+                latest: Some("9.9.9".into()),
+                available: false,
+                ..Default::default()
+            },
+        )
+        .expect("write status");
+        let lines = doctor_lines(&path, "0.0.0-test", |_| Vec::new());
+        assert!(check(&lines, "up to date").is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `extras` is spliced in where a frontend's own sections belong rather
+    /// than appended, so moving the report into the core did not push the
+    /// waybar sections past the ones that were always last.
+    #[test]
+    fn frontend_extras_land_before_the_sections_that_end_the_report() {
+        let dir = temp_dir("extras");
+        let path = quiet_config(&dir);
+
+        let lines = doctor_lines(&path, "0.0.0-test", |_| {
+            vec![
+                DoctorLine::Heading("Waybar"),
+                DoctorLine::Check(DoctorCheck {
+                    label: "bar wiring".into(),
+                    ok: true,
+                    detail: String::new(),
+                }),
+            ]
+        });
+
+        let extras = position(&lines, "Waybar").expect("the extras reach the report");
+        let updates = position(&lines, "Updates").expect("the report still ends with Updates");
+        assert!(extras < updates, "a frontend's checks are not an appendix");
+        assert!(position(&lines, "bar wiring").expect("the check too") < updates);
+
+        assert_eq!(
+            handle_doctor(&path, "0.0.0-test", |_| Vec::new()),
+            1,
+            "an empty store and an unbackfilled machine are faults"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

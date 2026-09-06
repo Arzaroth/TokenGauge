@@ -363,6 +363,12 @@ still catch schema mistakes.
   `cargo test --workspace`. For QML run `qmllint`, for the GNOME extension
   `node --input-type=module --check`. CI's `frontends` job runs the last two, so
   they are enforced rather than remembered.
+- `scripts/coverage.sh` runs `cargo llvm-cov` over the workspace and then ranks
+  the files by uncovered lines; `--html` opens the browsable report. It is a
+  local tool, not a CI gate - nothing fails on a number. The gaps it keeps
+  pointing at are the process surfaces (event loops, `main`, the daemon accept
+  loop) and they stay uncovered on purpose; what is worth reading is a *logic*
+  file drifting down the list.
 - `tokengauge-tray` is `cfg(windows)`-gated with Windows-only GUI deps, so it
   does not type-check on Linux. CI's Windows job runs `cargo clippy -p
   tokengauge-tray` and is the authority. To check a change locally before

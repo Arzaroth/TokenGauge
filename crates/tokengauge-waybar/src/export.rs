@@ -224,6 +224,70 @@ mod tests {
         assert_eq!(csv_field("ordinary"), "ordinary");
     }
 
+    /// The JSON form is for something parsing the data rather than opening it,
+    /// so it carries the same columns and says "no price" as `null` - never as
+    /// the zero the CSV leaves as an empty cell.
+    #[test]
+    fn the_json_form_carries_the_same_columns_and_a_null_for_an_unpriced_row() {
+        let mut unpriced = row("mystery-model", "desk");
+        unpriced.usd = None;
+
+        let mut out = Vec::new();
+        write_json(&mut out, &[row("m", "desk"), unpriced]).expect("json");
+        let parsed: Vec<serde_json::Value> =
+            serde_json::from_slice(&out).expect("the export has to be valid JSON");
+
+        assert_eq!(parsed.len(), 2);
+        let keys: Vec<&str> = parsed[0]
+            .as_object()
+            .expect("an object per row")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let mut expected = COLUMNS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(keys, expected, "the two forms describe the same row");
+        assert_eq!(parsed[0]["usd"], serde_json::json!(1.5));
+        assert_eq!(parsed[1]["usd"], serde_json::Value::Null);
+        assert_eq!(parsed[1]["total_tokens"], serde_json::json!(15));
+    }
+
+    fn config(tag: &str) -> TokenGaugeConfig {
+        let dir = std::env::temp_dir().join(format!(
+            "tg-export-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        TokenGaugeConfig {
+            cache_file: dir.join("usage.json"),
+            ..Default::default()
+        }
+    }
+
+    /// Both refusals happen before a single row is written, because a partial
+    /// export on stdout is one a script cannot tell from a complete one.
+    #[test]
+    fn an_export_that_cannot_be_trusted_is_refused_rather_than_written() {
+        let cfg = config("since");
+        let since = run(&cfg, ExportFormat::Csv, Some("last tuesday")).expect_err("not a date");
+        assert!(since.to_string().contains("YYYY-MM-DD"), "{since}");
+        let _ = std::fs::remove_dir_all(cfg.cache_file.parent().expect("temp dir"));
+
+        // A store that will not parse would otherwise export an empty file,
+        // which downstream reads as "nothing was spent".
+        let cfg = config("corrupt");
+        let store = tokengauge_core::sync::store::store_path(&cfg.cache_file);
+        std::fs::create_dir_all(store.parent().expect("state dir")).expect("state dir");
+        std::fs::write(&store, "{ this is not the store }").expect("write");
+        assert!(
+            run(&cfg, ExportFormat::Json, None).is_err(),
+            "an unreadable store is not an empty one"
+        );
+
+        let _ = std::fs::remove_dir_all(cfg.cache_file.parent().expect("temp dir"));
+    }
+
     #[test]
     fn a_label_with_a_comma_does_not_become_two_columns() {
         // Device labels are typed by the user and model ids come from upstream.

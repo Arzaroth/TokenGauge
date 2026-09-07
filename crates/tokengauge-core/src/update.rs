@@ -748,4 +748,84 @@ mod tests {
         assert!(version_gt("0.9.0-rc1", "0.8.0"));
         assert!(!version_gt("0.8.0-rc1", "0.8.0"));
     }
+
+    /// Two `--update` invocations can overlap - the CLI, the tray menu and the
+    /// Plasma button all reach the same staging directory.
+    #[test]
+    fn the_update_lock_is_exclusive_and_released_on_drop() {
+        let dir = std::env::temp_dir().join(format!(
+            "tg-update-lock-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let held = super::UpdateLock::acquire(&dir).expect("first acquire");
+        let refused = super::UpdateLock::acquire(&dir)
+            .err()
+            .map(|e| e.to_string())
+            .expect("two updates must not stage at once");
+        assert!(
+            refused.contains("already in progress") && refused.contains("remove it if stale"),
+            "the error has to say how to clear a stale lock: {refused}"
+        );
+
+        drop(held);
+        super::UpdateLock::acquire(&dir).expect("the lock is released on drop");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The extractor and the asset asked for have to describe the same file.
+    #[test]
+    fn the_archive_kind_matches_the_suffix_the_updater_asks_for() {
+        match super::archive_kind() {
+            self_update::ArchiveKind::Zip => assert_eq!(super::ARCHIVE_SUFFIX, ".zip"),
+            self_update::ArchiveKind::Tar(_) => assert_eq!(super::ARCHIVE_SUFFIX, ".tar.gz"),
+            other => panic!("no suffix declared for {other:?}"),
+        }
+    }
+
+    fn release_workflow() -> String {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("workspace root");
+        std::fs::read_to_string(repo.join(".github/workflows/release.yml"))
+            .expect("the release workflow is what names the assets")
+    }
+
+    /// Asset names, not the workflow, are the compatibility surface: every
+    /// updater already shipped matches by substring. So the archive this build
+    /// asks for has to be one the workflow actually publishes.
+    #[test]
+    fn the_workflow_publishes_the_asset_this_build_asks_for() {
+        let workflow = release_workflow();
+        let target = super::arch_target().expect("a supported arch builds this test");
+        assert!(
+            workflow
+                .split(|c: char| c.is_whitespace() || c == '"' || c == ',')
+                .any(|token| token.contains(target) && token.ends_with(super::ARCHIVE_SUFFIX)),
+            "no {target}{} asset in the release workflow",
+            super::ARCHIVE_SUFFIX
+        );
+    }
+
+    /// The MSI is named `win64` rather than `windows-x86_64` on purpose: a
+    /// 0.22.x updater asks for no suffix at all and takes whichever asset
+    /// matches the platform first, so an MSI carrying the platform string
+    /// would be handed to the zip extractor on machines whose binaries can no
+    /// longer be changed.
+    #[test]
+    fn no_msi_is_named_so_an_old_updater_could_mistake_it_for_the_archive() {
+        for token in release_workflow().split(|c: char| c.is_whitespace() || c == '"' || c == ',') {
+            let token = token.trim_end_matches('`');
+            if token.ends_with(".msi") {
+                assert!(
+                    !token.contains("windows-x86_64"),
+                    "`{token}` is reachable by an updater asking for the platform alone"
+                );
+            }
+        }
+    }
 }

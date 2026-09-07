@@ -365,7 +365,13 @@ fn sync_that_is_off_keeps_the_store_and_touches_no_transport() {
     let root = scratch("off");
     let mut config = config(&root);
     config.sync.enabled = false;
-    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    // A week, not today: the event below is an hour old, so for the first hour
+    // after local midnight `today` is a window that starts after it and the
+    // store legitimately comes out empty. Every other test here that expects
+    // its own event to land already reaches back.
+    let since = (Utc::now() - Duration::days(7))
+        .with_timezone(&chrono::Local)
+        .date_naive();
 
     let outcome = sync::refresh(&config, &[event(1, 10, 1)], since);
     assert!(

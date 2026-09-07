@@ -221,8 +221,12 @@ mod tests {
         path
     }
 
+    /// Parsed rather than loaded: `load_config` runs `migrate_legacy_state`,
+    /// which moves state files out of the system temp directory - where these
+    /// fixtures live - and into whatever `cache_file` resolves to.
     fn reload(path: &Path) -> SyncConfig {
-        crate::load_config(Some(path.to_path_buf()))
+        let text = std::fs::read_to_string(path).expect("read");
+        toml::from_str::<crate::TokenGaugeConfig>(&text)
             .expect("the setup screen must leave a config that still parses")
             .sync
     }

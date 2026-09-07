@@ -61,20 +61,30 @@ fi
 
 cd "$REPO_DIR"
 
+# tokengauge-waybar is Linux-only, so --workspace cannot build on the other two
+# hosts the project supports. Elsewhere, cover what those hosts can: the tray's
+# GUI is cfg(windows)-gated and CI's Windows job is the authority on it.
+if [[ "$(uname -s)" == "Linux" ]]; then
+  SCOPE=(--workspace)
+else
+  SCOPE=(-p tokengauge-core -p tokengauge-tui)
+  warn "$(uname -s): covering core and tui only - the waybar crate is Linux-only."
+fi
+
 case "$MODE" in
 html)
   info "Running coverage (html)..."
-  cargo llvm-cov --workspace --all-features --html --open "${EXTRA[@]+"${EXTRA[@]}"}"
+  cargo llvm-cov "${SCOPE[@]}" --all-features --html --open "${EXTRA[@]+"${EXTRA[@]}"}"
   success "Report at target/llvm-cov/html/index.html"
   ;;
 lcov)
   info "Running coverage (lcov)..."
-  cargo llvm-cov --workspace --all-features --lcov --output-path target/llvm-cov/lcov.info "${EXTRA[@]+"${EXTRA[@]}"}"
+  cargo llvm-cov "${SCOPE[@]}" --all-features --lcov --output-path target/llvm-cov/lcov.info "${EXTRA[@]+"${EXTRA[@]}"}"
   success "Report at target/llvm-cov/lcov.info"
   ;;
 summary)
   info "Running coverage..."
-  cargo llvm-cov --workspace --all-features --summary-only "${EXTRA[@]+"${EXTRA[@]}"}"
+  cargo llvm-cov "${SCOPE[@]}" --all-features --summary-only "${EXTRA[@]+"${EXTRA[@]}"}"
 
   # The summary is alphabetical, which buries the gaps. Re-read the same
   # profile data - `report` reuses it and runs no tests - and rank by how many
@@ -85,12 +95,18 @@ summary)
   # configure one.
   cargo llvm-cov report --summary-only |
     awk -v top="$TOP" '
-      /^[a-zA-Z].*%/ && $1 != "TOTAL" && $9 + 0 > 0 {
-        cover = $10; sub(/%$/, "", cover)
-        rows[n++] = sprintf("  %6d uncovered  %6.2f%%  %s", $9, cover, $1)
+      /^[a-zA-Z].*%/ && $1 != "TOTAL" {
+        seen++
+        if ($9 + 0 > 0) {
+          cover = $10; sub(/%$/, "", cover)
+          rows[n++] = sprintf("  %6d uncovered  %6.2f%%  %s", $9, cover, $1)
+        }
       }
       END {
-        if (n == 0) { print "  (no rows parsed - llvm-cov summary format changed?)"; exit 1 }
+        # A summary with no file rows in it means the format moved; one whose
+        # rows all read zero means the job is done. Only the first is a fault.
+        if (seen == 0) { print "  (no rows parsed - llvm-cov summary format changed?)"; exit 1 }
+        if (n == 0) { print "  (nothing uncovered)"; exit 0 }
         # Sort descending by the leading uncovered count.
         for (i = 0; i < n; i++)
           for (j = i + 1; j < n; j++)

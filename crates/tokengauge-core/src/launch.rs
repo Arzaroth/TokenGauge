@@ -148,6 +148,9 @@ mod tests {
     /// that happens to share it.
     #[test]
     fn which_finds_a_binary_on_path_and_nothing_else() {
+        // `which` joins the name onto each PATH entry verbatim, so only a unix
+        // has a name it can be asked about; Windows would need the extension.
+        #[cfg(unix)]
         assert!(which("sh").is_some(), "sh is on PATH on every unix");
         assert!(which("tokengauge-no-such-binary").is_none());
     }
@@ -163,6 +166,7 @@ mod tests {
             "  ",
             Path::new("/tmp/tokengauge.toml")
         ));
+        #[cfg(unix)]
         assert!(spawn_shell("exit 0"), "a real command still spawns");
     }
 }

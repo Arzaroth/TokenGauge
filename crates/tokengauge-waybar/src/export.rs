@@ -272,6 +272,7 @@ mod tests {
         let cfg = config("since");
         let since = run(&cfg, ExportFormat::Csv, Some("last tuesday")).expect_err("not a date");
         assert!(since.to_string().contains("YYYY-MM-DD"), "{since}");
+        let _ = std::fs::remove_dir_all(cfg.cache_file.parent().expect("temp dir"));
 
         // A store that will not parse would otherwise export an empty file,
         // which downstream reads as "nothing was spent".

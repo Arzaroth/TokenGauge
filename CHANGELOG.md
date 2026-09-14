@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.5] - 2026-09-14
+
 ### Fixed
 
 - **A z.ai five-hour window counted down to an instant ten hours away.** z.ai
@@ -874,7 +876,8 @@ Major feature batch on top of upstream v0.4.2.
 
 Released by the upstream project, [oorestisime/TokenGauge](https://github.com/oorestisime/TokenGauge/releases). This fork's own history starts at 0.5.0.
 
-[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.30.5...HEAD
+[0.30.5]: https://github.com/Arzaroth/TokenGauge/compare/v0.30.4...v0.30.5
 [0.11.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/Arzaroth/TokenGauge/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.9.1...v0.10.0

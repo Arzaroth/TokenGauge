@@ -132,8 +132,12 @@ function historyChart(points, colorFor, height) {
 // row whose line is an abbreviation of what it carries: a day's exact tokens,
 // a model's split by device, the whole sync sentence behind its badge. The
 // label goes in the shell's own layer so the popup cannot clip it.
-function attachTooltip(actor, text) {
-    if (!text)
+function attachTooltip(actor, text, markup = false) {
+    // A row's tooltip is fixed for the life of the label that carries it, but
+    // the panel button outlives every snapshot - so a function is resolved on
+    // each hover rather than once here.
+    const resolve = typeof text === 'function' ? text : () => text;
+    if (typeof text !== 'function' && !text)
         return actor;
     actor.reactive = true;
     actor.track_hover = true;
@@ -148,7 +152,14 @@ function attachTooltip(actor, text) {
         hide();
         if (!actor.hover)
             return;
-        tip = new St.Label({style_class: 'tokengauge-tooltip', text});
+        const body = resolve();
+        if (!body)
+            return;
+        tip = new St.Label({style_class: 'tokengauge-tooltip'});
+        if (markup)
+            tip.clutter_text.set_markup(body);
+        else
+            tip.text = body;
         tip.clutter_text.line_wrap = true;
         Main.layoutManager.uiGroup.add_child(tip);
         const [x, y] = actor.get_transformed_position();
@@ -201,6 +212,11 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         panelBox.add_child(this._panelGlyph);
         panelBox.add_child(this._panelPercent);
         this.add_child(panelBox);
+        // The icon's hover summary, on the button rather than on the box so it
+        // covers the whole panel slot. Same sentence as the Plasma applet, the
+        // tray and the Quickshell widget: the core resolves it, this maps the
+        // tiers onto the shell theme.
+        attachTooltip(this, () => this._barTooltipMarkup(), true);
 
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
         this._content = box(true, {style_class: 'tokengauge-menu', x_expand: true});
@@ -484,6 +500,31 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         if (rows.length === 0)
             return null;
         return rows[this._selectedIndex];
+    }
+
+    // Pango for the panel button's tooltip. The lines are the core's; only the
+    // tier colours and the escaping are the shell's.
+    _barTooltipMarkup() {
+        // The popup already carries all of this and sits directly under the
+        // button, so a tooltip over it would be the same figures twice.
+        if (this.menu.isOpen)
+            return '';
+        const tip = this._row?.bar_tooltip;
+        if (!tip)
+            return '';
+        const escape = value => String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+        const lines = (tip.lines || []).map(line => {
+            const value = `<b>${escape(line.value)}</b>`;
+            // `normal` carries no tier - a spend figure has no threshold to
+            // tint against - and colouring it would read it as dim.
+            return `${escape(line.label)}: ${line.tone === 'normal'
+                ? value
+                : `<span color="${this._toneColor(line.tone)}">${value}</span>`}`;
+        });
+        return [`<b>${escape(tip.title)}</b>`, ...lines].join('\n');
     }
 
     _theme() {

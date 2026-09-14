@@ -88,10 +88,15 @@ pub fn format_updated(value: Option<String>) -> String {
 }
 
 /// Token counts at a glance: `384.0M`, `1.2K`, `999`.
+///
+/// Each threshold is the value that would *round* into the next unit, not the
+/// value that reaches it: 999,950 is 999.95K, and one decimal place turns that
+/// into `1000.0K`, a unit that does not exist. Picking the unit before
+/// rounding is what printed it.
 pub fn format_tokens(t: u64) -> String {
-    if t >= 1_000_000_000 {
+    if t >= 999_950_000 {
         format!("{:.1}B", t as f64 / 1e9)
-    } else if t >= 1_000_000 {
+    } else if t >= 999_950 {
         format!("{:.1}M", t as f64 / 1e6)
     } else if t >= 1_000 {
         format!("{:.1}K", t as f64 / 1e3)
@@ -225,6 +230,20 @@ mod tests {
         assert_eq!(format_tokens(1_500), "1.5K");
         assert_eq!(format_tokens(2_300_000), "2.3M");
         assert_eq!(format_tokens(4_500_000_000), "4.5B");
+    }
+
+    /// A value that rounds up to a thousand of its unit belongs to the next
+    /// one. `1000.0K` and `1000.0M` are not units.
+    #[test]
+    fn format_tokens_promotes_at_the_rounding_boundary() {
+        assert_eq!(format_tokens(999_949), "999.9K");
+        assert_eq!(format_tokens(999_950), "1.0M");
+        assert_eq!(format_tokens(999_999), "1.0M");
+        assert_eq!(format_tokens(1_000_000), "1.0M");
+        assert_eq!(format_tokens(999_949_999), "999.9M");
+        assert_eq!(format_tokens(999_950_000), "1.0B");
+        assert_eq!(format_tokens(999_999_999), "1.0B");
+        assert_eq!(format_tokens(1_000_000_000), "1.0B");
     }
 
     #[test]

@@ -301,6 +301,68 @@ fn device_tooltip(device: &DeviceCost, now_ms: i64) -> String {
     lines.join("\n")
 }
 
+/// One line of a bar icon's hover summary: a label, the figure beside it, and
+/// the tier that figure sits in.
+///
+/// A frontend maps [`Tone`] onto its own palette and does its own escaping; it
+/// never picks which lines there are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BarTooltipLine {
+    pub label: String,
+    pub value: String,
+    pub tone: Tone,
+}
+
+/// What a bar icon says on hover.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct BarTooltip {
+    /// The provider, for the frontends whose tooltip has a heading slot.
+    /// The ones that do not put it on the first line themselves.
+    pub title: String,
+    pub lines: Vec<BarTooltipLine>,
+}
+
+/// The hover summary behind a bar icon: every limit window with its tier, then
+/// today's spend.
+///
+/// The icon itself is chrome - a plasmoid's compact representation, a St label,
+/// a `WidgetButton`, a tray icon - but what it says on hover is content, and it
+/// was the last piece of content no frontend agreed on. Plasma built this in
+/// QML, the tray re-derived `session_used` / `weekly_used` in Rust and phrased
+/// it differently, and GNOME and the Quickshell widget said nothing at all.
+///
+/// Read off [`panel_spec`] rather than off the row, so the summary can never
+/// name a window the panel under it does not draw.
+pub fn bar_tooltip(row: &ProviderRow) -> BarTooltip {
+    let sections = panel_spec(row);
+    let mut lines = Vec::new();
+
+    let line = |r: &PanelRow, tone: Tone| BarTooltipLine {
+        label: r.label.clone(),
+        value: r.value.clone(),
+        tone,
+    };
+
+    if let Some(limits) = sections.iter().find(|s| s.id == "limits") {
+        lines.extend(limits.rows.iter().map(|r| line(r, r.tone)));
+    }
+    // Today only. A hover is a glance, and the rest of the cost section is one
+    // click away in the panel; the tier is the panel's too, and a spend figure
+    // has no threshold to tint against.
+    if let Some(today) = sections
+        .iter()
+        .find(|s| s.id == "cost")
+        .and_then(|s| s.rows.first())
+    {
+        lines.push(line(today, Tone::Normal));
+    }
+
+    BarTooltip {
+        title: crate::provider_label(&row.provider).to_string(),
+        lines,
+    }
+}
+
 /// What a refresh control says on hover: when the figures it offers to replace
 /// arrived.
 ///
@@ -1474,6 +1536,45 @@ mod tests {
                  last refresh itself, or not saying it at all"
             );
         }
+    }
+
+    #[test]
+    fn the_bar_tooltip_is_every_limit_and_today_only() {
+        let mut r = row();
+        r.cost = Some(cost());
+        let tip = bar_tooltip(&r);
+
+        assert_eq!(tip.title, "Claude");
+        let labels: Vec<&str> = tip.lines.iter().map(|l| l.label.as_str()).collect();
+        let spec = panel_spec(&r);
+        let limits: Vec<&str> = spec
+            .iter()
+            .find(|s| s.id == "limits")
+            .expect("a limits section")
+            .rows
+            .iter()
+            .map(|r| r.label.as_str())
+            .collect();
+        // Every limit the panel draws, in the panel's order, and then one cost
+        // line - not the whole cost section.
+        assert_eq!(labels[..limits.len()], limits[..]);
+        assert_eq!(labels.len(), limits.len() + 1);
+
+        // The tier rides along, so a frontend never re-derives the boundaries.
+        assert_eq!(tip.lines[0].value, "31%");
+        assert_eq!(tip.lines[0].tone, Tone::Good);
+        // A spend figure has no threshold to tint against.
+        assert_eq!(tip.lines.last().unwrap().tone, Tone::Normal);
+    }
+
+    #[test]
+    fn a_provider_with_no_windows_still_names_itself() {
+        let mut r = row();
+        r.session_used = None;
+        r.weekly_used = None;
+        let tip = bar_tooltip(&r);
+        assert_eq!(tip.title, "Claude");
+        assert!(tip.lines.is_empty(), "{:?}", tip.lines);
     }
 
     /// Every frontend that draws the panel draws every kind of section in it.

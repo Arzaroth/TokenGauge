@@ -111,6 +111,13 @@ pub(crate) fn json_snapshot(
                     "refresh_hint".into(),
                     tokengauge_core::refresh_hint(r.updated_iso.as_deref(), now_ms).into(),
                 );
+                // What the bar icon says on hover. Resolved here for the same
+                // reason the panel is: the summary is content, and the icon
+                // under it is the only chrome around it.
+                map.insert(
+                    "bar_tooltip".into(),
+                    serde_json::to_value(tokengauge_core::bar_tooltip(r)).unwrap_or_default(),
+                );
                 map.insert("color".into(), icon.color_hex.into());
                 let pace_badge = |pace: Option<UsagePace>| {
                     pace.map(|p| serde_json::Value::from(p.badge()))
@@ -540,6 +547,7 @@ mod tests {
             "glyph",
             "color",
             "refresh_hint",
+            "bar_tooltip",
             "icon_svg",
             "window_labels",
             "session_pace",

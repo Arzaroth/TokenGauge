@@ -53,10 +53,12 @@ and Fireworks. Both can sit in the bar at once; drop theirs with
 
 ## Interactions
 
-- Bar icon: left = panel, right = refresh, middle = usage dashboard, back
-  (mouse 8) = status page, scroll = previous / next provider. The same set the
-  Waybar module binds, minus its rotate-and-persist: scrolling here moves the
-  panel's own selection and leaves `config.toml` alone.
+- Bar icon: hover = every limit and today's spend, left = panel, right =
+  refresh, middle = usage dashboard, back (mouse 8) = status page, scroll =
+  previous / next provider. The clicks are the set the Waybar module binds,
+  minus its rotate-and-persist: scrolling here moves the panel's own selection
+  and leaves `config.toml` alone. The hover is this widget's own - Waybar's
+  tooltip is the whole panel rather than a summary of it.
 - Panel header: refresh, history, settings.
 - Panel: `h`/`l` switch provider, `j`/`k` scroll, `r` or Enter refresh, `u` and
   `s` open the active provider's usage dashboard and status page, `,` toggles

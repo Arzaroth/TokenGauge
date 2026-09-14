@@ -56,34 +56,30 @@ PlasmoidItem {
     readonly property var selRow: rows.length > 0 ? rows[selectedIndex] : null
 
     Plasmoid.icon: "utilities-system-monitor"
-    toolTipMainText: selRow ? (selRow.label || selRow.provider) : "TokenGauge"
+    toolTipMainText: selRow ? ((selRow.bar_tooltip && selRow.bar_tooltip.title)
+                              || selRow.label || selRow.provider) : "TokenGauge"
     toolTipTextFormat: Text.RichText
     toolTipSubText: tooltipSub(selRow)
 
-    // The hover summary: every limit the panel draws, with its tier colour, and
-    // today's spend. Read off the same core section list the applet renders, so
-    // the two can never disagree about which windows exist.
+    // The hover summary, resolved by the core: every limit with its tier
+    // colour, then today's spend. `bar_tooltip` is what the tray, the GNOME
+    // extension and the Quickshell widget hover with too - this used to pick
+    // the lines apart from `panel` here, which is how the other three each
+    // ended up saying something different or nothing at all.
     function tooltipSub(r) {
         if (!r)
             return lastError !== "" ? lastError : i18n("No provider data yet.")
-        var sections = Array.isArray(r.panel) ? r.panel : []
+        var tip = r.bar_tooltip || {}
         var lines = []
-        for (var i = 0; i < sections.length; i++) {
-            if (sections[i].id !== "limits") continue
-            var rows = sections[i].rows
-            for (var j = 0; j < rows.length; j++)
-                lines.push(root.escapeHtml(rows[j].label) + ":&nbsp;<font color=\""
-                           + root.toneColor(rows[j].tone) + "\"><b>"
-                           + root.escapeHtml(rows[j].value) + "</b></font>")
-        }
-        // Today's spend comes off the same section list, not off raw
-        // today_usd: the local formatter this replaces disagreed with core's
-        // money() above a hundred dollars ($312.21 against $312).
-        for (var k = 0; k < sections.length; k++) {
-            if (sections[k].id !== "cost" || sections[k].rows.length === 0) continue
-            var today = sections[k].rows[0]
-            lines.push(root.escapeHtml(today.label) + ":&nbsp;<b>"
-                       + root.escapeHtml(today.value) + "</b>")
+        var rows = Array.isArray(tip.lines) ? tip.lines : []
+        for (var i = 0; i < rows.length; i++) {
+            // `normal` carries no tier - a spend figure has no threshold to
+            // tint against - and wrapping it would read it as dim.
+            var value = root.escapeHtml(rows[i].value)
+            var body = String(rows[i].tone) === "normal"
+                ? "<b>" + value + "</b>"
+                : "<font color=\"" + root.toneColor(rows[i].tone) + "\"><b>" + value + "</b></font>"
+            lines.push(root.escapeHtml(rows[i].label) + ":&nbsp;" + body)
         }
         return lines.join("<br>")
     }

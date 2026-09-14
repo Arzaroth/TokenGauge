@@ -104,9 +104,12 @@ mod win {
         /// What the Refresh button says on hover, resolved by the core on every
         /// rebuild - the age in it keeps moving after the fetch that wrote it.
         refresh_hint: String,
-        /// Kept out of `panel` because the tray icon needs the raw number.
+        /// What the tray icon says on hover, resolved by the core - the same
+        /// summary the Plasma, GNOME and Quickshell icons carry.
+        bar_tooltip: tokengauge_core::BarTooltip,
+        /// Kept out of `panel` because the tray icon paints the raw number on
+        /// itself. The weekly one went with the tooltip that re-derived it.
         session_used: Option<u8>,
-        weekly_used: Option<u8>,
         panel: Vec<Section>,
         /// Every range, resolved by the core. The second screen behind the
         /// History button draws one of these and formats none of it.
@@ -165,8 +168,8 @@ mod win {
                 r.updated_iso.as_deref(),
                 tokengauge_core::now_ms(),
             ),
+            bar_tooltip: tokengauge_core::bar_tooltip(r),
             session_used: r.session_used,
-            weekly_used: r.weekly_used,
             panel: panel_spec(r),
             history: history.panel(&r.provider),
         }
@@ -391,7 +394,7 @@ mod win {
 
         /// Reflect the latest usage in the tray icon (peak %) and tooltip.
         fn sync_tray(&mut self, snap: &Snapshot) {
-            let (tip, peak) = tray_summary(snap);
+            let (tip, peak) = tray_summary(snap, self.selected);
             if tip != self.last_tip {
                 let color = peak.map(usage_color).unwrap_or(BLUE);
                 let _ = self.tray.set_icon(Some(render_icon(peak, color)));
@@ -1021,20 +1024,29 @@ mod win {
     }
 
     /// Tooltip text + the peak *session* usage percentage (what the icon shows).
-    fn tray_summary(snap: &Snapshot) -> (String, Option<u8>) {
-        if snap.rows.is_empty() {
-            return ("TokenGauge — no data".to_string(), None);
-        }
+    ///
+    /// The number on the icon is the peak across every provider, but the words
+    /// under it are the selected one's, because that is the provider the panel
+    /// behind the icon opens on. This used to re-derive `session_used` and
+    /// `weekly_used` here and phrase them its own way, which is how the tray
+    /// came to name two windows while the panel one click away drew four.
+    fn tray_summary(snap: &Snapshot, selected: usize) -> (String, Option<u8>) {
         let mut session_peak: Option<u8> = None;
-        let mut lines = Vec::new();
         for r in &snap.rows {
             if let Some(p) = r.session_used {
                 session_peak = Some(session_peak.map_or(p, |cur| cur.max(p)));
             }
-            let s = r.session_used.map_or("—".to_string(), |p| format!("{p}%"));
-            let w = r.weekly_used.map_or("—".to_string(), |p| format!("{p}%"));
-            lines.push(format!("{}: session {s} · weekly {w}", cap(&r.provider)));
         }
+        let Some(row) = snap.rows.get(selected).or_else(|| snap.rows.first()) else {
+            return ("TokenGauge — no data".to_string(), None);
+        };
+        let tip = &row.bar_tooltip;
+        let mut lines = vec![tip.title.clone()];
+        lines.extend(
+            tip.lines
+                .iter()
+                .map(|line| format!("{}: {}", line.label, line.value)),
+        );
         (lines.join("\n"), session_peak)
     }
 

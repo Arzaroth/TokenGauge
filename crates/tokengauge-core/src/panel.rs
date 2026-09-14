@@ -301,6 +301,71 @@ fn device_tooltip(device: &DeviceCost, now_ms: i64) -> String {
     lines.join("\n")
 }
 
+/// One line of a bar icon's hover summary: a label, the figure beside it, and
+/// the tier that figure sits in.
+///
+/// A frontend maps [`Tone`] onto its own palette and does its own escaping; it
+/// never picks which lines there are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BarTooltipLine {
+    pub label: String,
+    pub value: String,
+    pub tone: Tone,
+}
+
+/// What a bar icon says on hover.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct BarTooltip {
+    /// The provider, for the frontends whose tooltip has a heading slot.
+    /// The ones that do not put it on the first line themselves.
+    pub title: String,
+    pub lines: Vec<BarTooltipLine>,
+}
+
+/// The hover summary behind a bar icon: every limit window with its tier, then
+/// today's spend.
+///
+/// The icon itself is chrome - a plasmoid's compact representation, a St label,
+/// a `WidgetButton`, a tray icon - but what it says on hover is content, and it
+/// was the last piece of content no frontend agreed on. Plasma built this in
+/// QML, the tray re-derived `session_used` / `weekly_used` in Rust and phrased
+/// it differently, and GNOME and the Quickshell widget said nothing at all.
+///
+/// Read off [`panel_spec`] rather than off the row, so the summary can never
+/// name a window the panel under it does not draw.
+pub fn bar_tooltip(row: &ProviderRow) -> BarTooltip {
+    let sections = panel_spec(row);
+    let mut lines = Vec::new();
+
+    let line = |r: &PanelRow, tone: Tone| BarTooltipLine {
+        label: r.label.clone(),
+        value: r.value.clone(),
+        tone,
+    };
+
+    if let Some(limits) = sections.iter().find(|s| s.id == "limits") {
+        lines.extend(limits.rows.iter().map(|r| line(r, r.tone)));
+    }
+    // One money line, not the whole cost section: a hover is a glance, and the
+    // rest of it is one click away in the panel. The first row is the section's
+    // headline figure either way - today's spend for a provider whose
+    // transcripts are read, and the balance for a prepaid one, which has no
+    // spend to report and would otherwise hover with no money on it at all.
+    // Untinted: a spend figure has no threshold to tint against.
+    if let Some(money) = sections
+        .iter()
+        .find(|s| s.id == "cost")
+        .and_then(|s| s.rows.first())
+    {
+        lines.push(line(money, Tone::Normal));
+    }
+
+    BarTooltip {
+        title: crate::provider_label(&row.provider).to_string(),
+        lines,
+    }
+}
+
 /// What a refresh control says on hover: when the figures it offers to replace
 /// arrived.
 ///
@@ -1472,6 +1537,98 @@ mod tests {
                 sources.iter().any(|src| src.contains("refresh_hint")),
                 "{id} ({dir}) never reads `refresh_hint` - it is formatting the \
                  last refresh itself, or not saying it at all"
+            );
+        }
+    }
+
+    #[test]
+    fn the_bar_tooltip_is_every_limit_and_one_money_line() {
+        let mut r = row();
+        r.cost = Some(cost());
+        let tip = bar_tooltip(&r);
+
+        assert_eq!(tip.title, "Claude");
+        let labels: Vec<&str> = tip.lines.iter().map(|l| l.label.as_str()).collect();
+        let spec = panel_spec(&r);
+        let limits: Vec<&str> = spec
+            .iter()
+            .find(|s| s.id == "limits")
+            .expect("a limits section")
+            .rows
+            .iter()
+            .map(|r| r.label.as_str())
+            .collect();
+        // Every limit the panel draws, in the panel's order, and then one cost
+        // line - not the whole cost section.
+        assert_eq!(labels[..limits.len()], limits[..]);
+        assert_eq!(labels.len(), limits.len() + 1);
+
+        // The tier rides along, so a frontend never re-derives the boundaries.
+        assert_eq!(tip.lines[0].value, "31%");
+        assert_eq!(tip.lines[0].tone, Tone::Good);
+        // A spend figure has no threshold to tint against.
+        assert_eq!(tip.lines.last().unwrap().tone, Tone::Normal);
+    }
+
+    /// A prepaid provider has a balance and no transcripts to read, so the
+    /// cost section is the balance alone. That is the money line it hovers
+    /// with - taking today's spend by name instead would leave the one
+    /// provider whose money matters most with no money on it.
+    #[test]
+    fn a_prepaid_provider_hovers_with_its_balance() {
+        let mut r = row();
+        r.cost = None;
+        r.credits = Some(18.44);
+        let tip = bar_tooltip(&r);
+        let money = tip.lines.last().expect("a money line");
+        assert_eq!(money.label, "Credits");
+        assert_eq!(money.value, "$18.44");
+        assert_eq!(money.tone, Tone::Normal);
+        // Still one line, not the section.
+        assert_eq!(tip.lines.iter().filter(|l| l.label == "Credits").count(), 1);
+    }
+
+    #[test]
+    fn a_provider_with_no_windows_still_names_itself() {
+        let mut r = row();
+        r.session_used = None;
+        r.weekly_used = None;
+        let tip = bar_tooltip(&r);
+        assert_eq!(tip.title, "Claude");
+        assert!(tip.lines.is_empty(), "{:?}", tip.lines);
+    }
+
+    /// Every frontend with a bar icon says the same thing when it is hovered.
+    ///
+    /// Four surfaces have an icon sitting in a bar or a tray, and hovering one
+    /// is the cheapest read of the panel there is. They each used to answer it
+    /// alone: Plasma picked the lines out of `panel` in QML, the tray
+    /// re-derived the two percentages in Rust and named only those, and GNOME
+    /// and the Quickshell widget said nothing at all - a hover that looked
+    /// broken rather than deliberate.
+    ///
+    /// Waybar and the TUI are absent because neither has an icon to hover.
+    /// Waybar's tooltip *is* the panel, so a summary of it would be the same
+    /// figures twice on one surface; a TUI has no pointer surface at all.
+    #[test]
+    fn every_frontend_with_a_bar_icon_says_the_same_thing_on_hover() {
+        let frontends = [
+            ("tray", "crates/tokengauge-tray/src", "rs"),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+            ),
+            ("gnome", "gnome/tokengauge@arzaroth.github.io", "js"),
+            ("quickshell", "omarchy/arzaroth.tokengauge", "qml"),
+        ];
+
+        for (id, dir, extension) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            assert!(
+                sources.iter().any(|src| src.contains("bar_tooltip")),
+                "{id} ({dir}) never reads `bar_tooltip` - its icon is summarising \
+                 the panel itself, or saying nothing when it is hovered"
             );
         }
     }

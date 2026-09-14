@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Hovering the bar icon says what the panel says.** Four surfaces sit in a
+  bar or a tray, and hovering one is the cheapest read of the panel there is.
+  Only Plasma answered it usefully: GNOME and the Omarchy widget showed
+  nothing, and the Windows tray named two windows in its own words while the
+  panel one click away drew four. `panel::bar_tooltip` now resolves the
+  summary - every limit window with its tier, then today's spend - and all
+  four read it. Waybar and the TUI are out by design: neither has an icon to
+  hover, and waybar's tooltip already *is* the panel.
+
+
 ## [0.30.5] - 2026-09-14
 
 ### Fixed

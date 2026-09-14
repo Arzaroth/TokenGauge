@@ -391,6 +391,22 @@ Panel {
   implicitHeight: button.implicitHeight
 
   readonly property string barGlyph: provider ? String(provider.glyph || "󰊚") : "󰊚"
+
+  // What the bar icon says on hover, resolved by the core so every frontend's
+  // icon says the same thing. The tooltip is a plain-text bubble: the tier on
+  // each line is dropped rather than mapped, the way the omarchy theme has the
+  // meters collapse `good` and `warn` onto one foreground.
+  readonly property string barTooltip: {
+    var tip = root.provider ? root.provider.bar_tooltip : null
+    if (!tip) return ""
+    var lines = Array.isArray(tip.lines) ? tip.lines : []
+    if (lines.length === 0) return String(tip.title || "")
+    var out = []
+    for (var i = 0; i < lines.length; i++)
+      out.push(String(lines[i].label) + ": " + String(lines[i].value))
+    return String(tip.title || "") + "\n" + out.join("\n")
+  }
+
   readonly property string barText: headline ? barGlyph + " " + headline.value : barGlyph
 
   // WidgetButton rather than BarIconButton: the latter pins itself to a
@@ -404,10 +420,12 @@ Panel {
     text: root.vertical ? root.barGlyph : root.barText
     hasVisualContent: text !== ""
     active: root.alarming
-    // Suppressed because the panel is the detail view: the hero already says
-    // the provider and the plan, and a hover that repeats one click's worth of
-    // information is noise. Same reasoning as the first-party widgets.
-    tooltipText: ""
+    // The core's hover summary, the same one the Plasma applet, the tray and
+    // the GNOME extension carry. This was empty on the grounds that the panel
+    // is one click away, which the first-party widgets can afford because
+    // theirs open instantly - ours shells out. The bar tooltip is plain text,
+    // so the tiers collapse the way the meters' do here.
+    tooltipText: root.barTooltip
 
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) usage.refreshNow()

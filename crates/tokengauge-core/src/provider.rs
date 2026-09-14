@@ -29,8 +29,16 @@ pub(crate) fn check_status(
     unauthorized_hint: &str,
 ) -> Result<()> {
     use reqwest::StatusCode;
-    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+    if status == StatusCode::UNAUTHORIZED {
         return Err(anyhow!("{provider} unauthorized - {unauthorized_hint}"));
+    }
+    // 403 is a credential that works and an account that is not allowed here.
+    // Sending the user back through a login they have already completed is the
+    // one hint guaranteed not to help, so it is a state of its own.
+    if status == StatusCode::FORBIDDEN {
+        return Err(anyhow!(
+            "{provider} access denied - check your plan or account access"
+        ));
     }
     if status == StatusCode::TOO_MANY_REQUESTS {
         return Err(anyhow!("{provider} rate-limited - try again shortly"));
@@ -173,10 +181,16 @@ mod tests {
         let ladder = |code| check_status(code, "Kimi", "run `kimi` to log in");
 
         assert!(ladder(StatusCode::OK).is_ok());
-        for code in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
-            let message = ladder(code).unwrap_err().to_string();
-            assert_eq!(message, "Kimi unauthorized - run `kimi` to log in");
-        }
+        assert_eq!(
+            ladder(StatusCode::UNAUTHORIZED).unwrap_err().to_string(),
+            "Kimi unauthorized - run `kimi` to log in"
+        );
+        // Not the login hint: re-authenticating cannot grant an access the
+        // account does not have.
+        assert_eq!(
+            ladder(StatusCode::FORBIDDEN).unwrap_err().to_string(),
+            "Kimi access denied - check your plan or account access"
+        );
         assert_eq!(
             ladder(StatusCode::TOO_MANY_REQUESTS)
                 .unwrap_err()

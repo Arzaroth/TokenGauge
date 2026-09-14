@@ -78,6 +78,21 @@ It is resolved per render for the same reason a reset countdown is: the age in
 it keeps moving after the fetch that wrote the payload. Waybar has no button to
 hover, so its tooltip carries the sentence as a line.
 
+The bar icon is the same shape of problem. Every toolkit draws its own - a
+plasmoid compact representation, a St label, a `WidgetButton`, a tray icon -
+but what it says on hover is content, and it was the last piece of content no
+frontend agreed on: Plasma picked the lines out of `panel` in QML, the tray
+re-derived `session_used` / `weekly_used` in Rust and named only those, and
+GNOME and the Quickshell widget said nothing at all, which reads as broken
+rather than deliberate. `panel::bar_tooltip` resolves it - every limit window
+with its tier, then today's spend - carried to the JSON frontends as
+`bar_tooltip` on each row and asserted by
+`panel::tests::every_frontend_with_a_bar_icon_says_the_same_thing_on_hover`.
+It is built off `panel_spec`, not off the row, so the summary can never name a
+window the panel under it does not draw. Waybar and the TUI are absent from
+that test because neither has an icon to hover: waybar's tooltip *is* the
+panel, so summarising it would be the same figures twice on one surface.
+
 The instant is the *payload's*, never the process's. The TUI header measured
 `Instant::elapsed` since its own last fetch and so read "updated just now" over
 a snapshot ten minutes old - a refresh that finds the snapshot fresh serves the

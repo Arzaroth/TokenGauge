@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-09-14
+
 ### Added
 
 - **Hovering the bar icon says what the panel says.** Four surfaces sit in a
@@ -14,9 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Only Plasma answered it usefully: GNOME and the Omarchy widget showed
   nothing, and the Windows tray named two windows in its own words while the
   panel one click away drew four. `panel::bar_tooltip` now resolves the
-  summary - every limit window with its tier, then today's spend - and all
-  four read it. Waybar and the TUI are out by design: neither has an icon to
-  hover, and waybar's tooltip already *is* the panel.
+  summary - every limit window with its tier, then the money line under them -
+  and all four read it. Waybar and the TUI are out by design: neither has an
+  icon to hover, and waybar's tooltip already *is* the panel.
 
 
 ## [0.30.5] - 2026-09-14
@@ -888,7 +890,8 @@ Major feature batch on top of upstream v0.4.2.
 
 Released by the upstream project, [oorestisime/TokenGauge](https://github.com/oorestisime/TokenGauge/releases). This fork's own history starts at 0.5.0.
 
-[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.30.5...HEAD
+[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.30.5...v0.31.0
 [0.30.5]: https://github.com/Arzaroth/TokenGauge/compare/v0.30.4...v0.30.5
 [0.11.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/Arzaroth/TokenGauge/compare/v0.10.0...v0.10.1

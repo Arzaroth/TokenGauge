@@ -346,15 +346,18 @@ pub fn bar_tooltip(row: &ProviderRow) -> BarTooltip {
     if let Some(limits) = sections.iter().find(|s| s.id == "limits") {
         lines.extend(limits.rows.iter().map(|r| line(r, r.tone)));
     }
-    // Today only. A hover is a glance, and the rest of the cost section is one
-    // click away in the panel; the tier is the panel's too, and a spend figure
-    // has no threshold to tint against.
-    if let Some(today) = sections
+    // One money line, not the whole cost section: a hover is a glance, and the
+    // rest of it is one click away in the panel. The first row is the section's
+    // headline figure either way - today's spend for a provider whose
+    // transcripts are read, and the balance for a prepaid one, which has no
+    // spend to report and would otherwise hover with no money on it at all.
+    // Untinted: a spend figure has no threshold to tint against.
+    if let Some(money) = sections
         .iter()
         .find(|s| s.id == "cost")
         .and_then(|s| s.rows.first())
     {
-        lines.push(line(today, Tone::Normal));
+        lines.push(line(money, Tone::Normal));
     }
 
     BarTooltip {
@@ -1539,7 +1542,7 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_tooltip_is_every_limit_and_today_only() {
+    fn the_bar_tooltip_is_every_limit_and_one_money_line() {
         let mut r = row();
         r.cost = Some(cost());
         let tip = bar_tooltip(&r);
@@ -1565,6 +1568,24 @@ mod tests {
         assert_eq!(tip.lines[0].tone, Tone::Good);
         // A spend figure has no threshold to tint against.
         assert_eq!(tip.lines.last().unwrap().tone, Tone::Normal);
+    }
+
+    /// A prepaid provider has a balance and no transcripts to read, so the
+    /// cost section is the balance alone. That is the money line it hovers
+    /// with - taking today's spend by name instead would leave the one
+    /// provider whose money matters most with no money on it.
+    #[test]
+    fn a_prepaid_provider_hovers_with_its_balance() {
+        let mut r = row();
+        r.cost = None;
+        r.credits = Some(18.44);
+        let tip = bar_tooltip(&r);
+        let money = tip.lines.last().expect("a money line");
+        assert_eq!(money.label, "Credits");
+        assert_eq!(money.value, "$18.44");
+        assert_eq!(money.tone, Tone::Normal);
+        // Still one line, not the section.
+        assert_eq!(tip.lines.iter().filter(|l| l.label == "Credits").count(), 1);
     }
 
     #[test]

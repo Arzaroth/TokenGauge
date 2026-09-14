@@ -368,11 +368,6 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         };
         return Err(anyhow!("Kimi unauthorized - {hint}"));
     }
-    if status == reqwest::StatusCode::FORBIDDEN {
-        return Err(anyhow!(
-            "Kimi access denied - check your plan or account access"
-        ));
-    }
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         // Kimi returns 429 for both transient rate limits and an exhausted usage
         // quota - inspect the body so the hint matches the actual cause.
@@ -385,8 +380,9 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         return Err(anyhow!("Kimi rate-limited - try again shortly"));
     }
     // Everything above is Kimi-specific: the hint depends on which source
-    // supplied the token, 403 is its own state, and a 429 can mean either a
-    // rate limit or a spent quota. What is left is the shared ladder.
+    // supplied the token, and a 429 can mean either a rate limit or a spent
+    // quota. What is left is the shared ladder, which now owns 403 for every
+    // provider - this is where that wording came from.
     check_status(status, "Kimi", "run `kimi` to log in")?;
 
     let body: UsageResponse = resp.json().context("Kimi usage JSON was invalid")?;

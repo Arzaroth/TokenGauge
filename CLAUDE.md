@@ -357,8 +357,6 @@ still catch schema mistakes.
 
 - `CHANGELOG.md` is the source of truth for GitHub release notes. Update
   `[Unreleased]` with every user-facing change.
-- `gh` resolves to the upstream fork parent here; always pass
-  `-R Arzaroth/TokenGauge`.
 - Before finishing: `cargo fmt --all`, `cargo clippy --workspace --all-targets`,
   `cargo test --workspace`. For QML run `qmllint`, for the GNOME extension
   `node --input-type=module --check`. CI's `frontends` job runs the last two, so

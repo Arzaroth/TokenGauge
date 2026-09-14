@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -167,19 +167,37 @@ fn used_percent(l: &Limit) -> Option<u8> {
     Some(pct_u8(used / total * 100.0))
 }
 
-fn to_window(l: &Limit) -> Option<UsageWindow> {
+/// A window of length N cannot reset more than N from now. z.ai reports a
+/// five-hour Coding Plan quota resetting ten hours out, and the countdown is
+/// measured against the instant rather than the label, so the row reads
+/// "Resets in 9h 40m" under a heading that says 5-hour. Drop an instant the
+/// window cannot reach rather than guess a timezone correction: the gauge is
+/// still good, only its countdown was not.
+fn plausible_reset(resets_at: &str, window_minutes: Option<u32>, now: DateTime<Utc>) -> bool {
+    let (Some(minutes), Ok(at)) = (window_minutes, DateTime::parse_from_rfc3339(resets_at)) else {
+        return true;
+    };
+    at.with_timezone(&Utc) <= now + TimeDelta::minutes(i64::from(minutes) + 1)
+}
+
+fn to_window(l: &Limit, now: DateTime<Utc>) -> Option<UsageWindow> {
     let used_percent = used_percent(l)?;
-    let resets_at = l.reset_at.clone().or_else(|| {
-        l.next_reset_time
-            .as_ref()
-            .and_then(json_num)
-            .and_then(epoch_to_rfc3339)
-    });
+    let window_minutes = window_minutes(l);
+    let resets_at = l
+        .reset_at
+        .clone()
+        .or_else(|| {
+            l.next_reset_time
+                .as_ref()
+                .and_then(json_num)
+                .and_then(epoch_to_rfc3339)
+        })
+        .filter(|at| plausible_reset(at, window_minutes, now));
     Some(UsageWindow {
         used_percent: Some(used_percent),
         reset_description: None,
         resets_at,
-        window_minutes: window_minutes(l),
+        window_minutes,
     })
 }
 
@@ -211,12 +229,12 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
     const SHORT_WINDOW_MAX_MINUTES: u32 = 1440; // under a day = the 5-hour rolling quota
     let mut quotas: Vec<&Limit> = limits
         .iter()
-        .filter(|l| is_quota_limit(l) && to_window(l).is_some())
+        .filter(|l| is_quota_limit(l) && to_window(l, now).is_some())
         .collect();
     quotas.sort_by_key(|l| std::cmp::Reverse(window_minutes(l).unwrap_or(0)));
     let time_limit = limits
         .iter()
-        .find(|l| !is_quota_limit(l) && to_window(l).is_some());
+        .find(|l| !is_quota_limit(l) && to_window(l, now).is_some());
 
     let short_quota = quotas
         .iter()
@@ -227,9 +245,9 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         .copied()
         .find(|l| window_minutes(l).is_none_or(|m| m >= SHORT_WINDOW_MAX_MINUTES));
 
-    let primary = weekly_quota.and_then(to_window);
-    let secondary = time_limit.and_then(to_window);
-    let tertiary = short_quota.and_then(to_window);
+    let primary = weekly_quota.and_then(|l| to_window(l, now));
+    let secondary = time_limit.and_then(|l| to_window(l, now));
+    let tertiary = short_quota.and_then(|l| to_window(l, now));
 
     if primary.is_none() && secondary.is_none() && tertiary.is_none() {
         return Err(anyhow!("z.ai returned no usage - check region/token"));
@@ -317,6 +335,57 @@ mod tests {
         assert_eq!(tertiary.used_percent, Some(30));
         assert_eq!(tertiary.window_minutes, Some(300));
         assert_eq!(usage.login_method.as_deref(), Some("GLM Coding Plan"));
+    }
+
+    /// z.ai's recurring wire bug: the five-hour quota carries a reset twice its
+    /// own window away. The gauge survives, the countdown does not.
+    #[test]
+    fn drops_a_reset_the_window_cannot_reach() {
+        let now = Utc::now();
+        let ten_hours_out = (now + TimeDelta::hours(10)).timestamp_millis();
+        let body = resp(&format!(
+            r#"{{"data": {{"limits": [
+                {{"type": "TOKENS_LIMIT", "percentage": 30, "unit": 3, "number": 5,
+                 "nextResetTime": {ten_hours_out}}}
+            ]}}}}"#
+        ));
+        let usage = to_payload(body, now).unwrap().usage.unwrap();
+        // A 300-minute quota is the short slot.
+        let window = usage.tertiary.unwrap();
+        assert_eq!(window.used_percent, Some(30));
+        assert_eq!(window.window_minutes, Some(300));
+        assert_eq!(window.resets_at, None);
+    }
+
+    #[test]
+    fn keeps_a_reset_inside_the_window() {
+        let now = Utc::now();
+        let four_hours_out = (now + TimeDelta::hours(4)).timestamp_millis();
+        let body = resp(&format!(
+            r#"{{"data": {{"limits": [
+                {{"type": "TOKENS_LIMIT", "percentage": 30, "unit": 3, "number": 5,
+                 "nextResetTime": {four_hours_out}}}
+            ]}}}}"#
+        ));
+        let usage = to_payload(body, now).unwrap().usage.unwrap();
+        assert!(usage.tertiary.unwrap().resets_at.is_some());
+    }
+
+    /// Nothing bounds a window whose duration the payload never stated, so the
+    /// instant is taken as given rather than dropped on a guess.
+    #[test]
+    fn keeps_a_far_reset_when_the_window_length_is_unknown() {
+        let now = Utc::now();
+        let far_out = (now + TimeDelta::days(40)).timestamp_millis();
+        let body = resp(&format!(
+            r#"{{"data": {{"limits": [
+                {{"type": "TOKENS_LIMIT", "percentage": 30, "nextResetTime": {far_out}}}
+            ]}}}}"#
+        ));
+        let usage = to_payload(body, now).unwrap().usage.unwrap();
+        let window = usage.primary.unwrap();
+        assert_eq!(window.window_minutes, None);
+        assert!(window.resets_at.is_some());
     }
 
     #[test]

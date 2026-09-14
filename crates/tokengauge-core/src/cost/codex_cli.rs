@@ -19,6 +19,11 @@
 //! 5. A one-shot `codex exec` writes no rollout envelope at all: the usage
 //!    rides on the line itself, one row per call rather than a cumulative, and
 //!    under whichever field names the API that served it used.
+//! 6. A subagent rollout opens with its **parent's records copied in** as model
+//!    context, `token_count` rows included. `session_meta` marks where the
+//!    child's own history starts; before that mark the cumulative belongs to
+//!    the parent, and the child opens a counter of its own at zero rather than
+//!    continuing it.
 //!
 //! The model is not in the usage payload either: it lives in `turn_context`,
 //! and it changes mid-session.
@@ -38,6 +43,9 @@ struct Record {
     timestamp: String,
     #[serde(default, rename = "type")]
     kind: String,
+    /// Position in the rollout. Only a subagent's copied prefix needs it.
+    #[serde(default)]
+    ordinal: Option<u64>,
     #[serde(default)]
     payload: Option<Payload>,
 }
@@ -55,6 +63,10 @@ struct Payload {
     /// `token_count` only, and null on the rate-limit-only emissions.
     #[serde(default)]
     info: Option<TokenInfo>,
+    /// `session_meta` of a subagent rollout: the first ordinal that is the
+    /// child's own. Absent on every ordinary session.
+    #[serde(default)]
+    subagent_history_start_ordinal: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -283,6 +295,8 @@ pub(super) fn read_file(
     // because fleet sync dedupes on the key built from it.
     let mut last_at: Option<DateTime<Utc>> = None;
     let mut bare_rows = 0usize;
+    // Set only by a subagent rollout. See trap 6.
+    let mut subagent_start: Option<u64> = None;
 
     for line in contents.lines() {
         let Ok(record) = serde_json::from_str::<Record>(line) else {
@@ -354,6 +368,9 @@ pub(super) fn read_file(
             if let Some(id) = payload.id.as_deref().filter(|id| !id.is_empty()) {
                 session_id = id.to_string();
             }
+            if let Some(start) = payload.subagent_history_start_ordinal {
+                subagent_start = Some(start);
+            }
             if model.is_none()
                 && let Some(m) = payload.model.as_deref()
             {
@@ -376,6 +393,16 @@ pub(super) fn read_file(
         let Some(info) = payload.info.as_ref() else {
             continue;
         };
+
+        // Inherited context, not this session's spend. Dropped outright rather
+        // than latched as a baseline: the child counts from zero, so the
+        // parent's cumulative sitting in `totals` would read as a regression
+        // against every reading the child goes on to write, and the session
+        // would bill nothing at all. A row with no ordinal cannot be shown to
+        // be the child's, and reads as inherited for the same reason.
+        if subagent_start.is_some_and(|start| record.ordinal.is_none_or(|at| at < start)) {
+            continue;
+        }
 
         let cumulative = info.total_token_usage;
         let previous = totals.entry(session_id.clone()).or_default();
@@ -476,6 +503,69 @@ mod tests {
     }
 
     const CONTEXT: &str = r#"{"timestamp":"2026-05-11T06:17:00.967Z","type":"turn_context","payload":{"model":"gpt-5.5"}}"#;
+
+    fn ordinal_token_count(ordinal: u64, ts: &str, input: u64, output: u64) -> String {
+        let row = token_count(ts, input, 0, output);
+        format!(r#"{{"ordinal":{ordinal},{}"#, &row[1..])
+    }
+
+    /// A subagent rollout opens with the parent's records copied in. Billing
+    /// the copied prefix charges the child for context it inherited: here the
+    /// parent's 900K/90K, which is all of the session's apparent spend.
+    #[test]
+    fn an_inherited_prefix_is_not_the_subagents_spend() {
+        let meta = r#"{"ordinal":0,"timestamp":"2026-05-11T06:00:00.000Z","type":"session_meta","payload":{"id":"sub-1","subagent_history_start_ordinal":3}}"#;
+        let lines = [
+            meta,
+            CONTEXT,
+            &ordinal_token_count(1, "2026-05-11T06:10:00.000Z", 900_000, 90_000),
+            &ordinal_token_count(2, "2026-05-11T06:11:00.000Z", 950_000, 95_000),
+            &ordinal_token_count(3, "2026-05-11T06:18:00.000Z", 1_000, 100),
+            &ordinal_token_count(4, "2026-05-11T06:19:00.000Z", 2_500, 300),
+        ]
+        .join("\n");
+
+        let events = read(&lines);
+        let input: u64 = events.iter().map(|e| e.tokens.input).sum();
+        let output: u64 = events.iter().map(|e| e.tokens.output).sum();
+        // The child's own two readings: 1000 then 2500 cumulative, so 2500
+        // billed once. Not 2500 + the 950K it was handed.
+        assert_eq!(input, 2_500, "inherited input billed to the child");
+        assert_eq!(output, 300);
+    }
+
+    /// The boundary is authoritative even when the file stops before the child
+    /// writes anything of its own, which is how a subagent that was cancelled
+    /// early lands on disk.
+    #[test]
+    fn a_prefix_only_subagent_rollout_bills_nothing() {
+        let meta = r#"{"ordinal":0,"timestamp":"2026-05-11T06:00:00.000Z","type":"session_meta","payload":{"id":"sub-2","subagent_history_start_ordinal":9}}"#;
+        let lines = [
+            meta,
+            CONTEXT,
+            &ordinal_token_count(1, "2026-05-11T06:10:00.000Z", 900_000, 90_000),
+        ]
+        .join("\n");
+        assert!(read(&lines).is_empty());
+    }
+
+    /// An ordinary session carries no boundary, and its ordinals must not be
+    /// read as a prefix. This is the regression that would silently zero every
+    /// Codex figure.
+    #[test]
+    fn a_session_without_a_boundary_bills_every_row() {
+        let meta = r#"{"ordinal":0,"timestamp":"2026-05-11T06:00:00.000Z","type":"session_meta","payload":{"id":"plain-1"}}"#;
+        let lines = [
+            meta,
+            CONTEXT,
+            &ordinal_token_count(1, "2026-05-11T06:18:00.000Z", 1_000, 100),
+            &ordinal_token_count(2, "2026-05-11T06:19:00.000Z", 2_500, 300),
+        ]
+        .join("\n");
+        let events = read(&lines);
+        let input: u64 = events.iter().map(|e| e.tokens.input).sum();
+        assert_eq!(input, 2_500);
+    }
 
     #[test]
     fn cumulative_readings_are_billed_as_deltas() {

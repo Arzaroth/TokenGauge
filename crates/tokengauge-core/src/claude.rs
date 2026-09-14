@@ -62,7 +62,7 @@ struct Oauth {
     /// reject; see `validate_oauth`.
     #[serde(rename = "expiresAt")]
     expires_at: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::provider::null_as_default")]
     scopes: Vec<String>,
     #[serde(rename = "rateLimitTier")]
     rate_limit_tier: Option<String>,
@@ -269,7 +269,7 @@ struct UsageResponse {
     seven_day_oauth_apps: Option<Win>,
     seven_day_opus: Option<Win>,
     seven_day_sonnet: Option<Win>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::provider::null_as_default")]
     limits: Vec<Limit>,
     /// Routine aliases + unknown `seven_day_*` keys land here.
     #[serde(flatten)]
@@ -579,6 +579,43 @@ mod tests {
 
     fn resp(json: &str) -> UsageResponse {
         serde_json::from_str(json).expect("fixture parses")
+    }
+
+    /// `#[serde(default)]` fills in a field that is *absent*; a field that is
+    /// present and `null` is a value, and a null where a sequence belongs
+    /// fails the **whole** response rather than the one field. Anthropic sends
+    /// `null` rather than `[]` for a list an account has none of, so this is
+    /// the difference between a working panel and every Claude row reading
+    /// "expected a sequence".
+    #[test]
+    fn an_explicitly_null_collection_is_empty_not_a_parse_failure() {
+        let body = resp(
+            r#"{
+            "five_hour": {"utilization": 5.0, "resets_at": "2026-07-15T12:09:59Z"},
+            "limits": null
+        }"#,
+        );
+        assert!(body.limits.is_empty());
+        let usage = to_payload(body, None, Utc::now()).unwrap().usage.unwrap();
+        assert_eq!(usage.primary.unwrap().used_percent, Some(5));
+    }
+
+    /// The same trap in the credentials file. A hollow `scopes` must not cost
+    /// us the access token sitting beside it.
+    #[test]
+    fn a_null_scopes_list_does_not_lose_the_token() {
+        let creds: Oauth =
+            serde_json::from_str(r#"{"accessToken":"sk-live","expiresAt":null,"scopes":null}"#)
+                .expect("credentials parse");
+        assert_eq!(creds.access_token, "sk-live");
+        assert!(creds.scopes.is_empty());
+    }
+
+    /// A wrong *type* is still drift. Reading a string as an empty list would
+    /// hide a real format change behind a panel that looks fine.
+    #[test]
+    fn a_collection_of_the_wrong_type_is_still_refused() {
+        assert!(serde_json::from_str::<UsageResponse>(r#"{"limits": "none"}"#).is_err());
     }
 
     #[test]

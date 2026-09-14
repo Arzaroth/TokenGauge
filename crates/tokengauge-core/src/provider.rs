@@ -29,8 +29,16 @@ pub(crate) fn check_status(
     unauthorized_hint: &str,
 ) -> Result<()> {
     use reqwest::StatusCode;
-    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+    if status == StatusCode::UNAUTHORIZED {
         return Err(anyhow!("{provider} unauthorized - {unauthorized_hint}"));
+    }
+    // 403 is a credential that works and an account that is not allowed here.
+    // Sending the user back through a login they have already completed is the
+    // one hint guaranteed not to help, so it is a state of its own.
+    if status == StatusCode::FORBIDDEN {
+        return Err(anyhow!(
+            "{provider} access denied - check your plan or account access"
+        ));
     }
     if status == StatusCode::TOO_MANY_REQUESTS {
         return Err(anyhow!("{provider} rate-limited - try again shortly"));
@@ -39,6 +47,27 @@ pub(crate) fn check_status(
         return Err(anyhow!("{provider} HTTP {}", status.as_u16()));
     }
     Ok(())
+}
+
+/// A collection that may arrive as an explicit `null`.
+///
+/// `#[serde(default)]` fills in a field that is **absent**. A field that is
+/// present and `null` is a value, and deserializing that into a collection
+/// fails the *whole* response rather than the one field. Both Anthropic and
+/// OpenAI send `null` rather than `[]` for a list an account has none of, so
+/// the field that exists to describe extra limits is the field that breaks the
+/// panel for everyone who has none.
+///
+/// A wrong *type* is still drift: a string or a number where a collection
+/// belongs is refused here as before, because reading it as empty would hide a
+/// real format change behind a panel that looks fine.
+pub(crate) fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de> + Default,
+{
+    use serde::Deserialize;
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// A number out of a loosely-typed body, whether it arrived as a number or as
@@ -173,10 +202,16 @@ mod tests {
         let ladder = |code| check_status(code, "Kimi", "run `kimi` to log in");
 
         assert!(ladder(StatusCode::OK).is_ok());
-        for code in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
-            let message = ladder(code).unwrap_err().to_string();
-            assert_eq!(message, "Kimi unauthorized - run `kimi` to log in");
-        }
+        assert_eq!(
+            ladder(StatusCode::UNAUTHORIZED).unwrap_err().to_string(),
+            "Kimi unauthorized - run `kimi` to log in"
+        );
+        // Not the login hint: re-authenticating cannot grant an access the
+        // account does not have.
+        assert_eq!(
+            ladder(StatusCode::FORBIDDEN).unwrap_err().to_string(),
+            "Kimi access denied - check your plan or account access"
+        );
         assert_eq!(
             ladder(StatusCode::TOO_MANY_REQUESTS)
                 .unwrap_err()

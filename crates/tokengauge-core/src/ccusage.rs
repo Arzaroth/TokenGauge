@@ -68,16 +68,16 @@ pub(crate) const WEEKLY_HISTORY_DAYS: usize = 7;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct CcusageDailyResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::provider::null_as_default")]
     daily: Vec<CcusageDay>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CcusageDay {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::provider::null_as_default")]
     agents: Vec<CcusageAgent>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::provider::null_as_default")]
     model_breakdowns: Vec<CcusageModelBreakdown>,
     #[serde(default)]
     period: String,
@@ -89,7 +89,7 @@ struct CcusageDay {
 struct CcusageAgent {
     #[serde(default)]
     agent: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::provider::null_as_default")]
     model_breakdowns: Vec<CcusageModelBreakdown>,
 }
 
@@ -303,7 +303,7 @@ fn aggregate_ccusage(
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CcusageBlocksResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::provider::null_as_default")]
     blocks: Vec<CcusageBlock>,
 }
 
@@ -312,7 +312,7 @@ struct CcusageBlocksResponse {
 struct CcusageBlock {
     #[serde(default)]
     is_active: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::provider::null_as_default")]
     models: Vec<String>,
     #[serde(default)]
     burn_rate: Option<CcusageBurnRate>,

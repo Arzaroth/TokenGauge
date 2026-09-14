@@ -49,6 +49,27 @@ pub(crate) fn check_status(
     Ok(())
 }
 
+/// A collection that may arrive as an explicit `null`.
+///
+/// `#[serde(default)]` fills in a field that is **absent**. A field that is
+/// present and `null` is a value, and deserializing that into a collection
+/// fails the *whole* response rather than the one field. Both Anthropic and
+/// OpenAI send `null` rather than `[]` for a list an account has none of, so
+/// the field that exists to describe extra limits is the field that breaks the
+/// panel for everyone who has none.
+///
+/// A wrong *type* is still drift: a string or a number where a collection
+/// belongs is refused here as before, because reading it as empty would hide a
+/// real format change behind a panel that looks fine.
+pub(crate) fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de> + Default,
+{
+    use serde::Deserialize;
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// A number out of a loosely-typed body, whether it arrived as a number or as
 /// a string.
 ///

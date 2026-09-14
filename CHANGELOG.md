@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A z.ai five-hour window counted down to an instant ten hours away.** z.ai
+  reports the Coding Plan's five-hour quota with a reset twice its own window
+  out, and the countdown is measured against that instant rather than the
+  label, so the row read `Resets in 9h 40m` under a heading saying 5-hour. A
+  window of length N cannot reset more than N from now: an instant the window
+  cannot reach is dropped and the gauge keeps its percentage, rather than the
+  countdown being talked into a timezone correction nobody can verify.
+- **Token counts could read `1000.0K`.** The unit was picked before the value
+  was rounded, so anything from 999,950 tokens up printed as a thousand of the
+  smaller unit instead of one of the larger. `1000.0M` was the more reachable
+  of the two, covering the last fifty thousand counts below a billion. Tokens
+  by day and by model on every frontend.
+- **An HTTP 403 told you to log in again.** The shared status ladder read 401
+  and 403 as one state, so an account without access to what it asked for got
+  the re-authenticate hint - the one instruction guaranteed not to help,
+  because the credential was never the problem. 403 now reads
+  `access denied - check your plan or account access`, which is the wording
+  Kimi already had and every provider now shares.
+- **A `null` where a list belongs broke the whole Claude response.**
+  `#[serde(default)]` fills in a field that is *absent*, but a field that is
+  present and `null` is a value, and a null where a sequence belongs fails the
+  entire response rather than that one field. Anthropic sends `null` rather
+  than `[]` for a list an account has none of, so the field describing extra
+  limits was the field that would blank the panel for everyone who has none.
+  Claude's `limits`, the `scopes` in its credentials file, and the six
+  collections read out of ccusage's output now read an explicit null as empty.
+  A wrong *type* is still refused: a string where a list belongs is a format
+  change worth failing on, and reading it as empty would hide it behind a panel
+  that looks fine.
+
+- **A Codex subagent was billed for the context it inherited.** A subagent
+  rollout opens with its parent's records copied in for model context, token
+  counts included, and its own counter starts at zero rather than continuing
+  the parent's. Reading the copied prefix as the child's spend charged the
+  session for the whole conversation it was handed. `session_meta` marks where
+  the child's own history begins, and records before that mark are now neither
+  billed nor taken as a baseline.
+
 ## [0.30.4] - 2026-09-03
 
 ### Fixed

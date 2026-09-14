@@ -1577,6 +1577,41 @@ mod tests {
         assert!(tip.lines.is_empty(), "{:?}", tip.lines);
     }
 
+    /// Every frontend with a bar icon says the same thing when it is hovered.
+    ///
+    /// Four surfaces have an icon sitting in a bar or a tray, and hovering one
+    /// is the cheapest read of the panel there is. They each used to answer it
+    /// alone: Plasma picked the lines out of `panel` in QML, the tray
+    /// re-derived the two percentages in Rust and named only those, and GNOME
+    /// and the Quickshell widget said nothing at all - a hover that looked
+    /// broken rather than deliberate.
+    ///
+    /// Waybar and the TUI are absent because neither has an icon to hover.
+    /// Waybar's tooltip *is* the panel, so a summary of it would be the same
+    /// figures twice on one surface; a TUI has no pointer surface at all.
+    #[test]
+    fn every_frontend_with_a_bar_icon_says_the_same_thing_on_hover() {
+        let frontends = [
+            ("tray", "crates/tokengauge-tray/src", "rs"),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+            ),
+            ("gnome", "gnome/tokengauge@arzaroth.github.io", "js"),
+            ("quickshell", "omarchy/arzaroth.tokengauge", "qml"),
+        ];
+
+        for (id, dir, extension) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            assert!(
+                sources.iter().any(|src| src.contains("bar_tooltip")),
+                "{id} ({dir}) never reads `bar_tooltip` - its icon is summarising \
+                 the panel itself, or saying nothing when it is hovered"
+            );
+        }
+    }
+
     /// Every frontend that draws the panel draws every kind of section in it.
     ///
     /// The backstop for the QML and JS frontends the compiler cannot check.

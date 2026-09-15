@@ -105,6 +105,14 @@ jobs:
             exit 1
           fi
 
+      # qmllint reads the files; this runs them. It loads each frontend's data
+      # layer in a plain QML runtime with the desktop imports stubbed, and
+      # drives it with a recording of what `--json` prints - the bindings, the
+      # JSON read back out, and the command handed over next, none of which a
+      # syntax check can reach.
+      - name: Drive the QML frontends against a recorded panel
+        run: tests/qml/run.sh
+
       - name: Typecheck the GNOME extension
         run: pnpm typecheck
 

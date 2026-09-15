@@ -1,0 +1,2 @@
+module Harness
+singleton Registry 1.0 Registry.qml

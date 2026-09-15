@@ -5,19 +5,9 @@ import Gtk from 'gi://Gtk';
 import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import type * as Panel from './panel.js';
+import {isCancelled, shellQuote} from './util.js';
 
 type RunCallback = (successful: boolean, stdout: string, stderr: string) => void;
-
-function shellQuote(s: string): string {
-    return `'${String(s).replace(/'/g, "'\\''")}'`;
-}
-
-// GJS raises GLib.Error, which carries matches(); everything else reaching a
-// catch here is a plain throw, and only its text is ever used.
-function isCancelled(error: unknown): boolean {
-    const candidate = error as {matches?: (domain: unknown, code: number) => boolean};
-    return candidate?.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED) === true;
-}
 
 // gnome-shell and gnome-extensions-app both inherit the session PATH, which
 // often lacks the user bin dirs the installer drops the binaries into.

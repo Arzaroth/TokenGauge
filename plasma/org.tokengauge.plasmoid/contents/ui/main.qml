@@ -1,14 +1,23 @@
 import QtQuick
 import org.kde.plasma.plasmoid
-import org.kde.plasma.plasma5support as Plasma5Support
 
 PlasmoidItem {
     id: root
 
+    // The data side, which owns the subprocess and the snapshot it brings
+    // back. It lives in its own file so it can be instantiated without a
+    // plasmoid around it - `Plasmoid` is an attached type and no stub can
+    // provide one, which is what kept tests/qml from ever driving this.
+    property Service service: Service {
+        binary: root.waybarBin
+        refreshSecs: root.refreshSecs
+        live: root.expanded
+    }
+
     // Full snapshot emitted by `tokengauge-waybar --json`.
-    property var snapshot: ({ rows: [], errors: [], enabled: [], primary: null, window: "daily", theme: {} })
+    readonly property alias snapshot: root.service.snapshot
     property var rows: snapshot.rows || []
-    property string lastError: ""
+    readonly property alias lastError: root.service.lastError
 
     // The selection follows the provider id, not the slot it sits in: a row
     // that appears or drops out on a refresh would otherwise slide a different
@@ -45,12 +54,8 @@ PlasmoidItem {
     // Cached GitHub release check written by the daemon; see UpdateStatus.
     readonly property var updateInfo: snapshot.update || null
     readonly property bool updateAvailable: !!(updateInfo && updateInfo.available)
-    // True while an --update command is in flight; reset when exec completes.
-    property bool updating: false
-    // Exact exec source of the in-flight update command, so only its own
-    // completion clears `updating` (waybarBin is user-configurable, so a
-    // substring match on "--update" isn't reliable).
-    property string updateSource: ""
+    // True while an --update command is in flight.
+    readonly property alias updating: root.service.updating
 
     // Row shown in the panel / hovered.
     readonly property var selRow: rows.length > 0 ? rows[selectedIndex] : null
@@ -85,145 +90,14 @@ PlasmoidItem {
     }
 
     // ---- data ----------------------------------------------------------------
-    Plasma5Support.DataSource {
-        id: exec
-        engine: "executable"
-        connectedSources: []
-        onNewData: (source, data) => {
-            exec.disconnectSource(source)
-            // Clear the in-flight update state only when the update command
-            // itself completes, so a periodic refresh finishing mid-update
-            // doesn't re-enable the button while --update is still running.
-            if (source === root.updateSource) {
-                root.updating = false
-                root.updateSource = ""
-            }
-            // Re-arm the long poll from a timer rather than from inside its own
-            // newData handler, which is still mid-disconnect. A wait that fails
-            // instead of waiting - no binary on PATH, say - would respawn every
-            // 200ms forever, so failures back off.
-            if (source === root.watchSource) {
-                root.watchSource = ""
-                if (data["exit code"] === 0) {
-                    root.watchFailures = 0
-                    rearmWatch.interval = 200
-                } else {
-                    root.watchFailures = Math.min(root.watchFailures + 1, 6)
-                    rearmWatch.interval = 1000 * Math.pow(2, root.watchFailures - 1)
-                }
-                rearmWatch.restart()
-            }
-            if (data["exit code"] === 0) {
-                try {
-                    var parsed = JSON.parse(data.stdout)
-                    root.snapshot = parsed
-                    root.lastError = ""
-                } catch (e) {
-                    root.lastError = "parse error: " + e
-                }
-            } else {
-                root.lastError = ((data.stderr || "") + "").trim() || ("exit " + data["exit code"])
-            }
-        }
-    }
+    // All of it is the service's; these are the names FullRep and CompactRep
+    // already call.
+    function reload() { root.service.reload() }
+    function action(flag) { root.service.action(flag) }
+    function applyUpdate() { root.service.applyUpdate() }
+    function openSyncSetup() { root.service.openSyncSetup() }
 
-    // Wrap a command so it runs through a shell with the usual user bin dirs on
-    // PATH - plasmashell's session PATH often lacks ~/.local/bin, which is where
-    // the installer drops tokengauge-waybar.
-    function cmd(c) {
-        return "sh -c " + shellQuote('export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ' + c)
-    }
-
-    // Refresh the snapshot.
-    function reload() {
-        exec.connectSource(cmd(root.waybarBin + " --json"))
-    }
-
-    // Run a tokengauge-waybar action flag, then refresh the snapshot.
-    function action(flag) {
-        exec.connectSource(cmd(root.waybarBin + " " + flag + " && " + root.waybarBin + " --json"))
-    }
-
-    // Long-poll for the next change instead of only re-reading on a timer, so a
-    // fetch by the daemon or another frontend shows up here at once. QML in a
-    // plasmoid has no file watcher, so the wait happens in the binary: it parks
-    // on the revision file and exits when the snapshot is rewritten, or after
-    // the timeout, and the chained --json brings back the new state either way.
-    property string watchSource: ""
-    property int watchFailures: 0
-
-    function watch() {
-        if (root.watchSource !== "")
-            return
-        root.watchSource = cmd(root.waybarBin + " --wait-change --wait-timeout 300 && "
-                               + root.waybarBin + " --json")
-        exec.connectSource(root.watchSource)
-    }
-
-    Timer {
-        id: rearmWatch
-        interval: 200
-        repeat: false
-        onTriggered: root.watch()
-    }
-
-    // Download + install the latest release, then refresh so the banner clears.
-    // --update's human-readable stdout is discarded so only the --json payload
-    // reaches onNewData's JSON.parse.
-    function applyUpdate() {
-        root.updating = true
-        // Discard --update's stdout (keeps the JSON refresh parseable) but keep
-        // stderr so a failed update surfaces its error via root.lastError.
-        var updateSource = cmd(root.waybarBin + " --update >/dev/null && " + root.waybarBin + " --json")
-        root.updateSource = updateSource
-        exec.connectSource(updateSource)
-    }
-
-    // Opens the TUI's sync screen in a terminal. `--sync-setup` returns as soon
-    // as it has spawned one, so the `--json` chained behind it is not waiting on
-    // the user. `&&` and a kept stderr, matching applyUpdate: with `;` the
-    // compound command exits 0 whatever setup did, so "no terminal found" would
-    // never reach root.lastError.
-    function openSyncSetup() {
-        exec.connectSource(cmd(root.waybarBin + " --sync-setup >/dev/null && "
-                               + root.waybarBin + " --json"))
-    }
-
-    function shellQuote(s) {
-        return "'" + String(s).replace(/'/g, "'\\''") + "'"
-    }
-
-    // Fallback beside the long poll: nothing writes the snapshot unless someone
-    // asks for it, so with no daemon running this timer is what ages the cache
-    // out and triggers the next fetch.
-    Timer {
-        interval: root.refreshSecs * 1000
-        running: true
-        repeat: true
-        triggeredOnStart: true
-        onTriggered: root.reload()
-    }
-
-    // While the panel is open, on a much shorter cycle. A reset time is counted
-    // against the clock at render time, so the countdown only moves when the
-    // snapshot is rendered again - a panel left open otherwise keeps the
-    // countdown it opened with. `--json` serves the snapshot it already has and
-    // refetches only once that snapshot has aged past `refresh_secs`, so this
-    // costs a subprocess, not a provider call.
-    Timer {
-        interval: 30000
-        running: root.expanded
-        repeat: true
-        triggeredOnStart: true
-        onTriggered: root.reload()
-    }
-
-    Component.onCompleted: watch()
-
-    Component.onDestruction: {
-        if (root.watchSource !== "")
-            exec.disconnectSource(root.watchSource)
-    }
+    Component.onDestruction: root.service.shutdown()
 
     // ---- helpers -------------------------------------------------------------
     // Tier colour for a usage percent, mirroring core color_for_percent.

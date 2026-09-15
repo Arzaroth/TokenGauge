@@ -131,6 +131,14 @@ jobs:
             node --input-type=module --check < "$file"
           done
 
+      # The extension only ever runs inside a live shell, so the shell is
+      # stubbed instead: St records the widget tree rather than drawing it, Gio
+      # records the subprocess rather than spawning it. What that leaves under
+      # test is what the extension decides - what it asks the binary, what it
+      # does with the answer, and what it draws.
+      - name: Drive the GNOME extension against a recorded panel
+        run: tests/gnome/run.sh
+
       - name: Check the frontend manifests
         run: |
           shopt -s globstar nullglob

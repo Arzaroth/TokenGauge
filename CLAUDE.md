@@ -336,6 +336,48 @@ the mtime filter `jsonl_files` leans on, so it must never run on a poll.
 
 Design notes in `docs/history.md`, vocabulary in `CONTEXT.md`.
 
+## Three frontends are driven, not just read
+
+`qmllint` and `tsc` read these files. Three harnesses run them, each against
+the same recording of what `--json` prints, so a frontend and the binary can
+never quietly disagree about it:
+
+| Harness | What it loads | What it covers |
+| ------- | ------------- | -------------- |
+| `crates/tokengauge-waybar/tests/e2e.rs` | the shipped binary | config, cache, staleness, `panel_spec`, the JSON |
+| `tests/qml/run.sh` | `Usage.qml`, `Service.qml` | bindings, the snapshot read back, the next command |
+| `tests/gnome/run.sh` | the compiled `extension.js` | all of that, plus the widget tree it draws |
+
+None of them touches a network, a credential or a daemon. The binary's tests
+seed a fresh snapshot, so `cache_is_stale()` says serve and the run never
+fetches; the frontends' stubs answer a command by its command line rather than
+spawning anything. The one test that wants a fetch backdates the write and
+lands in the credential walk, because a provider with no token says so before
+it asks anyone.
+
+`scripts/make-panel-fixture.sh` records `tests/qml/fixtures/panel.json` off the
+same seeded snapshot the binary's tests use, so the two cannot drift. Its
+machine has no fleet store on purpose: the history comes out empty, which is
+the state every user is in before their first recorded day and the one a
+frontend most easily gets wrong by drawing nothing at all.
+
+Two things follow from this and are easy to regress:
+
+- **A frontend's data layer has to be instantiable on its own.** Plasma's
+  `main.qml` is a `PlasmoidItem` that sets the attached `Plasmoid.icon`, which
+  no QML stub can provide, so the half that owns the subprocess lives in
+  `Service.qml` and imports no plasmoid module. `main.qml` re-exposes it under
+  the names the representations already call. Keep new data work on that side
+  of the line or it drops out of the harness.
+- **The GNOME harness runs the compiled extension, not the TypeScript**, for
+  the same reason CI's syntax check does: what ships is the JavaScript. It
+  needs `scripts/build.sh` to have run, and says so rather than passing
+  vacuously.
+
+Waybar and the tray are absent: waybar's surface is the binary's own output,
+which the e2e tests already assert, and the tray is Rust that only builds on
+Windows.
+
 ## The binary is `tokengauge`, the crate is not
 
 `crates/tokengauge-waybar` still builds the shared backend every frontend shells
@@ -399,8 +441,9 @@ still catch schema mistakes.
   `[Unreleased]` with every user-facing change.
 - Before finishing: `cargo fmt --all`, `cargo clippy --workspace --all-targets`,
   `cargo test --workspace`. For QML run `qmllint`, for the GNOME extension
-  `pnpm typecheck` and then `scripts/build.sh`. CI's `frontends` job runs all
-  three, so they are enforced rather than remembered.
+  `pnpm typecheck` and then `scripts/build.sh`, and then the two frontend
+  harnesses: `tests/qml/run.sh` and `tests/gnome/run.sh`. CI's `frontends` job
+  runs all of them, so they are enforced rather than remembered.
 - `scripts/coverage.sh` runs `cargo llvm-cov` over the workspace and then ranks
   the files by uncovered lines; `--html` opens the browsable report. It is a
   local tool, not a CI gate - nothing fails on a number. The gaps it keeps

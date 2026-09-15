@@ -21,6 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than install uncompiled sources. Release archives are unchanged - they
   carry the compiled extension, exactly as they carried the hand-written one.
 
+- **Three frontends are driven by tests, not just read by linters.** The
+  binary now has end-to-end tests that run the shipped executable against a
+  seeded snapshot with no credentials, no daemon and no network; the Plasma
+  and Omarchy data layers load in a plain QML runtime with their desktop
+  imports stubbed; and the compiled GNOME extension loads in Node with the
+  shell stubbed, which is the first runtime coverage the largest frontend has
+  ever had - including the widget tree it draws, which nothing else in the
+  repository could see. All three read the same recorded panel, so a frontend
+  and the binary cannot quietly disagree about it.
+- Plasma's data layer moved out of `main.qml` into `Service.qml` so it can be
+  instantiated without a plasmoid around it. The applet draws the same thing;
+  `CompactRep` and `FullRep` did not change a line.
+
 ### Fixed
 
 - **The GNOME preferences window dropped its About row.** `_fillProviders`

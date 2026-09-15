@@ -76,6 +76,11 @@ class Actor {
         this.emit('notify::hover');
     }
 
+    set_position(x, y) {
+        this.x = x;
+        this.y = y;
+    }
+
     get_transformed_position() {
         return [0, 0];
     }
@@ -149,7 +154,9 @@ export class DrawingArea extends Widget {
     }
 
     get_context() {
-        return new CairoContext();
+        // Kept, so a test can read back what the repaint painted.
+        this._lastContext = new CairoContext();
+        return this._lastContext;
     }
 
     get_theme_node() {

@@ -101,11 +101,11 @@ Panel {
     var list = usage.allProviders
     if (index < 0 || index >= list.length) return
     var id = String(list[index])
-    usage.setProvider(id, usage.enabled.indexOf(id) < 0)
+    usage.setProvider(id, usage.enabledProviders.indexOf(id) < 0)
   }
 
   function cyclePin() {
-    var choices = ["highest"].concat(usage.enabled.map(function(id) { return String(id) }))
+    var choices = ["highest"].concat(usage.enabledProviders.map(function(id) { return String(id) }))
     var current = present(usage.primary) === "" ? "highest" : String(usage.primary).toLowerCase()
     var at = choices.indexOf(current)
     usage.setPrimary(choices[(at + 1) % choices.length])
@@ -1040,7 +1040,7 @@ Panel {
                   id: providerToggle
                   anchors.right: parent.right
                   anchors.verticalCenter: parent.verticalCenter
-                  checked: usage.enabled.indexOf(String(modelData)) >= 0
+                  checked: usage.enabledProviders.indexOf(String(modelData)) >= 0
                   busy: usage.loading
                   foreground: root.foreground
                   accent: Color.accent
@@ -1066,8 +1066,8 @@ Panel {
             fontFamily: root.fontFamily
             options: {
               var out = [{ value: "highest", label: "Highest usage" }]
-              for (var i = 0; i < usage.enabled.length; i++) {
-                var id = String(usage.enabled[i])
+              for (var i = 0; i < usage.enabledProviders.length; i++) {
+                var id = String(usage.enabledProviders[i])
                 out.push({ value: id, label: root.providerLabel(id) })
               }
               return out

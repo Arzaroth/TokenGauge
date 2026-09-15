@@ -26,7 +26,9 @@ Item {
 
   readonly property var rows: snapshot && Array.isArray(snapshot.rows) ? snapshot.rows : []
   readonly property var errors: snapshot && Array.isArray(snapshot.errors) ? snapshot.errors : []
-  readonly property var enabled: snapshot && Array.isArray(snapshot.enabled) ? snapshot.enabled : []
+  // Not `enabled`: that is a property every Item already has, and shadowing it
+  // makes the engine warn and leaves the widget with no way to be disabled.
+  readonly property var enabledProviders: snapshot && Array.isArray(snapshot.enabled) ? snapshot.enabled : []
   // Every toggleable provider, not just the enabled ones - the settings pane
   // needs the full list to draw a switch for each.
   readonly property var allProviders: snapshot && Array.isArray(snapshot.providers) ? snapshot.providers : []

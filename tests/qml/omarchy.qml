@@ -38,7 +38,7 @@ Item {
         check.equal("the snapshot landed", usage.rows.length, 2)
         check.equal("the first row is the pinned one", usage.primary, "claude")
         check.equal("the provider list is the full one", usage.allProviders.length, 5)
-        check.equal("enabled is the subset", usage.enabled.length, 2)
+        check.equal("enabled is the subset", usage.enabledProviders.length, 2)
         check.equal("no errors", usage.errors.length, 0)
         check.equal("loading cleared", usage.loading, false)
         check.equal("the revision counter moved", usage.revision, 1)

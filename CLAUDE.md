@@ -9,7 +9,7 @@ on all of them, or it is not done.**
 | ---------- | -------------------------------------------- | --------------- |
 | Waybar     | `crates/tokengauge-waybar` (bar + tooltip)    | yes - the tooltip *is* waybar's panel |
 | Plasma     | `plasma/org.tokengauge.plasmoid`              | yes |
-| GNOME      | `gnome/tokengauge@arzaroth.github.io`         | yes |
+| GNOME      | `gnome/tokengauge@arzaroth.github.io` (TypeScript, see below) | yes |
 | Quickshell | `omarchy/arzaroth.tokengauge`                 | yes |
 | Tray (Windows) | `crates/tokengauge-tray`                  | yes |
 | TUI        | `crates/tokengauge-tui`                       | yes - exempt from layout parity only |
@@ -50,7 +50,9 @@ credential expired weeks ago.
 Adding a section means editing `panel.rs` and nothing else. Adding a *kind*
 means touching all six frontends - `panel::tests::every_panel_frontend_handles_every_section_kind`
 reads each frontend's source and fails when one of them never mentions a kind,
-which is the backstop for the QML and JS frontends the compiler cannot check.
+which is the backstop for a rule no compiler enforces: `SectionKind` is a Rust
+enum, a QML string and a TypeScript union, and none of the three makes a
+frontend that never mentions a kind fail to build.
 
 The TUI's exemption is *layout*, not content: it draws `tokens_by_day` as a bar
 chart rather than a row list, and keeps its sidebar, gauges and keybindings, but
@@ -97,6 +99,29 @@ The instant is the *payload's*, never the process's. The TUI header measured
 `Instant::elapsed` since its own last fetch and so read "updated just now" over
 a snapshot ten minutes old - a refresh that finds the snapshot fresh serves the
 cache, and that is still a refresh as far as the process is concerned.
+
+### The GNOME extension is compiled
+
+It is TypeScript against `@girs/gnome-shell`, and the only frontend in the
+repository that is not installable as it sits. `scripts/build.sh` compiles it
+and assembles all three desktop payloads under `build/frontends/<payload>` -
+the release archive's own layout, so one path serves both. The `.ts` sources
+are dropped from the payload; the GSettings schemas stay XML, because the
+compiled blob belongs on the machine that runs the extension and `install_into`
+is what builds it.
+
+`Frontend.compiled` is what makes that safe: `payload_in` looks under `build/`
+for a compiled frontend and never falls back to its source directory, so
+`--install-frontend gnome` and `--update` from a checkout refuse instead of
+landing TypeScript in `~/.local/share/gnome-shell/extensions`, which the shell
+loads as an error. Release archives are unaffected - they carry the compiled
+extension and resolve through the archive branch as before.
+
+The `--json` contract is declared once, in `gnome/*/panel.ts`, by hand: the
+other side is a Rust struct and there is nothing to generate them from, which
+is why the fields are named exactly as the JSON names them and only the fields
+this frontend reads are declared. The four `panel::tests` that grep frontend
+sources read the `.ts`, not the build output.
 
 ### Rows the spec drops
 
@@ -374,8 +399,8 @@ still catch schema mistakes.
   `[Unreleased]` with every user-facing change.
 - Before finishing: `cargo fmt --all`, `cargo clippy --workspace --all-targets`,
   `cargo test --workspace`. For QML run `qmllint`, for the GNOME extension
-  `node --input-type=module --check`. CI's `frontends` job runs the last two, so
-  they are enforced rather than remembered.
+  `pnpm typecheck` and then `scripts/build.sh`. CI's `frontends` job runs all
+  three, so they are enforced rather than remembered.
 - `scripts/coverage.sh` runs `cargo llvm-cov` over the workspace and then ranks
   the files by uncovered lines; `--html` opens the browsable report. It is a
   local tool, not a CI gate - nothing fails on a number. The gaps it keeps

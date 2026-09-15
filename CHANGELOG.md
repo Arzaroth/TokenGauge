@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The GNOME extension is TypeScript.** It was the one panel frontend with no
+  compiler behind it and the most code to get wrong - 1100 lines reading a JSON
+  contract resolved in Rust, with `panel::tests` grepping its source as the only
+  backstop. It is now written against `@girs/gnome-shell` and typechecked in
+  CI, with the `--json` snapshot declared once in `panel.ts`, so a renamed
+  field on the Rust side stops being something a user discovers as a blank
+  popup. `scripts/build.sh` compiles it and assembles every frontend payload
+  under `build/frontends/`, in the layout the release archive already used;
+  `--install-frontend` and `--update` read it there in a checkout, and refuse
+  rather than install uncompiled sources. Release archives are unchanged - they
+  carry the compiled extension, exactly as they carried the hand-written one.
+
+### Fixed
+
+- **The GNOME preferences window dropped its About row.** `_fillProviders`
+  referred to a `page` that only existed in its caller, so the version
+  comparison between the extension and the binary - the one thing that makes an
+  install skew visible - threw a `ReferenceError` instead of rendering. Found
+  by the compiler on the first typecheck.
+- **A panel rendered before the first snapshot arrived had no colour for an
+  untinted value.** The fallback theme carried four of the six colours, so
+  `neutral` and `separator` resolved to `undefined` until a snapshot landed.
+
 ## [0.31.0] - 2026-09-14
 
 ### Added

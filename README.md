@@ -398,11 +398,21 @@ module keeps working. From a local checkout:
 bash scripts/install-gnome.sh
 ```
 
-The script builds the release binaries, installs the provider logos to
-`~/.local/share/tokengauge/icons`, copies the extension into
+The script compiles the extension's TypeScript, builds the release binaries,
+installs the provider logos to `~/.local/share/tokengauge/icons`, copies the
+extension into
 `~/.local/share/gnome-shell/extensions/tokengauge@arzaroth.github.io`, compiles
 its GSettings schema, and enables it. Reload the shell afterwards - Alt+F2 then
 `r` on Xorg, or log out and back in on Wayland.
+
+The extension is written in TypeScript against `@girs/gnome-shell`, so a
+checkout needs Node and pnpm (npm works, with the caveat in
+`scripts/build.sh`). `scripts/build.sh` compiles it and assembles every
+frontend payload under `build/frontends/`, which is the same layout the release
+archive ships - `tokengauge --install-frontend gnome` reads it there rather
+than from `gnome/`, so it never installs uncompiled sources. Release archives
+carry the compiled extension, so none of this reaches a user installing from
+one.
 
 `tokengauge --install-frontend gnome` and `tokengauge --update` install the
 same extension and compile the schema too, so both need `glib-compile-schemas`

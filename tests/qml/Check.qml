@@ -39,6 +39,39 @@ Item {
         xhr.send()
     }
 
+    /// Read several sources and hand them over as a map keyed by name. Same
+    /// contract as `run`, for the checks that read frontend source rather than
+    /// driving it.
+    function readAll(files, body) {
+        var loaded = {}
+        var remaining = 0
+        for (var key in files) remaining += 1
+        if (remaining === 0) { done(); return }
+        var finish = function () {
+            remaining -= 1
+            if (remaining > 0) return
+            try {
+                body(loaded)
+            } catch (e) {
+                failures += 1
+                console.warn("THREW in " + name + ": " + e + "\n" + (e.stack || ""))
+            }
+            done()
+        }
+        for (var which in files) {
+            (function (key, path) {
+                var xhr = new XMLHttpRequest()
+                xhr.onreadystatechange = function () {
+                    if (xhr.readyState !== XMLHttpRequest.DONE) return
+                    loaded[key] = xhr.responseText
+                    finish()
+                }
+                xhr.open("GET", Qt.resolvedUrl(path))
+                xhr.send()
+            })(which, files[which])
+        }
+    }
+
     function done() {
         console.warn(name + ": " + (checks - failures) + "/" + checks + " checks, "
                      + failures + " failed")

@@ -32,7 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the binary cannot quietly disagree about it.
 - Plasma's data layer moved out of `main.qml` into `Service.qml` so it can be
   instantiated without a plasmoid around it. The applet draws the same thing;
-  `CompactRep` and `FullRep` did not change a line.
+  `CompactRep` and `FullRep` did not change a line, and a check holds every
+  name they call against what `main.qml` still provides - QML resolves those
+  at use time, so a missing one would have been an undefined in a binding
+  rather than anything a linter or a load could catch.
 
 ### Fixed
 
@@ -41,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comparison between the extension and the binary - the one thing that makes an
   install skew visible - threw a `ReferenceError` instead of rendering. Found
   by the compiler on the first typecheck.
+- **The Omarchy widget could not be disabled.** Its data layer declared an
+  `enabled` property holding the list of enabled providers, shadowing the one
+  every QML Item already has. Found by the new harness, which surfaced the
+  engine warning nothing had been reading. It is `enabledProviders` now.
 - **A panel rendered before the first snapshot arrived had no colour for an
   untinted value.** The fallback theme carried four of the six colours, so
   `neutral` and `separator` resolved to `undefined` until a snapshot landed.

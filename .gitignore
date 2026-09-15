@@ -1,2 +1,5 @@
 /target
 __pycache__/
+build/
+node_modules/
+*.shell-extension.zip

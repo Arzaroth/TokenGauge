@@ -4,15 +4,26 @@ import Gtk from 'gi://Gtk';
 
 import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-function shellQuote(s) {
+import type * as Panel from './panel.js';
+
+type RunCallback = (successful: boolean, stdout: string, stderr: string) => void;
+
+function shellQuote(s: string): string {
     return `'${String(s).replace(/'/g, "'\\''")}'`;
+}
+
+// GJS raises GLib.Error, which carries matches(); everything else reaching a
+// catch here is a plain throw, and only its text is ever used.
+function isCancelled(error: unknown): boolean {
+    const candidate = error as {matches?: (domain: unknown, code: number) => boolean};
+    return candidate?.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED) === true;
 }
 
 // gnome-shell and gnome-extensions-app both inherit the session PATH, which
 // often lacks the user bin dirs the installer drops the binaries into.
-function run(command, cancellable, callback) {
+function run(command: string, cancellable: Gio.Cancellable, callback: RunCallback): void {
     const wrapped = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ${command}`;
-    let proc;
+    let proc: Gio.Subprocess;
     try {
         proc = Gio.Subprocess.new(
             ['sh', '-c', wrapped],
@@ -23,22 +34,22 @@ function run(command, cancellable, callback) {
     }
     proc.communicate_utf8_async(null, cancellable, (source, result) => {
         try {
-            const [, stdout, stderr] = source.communicate_utf8_finish(result);
-            callback(source.get_successful(), stdout ?? '', stderr ?? '');
+            const [, stdout, stderr] = source!.communicate_utf8_finish(result);
+            callback(source!.get_successful(), stdout ?? '', stderr ?? '');
         } catch (e) {
-            if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+            if (isCancelled(e))
                 return;
             callback(false, '', `${e}`);
         }
     });
 }
 
-function titleCase(name) {
+function titleCase(name: string): string {
     return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 export default class TokenGaugePreferences extends ExtensionPreferences {
-    fillPreferencesWindow(window) {
+    override async fillPreferencesWindow(window: Adw.PreferencesWindow): Promise<void> {
         const settings = this.getSettings();
         // Callbacks touch rows that die with the window.
         const cancellable = new Gio.Cancellable();
@@ -77,12 +88,17 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
             description: _('Written to ~/.config/tokengauge/config.toml, shared with the Waybar module'),
         });
         page.add(providers);
-        this._fillProviders(settings, providers, cancellable);
+        this._fillProviders(settings, page, providers, cancellable);
     }
 
     // The provider list and their enabled state live in the shared config, not
     // in GSettings, so both come from the snapshot the binary emits.
-    _fillProviders(settings, group, cancellable) {
+    _fillProviders(
+        settings: Gio.Settings,
+        page: Adw.PreferencesPage,
+        group: Adw.PreferencesGroup,
+        cancellable: Gio.Cancellable,
+    ): void {
         const status = new Adw.ActionRow({title: _('Reading providers…')});
         group.add(status);
 
@@ -122,9 +138,9 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
                 status.subtitle = (stderr || '').trim().split('\n')[0] || _('snapshot command failed');
                 return;
             }
-            let snapshot;
+            let snapshot: Panel.Snapshot;
             try {
-                snapshot = JSON.parse(stdout);
+                snapshot = JSON.parse(stdout) as Panel.Snapshot;
             } catch (e) {
                 status.title = _('Could not read providers');
                 status.subtitle = `${e}`;

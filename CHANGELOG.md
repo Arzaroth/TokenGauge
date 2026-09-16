@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **TokenGauge has a licence.** It is dual-licensed MIT OR WTFPL: use it under
   whichever you prefer. Release archives now carry the licence files and
   `THIRD-PARTY.md`.
+- TokenGauge identifies itself as TokenGauge when it asks OpenAI about Codex
+  usage. It had been sending `User-Agent: CodexBar`, inherited from the port
+  that taught it the endpoint.
 - `THIRD-PARTY.md` and an Acknowledgements section credit the projects this one
   is built on, first among them
   [CodexBar](https://github.com/steipete/CodexBar), which is where most of the

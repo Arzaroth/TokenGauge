@@ -772,7 +772,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let mut req = client
         .get(USAGE_URL)
         .header("authorization", format!("Bearer {}", tokens.access_token))
-        .header("user-agent", "CodexBar")
+        .header("user-agent", "TokenGauge")
         .header("accept", "application/json");
     if let Some(account) = tokens.account_id.as_deref().filter(|a| !a.is_empty()) {
         req = req.header("chatgpt-account-id", account);

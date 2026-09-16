@@ -23,7 +23,10 @@ for candidate in qml6 /usr/lib/qt6/bin/qml qml; do
   fi
 done
 if [[ -z $qml ]]; then
-  echo "qml: no Qt QML runtime found - install qt6-declarative" >&2
+  echo "qml: no Qt QML runtime found." >&2
+  echo "  Arch:   pacman -S qt6-declarative" >&2
+  echo "  Ubuntu: apt install qml-qt6 qml6-module-qtquick" >&2
+  echo "  (qt6-declarative-dev-tools ships qmllint but not the runtime)" >&2
   exit 1
 fi
 

@@ -21,6 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A Windows install that did not come from the MSI asked for the Linux asset
   when it updated, and would have handed a zip to the tar extractor. Both now
   follow the platform.
+- **An update finishing while the daemon was drawing its notification could be
+  undone on paper.** The notification wrote the update status back itself,
+  without the lock a check and an update take, carrying the version that was
+  running before the update landed. A panel then went on offering an update to
+  the version already installed, until something checked again.
+- The PATH walk behind the "open the TUI" command and `--doctor` answered for
+  any regular file with the right name. A `kitty` that was never made
+  executable was picked as the terminal, and `--doctor` called it green.
+- **An update could install binaries for another platform.** The release asset
+  was matched by archive suffix as well as by platform, but the matcher fell
+  back to the suffix alone, so a release whose aarch64 build failed handed an
+  aarch64 machine the x86_64 tarball and the update succeeded. A release that
+  does not carry this platform is refused as one.
 
 ## [0.35.0] - 2026-09-16
 

@@ -5,17 +5,15 @@
 //! frontend's "open" button is a spawn of a command it already knows how to
 //! run. No frontend needs to know what a terminal is.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::TokenGaugeConfig;
 
-pub fn which(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
-}
+/// The PATH walk is selvedge's, which answers only for a file that is
+/// actually executable. This copy stopped at `is_file`, so a regular file
+/// named `kitty` and never chmod'd answered for the terminal.
+pub use selvedge::proc::which;
 
 /// The shell command that opens the TUI, honouring `[waybar] tui_command`.
 pub fn tui_command(config: &TokenGaugeConfig) -> String {

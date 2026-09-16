@@ -8,13 +8,7 @@
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 
-/// Milliseconds since the epoch, signed.
-///
-/// Signed because every consumer subtracts two of these and cares about the
-/// sign; the unsigned copy this replaces was cast at each of its call sites.
-pub fn now_ms() -> i64 {
-    Utc::now().timestamp_millis()
-}
+pub use selvedge::state::now_ms;
 
 /// The first of `day`'s month.
 ///

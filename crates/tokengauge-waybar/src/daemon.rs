@@ -51,39 +51,29 @@ pub(crate) fn restart_daemon() -> bool {
         .unwrap_or(false)
 }
 
-/// Fire a one-shot "update available" desktop notification, guarding on the
-/// version so the daemon doesn't nag on every check.
-pub(crate) fn notify_update_available(
-    config: &TokenGaugeConfig,
-    status: &tokengauge_core::UpdateStatus,
-) {
-    let Some(latest) = &status.latest else {
-        return;
-    };
-    if !status.available || status.notified.as_deref() == Some(latest.as_str()) {
-        return;
-    }
-    let title = "TokenGauge: update available";
-    let body = format!(
-        "v{latest} is available (you have v{}). Run tokengauge --update.",
-        status.current
-    );
-    let _ = Command::new("notify-send")
-        .arg("--app-name")
-        .arg("tokengauge")
-        .arg("--hint=int:transient:1")
-        .arg(title)
-        .arg(&body)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-
-    let mut persisted = status.clone();
-    persisted.notified = Some(latest.clone());
-    let _ = selvedge::state::write_update_status(
+/// Fire a one-shot "update available" desktop notification.
+///
+/// The guard and the write-back are selvedge's, because the file is: a check
+/// and an update coordinate over it under a lock, and this used to write it
+/// without one. What is left here is the wording.
+pub(crate) fn notify_update_available(config: &TokenGaugeConfig) {
+    let _ = selvedge::state::announce_if_new(
         &tokengauge_core::update_status_path(&config.cache_file),
-        &persisted,
+        |latest, current| {
+            Command::new("notify-send")
+                .arg("--app-name")
+                .arg("tokengauge")
+                .arg("--hint=int:transient:1")
+                .arg("TokenGauge: update available")
+                .arg(format!(
+                    "v{latest} is available (you have v{current}). Run tokengauge --update."
+                ))
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .is_ok()
+        },
     );
 }
 
@@ -105,7 +95,7 @@ pub(crate) fn daemon_update_loop(config: Arc<Mutex<TokenGaugeConfig>>) {
                         "update",
                         &format!("newer version available: {:?}", status.latest),
                     );
-                    notify_update_available(&snapshot, &status);
+                    notify_update_available(&snapshot);
                 }
             }
             Err(e) => dlog("update", &format!("check failed: {e}")),

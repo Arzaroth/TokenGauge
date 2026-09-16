@@ -35,17 +35,24 @@ Item {
         asked.answer(panelJson, "", 0)
 
         // The answer arrived and every derived property followed it.
-        check.equal("the snapshot landed", usage.rows.length, 2)
-        check.equal("the first row is the pinned one", usage.primary, "claude")
-        check.equal("the provider list is the full one", usage.allProviders.length, 5)
-        check.equal("enabled is the subset", usage.enabledProviders.length, 2)
+        // Against the recording rather than literals, for the same reason the
+        // version is: adding a provider moved `allProviders` from 5 to 6 and
+        // turned this suite red over a number no reader of it can act on.
+        var recorded = JSON.parse(panelJson)
+        check.equal("the snapshot landed", usage.rows.length, recorded.rows.length)
+        check.equal("the first row is the pinned one", usage.primary, recorded.primary)
+        check.equal("the provider list is the full one",
+                    usage.allProviders.length, recorded.providers.length)
+        check.equal("enabled is the subset",
+                    usage.enabledProviders.length, recorded.enabled.length)
+        check.ok("and enabled really is a subset",
+                 usage.enabledProviders.length < usage.allProviders.length)
         check.equal("no errors", usage.errors.length, 0)
         check.equal("loading cleared", usage.loading, false)
         check.equal("the revision counter moved", usage.revision, 1)
         // Against the recording rather than a literal: pinning the number here
         // makes every release edit a test, and a release that forgets turns a
         // green suite red for no reason anyone can act on.
-        var recorded = JSON.parse(panelJson)
         check.equal("the version came off the snapshot", usage.version, recorded.version)
         check.ok("and it is a version", /^[0-9]+\.[0-9]+\.[0-9]+/.test(usage.version))
         check.ok("the update banner has something to draw", usage.updateStatus.available)
@@ -104,7 +111,8 @@ Item {
         if (broken) {
             broken.answer("not json at all", "", 0)
             check.equal("unreadable output is reported", usage.lastError, "Unreadable snapshot")
-            check.equal("and the last good snapshot stays", usage.rows.length, 2)
+            check.equal("and the last good snapshot stays",
+                        usage.rows.length, recorded.rows.length)
         }
     })
 }

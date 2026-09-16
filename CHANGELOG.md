@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-09-16
+
 ### Added
 
 - **OpenRouter.** The first provider TokenGauge reads that sells credit rather
@@ -969,7 +971,8 @@ Major feature batch on top of upstream v0.4.2.
 
 Released by the upstream project, [oorestisime/TokenGauge](https://github.com/oorestisime/TokenGauge/releases). This fork's own history starts at 0.5.0.
 
-[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.31.0...HEAD
+[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.32.0...HEAD
+[0.32.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.30.5...v0.31.0
 [0.30.5]: https://github.com/Arzaroth/TokenGauge/compare/v0.30.4...v0.30.5
 [0.11.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.10.1...v0.11.0

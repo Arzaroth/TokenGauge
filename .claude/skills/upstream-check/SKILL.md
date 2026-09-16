@@ -32,7 +32,7 @@ gh api repos/steipete/CodexBar/releases --paginate \
 CodexBar is a macOS menu-bar app with a much wider provider list than ours.
 Most of every release is noise for us.
 
-**Signal** - anything touching a provider we ship (Claude, Codex, Kimi, Grok,
+**Signal** - anything touching a provider we ship (Claude, Codex, Kimi, Grok, OpenRouter,
 z.ai/GLM), specifically: auth file locations and credential shapes, endpoints
 and their headers, response fields and quota types, window classification and
 labels, ccusage-equivalent cost maths, and pace.

@@ -15,7 +15,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::provider::{check_status, epoch_to_rfc3339, json_int, json_num, trimmed};
+use crate::provider::{check_status, epoch_to_rfc3339, json_int, json_num, jwt_claims, trimmed};
 use crate::{
     Credits, ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8,
     slug,
@@ -89,40 +89,11 @@ fn read_auth(path: &Path) -> Result<AuthFile> {
     serde_json::from_str(&data).context("auth.json was invalid")
 }
 
-/// Base64url, unpadded, which is how a JWT segment is encoded. Written out
-/// because this is the only base64 in the crate and the alternative is a
-/// dependency for twenty lines. `+` and `/` are accepted too, so a token
-/// encoded with the standard alphabet still reads.
-fn base64_decode(s: &str) -> Option<Vec<u8>> {
-    fn sextet(b: u8) -> Option<u32> {
-        Some(match b {
-            b'A'..=b'Z' => u32::from(b - b'A'),
-            b'a'..=b'z' => u32::from(b - b'a') + 26,
-            b'0'..=b'9' => u32::from(b - b'0') + 52,
-            b'-' | b'+' => 62,
-            b'_' | b'/' => 63,
-            _ => return None,
-        })
-    }
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    let (mut acc, mut bits) = (0u32, 0u32);
-    for byte in s.bytes().filter(|b| *b != b'=') {
-        acc = (acc << 6) | sextet(byte)?;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-        }
-    }
-    Some(out)
-}
-
 /// When a JWT access token says it dies. `None` for an opaque or malformed
 /// token, which is the signal to fall back to the age rule rather than to
 /// treat the credential as bad.
 fn jwt_expiry(token: &str) -> Option<DateTime<Utc>> {
-    let claims: Value = serde_json::from_slice(&base64_decode(token.split('.').nth(1)?)?).ok()?;
-    DateTime::from_timestamp(claims.get("exp")?.as_i64()?, 0)
+    DateTime::from_timestamp(jwt_claims(token)?.get("exp")?.as_i64()?, 0)
 }
 
 /// Codex writes no expiry field of its own, so the access token is the only

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Cursor.** The included allowance and the two pools inside it - Cursor
+  models and other models - over one billing cycle, plus the on-demand cap as
+  a named spend limit when it is switched on. Enable with `cursor = true` under
+  `[providers]`; the token comes from the `cursor-agent` CLI's own login, so
+  signing in there is all the setup there is.
+
 ## [0.34.0] - 2026-09-16
 
 ### Added

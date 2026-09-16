@@ -92,6 +92,9 @@ pub enum CreditLimitKind {
     Key,
     /// A cap that comes with a subscription tier.
     Subscription,
+    /// A ceiling on spending *past* an included allowance, billed as it is
+    /// used rather than drawn from a balance held in advance.
+    OnDemand,
     /// A kind from a newer build. Degrades to a generic label rather than
     /// failing the whole snapshot read, exactly as an unknown provider does.
     #[serde(other)]
@@ -237,6 +240,7 @@ impl Default for TokenGaugeConfig {
                 glm: None,
                 openrouter: None,
                 opencode: None,
+                cursor: None,
                 unknown: HashMap::new(),
             },
             cost_source: CostSource::default(),

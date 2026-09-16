@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "Token usage, limits, pace and cost for Claude, Codex, Kimi, Grok, GLM, OpenRouter and opencode Go.",
+  "description": "Token usage, limits, pace and cost for Claude, Codex, Kimi, Grok, GLM, OpenRouter, opencode Go and Cursor.",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "scripts/build.sh",

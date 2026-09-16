@@ -21,7 +21,7 @@ use anyhow::{Result, anyhow};
 use chrono::Utc;
 
 use crate::{
-    ProviderPayload, ProvidersConfig, claude, codex, glm, grok, kimi, opencode, openrouter,
+    ProviderPayload, ProvidersConfig, claude, codex, cursor, glm, grok, kimi, opencode, openrouter,
 };
 
 /// Whether a provider's credentials are currently available, and where from.
@@ -211,6 +211,28 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         auth: opencode_auth,
         enabled_in: |c| c.opencode,
     },
+    ProviderMeta {
+        id: "cursor",
+        label: "Cursor",
+        // The token comes from the CLI's own auth file rather than from a key
+        // the user mints, so the CLI is worth naming: `--doctor` says to run
+        // it rather than to go looking for a key that does not exist.
+        cli: Some("cursor-agent"),
+        glyph: "\u{f1c9}",
+        color_hex: "#6C7086",
+        icon_slug: Some("cursor"),
+        urls: ProviderUrls {
+            dashboard: Some("https://cursor.com/dashboard"),
+            status: Some("https://status.cursor.com"),
+        },
+        // One billing cycle, three pools inside it: the headline allowance and
+        // the two it is made of.
+        windows: ("Included", "Cursor models", "Other models"),
+        natively_read: false,
+        fetch: cursor::fetch,
+        auth: cursor_auth,
+        enabled_in: |c| c.cursor,
+    },
 ];
 
 /// The row for a provider, or `None` for a name from a config or a snapshot
@@ -230,6 +252,7 @@ pub const PROVIDERS: &[&str] = &[
     "glm",
     "openrouter",
     "opencode",
+    "cursor",
 ];
 
 /// The providers a transcript reader can produce events for on its own.
@@ -474,6 +497,34 @@ fn kimi_auth() -> AuthStatus {
     }
 }
 
+/// Cursor's token is not a key the user mints: the `cursor-agent` CLI writes
+/// it, so the check is whether that file holds one - a present file proving
+/// nothing, which is the lesson `claude.rs` records twice.
+fn cursor_auth() -> AuthStatus {
+    if let Some(var) = ["CURSOR_ACCESS_TOKEN", "CURSOR_SESSION_TOKEN"]
+        .into_iter()
+        .find(|v| env_var_present(v))
+    {
+        return AuthStatus {
+            ok: true,
+            detail: format!("{var} set"),
+            hint: "",
+        };
+    }
+    match crate::cursor::access_token() {
+        Ok(_) => AuthStatus {
+            ok: true,
+            detail: crate::cursor::agent_auth_path().display().to_string(),
+            hint: "",
+        },
+        Err(e) => AuthStatus {
+            ok: false,
+            detail: format!("{e}"),
+            hint: "run `cursor-agent` and sign in, or set CURSOR_ACCESS_TOKEN",
+        },
+    }
+}
+
 fn opencode_auth() -> AuthStatus {
     match ["OPENCODE_API_KEY", "OPENCODE_GO_API_KEY"]
         .into_iter()
@@ -704,6 +755,7 @@ mod tests {
                 "glm" => config.glm = Some(true),
                 "openrouter" => config.openrouter = Some(true),
                 "opencode" => config.opencode = Some(true),
+                "cursor" => config.cursor = Some(true),
                 other => panic!("{other} has no field in this test - add it with the row"),
             }
             assert_eq!(

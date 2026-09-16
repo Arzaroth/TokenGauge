@@ -95,6 +95,87 @@ There are two routes and the cheap one is not the obvious one:
 
 Do (1) first.
 
+### The remaining providers, and what actually blocks each
+
+`openrouter` and `opencode` landed in 0.32.0 and 0.33.0. The four below were
+scoped at the same time; the research is here so it is not redone. CodexBar
+ships all of them, but it is a macOS app with an embedded browser and automatic
+cookie import, so *how* it reaches one says little about whether we can.
+`akitaonrails/ai-usagebar` is the better precedent: same language, no browser.
+
+**Cursor** shipped in this branch, and cost no dependency after all. The
+`rusqlite` question was a false alarm: `state.vscdb` is one of *two* sources,
+and the other is a plain `auth.json` the `cursor-agent` CLI writes. Reading the
+IDE's SQLite is still the only route for someone who runs the desktop app and
+never the CLI - worth adding behind an optional feature if anyone asks, and not
+before.
+
+**Devin** needs no new dependency and has the worst credential story: a bearer
+token the user copies out of `app.devin.ai` by hand, which expires. CodexBar
+offers nothing better. It does carry an "Extra usage balance" alongside ACU
+consumption, which is a second `CreditLimit` case worth having. **Effort: S**
+for the fetcher, and the paste-and-expire workflow is the real cost - decide
+whether that is a provider worth shipping at all before building it.
+
+**Meta (Muse Spark)** is **closed for now, and the check is done.** It is a
+credits provider in the same shape as OpenRouter - per-token pricing, $20 of
+credits on signup, a cheaper Contributor tier with a 100 rpm cap - so
+`Credits`, `CreditLimit` and `ReportedCost` would have fitted it without new
+vocabulary. But the Meta Model API is `https://api.meta.ai/v1/messages`, an
+OpenAI-compatible chat endpoint with an API key, and **no credits or usage
+endpoint is documented**: the balance lives in the dashboard. That is the same
+position OpenAI's own API is in, and it is why there is no `openai` provider
+here either.
+
+Reopen it if any of these change: Meta documents a balance endpoint; the
+dashboard is found to call one an ordinary key can reach; or the preview leaves
+US-only with a fuller API. Nothing to build until then, and neither CodexBar
+nor ai-usagebar has anything to copy.
+
+**T3 Chat** is the one to leave. A cookie with no local file behind it, no API,
+and message-count limits rather than anything the panel models. It is on the
+upstream-check Noise list for that reason.
+
+Meta's check is done and closed it. Cursor shipped. Devin is what is left, and
+it is a judgement call about the paste-and-expire workflow rather than a
+technical one.
+
+### Two shipped providers report a balance TokenGauge throws away
+
+`Credits` arrived with OpenRouter and Cursor, and Codex already filled it. The
+five providers that predate it were swept against CodexBar to settle whether any
+of them reports a balance that never reaches the wire. Two do.
+
+**Claude carries `extra_usage` on the response we already fetch.** The OAuth
+usage body at `api.anthropic.com/api/oauth/usage` has an `extra_usage` object -
+`is_enabled`, `used_credits`, `monthly_limit`, `utilization`, `currency` - and
+`UsageResponse` never names it, so it flattens into `rest` and is discarded.
+That is the overage wallet: a user who has turned extra usage on is spending
+money the panel cannot show. `is_enabled` gates it, and on an Enterprise account
+`monthly_limit` is a spend limit rather than a cap, a distinction CodexBar draws
+off the login method. **Effort: S, and no new request** - the bytes are already
+in hand.
+
+**Grok reports an on-demand cap, on an endpoint we do not call.** `grok.rs`
+talks to `grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig` and scans
+the protobuf for a percentage. CodexBar has moved off that endpoint: it now
+wants a browser-held WKE keypair, and the bearer-token path is
+`https://cli-chat-proxy.grok.com/v1/billing?format=credits` - plain JSON, the
+same access token, plus `x-xai-token-auth: xai-grok-cli`. Its response carries
+`onDemandCap` and `onDemandUsed` as `{ "val": n }`, which is
+`CreditLimit { kind: OnDemand }` unchanged from Cursor. **Effort: M**, and the
+deprecation is the better reason to do it: the endpoint we depend on is the one
+upstream walked away from.
+
+**Kimi and GLM are clear, and the negatives are the point.** Both look like they
+carry a balance and neither does for the account TokenGauge tracks. Kimi's
+`remaining` is a window denominator - `to_window` uses it to derive `used` from
+`limit - remaining` and for nothing else - and the balance CodexBar shows under
+Kimi's name belongs to a *different account*, the pay-as-you-go Open Platform
+key it models as its own `Moonshot` provider. GLM's `CREDIT_LIMIT` is a
+percentage quota window `is_quota_limit` already handles, and z.ai's balance
+endpoint is BigModel CN-only, nil for the global region the coding plan sells.
+
 ### A macOS surface
 
 macOS is the strangest hole in the project. `claude.rs` reads the macOS keychain

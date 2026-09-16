@@ -560,6 +560,7 @@ fn credit_limit_title(kind: CreditLimitKind) -> &'static str {
     match kind {
         CreditLimitKind::Key => "Key limit",
         CreditLimitKind::Subscription => "Plan limit",
+        CreditLimitKind::OnDemand => "On-demand cap",
         // A kind this build does not know still draws, under a word that is
         // true of every cap there is.
         CreditLimitKind::Other => "Spend limit",

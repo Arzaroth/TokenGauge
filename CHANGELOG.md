@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is built on, first among them
   [CodexBar](https://github.com/steipete/CodexBar), which is where most of the
   provider protocols were worked out and which `pace.rs`, the provider icons
-  and the credits model all come from.
+  and the credits model all come from. The Omarchy widget carries
+  [omarchy](https://github.com/basecamp/omarchy)'s MIT notice, which it owed:
+  it is adapted from their own `omarchy.agents` plugin.
 
 ## [0.35.1] - 2026-09-16
 

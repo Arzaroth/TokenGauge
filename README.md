@@ -709,7 +709,9 @@ repository this one was forked from - "Waybar & Tui support for codexbar". This
 fork's own history starts at 0.5.0.
 
 **[basecamp/omarchy](https://github.com/basecamp/omarchy)** is what the
-Quickshell widget plugs into, adapted from their `omarchy.agents` widget.
+Quickshell widget plugs into, and the widget is adapted from their own
+`omarchy.agents` plugin - about a quarter of its lines are theirs. MIT, and a
+third-party plugin rather than an endorsed one.
 
 **[akitaonrails/ai-usagebar](https://github.com/akitaonrails/ai-usagebar)** is a
 parallel implementation in the same language. Nothing is copied from it, but it

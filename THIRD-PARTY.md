@@ -39,12 +39,20 @@ a repository that grants no terms is not something a downstream licence can
 fix, and anyone redistributing TokenGauge should know the pre-0.5.0 history is
 in that position.
 
-## basecamp/omarchy
+## basecamp/omarchy - MIT
 
-<https://github.com/basecamp/omarchy>
+<https://github.com/basecamp/omarchy>, Copyright (c) David Heinemeier Hansson.
 
 `omarchy/arzaroth.tokengauge` is a third-party plugin for omarchy-shell,
-adapted from their `omarchy.agents` widget. Nothing is copied.
+adapted from their own `omarchy.agents` plugin (`shell/plugins/agents/`). It
+carries structure from it: the panel's Flickable and KeyboardPanel
+scaffolding, the IpcHandler surface, and the shape a plugin presents to the
+shell. Roughly a quarter of the widget's lines are theirs.
+
+Their MIT notice travels with the payload in
+`omarchy/arzaroth.tokengauge/NOTICE`.
+
+This is a third-party plugin and is not endorsed by the Omarchy project.
 
 ## akitaonrails/ai-usagebar - MIT
 

@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   running before the update landed. A panel then went on offering an update to
   the version already installed, until something checked again.
 - The PATH walk behind the "open the TUI" command and `--doctor` answered for
-  any readable file with the right name. A `kitty` that was never made
+  any regular file with the right name. A `kitty` that was never made
   executable was picked as the terminal, and `--doctor` called it green.
 - **An update could install binaries for another platform.** The release asset
   was matched by archive suffix as well as by platform, but the matcher fell

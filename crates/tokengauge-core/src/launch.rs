@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use crate::TokenGaugeConfig;
 
 /// The PATH walk is selvedge's, which answers only for a file that is
-/// actually executable. This copy stopped at `is_file`, so a readable file
+/// actually executable. This copy stopped at `is_file`, so a regular file
 /// named `kitty` and never chmod'd answered for the terminal.
 pub use selvedge::proc::which;
 

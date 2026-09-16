@@ -163,6 +163,7 @@ impl Default for TokenGaugeConfig {
                 kimi: None,
                 grok: None,
                 glm: None,
+                openrouter: None,
                 unknown: HashMap::new(),
             },
             cost_source: CostSource::default(),

@@ -16,7 +16,14 @@
 //! | --- | --- | --- |
 //! | `total_credits` - `total_usage` | [`Credits::remaining`] | the balance, the headline |
 //! | `limit`, `limit_remaining` | [`CreditLimit`], and a window | a cap is both money and exhaustible |
-//! | `usage_daily` / `weekly` / `monthly` | `CostInfo` | spend over a period is cost, not a limit |
+//! | `usage_daily` / `weekly` / `monthly` | nowhere, yet | spend over a period is cost, not a limit |
+//!
+//! That last row is unfinished on purpose. The three figures are OpenRouter's
+//! own billing numbers and are better than anything a transcript reader could
+//! produce, but `CostInfo` is assembled from readers and ccusage, and there is
+//! no channel for a provider that reports its own cost. They are parsed and
+//! dropped until there is one; inventing a side door for one provider is how
+//! the cost pipeline stops having one shape.
 //!
 //! The third row is the one worth stating out loud: those three look like
 //! TokenGauge's three windows and are not. A window is a quota you can exhaust;
@@ -109,11 +116,18 @@ struct KeyData {
     limit: Option<f64>,
     #[serde(default)]
     limit_remaining: Option<f64>,
+    // Read off the wire and routed nowhere yet - see the module note. Kept
+    // rather than dropped because they are the contract, and a test pins that
+    // they parse; deleting them means rediscovering the API shape when the
+    // channel for a self-reported cost arrives.
     #[serde(default)]
+    #[allow(dead_code)]
     usage_daily: Option<f64>,
     #[serde(default)]
+    #[allow(dead_code)]
     usage_weekly: Option<f64>,
     #[serde(default)]
+    #[allow(dead_code)]
     usage_monthly: Option<f64>,
     #[serde(default)]
     is_free_tier: Option<bool>,
@@ -133,20 +147,7 @@ fn money(value: Option<f64>) -> Option<f64> {
 // Mapping
 // ---------------------------------------------------------------------------
 
-/// The spend this key has made, by period. Cost, not limits - see the module
-/// note. `None` when OpenRouter reported nothing usable for any of them, so a
-/// cost section is dropped rather than drawn as three zeroes.
-pub(crate) struct KeySpend {
-    pub today_usd: f64,
-    pub weekly_usd: f64,
-    pub monthly_usd: f64,
-}
-
-fn to_payload(
-    credits: CreditsData,
-    key: KeyData,
-    now: DateTime<Utc>,
-) -> (ProviderPayload, Option<KeySpend>) {
+fn to_payload(credits: CreditsData, key: KeyData, now: DateTime<Utc>) -> ProviderPayload {
     // A cap on the key is the only thing here that behaves like a window: it
     // has a ceiling, a consumed part, and it is exhaustible.
     let limit = money(key.limit);
@@ -230,15 +231,7 @@ fn to_payload(
         });
     }
 
-    let spend = [key.usage_daily, key.usage_weekly, key.usage_monthly];
-    let has_spend = spend.iter().any(|v| money(*v).is_some());
-    let spend = has_spend.then(|| KeySpend {
-        today_usd: money(key.usage_daily).unwrap_or(0.0),
-        weekly_usd: money(key.usage_weekly).unwrap_or(0.0),
-        monthly_usd: money(key.usage_monthly).unwrap_or(0.0),
-    });
-
-    (payload, spend)
+    payload
 }
 
 // ---------------------------------------------------------------------------
@@ -246,16 +239,6 @@ fn to_payload(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
-    let (payload, _spend) = fetch_with_spend(timeout)?;
-    Ok(vec![payload])
-}
-
-/// The fetch, with the key's own spend figures handed back separately.
-///
-/// They are cost rather than usage, and the cost side of a row is assembled
-/// elsewhere, so they leave here as their own value rather than being forced
-/// into the payload.
-pub(crate) fn fetch_with_spend(timeout: Duration) -> Result<(ProviderPayload, Option<KeySpend>)> {
     let now = Utc::now();
     let key = api_key()?;
     let (credits_url, key_url) = endpoints()?;
@@ -264,7 +247,7 @@ pub(crate) fn fetch_with_spend(timeout: Duration) -> Result<(ProviderPayload, Op
     let credits: CreditsData = get(&client, &credits_url, &key)?;
     let key_data: KeyData = get(&client, &key_url, &key)?;
 
-    Ok(to_payload(credits, key_data, now))
+    Ok(vec![to_payload(credits, key_data, now)])
 }
 
 fn get<T: serde::de::DeserializeOwned>(
@@ -344,7 +327,7 @@ mod tests {
     /// says nothing about what is left.
     #[test]
     fn the_balance_is_credit_bought_minus_credit_spent() {
-        let (payload, _) = to_payload(credits(Some(100.0), Some(25.5)), key(), at());
+        let payload = to_payload(credits(Some(100.0), Some(25.5)), key(), at());
         assert_eq!(payload.credits.and_then(|c| c.remaining), Some(74.5));
     }
 
@@ -353,14 +336,14 @@ mod tests {
     /// credits, and "-$0.30 left" reads as a bug rather than as an overdraft.
     #[test]
     fn an_overspend_floors_at_zero_rather_than_going_negative() {
-        let (payload, _) = to_payload(credits(Some(10.0), Some(10.3)), key(), at());
+        let payload = to_payload(credits(Some(10.0), Some(10.3)), key(), at());
         assert_eq!(payload.credits.and_then(|c| c.remaining), Some(0.0));
     }
 
     /// The headline gauge is the share of purchased credit already spent.
     #[test]
     fn the_leading_window_is_the_share_of_credit_spent() {
-        let (payload, _) = to_payload(credits(Some(200.0), Some(50.0)), key(), at());
+        let payload = to_payload(credits(Some(200.0), Some(50.0)), key(), at());
         let usage = payload.usage.expect("usage");
         assert_eq!(usage.primary.expect("credit window").used_percent, Some(25));
     }
@@ -372,7 +355,7 @@ mod tests {
         let mut k = key();
         k.limit = Some(50.0);
         k.limit_remaining = Some(12.5);
-        let (payload, _) = to_payload(credits(Some(100.0), Some(10.0)), k, at());
+        let payload = to_payload(credits(Some(100.0), Some(10.0)), k, at());
         let usage = payload.usage.expect("usage");
         assert_eq!(usage.primary.expect("credit window").used_percent, Some(10));
         assert_eq!(usage.secondary.expect("key window").used_percent, Some(75));
@@ -382,43 +365,31 @@ mod tests {
     /// empty gauge reads as "nothing used" rather than "no such limit".
     #[test]
     fn a_key_with_no_cap_draws_no_second_window() {
-        let (payload, _) = to_payload(credits(Some(100.0), Some(10.0)), key(), at());
+        let payload = to_payload(credits(Some(100.0), Some(10.0)), key(), at());
         assert!(payload.usage.expect("usage").secondary.is_none());
     }
 
     /// The three `usage_*` fields look like TokenGauge's three windows and are
     /// not: they are money already spent, with nothing to be a fraction of.
-    /// They leave as cost.
+    /// They are read off the wire and deliberately go nowhere yet - routing
+    /// them needs a channel for a provider that reports its own cost, which
+    /// does not exist. What this holds is that they never become a window.
     #[test]
-    fn period_spend_leaves_as_cost_and_never_as_a_window() {
-        let (payload, spend) = to_payload(credits(Some(100.0), Some(10.0)), key(), at());
-        let spend = spend.expect("spend");
-        assert_eq!(spend.today_usd, 1.25);
-        assert_eq!(spend.weekly_usd, 8.0);
-        assert_eq!(spend.monthly_usd, 31.5);
+    fn period_spend_is_read_but_never_becomes_a_window() {
+        let parsed: Envelope<KeyData> = serde_json::from_str(
+            r#"{"data":{"usage_daily":1.25,"usage_weekly":8.0,"usage_monthly":31.5}}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.data.usage_daily, Some(1.25));
+        assert_eq!(parsed.data.usage_monthly, Some(31.5));
+
+        let payload = to_payload(credits(Some(100.0), Some(10.0)), key(), at());
+        let usage = payload.usage.expect("usage");
+        assert!(usage.tertiary.is_none(), "monthly spend became a window");
         assert!(
-            payload.usage.expect("usage").tertiary.is_none(),
-            "monthly spend became a window"
+            usage.secondary.is_none(),
+            "this key has no cap, so nothing but the credit gauge is drawn"
         );
-    }
-
-    /// A key that has spent nothing yet reports zeroes; a response that carries
-    /// no spend at all reports nothing, and the two must not look alike.
-    #[test]
-    fn a_response_with_no_spend_at_all_yields_no_cost_rows() {
-        let mut k = key();
-        k.usage_daily = None;
-        k.usage_weekly = None;
-        k.usage_monthly = None;
-        let (_, spend) = to_payload(credits(Some(100.0), Some(10.0)), k, at());
-        assert!(spend.is_none());
-
-        let mut zeroed = key();
-        zeroed.usage_daily = Some(0.0);
-        zeroed.usage_weekly = Some(0.0);
-        zeroed.usage_monthly = Some(0.0);
-        let (_, spend) = to_payload(credits(Some(100.0), Some(10.0)), zeroed, at());
-        assert!(spend.is_some(), "a real zero is a figure, not an absence");
     }
 
     /// A free-tier key has no purchased credit, so the balance gauge would read
@@ -427,7 +398,7 @@ mod tests {
     fn a_free_tier_key_is_named_rather_than_gauged() {
         let mut k = key();
         k.is_free_tier = Some(true);
-        let (payload, _) = to_payload(credits(Some(0.0), Some(0.0)), k, at());
+        let payload = to_payload(credits(Some(0.0), Some(0.0)), k, at());
         let usage = payload.usage.expect("usage");
         assert!(
             usage.primary.is_none(),
@@ -447,7 +418,7 @@ mod tests {
         assert_eq!(money(Some(f64::NAN)), None);
         assert_eq!(money(Some(f64::INFINITY)), None);
 
-        let (payload, _) = to_payload(credits(Some(f64::NAN), Some(10.0)), key(), at());
+        let payload = to_payload(credits(Some(f64::NAN), Some(10.0)), key(), at());
         assert!(payload.usage.expect("usage").primary.is_none());
         assert!(payload.credits.is_none());
     }

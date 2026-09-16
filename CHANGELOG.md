@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **OpenRouter.** The first provider TokenGauge reads that sells credit rather
+  than a plan: the panel shows the account balance, and the key's own spend cap
+  under it when the key has one. Enable it with `openrouter = true` under
+  `[providers]` and set `OPENROUTER_API_KEY`.
+- **A credit balance can have a named cap in front of it.** `Credits` held one
+  number, and a provider can have two at once - an account balance every key
+  draws on, and a cap on the thing being used. OpenRouter is exactly that, and
+  so is opencode, where a Go subscription's caps sit in front of the Zen
+  balance it falls back to. The cap carries its own title, resolved in the core
+  like every other string a user reads, and draws under the balance because it
+  is the narrower of the two.
+
 ### Changed
 
 - **The GNOME extension is TypeScript.** It was the one panel frontend with no

@@ -189,7 +189,7 @@ population is on macOS.
 
 - **First slice, ~a day:** add `aarch64-apple-darwin` to CI and the release
   matrix. This alone earns its keep by *compiling* the keychain path, and gives
-  Mac users the TUI. Mind `update::asset_for` - `CLAUDE.md` is emphatic that
+  Mac users the TUI. Mind selvedge's `arch_target` - `CLAUDE.md` is emphatic that
   naming a new release asset carelessly breaks `--update` on machines whose
   binaries can no longer be changed.
 - **Second slice:** a menu bar app. "Just reuse the tray" understates it - the

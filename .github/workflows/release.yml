@@ -212,7 +212,7 @@ jobs:
       #
       # `win64`, deliberately not `windows-x86_64`: every updater already
       # shipped picks its download by substring and would happily hand this
-      # package to the zip extractor. See ARCHIVE_SUFFIX in update.rs.
+      # package to the zip extractor. See ARCHIVE_SUFFIX in selvedge.
       - name: Build MSI
         shell: pwsh
         env:

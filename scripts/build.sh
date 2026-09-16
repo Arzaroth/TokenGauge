@@ -6,12 +6,12 @@
 # extension's TypeScript is the only thing that needs a compiler.
 #
 # The layout is the release archive's - build/frontends/<payload> - because
-# `frontend::payload_in` resolves a checkout's payloads there. Installing the
-# GNOME extension's source directory would land TypeScript in
+# selvedge's `frontend::payload_in` resolves a checkout's payloads there.
+# Installing the GNOME extension's source directory would land TypeScript in
 # ~/.local/share/gnome-shell/extensions and the shell would refuse it.
 #
 # The GSettings schemas are deliberately left as XML: the compiled blob is
-# built on the machine that runs the extension, by `install_into` or by
+# built on the machine that runs the extension, by selvedge's `install_into` or by
 # scripts/install-gnome.sh, and a blob built here would ship in the archive.
 set -euo pipefail
 

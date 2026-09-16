@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The updater and the payload installer are now the
+  [selvedge](https://github.com/Arzaroth/selvedge) crate, shared with
+  TailGauge, rather than 1,500 lines kept in step by hand in two repositories.
+  Nothing changes for a user: the same archive is fetched, the same binaries
+  and frontends are replaced, and the cached update status stays at the path
+  it has always been written to.
+
+### Fixed
+
+- A Windows install that did not come from the MSI asked for the Linux asset
+  when it updated, and would have handed a zip to the tar extractor. Both now
+  follow the platform.
+
 ## [0.35.0] - 2026-09-16
 
 ### Added

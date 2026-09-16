@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-09-16
+
 ### Added
 
 - **Cursor.** The included allowance and the two pools inside it - Cursor
@@ -1010,7 +1012,8 @@ Major feature batch on top of upstream v0.4.2.
 
 Released by the upstream project, [oorestisime/TokenGauge](https://github.com/oorestisime/TokenGauge/releases). This fork's own history starts at 0.5.0.
 
-[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.34.0...HEAD
+[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.35.0...HEAD
+[0.35.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.31.0...v0.32.0

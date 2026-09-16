@@ -704,9 +704,13 @@ for a plan, what the payload looks like, where each CLI keeps its credential.
 `pace.rs` is a port of its `UsagePace.swift`, the provider icons are its files,
 and the credits model follows its `CreditsSnapshot`. MIT.
 
-**[oorestisime/TokenGauge](https://github.com/oorestisime/TokenGauge)** is the
-repository this one was forked from - "Waybar & Tui support for codexbar". This
-fork's own history starts at 0.5.0.
+**[Orestis Ioannou](https://github.com/oorestisime)** started TokenGauge -
+"Waybar & Tui support for codexbar" - and this fork's own history begins at
+0.5.0. The install and update scripts, the CI and release workflows and parts
+of the README are still substantially his.
+
+**[boubou666](https://github.com/boubou666)** wrote the Windows half: the tray,
+the PowerShell installer, and the packaging behind them.
 
 **[basecamp/omarchy](https://github.com/basecamp/omarchy)** is what the
 Quickshell widget plugs into, and the widget is adapted from their own

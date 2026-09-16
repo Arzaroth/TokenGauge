@@ -1,0 +1,47 @@
+{
+  "payloads": [
+    {
+      "provider": "claude",
+      "source": "oauth",
+      "stale": false,
+      "usage": {
+        "primary": {"usedPercent": 31, "resetsAt": "{{SESSION_RESET}}", "windowMinutes": 300},
+        "secondary": {"usedPercent": 68, "resetsAt": "{{WEEKLY_RESET}}", "windowMinutes": 10080},
+        "updatedAt": "{{UPDATED_AT}}",
+        "loginMethod": "claude.ai"
+      }
+    },
+    {
+      "provider": "codex",
+      "source": "oauth",
+      "stale": false,
+      "usage": {
+        "primary": {"usedPercent": 12, "resetsAt": "{{SESSION_RESET}}", "windowMinutes": 300},
+        "secondary": {"usedPercent": 44, "resetsAt": "{{WEEKLY_RESET}}", "windowMinutes": 10080},
+        "updatedAt": "{{UPDATED_AT}}",
+        "loginMethod": "chatgpt"
+      }
+    }
+  ],
+  "errors": [],
+  "costs": {
+    "claude": {
+      "today_usd": 12.5,
+      "today_tokens": 384000,
+      "monthly_usd": 210.0,
+      "monthly_tokens": 9000000
+    },
+    "codex": {
+      "today_usd": 3.25,
+      "today_tokens": 91000,
+      "monthly_usd": 48.0,
+      "monthly_tokens": 2100000
+    }
+  },
+  "meta": {
+    "schemaVersion": 1,
+    "device": {"machineId": "e2e", "hostname": "e2e"},
+    "updatedAtMs": {{UPDATED_AT_MS}},
+    "providers": ["claude", "codex"]
+  }
+}

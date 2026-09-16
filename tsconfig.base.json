@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "newLine": "lf",
+    "removeComments": false,
+    "declaration": false,
+    "sourceMap": false
+  }
+}

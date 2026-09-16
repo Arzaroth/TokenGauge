@@ -1,0 +1,16 @@
+{
+  "name": "tokengauge",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Token usage, limits, pace and cost for Claude, Codex, Kimi, Grok and GLM.",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "build": "scripts/build.sh",
+    "typecheck": "tsc -p tsconfig.gnome.json --noEmit"
+  },
+  "devDependencies": {
+    "@girs/gnome-shell": "50.0.4",
+    "typescript": "~5.7.2"
+  }
+}

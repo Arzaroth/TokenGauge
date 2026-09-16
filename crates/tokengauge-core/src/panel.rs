@@ -1475,7 +1475,7 @@ mod tests {
     /// The second screen's backstop, and the record of why waybar is not in it.
     ///
     /// The test above covers the panel; this covers the history screen, which
-    /// the compiler cannot check on three of these five either. Waybar is
+    /// no compiler checks the drawing of on any of these five. Waybar is
     /// deliberately absent: its tooltip is a hover surface with no second
     /// screen and no way to gain one, so a waybar user's history is the TUI,
     /// which left-click has opened since long before there was any history to
@@ -1491,7 +1491,7 @@ mod tests {
                 "plasma/org.tokengauge.plasmoid/contents/ui",
                 "qml",
             ),
-            ("gnome", "gnome/tokengauge@arzaroth.github.io", "js"),
+            ("gnome", "gnome/tokengauge@arzaroth.github.io", "ts"),
             ("quickshell", "omarchy/arzaroth.tokengauge", "qml"),
         ];
 
@@ -1527,7 +1527,7 @@ mod tests {
                 "plasma/org.tokengauge.plasmoid/contents/ui",
                 "qml",
             ),
-            ("gnome", "gnome/tokengauge@arzaroth.github.io", "js"),
+            ("gnome", "gnome/tokengauge@arzaroth.github.io", "ts"),
             ("quickshell", "omarchy/arzaroth.tokengauge", "qml"),
         ];
 
@@ -1619,7 +1619,7 @@ mod tests {
                 "plasma/org.tokengauge.plasmoid/contents/ui",
                 "qml",
             ),
-            ("gnome", "gnome/tokengauge@arzaroth.github.io", "js"),
+            ("gnome", "gnome/tokengauge@arzaroth.github.io", "ts"),
             ("quickshell", "omarchy/arzaroth.tokengauge", "qml"),
         ];
 
@@ -1635,7 +1635,9 @@ mod tests {
 
     /// Every frontend that draws the panel draws every kind of section in it.
     ///
-    /// The backstop for the QML and JS frontends the compiler cannot check.
+    /// The backstop for a rule no compiler enforces: `SectionKind` is a Rust
+    /// enum, a QML string and a TypeScript union, and none of the three makes
+    /// a frontend that never mentions a kind fail to build.
     #[test]
     fn every_panel_frontend_handles_every_section_kind() {
         // Each frontend is named by its *directory* and the extensions its
@@ -1661,7 +1663,7 @@ mod tests {
                 "qml",
                 "\"",
             ),
-            ("gnome", "gnome/tokengauge@arzaroth.github.io", "js", "'"),
+            ("gnome", "gnome/tokengauge@arzaroth.github.io", "ts", "'"),
             ("quickshell", "omarchy/arzaroth.tokengauge", "qml", "\""),
         ];
 

@@ -327,8 +327,16 @@ fn to_payload(
 /// Build the usage endpoint, tolerating a `KIMI_CODE_BASE_URL` override that
 /// already carries part of the `coding/v1` path.
 fn usage_endpoint() -> Result<String> {
-    let base =
-        cleaned(std::env::var(BASE_URL_ENV).ok()).unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+    usage_endpoint_for(cleaned(std::env::var(BASE_URL_ENV).ok()).as_deref())
+}
+
+/// The half of [`usage_endpoint`] that is not the environment.
+///
+/// Split out so it can be tested: a base URL is the one thing here a user can
+/// get wrong, and `std::env::set_var` is unsafe since the 2024 edition, so a
+/// test that went through the variable would have to be the only test running.
+fn usage_endpoint_for(override_base: Option<&str>) -> Result<String> {
+    let base = override_base.unwrap_or(DEFAULT_BASE_URL);
     let base = base.trim_end_matches('/');
     if !base.starts_with("https://") {
         return Err(anyhow!("Kimi base URL must use HTTPS"));
@@ -399,6 +407,64 @@ fn unix_now_secs() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every shape of `KIMI_CODE_BASE_URL` a user can plausibly set.
+    ///
+    /// The override exists because Kimi is also sold through resellers on
+    /// their own hosts, and people paste whatever their vendor's docs showed
+    /// them - which is sometimes the bare host, sometimes the host with
+    /// `/coding` on it, and sometimes the whole `/coding/v1` prefix. All three
+    /// have to land on the same endpoint or the fetch 404s with nothing to
+    /// say about why.
+    #[test]
+    fn a_base_url_lands_on_the_same_endpoint_however_much_of_it_was_pasted() {
+        let bare = usage_endpoint_for(Some("https://example.test")).unwrap();
+        assert_eq!(bare, "https://example.test/coding/v1/usages");
+        assert_eq!(
+            usage_endpoint_for(Some("https://example.test/coding")).unwrap(),
+            "https://example.test/coding/v1/usages"
+        );
+        assert_eq!(
+            usage_endpoint_for(Some("https://example.test/coding/v1")).unwrap(),
+            "https://example.test/coding/v1/usages"
+        );
+        // A trailing slash is what a copy out of a browser bar carries.
+        assert_eq!(
+            usage_endpoint_for(Some("https://example.test/")).unwrap(),
+            bare
+        );
+        assert_eq!(
+            usage_endpoint_for(Some("https://example.test/coding/v1///")).unwrap(),
+            "https://example.test/coding/v1/usages"
+        );
+    }
+
+    /// The token is sent as a bearer header, so a base URL that downgrades the
+    /// transport would put it on the wire in the clear. Refusing is the only
+    /// safe answer, and it must not be possible to talk the check round with a
+    /// prefix that merely contains `https`.
+    #[test]
+    fn a_base_url_that_is_not_https_is_refused_rather_than_used() {
+        for bad in [
+            "http://example.test",
+            "http://example.test/coding/v1",
+            "ftp://example.test",
+            "example.test",
+            "//example.test",
+            "httpsx://example.test",
+            "http://https.example.test",
+        ] {
+            let err = usage_endpoint_for(Some(bad)).unwrap_err().to_string();
+            assert!(err.contains("HTTPS"), "{bad} was accepted: {err}");
+        }
+    }
+
+    #[test]
+    fn no_override_uses_the_default_host() {
+        let endpoint = usage_endpoint_for(None).unwrap();
+        assert!(endpoint.starts_with(DEFAULT_BASE_URL), "{endpoint}");
+        assert!(endpoint.ends_with("/usages"), "{endpoint}");
+    }
 
     fn resp(json: &str) -> UsageResponse {
         serde_json::from_str(json).expect("fixture parses")

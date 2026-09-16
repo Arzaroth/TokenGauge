@@ -11,7 +11,9 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
 ICON_DIR="$DATA_DIR/tokengauge/icons"
 UUID="tokengauge@arzaroth.github.io"
-SRC_DIR="$REPO_DIR/gnome/$UUID"
+# The extension is TypeScript; scripts/build.sh compiles it and assembles the
+# payload here, in the same layout the release archive uses.
+SRC_DIR="$REPO_DIR/build/frontends/gnome/$UUID"
 EXT_DIR="$DATA_DIR/gnome-shell/extensions/$UUID"
 
 if [[ -t 1 ]]; then B="\033[0;34m"; G="\033[0;32m"; Y="\033[0;33m"; R="\033[0;31m"; Z="\033[0m"; else B=""; G=""; Y=""; R=""; Z=""; fi
@@ -29,6 +31,9 @@ command -v cargo >/dev/null 2>&1 || { fail "cargo not found - install Rust to bu
 if ! command -v gnome-shell >/dev/null 2>&1; then
   warn "gnome-shell not found on PATH - installing anyway."
 fi
+
+info "Building the extension..."
+"$REPO_DIR/scripts/build.sh" >/dev/null
 
 info "Building release binaries..."
 cargo build --release --manifest-path "$REPO_DIR/Cargo.toml" \

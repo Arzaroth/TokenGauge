@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The GNOME extension is TypeScript.** It was the one panel frontend with no
+  compiler behind it and the most code to get wrong - 1100 lines reading a JSON
+  contract resolved in Rust, with `panel::tests` grepping its source as the only
+  backstop. It is now written against `@girs/gnome-shell` and typechecked in
+  CI, with the `--json` snapshot declared once in `panel.ts`, so a renamed
+  field on the Rust side stops being something a user discovers as a blank
+  popup. `scripts/build.sh` compiles it and assembles every frontend payload
+  under `build/frontends/`, in the layout the release archive already used;
+  `--install-frontend` and `--update` read it there in a checkout, and refuse
+  rather than install uncompiled sources. Release archives are unchanged - they
+  carry the compiled extension, exactly as they carried the hand-written one.
+
+- **Three frontends are driven by tests, not just read by linters.** The
+  binary now has end-to-end tests that run the shipped executable against a
+  seeded snapshot with no credentials, no daemon and no network; the Plasma
+  and Omarchy data layers load in a plain QML runtime with their desktop
+  imports stubbed; and the compiled GNOME extension loads in Node with the
+  shell stubbed, which is the first runtime coverage the largest frontend has
+  ever had - including the widget tree it draws, which nothing else in the
+  repository could see. All three read the same recorded panel, so a frontend
+  and the binary cannot quietly disagree about it.
+- **The extension's pure helpers are testable.** `shellQuote` and `isCancelled`
+  were copied into `extension.ts` and `prefs.ts` verbatim - one copy too many
+  for a function whose whole job is to be exactly right - and the drawing
+  helpers were private, so nothing could hold them to a value. They are
+  `util.ts` and `widgets.ts` now, with unit tests for the boundaries the
+  end-to-end harness cannot reach: a fraction above 1 from a provider over its
+  quota, a corner radius wider than the bar it rounds, a step that spent a
+  little never drawing as a step that spent nothing, and a tooltip on the first
+  row of the popup with no room above it.
+- **Three pieces of Rust logic that nothing tested now have tests.** Every
+  state file is asserted to be derived from the snapshot's parent - nine of
+  them, the rule the whole of `--config` rests on, and not one had been
+  checked. `kimi::usage_endpoint` normalises whichever part of the
+  `coding/v1` path a reseller's docs told the user to paste. And the waybar
+  bar's three Pango formatters are held to the same escaping the GNOME
+  extension already was, because a provider's error body reaches them
+  unescaped otherwise.
+- Plasma's data layer moved out of `main.qml` into `Service.qml` so it can be
+  instantiated without a plasmoid around it. The applet draws the same thing;
+  `CompactRep` and `FullRep` did not change a line, and a check holds every
+  name they call against what `main.qml` still provides - QML resolves those
+  at use time, so a missing one would have been an undefined in a binding
+  rather than anything a linter or a load could catch.
+
+### Fixed
+
+- **The GNOME preferences window dropped its About row.** `_fillProviders`
+  referred to a `page` that only existed in its caller, so the version
+  comparison between the extension and the binary - the one thing that makes an
+  install skew visible - threw a `ReferenceError` instead of rendering. Found
+  by the compiler on the first typecheck.
+- **The Omarchy widget could not be disabled.** Its data layer declared an
+  `enabled` property holding the list of enabled providers, shadowing the one
+  every QML Item already has. Found by the new harness, which surfaced the
+  engine warning nothing had been reading. It is `enabledProviders` now.
+- **A panel rendered before the first snapshot arrived had no colour for an
+  untinted value.** The fallback theme carried four of the six colours, so
+  `neutral` and `separator` resolved to `undefined` until a snapshot landed.
+
 ## [0.31.0] - 2026-09-14
 
 ### Added

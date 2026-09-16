@@ -17,6 +17,10 @@ use anyhow::{Context, Result, bail};
 /// Directory inside the release archive holding the frontend payloads.
 pub const ARCHIVE_ROOT: &str = "frontends";
 
+/// Directory a checkout assembles its payloads into, in the archive's own
+/// layout. `scripts/build.sh` writes it; it is not in the repository.
+pub const BUILD_ROOT: &str = "build";
+
 /// What has to happen before a freshly installed frontend is actually running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Restart {
@@ -65,6 +69,13 @@ pub struct Frontend {
     /// Ships GSettings schemas, which are XML in the payload and a compiled
     /// blob at runtime. See [`compile_schemas`].
     gsettings_schemas: bool,
+    /// Its sources are compiled rather than installed as they are, so
+    /// `payload` in a checkout is the compiler's input and not a payload.
+    /// [`payload_in`](Frontend::payload_in) looks under [`BUILD_ROOT`] for
+    /// these instead: installing the source directory would land an extension
+    /// the shell loads as an error, the same failure a schema directory with
+    /// no compiled blob produces.
+    compiled: bool,
     pub restart: Restart,
 }
 
@@ -76,6 +87,7 @@ pub const FRONTENDS: &[Frontend] = &[
         artifact: "org.tokengauge.plasmoid",
         version_source: VersionSource::PlasmaMetadata,
         gsettings_schemas: false,
+        compiled: false,
         restart: Restart::Cheap("kquitapp6 plasmashell && kstart plasmashell"),
     },
     Frontend {
@@ -85,6 +97,7 @@ pub const FRONTENDS: &[Frontend] = &[
         artifact: "tokengauge@arzaroth.github.io",
         version_source: VersionSource::GnomeMetadata,
         gsettings_schemas: true,
+        compiled: true,
         restart: Restart::Session(
             "log out and back in, then: gnome-extensions enable tokengauge@arzaroth.github.io",
         ),
@@ -96,6 +109,7 @@ pub const FRONTENDS: &[Frontend] = &[
         artifact: "arzaroth.tokengauge",
         version_source: VersionSource::ManifestVersion,
         gsettings_schemas: false,
+        compiled: false,
         restart: Restart::Cheap("omarchy-restart-shell"),
     },
 ];
@@ -187,11 +201,19 @@ impl Frontend {
     /// environment to move `$XDG_DATA_HOME`.
     pub fn install_into(&self, source_root: &Path, dest: &Path) -> Result<PathBuf> {
         let src = self.payload_in(source_root).ok_or_else(|| {
-            anyhow::anyhow!(
-                "{} payload not found under {}",
-                self.label,
-                source_root.display()
-            )
+            if self.compiled {
+                anyhow::anyhow!(
+                    "{} payload not found under {} - run scripts/build.sh to compile it",
+                    self.label,
+                    source_root.display()
+                )
+            } else {
+                anyhow::anyhow!(
+                    "{} payload not found under {}",
+                    self.label,
+                    source_root.display()
+                )
+            }
         })?;
 
         if let Some(parent) = dest.parent() {
@@ -263,8 +285,24 @@ impl Frontend {
         if archived.is_dir() {
             return Some(archived);
         }
-        let in_checkout = source_root.join(self.payload);
+        let in_checkout = self.checkout_payload(source_root);
         in_checkout.is_dir().then_some(in_checkout)
+    }
+
+    /// Where a checkout keeps this frontend's payload. For a [`compiled`]
+    /// frontend that is what `scripts/build.sh` assembled, never the sources
+    /// it assembled it from.
+    ///
+    /// [`compiled`]: Frontend::compiled
+    fn checkout_payload(&self, source_root: &Path) -> PathBuf {
+        if self.compiled {
+            source_root
+                .join(BUILD_ROOT)
+                .join(ARCHIVE_ROOT)
+                .join(self.payload)
+        } else {
+            source_root.join(self.payload)
+        }
     }
 }
 
@@ -379,7 +417,16 @@ mod tests {
             .expect("workspace root");
         let dest = tmp.join("extensions").join(gnome.artifact);
 
-        let installed = gnome.install_into(repo, &dest);
+        // The archive layout `--update` installs from, filled with the
+        // repository's own extension directory - so the schema XML under test
+        // is the one that ships. Read from the repository rather than from
+        // `payload_in`, because in a checkout that resolves to whatever
+        // `scripts/build.sh` last produced and this test must run without one.
+        let archive = tmp.join("archive");
+        let staged = archive.join(ARCHIVE_ROOT).join(gnome.payload);
+        copy_dir(&repo.join(gnome.payload), &staged).unwrap();
+
+        let installed = gnome.install_into(&archive, &dest);
         if crate::launch::which("glib-compile-schemas").is_none() {
             // Nothing to compile with: refusing is the whole point, so the
             // working install a user already had is still there afterwards.
@@ -492,6 +539,23 @@ mod tests {
         );
 
         assert!(plasma.payload_in(&tmp.join("empty")).is_none());
+
+        // A compiled frontend has no payload in a checkout until the build has
+        // assembled one: its own directory there is TypeScript, and installing
+        // that lands an extension GNOME loads as an error.
+        let gnome = find("gnome").unwrap();
+        std::fs::create_dir_all(checkout.join(gnome.payload)).unwrap();
+        assert!(
+            gnome.payload_in(&checkout).is_none(),
+            "the extension's source directory must never pass for its payload"
+        );
+        let built = checkout
+            .join(BUILD_ROOT)
+            .join(ARCHIVE_ROOT)
+            .join(gnome.payload);
+        std::fs::create_dir_all(&built).unwrap();
+        assert_eq!(gnome.payload_in(&checkout).unwrap(), built);
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

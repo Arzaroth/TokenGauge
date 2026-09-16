@@ -502,6 +502,68 @@ mod tests {
         assert_eq!(creds.access_token, "valid");
     }
 
+    /// Expired and never-logged-in are different states and are not fixed by
+    /// the same thing. `expired_token_errors` below covers the first; this is
+    /// the other side of it, and the boundary between them.
+    #[test]
+    fn an_absence_is_reported_as_an_absence_and_a_spent_token_as_spent() {
+        for empty in ["{}", r#"{"scope": {}}"#, r#"{"scope": {"key": ""}}"#] {
+            let err = parse_credentials(empty, Utc::now())
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("not logged in"), "{empty} -> {err}");
+        }
+
+        // A token expiring exactly now is spent, not good for one more call.
+        let now = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let err = parse_credentials(
+            r#"{"s": {"key": "t", "expires_at": "2026-01-01T00:00:00Z"}}"#,
+            now,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("expired"), "{err}");
+    }
+
+    /// A file that is not an object at all, which is what a truncated or
+    /// half-written `auth.json` looks like. None of these may panic: this runs
+    /// inside a fetch, and a panic there takes the bar down rather than the
+    /// provider.
+    #[test]
+    fn a_file_that_is_not_an_object_is_rejected_rather_than_panicking() {
+        for bad in ["[]", "\"token\"", "null", "not json at all", "", "{"] {
+            assert!(parse_credentials(bad, Utc::now()).is_err(), "{bad:?}");
+        }
+    }
+
+    /// The login method is what the panel shows beside the provider. An
+    /// unknown mode is passed through rather than dropped, because whatever
+    /// x.ai calls a new tier is more use than a blank.
+    #[test]
+    fn an_unknown_login_mode_is_shown_rather_than_dropped() {
+        let named = |json: &str| {
+            parse_credentials(json, Utc::now())
+                .expect("credentials")
+                .login_method
+        };
+        assert_eq!(
+            named(r#"{"s": {"key": "t", "auth_mode": "OIDC"}}"#).as_deref(),
+            Some("SuperGrok"),
+            "the mode is matched case-insensitively"
+        );
+        assert_eq!(
+            named(r#"{"s": {"key": "t", "auth_mode": "enterprise"}}"#).as_deref(),
+            Some("enterprise")
+        );
+        assert_eq!(named(r#"{"s": {"key": "t"}}"#).as_deref(), Some("Grok"));
+        assert_eq!(
+            named(r#"{"s": {"key": "t", "auth_mode": ""}}"#).as_deref(),
+            Some("Grok")
+        );
+    }
+
     #[test]
     fn expired_token_errors() {
         let auth =

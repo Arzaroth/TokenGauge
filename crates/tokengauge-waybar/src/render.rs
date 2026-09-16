@@ -610,6 +610,89 @@ pub(crate) mod tests {
         }
     }
 
+    /// Pango parses everything this module emits, and every string in it came
+    /// off a provider's API: a window title, a plan name, an error body. An
+    /// unescaped `&` is a markup error that blanks the whole waybar module,
+    /// and Pango's tag set is wide enough that `<span foreground=...>` in a
+    /// provider's error message would be honoured rather than shown.
+    ///
+    /// The GNOME extension escapes the same data for the same reason; these
+    /// three formatters were the only ones here with nothing holding them to
+    /// it.
+    #[test]
+    fn a_provider_string_carrying_markup_cannot_break_out_of_the_bar() {
+        let hostile = "A & B <span foreground=\"#000\">x</span>";
+
+        let bar = format_bar_error(hostile);
+        assert!(bar.contains("A &amp; B &lt;span"), "{bar}");
+        assert!(!bar.contains("<span foreground=\"#000\">"), "{bar}");
+
+        let mut row = sample_row(hostile);
+        row.plan_label = Some("Max & More <b>".to_string());
+        let header = format_header(&row);
+        assert!(header.contains("A &amp; B &lt;span"), "{header}");
+        assert!(header.contains("Max &amp; More &lt;b&gt;"), "{header}");
+
+        let card = format_error_card(&tokengauge_core::ProviderFetchError {
+            provider: hostile.to_string(),
+            message: "quota < 0 & rising".to_string(),
+            raw: String::new(),
+        });
+        assert!(card.contains("quota &lt; 0 &amp; rising"), "{card}");
+        assert!(card.contains("A &amp; B &lt;span"), "{card}");
+    }
+
+    /// Each of the three still says what it is for: an error is marked, a
+    /// header names the plan beside the provider, and a card is monospaced so
+    /// the columns beneath it line up.
+    #[test]
+    fn the_three_bar_formatters_keep_their_shape() {
+        let bar = format_bar_error("Claude");
+        assert!(bar.contains("Claude"), "{bar}");
+        assert!(
+            bar.contains('\u{26a0}'),
+            "an error with no warning sign: {bar}"
+        );
+
+        let plain = format_header(&sample_row("Claude"));
+        assert_eq!(
+            plain.matches('\u{b7}').count(),
+            0,
+            "a row with no plan must not open on a separator: {plain}"
+        );
+        assert!(
+            plain.starts_with("<b>") && plain.ends_with("</b>"),
+            "{plain}"
+        );
+
+        let mut with_plan = sample_row("Claude");
+        with_plan.plan_label = Some("Max".to_string());
+        let badged = format_header(&with_plan);
+        assert!(
+            badged.contains('\u{b7}'),
+            "the plan lost its separator: {badged}"
+        );
+        assert!(badged.contains("Max"), "{badged}");
+
+        // An empty plan is not a plan. This is the row a provider that reports
+        // no tier produces, and a separator with nothing after it reads as a
+        // truncated string.
+        let mut blank = sample_row("Claude");
+        blank.plan_label = Some(String::new());
+        assert_eq!(format_header(&blank), plain);
+
+        let card = format_error_card(&tokengauge_core::ProviderFetchError {
+            provider: "Claude".to_string(),
+            message: "not signed in".to_string(),
+            raw: String::new(),
+        });
+        assert!(
+            card.starts_with("<tt>") && card.ends_with("</tt>"),
+            "{card}"
+        );
+        assert!(card.contains("not signed in"), "{card}");
+    }
+
     /// The contract five frontends parse, none of which the compiler sees. A
     /// renamed or dropped key reaches them as a blank panel, a missing tab
     /// strip or a settings pane that cannot toggle anything, and no Rust test

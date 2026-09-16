@@ -9,7 +9,7 @@ on all of them, or it is not done.**
 | ---------- | -------------------------------------------- | --------------- |
 | Waybar     | `crates/tokengauge-waybar` (bar + tooltip)    | yes - the tooltip *is* waybar's panel |
 | Plasma     | `plasma/org.tokengauge.plasmoid`              | yes |
-| GNOME      | `gnome/tokengauge@arzaroth.github.io`         | yes |
+| GNOME      | `gnome/tokengauge@arzaroth.github.io` (TypeScript, see below) | yes |
 | Quickshell | `omarchy/arzaroth.tokengauge`                 | yes |
 | Tray (Windows) | `crates/tokengauge-tray`                  | yes |
 | TUI        | `crates/tokengauge-tui`                       | yes - exempt from layout parity only |
@@ -50,7 +50,9 @@ credential expired weeks ago.
 Adding a section means editing `panel.rs` and nothing else. Adding a *kind*
 means touching all six frontends - `panel::tests::every_panel_frontend_handles_every_section_kind`
 reads each frontend's source and fails when one of them never mentions a kind,
-which is the backstop for the QML and JS frontends the compiler cannot check.
+which is the backstop for a rule no compiler enforces: `SectionKind` is a Rust
+enum, a QML string and a TypeScript union, and none of the three makes a
+frontend that never mentions a kind fail to build.
 
 The TUI's exemption is *layout*, not content: it draws `tokens_by_day` as a bar
 chart rather than a row list, and keeps its sidebar, gauges and keybindings, but
@@ -97,6 +99,29 @@ The instant is the *payload's*, never the process's. The TUI header measured
 `Instant::elapsed` since its own last fetch and so read "updated just now" over
 a snapshot ten minutes old - a refresh that finds the snapshot fresh serves the
 cache, and that is still a refresh as far as the process is concerned.
+
+### The GNOME extension is compiled
+
+It is TypeScript against `@girs/gnome-shell`, and the only frontend in the
+repository that is not installable as it sits. `scripts/build.sh` compiles it
+and assembles all three desktop payloads under `build/frontends/<payload>` -
+the release archive's own layout, so one path serves both. The `.ts` sources
+are dropped from the payload; the GSettings schemas stay XML, because the
+compiled blob belongs on the machine that runs the extension and `install_into`
+is what builds it.
+
+`Frontend.compiled` is what makes that safe: `payload_in` looks under `build/`
+for a compiled frontend and never falls back to its source directory, so
+`--install-frontend gnome` and `--update` from a checkout refuse instead of
+landing TypeScript in `~/.local/share/gnome-shell/extensions`, which the shell
+loads as an error. Release archives are unaffected - they carry the compiled
+extension and resolve through the archive branch as before.
+
+The `--json` contract is declared once, in `gnome/*/panel.ts`, by hand: the
+other side is a Rust struct and there is nothing to generate them from, which
+is why the fields are named exactly as the JSON names them and only the fields
+this frontend reads are declared. The four `panel::tests` that grep frontend
+sources read the `.ts`, not the build output.
 
 ### Rows the spec drops
 
@@ -311,6 +336,48 @@ the mtime filter `jsonl_files` leans on, so it must never run on a poll.
 
 Design notes in `docs/history.md`, vocabulary in `CONTEXT.md`.
 
+## Three frontends are driven, not just read
+
+`qmllint` and `tsc` read these files. Three harnesses run them, each against
+the same recording of what `--json` prints, so a frontend and the binary can
+never quietly disagree about it:
+
+| Harness | What it loads | What it covers |
+| ------- | ------------- | -------------- |
+| `crates/tokengauge-waybar/tests/e2e.rs` | the shipped binary | config, cache, staleness, `panel_spec`, the JSON |
+| `tests/qml/run.sh` | `Usage.qml`, `Service.qml` | bindings, the snapshot read back, the next command |
+| `tests/gnome/run.sh` | the compiled `extension.js` | all of that, plus the widget tree it draws |
+
+None of them touches a network, a credential or a daemon. The binary's tests
+seed a fresh snapshot, so `cache_is_stale()` says serve and the run never
+fetches; the frontends' stubs answer a command by its command line rather than
+spawning anything. The one test that wants a fetch backdates the write and
+lands in the credential walk, because a provider with no token says so before
+it asks anyone.
+
+`scripts/make-panel-fixture.sh` records `tests/qml/fixtures/panel.json` off the
+same seeded snapshot the binary's tests use, so the two cannot drift. Its
+machine has no fleet store on purpose: the history comes out empty, which is
+the state every user is in before their first recorded day and the one a
+frontend most easily gets wrong by drawing nothing at all.
+
+Two things follow from this and are easy to regress:
+
+- **A frontend's data layer has to be instantiable on its own.** Plasma's
+  `main.qml` is a `PlasmoidItem` that sets the attached `Plasmoid.icon`, which
+  no QML stub can provide, so the half that owns the subprocess lives in
+  `Service.qml` and imports no plasmoid module. `main.qml` re-exposes it under
+  the names the representations already call. Keep new data work on that side
+  of the line or it drops out of the harness.
+- **The GNOME harness runs the compiled extension, not the TypeScript**, for
+  the same reason CI's syntax check does: what ships is the JavaScript. It
+  needs `scripts/build.sh` to have run, and says so rather than passing
+  vacuously.
+
+Waybar and the tray are absent: waybar's surface is the binary's own output,
+which the e2e tests already assert, and the tray is Rust that only builds on
+Windows.
+
 ## The binary is `tokengauge`, the crate is not
 
 `crates/tokengauge-waybar` still builds the shared backend every frontend shells
@@ -374,8 +441,9 @@ still catch schema mistakes.
   `[Unreleased]` with every user-facing change.
 - Before finishing: `cargo fmt --all`, `cargo clippy --workspace --all-targets`,
   `cargo test --workspace`. For QML run `qmllint`, for the GNOME extension
-  `node --input-type=module --check`. CI's `frontends` job runs the last two, so
-  they are enforced rather than remembered.
+  `pnpm typecheck` and then `scripts/build.sh`, and then the two frontend
+  harnesses: `tests/qml/run.sh` and `tests/gnome/run.sh`. CI's `frontends` job
+  runs all of them, so they are enforced rather than remembered.
 - `scripts/coverage.sh` runs `cargo llvm-cov` over the workspace and then ranks
   the files by uncovered lines; `--html` opens the browsable report. It is a
   local tool, not a CI gate - nothing fails on a number. The gaps it keeps

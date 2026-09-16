@@ -9,190 +9,70 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 
+import * as Panel from './panel.js';
+import {isCancelled, shellQuote} from './util.js';
+import {attachTooltip, barFill, box, historyChart, label, spacer} from './widgets.js';
+
 // How often the open menu re-reads the snapshot. See `_setLive`.
 const LIVE_INTERVAL_SECS = 30;
 
-const FALLBACK_THEME = {
-    red: '#f38ba8',
-    yellow: '#f9e2af',
-    green: '#a6e3a1',
-    dim: '#6c7086',
-};
-
-// St.BoxLayout.vertical was replaced by the Clutter orientation property in
-// GNOME 48; both spellings have to work across the supported shell versions.
-function box(vertical, props = {}) {
-    const b = new St.BoxLayout(props);
-    if ('orientation' in b)
-        b.orientation = vertical ? Clutter.Orientation.VERTICAL : Clutter.Orientation.HORIZONTAL;
-    else
-        b.vertical = vertical;
-    return b;
+/// `PanelMenu.Button` builds either a real menu or a dummy one, and only the
+/// real one takes items. This button always has the real one.
+///
+/// A free function rather than a getter on the class: an underscore-prefixed
+/// member is the shell's own namespace on its own classes, and shadowing one
+/// across five supported shell versions is not worth saving a call.
+function popupOf(button: PanelMenu.Button): PopupMenu.PopupMenu {
+    return button.menu as PopupMenu.PopupMenu;
 }
 
-function shellQuote(s) {
-    return `'${String(s).replace(/'/g, "'\\''")}'`;
-}
-
-function label(text, styleClass, style) {
-    const l = new St.Label({text, style_class: styleClass});
-    if (style)
-        l.style = style;
-    l.clutter_text.line_wrap = true;
-    return l;
-}
-
-function spacer() {
-    return new St.Widget({x_expand: true});
-}
-
-// A fill sized in CSS lands wherever the layout puts it, and one sized from a
-// `notify::width` handler is a frame behind the allocation it tracks. Draw it
-// instead: the repaint runs with the width the popup actually gave the row.
-function barFill(fraction, radius, styleClass, style) {
-    const clamped = Math.max(0, Math.min(1, Number(fraction) || 0));
-    const area = new St.DrawingArea({
-        style_class: styleClass,
-        style,
-        x_expand: true,
-        y_expand: true,
-        x_align: Clutter.ActorAlign.FILL,
-        y_align: Clutter.ActorAlign.FILL,
-    });
-    area.connect('repaint', () => {
-        const [width, height] = area.get_surface_size();
-        const w = Math.round(width * clamped);
-        if (w <= 0 || height <= 0)
-            return;
-        const r = Math.min(radius, w / 2, height / 2);
-        const cr = area.get_context();
-        cr.newSubPath();
-        cr.arc(w - r, r, r, -Math.PI / 2, 0);
-        cr.arc(w - r, height - r, r, 0, Math.PI / 2);
-        cr.arc(r, height - r, r, Math.PI / 2, Math.PI);
-        cr.arc(r, r, r, Math.PI, 1.5 * Math.PI);
-        cr.closePath();
-        // GNOME 45 has no `cr.setSourceColor`; the components are 8-bit on
-        // every shell the extension supports.
-        const c = area.get_theme_node().get_foreground_color();
-        cr.setSourceRGBA(c.red / 255, c.green / 255, c.blue / 255, c.alpha / 255);
-        cr.fill();
-        cr.$dispose();
-    });
-    return area;
-}
-
-// Cairo wants components and the snapshot's theme carries hex strings.
-function hexToRgb(hex) {
-    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || ''));
-    if (!m)
-        return [1, 1, 1];
-    return [parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255];
-}
-
-// The history chart. Drawn rather than laid out for the same reason `barFill`
-// is: the repaint runs with the width the popup actually gave the row, and a
-// chart sized from a `notify::width` handler is a frame behind its allocation.
-function historyChart(points, colorFor, height) {
-    const area = new St.DrawingArea({
-        style_class: 'tokengauge-history-chart',
-        x_expand: true,
-        height,
-    });
-    area.connect('repaint', () => {
-        const [width, h] = area.get_surface_size();
-        const n = points.length;
-        if (n === 0 || width <= 0 || h <= 0)
-            return;
-        // Wide steps get a gap between them; ninety days of bars have none to
-        // spare.
-        const gap = n <= 12 ? 2 : (n <= 31 ? 1 : 0);
-        const w = Math.max(1, (width - gap * (n - 1)) / n);
-        const cr = area.get_context();
-        points.forEach((point, i) => {
-            const fraction = Math.max(0, Math.min(1, Number(point.fraction) || 0));
-            // A floor of one pixel: a step that spent a little must never draw
-            // as a step that spent nothing.
-            const barHeight = fraction > 0 ? Math.max(1, fraction * h) : 0;
-            if (barHeight <= 0)
-                return;
-            const [r, g, b] = hexToRgb(colorFor(point));
-            // The step in progress is short because it is not over, so it is
-            // drawn as unfinished rather than as a fall.
-            cr.setSourceRGBA(r, g, b, point.partial ? 0.45 : 1);
-            cr.rectangle(i * (w + gap), h - barHeight, w, barHeight);
-            cr.fill();
-        });
-        cr.$dispose();
-    });
-    return area;
-}
-
-// St has no tooltip of its own, and the panel spec fills `tooltip` for every
-// row whose line is an abbreviation of what it carries: a day's exact tokens,
-// a model's split by device, the whole sync sentence behind its badge. The
-// label goes in the shell's own layer so the popup cannot clip it.
-function attachTooltip(actor, text, markup = false) {
-    // A row's tooltip is fixed for the life of the label that carries it, but
-    // the panel button outlives every snapshot - so a function is resolved on
-    // each hover rather than once here.
-    const resolve = typeof text === 'function' ? text : () => text;
-    if (typeof text !== 'function' && !text)
-        return actor;
-    actor.reactive = true;
-    actor.track_hover = true;
-    let tip = null;
-    const hide = () => {
-        if (tip) {
-            tip.destroy();
-            tip = null;
-        }
-    };
-    actor.connect('notify::hover', () => {
-        hide();
-        if (!actor.hover)
-            return;
-        const body = resolve();
-        if (!body)
-            return;
-        tip = new St.Label({style_class: 'tokengauge-tooltip'});
-        if (markup)
-            tip.clutter_text.set_markup(body);
-        else
-            tip.text = body;
-        tip.clutter_text.line_wrap = true;
-        Main.layoutManager.uiGroup.add_child(tip);
-        const [x, y] = actor.get_transformed_position();
-        const right = global.stage.width - tip.get_width() - 4;
-        // Above the row, unless that leaves the stage: the first rows of the
-        // popup sit close enough to the top panel for it to.
-        const above = y - tip.get_height() - 6;
-        tip.set_position(
-            Math.round(Math.max(4, Math.min(x, right))),
-            Math.round(above >= 4 ? above : y + actor.get_height() + 6));
-    });
-    actor.connect('destroy', hide);
-    return actor;
-}
-
-const Indicator = GObject.registerClass(
+// Registered from a static block rather than through the return value of
+// `GObject.registerClass`, so the class keeps the constructor it declares:
+// the wrapper type infers `new (...)` from the base class's `_init` instead.
+// GJS routes `super(...)` here to `PanelMenu.Button.prototype._init`, so the
+// shell still builds the button before this constructor's body runs.
 class TokenGaugeIndicator extends PanelMenu.Button {
-    _init(extension) {
-        super._init(0.5, 'TokenGauge');
+    static {GObject.registerClass(this);}
+
+    declare _extension: Extension;
+    declare _settings: Gio.Settings;
+    declare _snapshot: Panel.Snapshot;
+    declare _lastError: string;
+    /// The selection follows the provider id, not the slot it sits in: a row
+    /// that appears or drops out on a refresh would otherwise slide a
+    /// different provider's numbers under whatever the user was reading.
+    /// Empty means nothing chosen, so the pin still leads.
+    declare _selectedProviderId: string;
+    declare _updating: boolean;
+    /// The history screen is a second screen over the panel: a year of bars
+    /// does not belong above the limit gauges. Every range is already on the
+    /// row, so cycling one is a re-render rather than another `--json`.
+    declare _historyOpen: boolean;
+    declare _historyRange: number;
+    declare _cancellable: Gio.Cancellable | null;
+    declare _requestId: number;
+    declare _timeoutId: number;
+    declare _liveTimeoutId: number;
+    declare _menuDirty: boolean;
+    declare _revisionFile: string;
+    declare _revisionMonitor: Gio.FileMonitor | null;
+    declare _revisionSettleId: number;
+    declare _settingsChangedId: number;
+
+    declare _panelIcon: St.Icon;
+    declare _panelGlyph: St.Label;
+    declare _panelPercent: St.Label;
+    declare _content: St.BoxLayout;
+
+    constructor(extension: Extension) {
+        super(0.5, 'TokenGauge');
 
         this._extension = extension;
         this._settings = extension.getSettings();
-        this._snapshot = {rows: [], errors: [], enabled: [], providers: []};
+        this._snapshot = Panel.emptySnapshot();
         this._lastError = '';
-        // The selection follows the provider id, not the slot it sits in: a
-        // row that appears or drops out on a refresh would otherwise slide a
-        // different provider's numbers under whatever the user was reading.
-        // Empty means nothing chosen, so the pin still leads.
         this._selectedProviderId = '';
         this._updating = false;
-        // The history screen is a second screen over the panel: a year of bars
-        // does not belong above the limit gauges. Every range is already on the
-        // row, so cycling one is a re-render rather than another `--json`.
         this._historyOpen = false;
         this._historyRange = 0;
         this._cancellable = null;
@@ -221,17 +101,17 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
         this._content = box(true, {style_class: 'tokengauge-menu', x_expand: true});
         item.add_child(this._content);
-        this.menu.addMenuItem(item);
+        popupOf(this).addMenuItem(item);
 
-        this.menu.connect('open-state-changed', (_menu, open) => {
+        popupOf(this).connect('open-state-changed', (_popup: unknown, open: boolean) => {
             if (open && this._menuDirty) {
                 this._menuDirty = false;
                 this._renderMenu();
             }
             this._setLive(open);
         });
-        this.connect('scroll-event', (_actor, event) => this._onScroll(event));
-        this._settingsChangedId = this._settings.connect('changed', (_s, key) => {
+        this.connect('scroll-event', (_actor: unknown, event: Clutter.Event) => this._onScroll(event));
+        this._settingsChangedId = this._settings.connect('changed', (_s: Gio.Settings, key: string) => {
             if (key === 'refresh-interval')
                 this._restartTimer();
             else
@@ -244,7 +124,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
     // Middle click refreshes without opening the menu; the shell's own handling
     // of the other buttons (menu toggle) is left alone.
-    vfunc_event(event) {
+    override vfunc_event(event: Clutter.Event): boolean {
         if (event.type() === Clutter.EventType.BUTTON_PRESS &&
             event.get_button() === Clutter.BUTTON_MIDDLE) {
             this._action('--refresh');
@@ -253,8 +133,8 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return super.vfunc_event(event);
     }
 
-    _onScroll(event) {
-        const rows = this._snapshot.rows || [];
+    _onScroll(event: Clutter.Event): boolean {
+        const rows = this._rows;
         if (rows.length < 2)
             return Clutter.EVENT_PROPAGATE;
         const direction = event.get_scroll_direction();
@@ -273,7 +153,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
     // ---- data ---------------------------------------------------------------
 
-    _binary() {
+    _binary(): string {
         return this._settings.get_string('waybar-binary') || 'tokengauge-waybar';
     }
 
@@ -286,13 +166,17 @@ class TokenGaugeIndicator extends PanelMenu.Button {
     // that owns a flag for the duration of its command has to clear it there:
     // clearing it in the shared completion path let an unrelated refresh
     // finishing mid-update put the Update button back to "Update".
-    _run(command, onDone, onSettled = null) {
+    _run(
+        command: string,
+        onDone: (successful: boolean, stdout: string, stderr: string) => void,
+        onSettled: (() => void) | null = null,
+    ): void {
         this._cancel();
         const requestId = this._requestId;
         const isCurrent = () => requestId === this._requestId;
         this._cancellable = new Gio.Cancellable();
         const wrapped = `export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ${command}`;
-        let proc;
+        let proc: Gio.Subprocess;
         try {
             proc = Gio.Subprocess.new(
                 ['sh', '-c', wrapped],
@@ -304,14 +188,15 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             return;
         }
         proc.communicate_utf8_async(null, this._cancellable, (source, result) => {
-            let stdout, stderr;
+            let stdout: string | null;
+            let stderr: string | null;
             try {
-                [, stdout, stderr] = source.communicate_utf8_finish(result);
+                [, stdout, stderr] = source!.communicate_utf8_finish(result);
             } catch (e) {
                 onSettled?.();
                 if (!isCurrent())
                     return;
-                if (!e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) {
+                if (!isCancelled(e)) {
                     this._lastError = `${e}`;
                     this._render();
                 }
@@ -320,11 +205,11 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             onSettled?.();
             if (!isCurrent())
                 return;
-            onDone(source.get_successful(), stdout ?? '', stderr ?? '');
+            onDone(source!.get_successful(), stdout ?? '', stderr ?? '');
         });
     }
 
-    _refreshSnapshot(command, onSettled = null) {
+    _refreshSnapshot(command: string, onSettled: (() => void) | null = null): void {
         this._run(command, (successful, stdout, stderr) => {
             if (!successful) {
                 this._lastError = (stderr || '').trim() || _('snapshot command failed');
@@ -332,8 +217,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
                 return;
             }
             try {
-                const parsed = JSON.parse(stdout);
-                this._snapshot = parsed;
+                this._snapshot = JSON.parse(stdout) as Panel.Snapshot;
                 this._lastError = '';
             } catch (e) {
                 this._lastError = `parse error: ${e}`;
@@ -346,7 +230,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
     // Watch the few bytes the binary rewrites after every fetch, so a fetch by
     // the daemon or another frontend lands here at once instead of on the next
     // poll. The snapshot itself still only ever comes from `--json`.
-    _watchRevision() {
+    _watchRevision(): void {
         const path = this._snapshot?.revision_file || '';
         if (path === '' || path === this._revisionFile)
             return;
@@ -367,14 +251,14 @@ class TokenGaugeIndicator extends PanelMenu.Button {
                     return GLib.SOURCE_REMOVE;
                 });
             });
-        } catch (e) {
+        } catch {
             // No watcher: the poll timer still carries the panel.
             this._revisionMonitor = null;
             this._revisionFile = '';
         }
     }
 
-    _stopWatchingRevision() {
+    _stopWatchingRevision(): void {
         if (this._revisionSettleId) {
             GLib.Source.remove(this._revisionSettleId);
             this._revisionSettleId = 0;
@@ -386,11 +270,11 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         this._revisionFile = '';
     }
 
-    _reload() {
+    _reload(): void {
         this._refreshSnapshot(`${shellQuote(this._binary())} --json`);
     }
 
-    _action(flag, arg) {
+    _action(flag: string, arg?: string): void {
         const bin = shellQuote(this._binary());
         const suffix = arg === undefined ? '' : ` ${shellQuote(arg)}`;
         this._refreshSnapshot(`${bin} ${flag}${suffix} && ${bin} --json`);
@@ -402,14 +286,14 @@ class TokenGaugeIndicator extends PanelMenu.Button {
     // command exits 0 whatever setup did, and "no terminal found" would be
     // dropped along with the exit status. Nothing needs refreshing after a
     // failure anyway - setup changes nothing until the user acts in the TUI.
-    _openSyncSetup() {
+    _openSyncSetup(): void {
         const bin = shellQuote(this._binary());
         this._refreshSnapshot(`${bin} --sync-setup >/dev/null && ${bin} --json`);
     }
 
     // --update's human-readable stdout is discarded so only the JSON payload
     // reaches JSON.parse; stderr still surfaces a failed update.
-    _applyUpdate() {
+    _applyUpdate(): void {
         this._updating = true;
         this._render();
         const bin = shellQuote(this._binary());
@@ -419,7 +303,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         });
     }
 
-    get _selectedIndex() {
+    get _selectedIndex(): number {
         const rows = this._rows;
         const chosen = rows.findIndex(row => String(row.provider) === this._selectedProviderId);
         if (chosen >= 0)
@@ -436,7 +320,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return 0;
     }
 
-    _restartTimer() {
+    _restartTimer(): void {
         if (this._timeoutId)
             GLib.Source.remove(this._timeoutId);
         const interval = Math.max(15, this._settings.get_int('refresh-interval'));
@@ -456,7 +340,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
     // otherwise keeps the countdown it opened with. The binary serves the
     // snapshot it already has and refetches only once that snapshot has aged
     // past `refresh_secs`, so this costs a subprocess, not a provider call.
-    _setLive(live) {
+    _setLive(live: boolean): void {
         if (this._liveTimeoutId) {
             GLib.Source.remove(this._liveTimeoutId);
             this._liveTimeoutId = 0;
@@ -481,7 +365,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
     // is `--update`, which stages a download and renames it into place; killing
     // it halfway is worse than letting a process we stopped listening to run to
     // completion, and the binary is the one that knows how to do that safely.
-    _cancel() {
+    _cancel(): void {
         this._requestId++;
         if (this._cancellable) {
             this._cancellable.cancel();
@@ -491,11 +375,11 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
     // ---- helpers ------------------------------------------------------------
 
-    get _rows() {
+    get _rows(): Panel.Row[] {
         return this._snapshot.rows || [];
     }
 
-    get _row() {
+    get _row(): Panel.Row | null {
         const rows = this._rows;
         if (rows.length === 0)
             return null;
@@ -504,15 +388,15 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
     // Pango for the panel button's tooltip. The lines are the core's; only the
     // tier colours and the escaping are the shell's.
-    _barTooltipMarkup() {
+    _barTooltipMarkup(): string {
         // The popup already carries all of this and sits directly under the
         // button, so a tooltip over it would be the same figures twice.
-        if (this.menu.isOpen)
+        if (popupOf(this).isOpen)
             return '';
         const tip = this._row?.bar_tooltip;
         if (!tip)
             return '';
-        const escape = value => String(value ?? '')
+        const escape = (value: string) => String(value ?? '')
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;');
@@ -527,18 +411,18 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return [`<b>${escape(tip.title)}</b>`, ...lines].join('\n');
     }
 
-    _theme() {
-        return {...FALLBACK_THEME, ...(this._snapshot.theme || {})};
+    _theme(): Panel.Theme {
+        return {...Panel.FALLBACK_THEME, ...(this._snapshot.theme || {})};
     }
 
     // The headline number and its tier come off the row's `bar`, resolved by
     // the core under the configured window. This used to pick the window here
     // and carry its own copy of the 50/80 boundaries to tint it with.
-    _bar(row) {
+    _bar(row: Panel.Row | null): Panel.Bar {
         return row?.bar ?? {percent: null, tone: 'dim'};
     }
 
-    _providerGicon(row) {
+    _providerGicon(row: Panel.Row | null): Gio.Icon | null {
         if (!row?.icon_svg)
             return null;
         const file = Gio.File.new_for_path(row.icon_svg);
@@ -547,16 +431,16 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return new Gio.FileIcon({file});
     }
 
-    _providerIcon(row, size) {
+    _providerIcon(row: Panel.Row | null, size: number): St.Icon | null {
         const gicon = this._providerGicon(row);
         return gicon ? new St.Icon({gicon, icon_size: size}) : null;
     }
 
     // ---- rendering ----------------------------------------------------------
 
-    _render() {
+    _render(): void {
         this._renderPanel();
-        if (this.menu.isOpen) {
+        if (popupOf(this).isOpen) {
             this._menuDirty = false;
             this._renderMenu();
         } else {
@@ -564,7 +448,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         }
     }
 
-    _renderPanel() {
+    _renderPanel(): void {
         const row = this._row;
         const bar = this._bar(row);
         const gicon = this._providerGicon(row);
@@ -573,7 +457,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         if (gicon)
             this._panelIcon.gicon = gicon;
         this._panelGlyph.visible = !gicon && !!row?.glyph;
-        if (this._panelGlyph.visible) {
+        if (this._panelGlyph.visible && row) {
             this._panelGlyph.text = row.glyph;
             this._panelGlyph.style = `color: ${row.color || this._theme().dim};`;
         }
@@ -588,7 +472,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         this._panelPercent.style = `color: ${this._toneColor(bar.tone)};`;
     }
 
-    _renderMenu() {
+    _renderMenu(): void {
         this._content.destroy_all_children();
         this._content.add_child(this._header());
 
@@ -631,7 +515,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
     /// The history screen. Every string comes off the row; the chart is the
     /// only part this file decides.
-    _historyScreen(row) {
+    _historyScreen(row: Panel.Row): St.BoxLayout {
         const history = row.history || {};
         const screen = box(true, {style_class: 'tokengauge-section', x_expand: true});
         screen.add_child(label(_('History'), 'tokengauge-section-title'));
@@ -672,7 +556,8 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             // The fill stays the series colour: `partial` already carries the
             // "in progress" signal as reduced alpha, and taking the dim tone
             // as well drew that step as a ghost rather than as data.
-            const fill = p => (p.tone === 'critical' ? this._theme().red : this._theme().neutral);
+            const fill = (p: Panel.HistoryPoint) =>
+                (p.tone === 'critical' ? this._theme().red : this._theme().neutral);
             screen.add_child(historyChart(current.points, fill, 140));
             const edges = box(false, {x_expand: true});
             edges.add_child(label(current.points[0].full_label, 'tokengauge-footer'));
@@ -688,7 +573,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return screen;
     }
 
-    _iconButton(iconName, tooltip, onClick, hint) {
+    _iconButton(iconName: string, tooltip: string, onClick: () => void, hint?: string): St.Button {
         const button = new St.Button({
             style_class: 'tokengauge-icon-button',
             child: new St.Icon({icon_name: iconName, icon_size: 16}),
@@ -702,7 +587,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return hint ? attachTooltip(button, `${tooltip}\n${hint}`) : button;
     }
 
-    _header() {
+    _header(): St.BoxLayout {
         const header = box(false, {style_class: 'tokengauge-header', x_expand: true});
         header.add_child(label('TokenGauge', 'tokengauge-title'));
         header.add_child(spacer());
@@ -711,7 +596,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             this._row?.refresh_hint));
         header.add_child(this._iconButton('web-browser-symbolic', _('Open dashboard'),
             () => {
-                this.menu.close();
+                popupOf(this).close();
                 this._action('--open=dashboard');
             }));
         header.add_child(this._iconButton(
@@ -723,18 +608,18 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             }));
         header.add_child(this._iconButton('folder-remote-symbolic', _('Set up fleet sync'),
             () => {
-                this.menu.close();
+                popupOf(this).close();
                 this._openSyncSetup();
             }));
         header.add_child(this._iconButton('emblem-system-symbolic', _('Settings'),
             () => {
-                this.menu.close();
+                popupOf(this).close();
                 this._extension.openPreferences();
             }));
         return header;
     }
 
-    _updateBanner() {
+    _updateBanner(): St.BoxLayout {
         const banner = box(false, {style_class: 'tokengauge-banner', x_expand: true});
         const latest = this._snapshot.update?.latest;
         const text = latest ? `${_('Update available')}: v${latest}` : _('Update available');
@@ -751,7 +636,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return banner;
     }
 
-    _tabStrip() {
+    _tabStrip(): St.BoxLayout {
         const strip = box(false, {style_class: 'tokengauge-tabs', x_expand: true});
         this._rows.forEach((row, index) => {
             const content = box(false, {style_class: 'tokengauge-tab-content'});
@@ -777,7 +662,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return strip;
     }
 
-    _providerCard(row) {
+    _providerCard(row: Panel.Row): St.BoxLayout {
         const card = box(false, {style_class: 'tokengauge-card', x_expand: true});
         const icon = this._providerIcon(row, 22);
         if (icon)
@@ -794,7 +679,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
     }
 
     /// A tone name from the core, mapped onto the snapshot theme.
-    _toneColor(tone) {
+    _toneColor(tone: Panel.Tone): string {
         const t = this._theme();
         switch (tone) {
         case 'good': return t.green;
@@ -805,7 +690,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         }
     }
 
-    _section(section) {
+    _section(section: Panel.Section): St.BoxLayout {
         const box_ = box(true, {style_class: 'tokengauge-section', x_expand: true});
         box_.add_child(label(section.title, 'tokengauge-section-title'));
         for (const row of section.rows) {
@@ -820,7 +705,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
     // Label and value on one line, a full-width bar under it, then the reset
     // note and the pace badge.
-    _meter(row) {
+    _meter(row: Panel.SectionRow): St.BoxLayout {
         const meter = box(true, {style_class: 'tokengauge-meter', x_expand: true});
 
         const top = box(false, {x_expand: true});
@@ -855,7 +740,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
     // One line per row with the share bar filling the row behind the text, so a
     // seven-day list and a model breakdown both stay on one screen.
-    _barRow(row) {
+    _barRow(row: Panel.SectionRow): St.Widget {
         const wrap = new St.Widget({
             style_class: 'tokengauge-bar-row',
             layout_manager: new Clutter.BinLayout(),
@@ -877,7 +762,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
     // under it, because beside the label the two of them leave a sentence
     // fighting over what is left of a narrow popup. The caption tracks the
     // right edge, where the figure it qualifies sits.
-    _keyRow(row) {
+    _keyRow(row: Panel.SectionRow): St.BoxLayout {
         const wrap = box(true, {x_expand: true});
 
         const line = box(false, {x_expand: true});
@@ -902,7 +787,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return attachTooltip(wrap, row.tooltip);
     }
 
-    _pinSection() {
+    _pinSection(): St.BoxLayout {
         const section = box(true, {style_class: 'tokengauge-section', x_expand: true});
         section.add_child(label(_('Pin to bar'), 'tokengauge-section-title'));
 
@@ -929,7 +814,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         return section;
     }
 
-    destroy() {
+    override destroy(): void {
         if (this._timeoutId) {
             GLib.Source.remove(this._timeoutId);
             this._timeoutId = 0;
@@ -943,15 +828,17 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         this._cancel();
         super.destroy();
     }
-});
+}
 
 export default class TokenGaugeExtension extends Extension {
-    enable() {
-        this._indicator = new Indicator(this);
+    declare _indicator: TokenGaugeIndicator | null;
+
+    override enable(): void {
+        this._indicator = new TokenGaugeIndicator(this);
         Main.panel.addToStatusArea(this.uuid, this._indicator);
     }
 
-    disable() {
+    override disable(): void {
         this._indicator?.destroy();
         this._indicator = null;
     }

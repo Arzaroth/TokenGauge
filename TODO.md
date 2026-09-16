@@ -140,6 +140,42 @@ Meta's check is done and closed it. Cursor shipped. Devin is what is left, and
 it is a judgement call about the paste-and-expire workflow rather than a
 technical one.
 
+### Two shipped providers report a balance TokenGauge throws away
+
+`Credits` arrived with OpenRouter and Cursor, and Codex already filled it. The
+five providers that predate it were swept against CodexBar to settle whether any
+of them reports a balance that never reaches the wire. Two do.
+
+**Claude carries `extra_usage` on the response we already fetch.** The OAuth
+usage body at `api.anthropic.com/api/oauth/usage` has an `extra_usage` object -
+`is_enabled`, `used_credits`, `monthly_limit`, `utilization`, `currency` - and
+`UsageResponse` never names it, so it flattens into `rest` and is discarded.
+That is the overage wallet: a user who has turned extra usage on is spending
+money the panel cannot show. `is_enabled` gates it, and on an Enterprise account
+`monthly_limit` is a spend limit rather than a cap, a distinction CodexBar draws
+off the login method. **Effort: S, and no new request** - the bytes are already
+in hand.
+
+**Grok reports an on-demand cap, on an endpoint we do not call.** `grok.rs`
+talks to `grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig` and scans
+the protobuf for a percentage. CodexBar has moved off that endpoint: it now
+wants a browser-held WKE keypair, and the bearer-token path is
+`https://cli-chat-proxy.grok.com/v1/billing?format=credits` - plain JSON, the
+same access token, plus `x-xai-token-auth: xai-grok-cli`. Its response carries
+`onDemandCap` and `onDemandUsed` as `{ "val": n }`, which is
+`CreditLimit { kind: OnDemand }` unchanged from Cursor. **Effort: M**, and the
+deprecation is the better reason to do it: the endpoint we depend on is the one
+upstream walked away from.
+
+**Kimi and GLM are clear, and the negatives are the point.** Both look like they
+carry a balance and neither does for the account TokenGauge tracks. Kimi's
+`remaining` is a window denominator - `to_window` uses it to derive `used` from
+`limit - remaining` and for nothing else - and the balance CodexBar shows under
+Kimi's name belongs to a *different account*, the pay-as-you-go Open Platform
+key it models as its own `Moonshot` provider. GLM's `CREDIT_LIMIT` is a
+percentage quota window `is_quota_limit` already handles, and z.ai's balance
+endpoint is BigModel CN-only, nil for the global region the coding plan sells.
+
 ### A macOS surface
 
 macOS is the strangest hole in the project. `claude.rs` reads the macOS keychain

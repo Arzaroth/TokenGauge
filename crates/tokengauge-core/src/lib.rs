@@ -48,6 +48,7 @@ mod grok;
 pub mod history;
 mod kimi;
 pub mod launch;
+mod openrouter;
 pub mod pace;
 pub mod panel;
 pub mod payload;

@@ -59,10 +59,72 @@ pub struct UsageWindow {
     pub window_minutes: Option<u32>,
 }
 
+/// What a provider selling credit reports.
+///
+/// Two figures rather than one, because a provider can legitimately have both
+/// at once: an account balance every key draws on, and a named cap on the
+/// particular thing being used. OpenRouter is exactly this - account credit
+/// plus an optional per-key spend limit - and so is opencode, where a Go
+/// subscription's caps sit in front of a Zen balance it falls back to.
+///
+/// The shape is CodexBar's `CreditsSnapshot`, which arrived at the same answer:
+/// one primary balance, and the cap hung off it as its own named thing rather
+/// than flattened into a second scalar nobody can label.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Credits {
+    /// The account balance. `None` when the provider did not report one, which
+    /// is not the same as a balance of zero and must not draw as one.
     pub remaining: Option<f64>,
+    /// A cap drawing on the same money, when the provider has one. Absent for
+    /// every provider that sells a plain balance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<CreditLimit>,
+}
+
+/// What kind of cap it is. A semantic tier, not a label: `panel.rs` turns it
+/// into the words a user reads, because that is where every other string a
+/// user reads is resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CreditLimitKind {
+    /// A spend cap on the credential being used, not on the account.
+    Key,
+    /// A cap that comes with a subscription tier.
+    Subscription,
+    /// A kind from a newer build. Degrades to a generic label rather than
+    /// failing the whole snapshot read, exactly as an unknown provider does.
+    #[serde(other)]
+    Other,
+}
+
+/// A named cap on credit, sitting in front of the balance above it.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreditLimit {
+    pub kind: CreditLimitKind,
+    pub used: f64,
+    pub limit: f64,
+    /// How the cap refills, in the provider's own words - `daily`, `monthly` -
+    /// or `None` when it never does. Deliberately not an instant: OpenRouter
+    /// reports a period name, and there is no date to turn it into.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets: Option<String>,
+}
+
+impl CreditLimit {
+    /// What is left under the cap. Floored at zero: a provider settling usage
+    /// asynchronously can report more spent than the cap allows, and a
+    /// negative remainder reads as a bug rather than as an overrun.
+    pub fn remaining(&self) -> f64 {
+        (self.limit - self.used).max(0.0)
+    }
+
+    /// How much of the cap is gone, 0-100. `None` when the cap is zero, which
+    /// is a cap that cannot be a denominator rather than one that is full.
+    pub fn used_percent(&self) -> Option<u8> {
+        (self.limit > 0.0).then(|| crate::pct_u8(self.used / self.limit * 100.0))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -115,6 +177,7 @@ impl Default for TokenGaugeConfig {
                 kimi: None,
                 grok: None,
                 glm: None,
+                openrouter: None,
                 unknown: HashMap::new(),
             },
             cost_source: CostSource::default(),

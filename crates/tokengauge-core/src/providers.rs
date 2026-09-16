@@ -20,7 +20,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use chrono::Utc;
 
-use crate::{ProviderPayload, ProvidersConfig, claude, codex, glm, grok, kimi};
+use crate::{ProviderPayload, ProvidersConfig, claude, codex, glm, grok, kimi, openrouter};
 
 /// Whether a provider's credentials are currently available, and where from.
 pub struct AuthStatus {
@@ -159,6 +159,29 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         auth: glm_auth,
         enabled_in: |c| c.glm,
     },
+    ProviderMeta {
+        id: "openrouter",
+        label: "OpenRouter",
+        // An API key in the environment: the key is pasted into whichever
+        // agent routes through it, so no file on disk reliably holds one.
+        cli: None,
+        glyph: "\u{f0ac}",
+        color_hex: "#6467F2",
+        icon_slug: Some("openrouter"),
+        urls: ProviderUrls {
+            dashboard: Some("https://openrouter.ai/activity"),
+            status: Some("https://status.openrouter.ai"),
+        },
+        // Not three windows of a plan: the first is how much of the purchased
+        // credit is gone, the second the cap on this key when it has one, and
+        // there is no third. See `openrouter.rs` for why the daily/weekly/
+        // monthly figures are cost rather than windows.
+        windows: ("Credit", "Key limit", "Tertiary"),
+        natively_read: false,
+        fetch: openrouter::fetch,
+        auth: openrouter_auth,
+        enabled_in: |c| c.openrouter,
+    },
 ];
 
 /// The row for a provider, or `None` for a name from a config or a snapshot
@@ -170,7 +193,7 @@ pub fn provider_meta(id: &str) -> Option<&'static ProviderMeta> {
 
 /// Every provider id, in the order the table lists them - which is the order
 /// they appear in the bar and in the settings pane.
-pub const PROVIDERS: &[&str] = &["codex", "claude", "kimi", "grok", "glm"];
+pub const PROVIDERS: &[&str] = &["codex", "claude", "kimi", "grok", "glm", "openrouter"];
 
 /// The providers a transcript reader can produce events for on its own.
 ///
@@ -414,6 +437,34 @@ fn kimi_auth() -> AuthStatus {
     }
 }
 
+/// Two credentials, one required. `/key` answers to any key; the account
+/// balance comes from `/credits`, which only a management key may ask. Say so
+/// when the second is absent rather than reporting a clean pass over a panel
+/// that will be missing its headline figure.
+fn openrouter_auth() -> AuthStatus {
+    let Some(var) = ["OPENROUTER_API_KEY", "OPENROUTER_KEY"]
+        .into_iter()
+        .find(|v| env_var_present(v))
+    else {
+        return AuthStatus {
+            ok: false,
+            detail: "OPENROUTER_API_KEY unset".to_string(),
+            hint: "set OPENROUTER_API_KEY from openrouter.ai/settings/keys",
+        };
+    };
+    let management = crate::openrouter::MANAGEMENT_KEY_ENVS
+        .iter()
+        .find(|v| env_var_present(v));
+    AuthStatus {
+        ok: true,
+        detail: match management {
+            Some(m) => format!("{var} set, {m} set"),
+            None => format!("{var} set, no management key (no account balance)"),
+        },
+        hint: "",
+    }
+}
+
 fn glm_auth() -> AuthStatus {
     match ["Z_AI_API_KEY", "ZAI_API_TOKEN"]
         .into_iter()
@@ -596,6 +647,7 @@ mod tests {
                 "kimi" => config.kimi = Some(true),
                 "grok" => config.grok = Some(true),
                 "glm" => config.glm = Some(true),
+                "openrouter" => config.openrouter = Some(true),
                 other => panic!("{other} has no field in this test - add it with the row"),
             }
             assert_eq!(

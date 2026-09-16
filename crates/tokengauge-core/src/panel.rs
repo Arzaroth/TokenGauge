@@ -19,7 +19,9 @@
 use serde::Serialize;
 
 use crate::sync::DeviceCost;
-use crate::{CostInfo, DayModelCost, ModelCost, ProviderRow, format_tokens};
+use crate::{
+    CostInfo, CreditLimit, CreditLimitKind, DayModelCost, ModelCost, ProviderRow, format_tokens,
+};
 
 /// Colour tier for a row, resolved from the value rather than from a palette -
 /// each frontend maps these onto its own theme.
@@ -195,7 +197,7 @@ pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
     // A provider can have one without the other: a plan sells a window and a
     // reader prices its transcripts, while a prepaid provider sells a balance
     // and writes nothing to read.
-    let cost_rows = cost_rows(row.cost.as_ref(), row.credits);
+    let cost_rows = cost_rows(row.cost.as_ref(), row.credits, row.credit_limit.as_ref());
     if !cost_rows.is_empty() {
         out.push(Section {
             id: "cost",
@@ -509,7 +511,11 @@ fn limit_rows(row: &ProviderRow) -> Vec<PanelRow> {
 // Cost
 // ---------------------------------------------------------------------------
 
-fn cost_rows(cost: Option<&CostInfo>, credits: Option<f64>) -> Vec<PanelRow> {
+fn cost_rows(
+    cost: Option<&CostInfo>,
+    credits: Option<f64>,
+    credit_limit: Option<&CreditLimit>,
+) -> Vec<PanelRow> {
     let mut out = Vec::new();
     if let Some(cost) = cost {
         out.extend(spend_rows(cost));
@@ -522,12 +528,42 @@ fn cost_rows(cost: Option<&CostInfo>, credits: Option<f64>) -> Vec<PanelRow> {
         out.push(PanelRow::new("Credits", balance(remaining)));
     }
 
+    // A cap drawing on that balance goes under it, because it is the narrower
+    // of the two and reading it first would suggest the account has only that
+    // much. It is the one figure in this section with a threshold to tint
+    // against - a cap is exhaustible where a month's spend is not - so it is
+    // also the only one that carries a tone.
+    if let Some(cap) = credit_limit {
+        let title = credit_limit_title(cap.kind);
+        let mut r = PanelRow::new(title, balance(cap.remaining()));
+        r.suffix = format!("of {}", balance(cap.limit));
+        if let Some(percent) = cap.used_percent() {
+            r.badge = format!("{percent}% used");
+            r.badge_tone = Tone::for_percent(percent);
+        }
+        if let Some(resets) = cap.resets.as_deref() {
+            r.tooltip = format!("{title} resets {resets}");
+        }
+        out.push(r);
+    }
+
     // Sync stays last: it is the section's status line, not one of its figures.
     if let Some(note) = cost.and_then(|c| c.sync_note.as_ref()) {
         out.push(sync_row(note));
     }
 
     out
+}
+
+/// What a cap is called. The kind is the provider's; the words are ours.
+fn credit_limit_title(kind: CreditLimitKind) -> &'static str {
+    match kind {
+        CreditLimitKind::Key => "Key limit",
+        CreditLimitKind::Subscription => "Plan limit",
+        // A kind this build does not know still draws, under a word that is
+        // true of every cap there is.
+        CreditLimitKind::Other => "Spend limit",
+    }
 }
 
 fn sync_row(note: &SyncNote) -> PanelRow {
@@ -896,6 +932,7 @@ mod tests {
     fn row() -> ProviderRow {
         ProviderRow {
             stale_reason: None,
+            credit_limit: None,
             provider: "Claude".into(),
             session_used: Some(31),
             session_window_minutes: Some(300),

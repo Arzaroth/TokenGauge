@@ -740,7 +740,11 @@ fn to_payload(
         .as_ref()
         .and_then(|c| c.balance.as_ref())
         .and_then(json_num)
-        .map(|b| Credits { remaining: Some(b) });
+        .map(|b| Credits {
+            remaining: Some(b),
+            // Codex sells a plain balance with no cap in front of it.
+            limit: None,
+        });
 
     let mut extra_rate_windows = Vec::new();
     for w in monthly {

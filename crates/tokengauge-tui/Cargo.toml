@@ -3,6 +3,7 @@ name = "tokengauge-tui"
 version = "0.35.1"
 edition = "2024"
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 tokengauge-core = { path = "../tokengauge-core", features = ["self-update"] }

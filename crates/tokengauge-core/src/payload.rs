@@ -173,24 +173,42 @@ pub struct ProviderPayload {
 /// no events behind it cannot do either. No provider currently reports both,
 /// and the day one does is the day that precedence is worth arguing about
 /// rather than guessing at now.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+/// Each period is optional on its own, because a provider can report one and
+/// not another. Collapsing an unreported period to zero would state a figure
+/// the response withheld - and worse, would overwrite a good estimate with it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportedCost {
-    pub today_usd: f64,
-    pub weekly_usd: f64,
-    pub monthly_usd: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub today_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekly_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monthly_usd: Option<f64>,
 }
 
 impl ReportedCost {
-    /// As a [`CostInfo`], with the token counts left at zero: the provider
-    /// billed in money and never said how many tokens it was for, and a zero
-    /// there is read as "not reported" by everything that draws it.
-    pub fn to_cost_info(self) -> CostInfo {
-        CostInfo {
-            today_usd: self.today_usd,
-            monthly_usd: self.monthly_usd,
-            weekly_usd: self.weekly_usd,
-            ..CostInfo::default()
+    pub fn is_empty(&self) -> bool {
+        self.today_usd.is_none() && self.weekly_usd.is_none() && self.monthly_usd.is_none()
+    }
+
+    /// Write the periods this actually carries over `base`, leaving the rest
+    /// as they were.
+    ///
+    /// Per period rather than wholesale: a provider that reported today's
+    /// spend and not the month's would otherwise replace a month figure
+    /// ccusage had estimated with a zero nobody reported. The token counts are
+    /// never touched - the provider billed money and never said how many
+    /// tokens it was for.
+    pub fn apply_to(self, base: &mut CostInfo) {
+        if let Some(today) = self.today_usd {
+            base.today_usd = today;
+        }
+        if let Some(weekly) = self.weekly_usd {
+            base.weekly_usd = weekly;
+        }
+        if let Some(monthly) = self.monthly_usd {
+            base.monthly_usd = monthly;
         }
     }
 }

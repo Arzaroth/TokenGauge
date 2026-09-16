@@ -267,7 +267,9 @@ fn fold_reported_costs(report: &mut NativeCostReport, payloads: &[ProviderPayloa
         if crate::providers::natively_read().contains(&key.as_str()) {
             continue;
         }
-        report.costs.insert(key, reported.to_cost_info());
+        // Merged rather than inserted: a provider that reported one period and
+        // not another must not blank the others.
+        reported.apply_to(report.costs.entry(key).or_default());
     }
 }
 
@@ -580,9 +582,9 @@ mod tests {
         ProviderPayload {
             stale_reason: None,
             reported_cost: Some(ReportedCost {
-                today_usd: today,
-                weekly_usd: today * 4.0,
-                monthly_usd: monthly,
+                today_usd: Some(today),
+                weekly_usd: Some(today * 4.0),
+                monthly_usd: Some(monthly),
             }),
             provider: provider.into(),
             version: None,
@@ -640,6 +642,43 @@ mod tests {
         assert_eq!(
             report.costs[*covered].monthly_usd, 0.0,
             "{covered} has a reader, so the reader's answer had to stand"
+        );
+    }
+
+    /// A period the provider did not report must not blank whatever else had
+    /// answered for it. The old code collapsed every absent period to zero and
+    /// inserted the lot, so a response carrying only today's spend replaced a
+    /// month's estimate with nothing.
+    #[test]
+    fn a_period_that_went_unreported_leaves_the_existing_figure_alone() {
+        let mut report = NativeCostReport::default();
+        report.costs.insert(
+            "openrouter".into(),
+            CostInfo {
+                today_usd: 9.0,
+                weekly_usd: 90.0,
+                monthly_usd: 900.0,
+                ..CostInfo::default()
+            },
+        );
+
+        let mut only_today = reporting("OpenRouter", 1.25, 0.0);
+        only_today.reported_cost = Some(ReportedCost {
+            today_usd: Some(1.25),
+            weekly_usd: None,
+            monthly_usd: None,
+        });
+        fold_reported_costs(&mut report, &[only_today]);
+
+        let cost = &report.costs["openrouter"];
+        assert_eq!(cost.today_usd, 1.25, "the period it did report");
+        assert_eq!(
+            cost.weekly_usd, 90.0,
+            "the week it did not report was blanked"
+        );
+        assert_eq!(
+            cost.monthly_usd, 900.0,
+            "the month it did not report was blanked"
         );
     }
 

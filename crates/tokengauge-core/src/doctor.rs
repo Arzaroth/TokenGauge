@@ -539,7 +539,7 @@ pub fn doctor_lines(
         ok: true,
         detail: String::new(),
     });
-    match crate::read_update_status(&cfg.cache_file) {
+    match selvedge::state::read_update_status(&crate::update_status_path(&cfg.cache_file)) {
         Some(status) if status.available => record(DoctorCheck {
             label: "update available".into(),
             ok: true,
@@ -568,9 +568,9 @@ pub fn doctor_lines(
     #[cfg(unix)]
     {
         section("Desktop frontends");
-        use crate::frontend;
+        use crate::project::TOKENGAUGE;
         let binary = version;
-        let present = frontend::installed();
+        let present = selvedge::frontend::installed(&TOKENGAUGE);
         if present.is_empty() {
             record(DoctorCheck {
                 label: "none installed".into(),
@@ -936,8 +936,8 @@ mod tests {
         let lines = doctor_lines(&path, "0.0.0-test", |_| Vec::new());
         assert!(check(&lines, "no update check yet").is_some());
 
-        crate::write_update_status(
-            &cache,
+        selvedge::state::write_update_status(
+            &crate::update_status_path(&cache),
             &crate::UpdateStatus {
                 current: "0.0.0-test".into(),
                 latest: Some("9.9.9".into()),
@@ -951,8 +951,8 @@ mod tests {
         assert!(available.detail.contains("9.9.9"));
         assert!(available.ok, "an available update is news, not a fault");
 
-        crate::write_update_status(
-            &cache,
+        selvedge::state::write_update_status(
+            &crate::update_status_path(&cache),
             &crate::UpdateStatus {
                 current: "9.9.9".into(),
                 latest: Some("9.9.9".into()),

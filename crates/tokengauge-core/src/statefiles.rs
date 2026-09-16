@@ -301,49 +301,14 @@ pub struct NotifyEntry {
     pub resets_at: Option<String>,
 }
 
-/// Cached result of the last GitHub release check. Written by the waybar
-/// binary (which owns the network code) and read by the GUIs so opening the
-/// a panel frontend never triggers a network call.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct UpdateStatus {
-    /// Currently-installed version (no leading `v`).
-    #[serde(default)]
-    pub current: String,
-    /// Latest release version seen on GitHub (no leading `v` - self_update
-    /// normalizes the tag, e.g. `0.9.0`), if a check succeeded. Display sites
-    /// prepend their own `v`.
-    #[serde(default)]
-    pub latest: Option<String>,
-    /// True when `latest` is newer than `current`.
-    #[serde(default)]
-    pub available: bool,
-    /// Unix ms of the last successful check.
-    #[serde(default)]
-    pub checked_ms: i64,
-    /// Version we last fired a desktop notification for (one-shot guard).
-    #[serde(default)]
-    pub notified: Option<String>,
-}
-
+/// Where the cached update check lives. Derived from the snapshot's parent
+/// like every other state file, rather than from selvedge's own
+/// `$XDG_CACHE_HOME/<binary>/update.json`: the waybar binary writes this and
+/// the GUIs read it, and a disagreement about the path stops the update prompt
+/// working without failing anywhere.
 pub fn update_status_path(cache_file: &Path) -> PathBuf {
     let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
     parent.join("tokengauge-update.json")
-}
-
-pub fn read_update_status(cache_file: &Path) -> Option<UpdateStatus> {
-    let path = update_status_path(cache_file);
-    let contents = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&contents).ok()
-}
-
-pub fn write_update_status(cache_file: &Path, status: &UpdateStatus) -> Result<()> {
-    let path = update_status_path(cache_file);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).ok();
-    }
-    let contents = serde_json::to_string(status)?;
-    fs::write(&path, contents)
-        .with_context(|| format!("failed to write update status {}", path.display()))
 }
 
 pub fn notify_state_path(cache_file: &Path) -> PathBuf {

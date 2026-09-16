@@ -18,7 +18,8 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use tokengauge_core::update;
+use selvedge::update;
+use tokengauge_core::project::TOKENGAUGE;
 use tokengauge_core::{
     FetchResult, TokenGaugeConfig, cache_is_stale, load_config, payload_to_rows_with_costs,
     refresh_in_progress, refresh_sentinel_deadline_ms, refresh_sentinel_path,
@@ -80,7 +81,10 @@ pub(crate) fn notify_update_available(
 
     let mut persisted = status.clone();
     persisted.notified = Some(latest.clone());
-    let _ = tokengauge_core::write_update_status(&config.cache_file, &persisted);
+    let _ = selvedge::state::write_update_status(
+        &tokengauge_core::update_status_path(&config.cache_file),
+        &persisted,
+    );
 }
 
 /// Daemon thread: periodically check GitHub and notify once per new version.
@@ -91,7 +95,10 @@ pub(crate) fn daemon_update_loop(config: Arc<Mutex<TokenGaugeConfig>>) {
             thread::sleep(Duration::from_secs(3600));
             continue;
         }
-        match update::check(&snapshot.cache_file) {
+        match update::check(
+            &TOKENGAUGE,
+            &tokengauge_core::update_status_path(&snapshot.cache_file),
+        ) {
             Ok(status) => {
                 if status.available {
                     dlog(

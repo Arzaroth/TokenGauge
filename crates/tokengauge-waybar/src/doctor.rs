@@ -30,7 +30,7 @@ fn waybar_checks(cfg: &TokenGaugeConfig) -> Vec<DoctorLine> {
     // running the Plasma applet, the GNOME extension or the Omarchy widget,
     // having no waybar config is the normal state and not a fault.
     out.borrow_mut().push(DoctorLine::Heading("Bar wiring"));
-    let drawn_by: Vec<&str> = tokengauge_core::frontend::installed()
+    let drawn_by: Vec<&str> = selvedge::frontend::installed(&tokengauge_core::project::TOKENGAUGE)
         .iter()
         .map(|f| f.label)
         .collect();

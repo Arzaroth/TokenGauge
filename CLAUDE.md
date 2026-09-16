@@ -107,8 +107,8 @@ repository that is not installable as it sits. `scripts/build.sh` compiles it
 and assembles all three desktop payloads under `build/frontends/<payload>` -
 the release archive's own layout, so one path serves both. The `.ts` sources
 are dropped from the payload; the GSettings schemas stay XML, because the
-compiled blob belongs on the machine that runs the extension and `install_into`
-is what builds it.
+compiled blob belongs on the machine that runs the extension and
+`selvedge::frontend`'s `install_into` is what builds it.
 
 `Frontend.compiled` is what makes that safe: `payload_in` looks under `build/`
 for a compiled frontend and never falls back to its source directory, so
@@ -401,10 +401,44 @@ already have) and the `[waybar]` config section, which really is Waybar-specific
 `signal_daemon_reload()` matches `tokengauge(-waybar)? --daemon`, because a
 daemon started before the rename is the same process to reload.
 
+## The updater is a crate, and it is not in this repository
+
+Fetching a release, replacing the installed binaries, and reinstalling the
+desktop payloads out of the same archive is
+[selvedge](https://github.com/Arzaroth/selvedge), pinned by tag. TailGauge runs
+on the same crate, which is the point: both projects had the same 1,500 lines
+and both had to fix the same bug twice.
+
+What stays here is `crates/tokengauge-core/src/project.rs`, and it is only
+declarations: the binaries, the repository, the aliases, the frontends, the MSI
+marker key. `TOKENGAUGE` is threaded into every selvedge call rather than read
+from a global there.
+
+Three things are easy to get wrong:
+
+- **The cached update status is at TokenGauge's path, not selvedge's.** The
+  crate would put it at `$XDG_CACHE_HOME/<binary>/update.json`; here it is
+  `update_status_path`, beside the snapshot like every other state file,
+  because the waybar binary writes it and the GUIs read it. Every selvedge
+  entry point takes the path as an argument, so pass it. A disagreement about
+  this path stops the update prompt working and fails nowhere.
+- **`self-update` is a feature that maps, not one that ends.**
+  `self-update = ["selvedge/self-update"]`, and the crate is taken with
+  `default-features = false`, so `frontend` and `state` arrive without
+  `self_update` behind them. A default build still links reqwest - that is
+  ponytail, not the updater - so the check that means anything is
+  `cargo tree -p tokengauge-core -e normal | grep self_update`, which must come
+  back empty.
+- **A gap in the machinery is fixed in selvedge, not worked around here.**
+  Change it there, add a test there, cut a tag, repin. TailGauge pins the same
+  crate, so a breaking change is two repositories. The Windows half compiles
+  only in selvedge's CI, which has a `windows-latest` job for exactly that
+  reason.
+
 ## Windows installs itself three ways, into one directory
 
-`scripts/install.ps1`, `packaging/windows/tokengauge.wxs` and
-`update::apply_full` all write to `%LOCALAPPDATA%\TokenGauge\bin`. That is a
+`scripts/install.ps1`, `packaging/windows/tokengauge.wxs` and selvedge's
+`update::apply` all write to `%LOCALAPPDATA%\TokenGauge\bin`. That is a
 contract, not a coincidence: the updater replaces the binaries *beside the
 running one*, so an installer that chose a different directory would leave two
 copies on disk and only one of them would ever update. A user with a stray
@@ -419,14 +453,16 @@ the binaries are replaced in place as before. Replacing them underneath MSI is
 the thing to avoid - Windows would keep describing a version nobody is running,
 a repair would restore the old one, and the next MSI would compare against it.
 
-`msi_upgrade` returns while the installer is still running, and has to: the
-package replaces the executable calling it. That is why the caller exits
-promptly and why the tray quits when it launches an update.
+selvedge's `msi_upgrade` returns while the installer is still running, and has
+to: the package replaces the executable calling it. That is why a caller seeing
+`Applied.installer_launched` exits promptly rather than reporting a version, and
+why the tray quits when it launches an update.
 
 **Adding a release asset is a compatibility event.** `asset_for` matches by
 substring, so every updater already shipped takes whatever asset happens to
 match first. The MSI is named `win64`, not `windows-x86_64`, purely so old
-updaters cannot see it; new ones ask for `ARCHIVE_SUFFIX` explicitly. Name the
+updaters cannot see it; new ones ask for selvedge's `ARCHIVE_SUFFIX`
+explicitly. Name the
 next Windows asset carelessly and you break `--update` on machines whose
 binaries you can no longer change.
 

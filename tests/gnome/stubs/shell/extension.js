@@ -6,7 +6,10 @@
 
 export class Extension {
     constructor(metadata = {}) {
-        this.metadata = {uuid: 'tokengauge@arzaroth.github.io', 'version-name': '0.31.0', ...metadata};
+        // Deliberately not a real version: nothing here compares it to the
+        // binary's, and a plausible number would just be one more place a
+        // release has to remember to edit.
+        this.metadata = {uuid: 'tokengauge@arzaroth.github.io', 'version-name': '0.0.0-stub', ...metadata};
         this.uuid = this.metadata.uuid;
         this.settings = null;
         this.preferencesOpened = 0;

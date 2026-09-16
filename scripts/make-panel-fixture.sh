@@ -74,7 +74,14 @@ if panel["errors"]:
 if not panel["rows"]:
     raise SystemExit("the recording served no rows - the seed did not take")
 panel["revision_file"] = "/tmp/tokengauge/tokengauge-revision"
-panel["update"] = {"current": "0.31.0", "latest": "0.32.0", "available": True}
+# Derived from whatever the binary just reported, so a release never has to
+# edit this file: `current` is the real version and `latest` is one minor above
+# it, which is all the frontends' update banner needs to have something to draw.
+current = str(panel.get("version") or "0.0.0")
+parts = (current.split(".") + ["0", "0"])[:3]
+parts[1] = str(int(parts[1]) + 1 if parts[1].isdigit() else 1)
+parts[2] = "0"
+panel["update"] = {"current": current, "latest": ".".join(parts), "available": True}
 # Compact, because this is a recording and not something to read by eye. The
 # harnesses parse it; `python3 -m json.tool` is there for when you do not.
 open(sys.argv[2], "w").write(json.dumps(panel, sort_keys=True) + "\n")

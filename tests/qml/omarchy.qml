@@ -42,7 +42,12 @@ Item {
         check.equal("no errors", usage.errors.length, 0)
         check.equal("loading cleared", usage.loading, false)
         check.equal("the revision counter moved", usage.revision, 1)
-        check.equal("the version came off the snapshot", usage.version, "0.31.0")
+        // Against the recording rather than a literal: pinning the number here
+        // makes every release edit a test, and a release that forgets turns a
+        // green suite red for no reason anyone can act on.
+        var recorded = JSON.parse(panelJson)
+        check.equal("the version came off the snapshot", usage.version, recorded.version)
+        check.ok("and it is a version", /^[0-9]+\.[0-9]+\.[0-9]+/.test(usage.version))
         check.ok("the update banner has something to draw", usage.updateStatus.available)
 
         // The panel is the core's, walked rather than rebuilt. A widget that

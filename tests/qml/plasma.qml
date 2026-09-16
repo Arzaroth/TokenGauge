@@ -75,11 +75,13 @@ Item {
         check.ok("the update command was run", refresh !== null)
         service.reload()
         var plain = Registry.find("--json")
+        check.ok("the unrelated refresh ran", plain !== null)
         if (plain && plain.commandLine !== service.updateSource) {
             plain.answer(panelJson, "", 0)
             check.equal("an unrelated refresh does not disarm it", service.updating, true)
         }
         var mine = Registry.find("--update")
+        check.ok("the update command is on the registry", mine !== null)
         if (mine) {
             mine.answer(panelJson, "", 0)
             check.equal("its own completion does", service.updating, false)

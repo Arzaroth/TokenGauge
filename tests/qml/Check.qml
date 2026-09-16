@@ -63,6 +63,14 @@ Item {
                 var xhr = new XMLHttpRequest()
                 xhr.onreadystatechange = function () {
                     if (xhr.readyState !== XMLHttpRequest.DONE) return
+                    // A source that reads empty is a path that has gone stale,
+                    // and every check over it would pass by finding nothing.
+                    // `run` cannot have this hole - an empty fixture throws in
+                    // JSON.parse - but a source read is just a string.
+                    if (!xhr.responseText) {
+                        failures += 1
+                        console.warn("FAIL " + name + ": read nothing from " + path)
+                    }
                     loaded[key] = xhr.responseText
                     finish()
                 }

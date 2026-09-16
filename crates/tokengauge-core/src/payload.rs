@@ -82,20 +82,34 @@ pub struct Credits {
     pub limit: Option<CreditLimit>,
 }
 
+/// What kind of cap it is. A semantic tier, not a label: `panel.rs` turns it
+/// into the words a user reads, because that is where every other string a
+/// user reads is resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CreditLimitKind {
+    /// A spend cap on the credential being used, not on the account.
+    Key,
+    /// A cap that comes with a subscription tier.
+    Subscription,
+    /// A kind from a newer build. Degrades to a generic label rather than
+    /// failing the whole snapshot read, exactly as an unknown provider does.
+    #[serde(other)]
+    Other,
+}
+
 /// A named cap on credit, sitting in front of the balance above it.
-///
-/// `title` is the provider's own word for it, resolved here so no frontend has
-/// to invent one - the same rule the panel spec applies to every other string
-/// a user reads.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreditLimit {
-    pub title: String,
+    pub kind: CreditLimitKind,
     pub used: f64,
     pub limit: f64,
-    /// When the cap refills, if it does. A spend limit on a key does not.
+    /// How the cap refills, in the provider's own words - `daily`, `monthly` -
+    /// or `None` when it never does. Deliberately not an instant: OpenRouter
+    /// reports a period name, and there is no date to turn it into.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resets_at: Option<String>,
+    pub resets: Option<String>,
 }
 
 impl CreditLimit {

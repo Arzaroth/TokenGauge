@@ -437,21 +437,31 @@ fn kimi_auth() -> AuthStatus {
     }
 }
 
+/// Two credentials, one required. `/key` answers to any key; the account
+/// balance comes from `/credits`, which only a management key may ask. Say so
+/// when the second is absent rather than reporting a clean pass over a panel
+/// that will be missing its headline figure.
 fn openrouter_auth() -> AuthStatus {
-    match ["OPENROUTER_API_KEY", "OPENROUTER_KEY"]
+    let Some(var) = ["OPENROUTER_API_KEY", "OPENROUTER_KEY"]
         .into_iter()
         .find(|v| env_var_present(v))
-    {
-        Some(var) => AuthStatus {
-            ok: true,
-            detail: format!("{var} set"),
-            hint: "",
-        },
-        None => AuthStatus {
+    else {
+        return AuthStatus {
             ok: false,
             detail: "OPENROUTER_API_KEY unset".to_string(),
             hint: "set OPENROUTER_API_KEY from openrouter.ai/settings/keys",
+        };
+    };
+    let management = crate::openrouter::MANAGEMENT_KEY_ENVS
+        .iter()
+        .find(|v| env_var_present(v));
+    AuthStatus {
+        ok: true,
+        detail: match management {
+            Some(m) => format!("{var} set, {m} set"),
+            None => format!("{var} set, no management key (no account balance)"),
         },
+        hint: "",
     }
 }
 

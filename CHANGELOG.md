@@ -12,7 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **OpenRouter.** The first provider TokenGauge reads that sells credit rather
   than a plan: the panel shows the account balance, and the key's own spend cap
   under it when the key has one. Enable it with `openrouter = true` under
-  `[providers]` and set `OPENROUTER_API_KEY`.
+  `[providers]` and set `OPENROUTER_API_KEY`. Set `OPENROUTER_MANAGEMENT_KEY`
+  as well to see the account balance: `/credits` is account-wide and only a
+  management key may ask it, so without one the panel shows the key's cap and
+  spend and omits the balance rather than failing.
 - **A credit balance can have a named cap in front of it.** `Credits` held one
   number, and a provider can have two at once - an account balance every key
   draws on, and a cap on the thing being used. OpenRouter is exactly that, and

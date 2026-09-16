@@ -19,7 +19,9 @@
 use serde::Serialize;
 
 use crate::sync::DeviceCost;
-use crate::{CostInfo, CreditLimit, DayModelCost, ModelCost, ProviderRow, format_tokens};
+use crate::{
+    CostInfo, CreditLimit, CreditLimitKind, DayModelCost, ModelCost, ProviderRow, format_tokens,
+};
 
 /// Colour tier for a row, resolved from the value rather than from a palette -
 /// each frontend maps these onto its own theme.
@@ -532,14 +534,15 @@ fn cost_rows(
     // against - a cap is exhaustible where a month's spend is not - so it is
     // also the only one that carries a tone.
     if let Some(cap) = credit_limit {
-        let mut r = PanelRow::new(cap.title.clone(), balance(cap.remaining()));
+        let title = credit_limit_title(cap.kind);
+        let mut r = PanelRow::new(title, balance(cap.remaining()));
         r.suffix = format!("of {}", balance(cap.limit));
         if let Some(percent) = cap.used_percent() {
             r.badge = format!("{percent}% used");
             r.badge_tone = Tone::for_percent(percent);
         }
-        if let Some(resets) = cap.resets_at.as_deref() {
-            r.tooltip = format!("{} resets {resets}", cap.title);
+        if let Some(resets) = cap.resets.as_deref() {
+            r.tooltip = format!("{title} resets {resets}");
         }
         out.push(r);
     }
@@ -550,6 +553,17 @@ fn cost_rows(
     }
 
     out
+}
+
+/// What a cap is called. The kind is the provider's; the words are ours.
+fn credit_limit_title(kind: CreditLimitKind) -> &'static str {
+    match kind {
+        CreditLimitKind::Key => "Key limit",
+        CreditLimitKind::Subscription => "Plan limit",
+        // A kind this build does not know still draws, under a word that is
+        // true of every cap there is.
+        CreditLimitKind::Other => "Spend limit",
+    }
 }
 
 fn sync_row(note: &SyncNote) -> PanelRow {

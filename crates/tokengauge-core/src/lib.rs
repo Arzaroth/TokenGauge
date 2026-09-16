@@ -39,6 +39,7 @@ mod claude;
 mod codex;
 pub mod config;
 pub mod cost;
+mod cursor;
 mod device;
 pub mod doctor;
 pub mod fetch;

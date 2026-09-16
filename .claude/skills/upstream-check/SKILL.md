@@ -33,14 +33,14 @@ CodexBar is a macOS menu-bar app with a much wider provider list than ours.
 Most of every release is noise for us.
 
 **Signal** - anything touching a provider we ship (Claude, Codex, Kimi, Grok,
-z.ai/GLM, OpenRouter, opencode Go), specifically: auth file locations and
+z.ai/GLM, OpenRouter, opencode Go, Cursor), specifically: auth file locations and
 credential shapes, endpoints and their headers, response fields and quota
 types, window classification and labels, ccusage-equivalent cost maths, and
 pace.
 
 **Noise** - SwiftUI, menu bar layouts and tokens, widgets, Settings, iCloud and
 Keychain plumbing, localization, the Spend dashboard's internals, and every
-provider we do not ship (Cursor, Antigravity, Kiro, Fireworks, T3 Chat, ...).
+provider we do not ship (Antigravity, Kiro, Fireworks, T3 Chat, Devin, ...).
 opencode **Zen** belongs on this list and opencode **Go** does not: they are
 separate products on one account and only Go is shipped.
 macOS-only paths we deliberately skipped stay skipped: browser-cookie imports

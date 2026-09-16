@@ -95,7 +95,7 @@ There are two routes and the cheap one is not the obvious one:
 
 Do (1) first.
 
-### Four more providers, and what actually blocks each
+### The remaining providers, and what actually blocks each
 
 `openrouter` and `opencode` landed in 0.32.0 and 0.33.0. The four below were
 scoped at the same time; the research is here so it is not redone. CodexBar
@@ -103,22 +103,12 @@ ships all of them, but it is a macOS app with an embedded browser and automatic
 cookie import, so *how* it reaches one says little about whether we can.
 `akitaonrails/ai-usagebar` is the better precedent: same language, no browser.
 
-**Cursor** is the best of the four by data quality and the only one with a
-dependency question. `individual_usage.plan` gives `total_percent_used`,
-`auto_percent_used` and `api_percent_used` - three ready percentages - with
-`billing_cycle_end` as the reset, and `on_demand.used` / `.limit` is exactly a
-`CreditLimit`. The credential is not a browser session: ai-usagebar reads
-Cursor's own token out of `.../User/globalStorage/state.vscdb`, takes the `sub`
-claim off the JWT, and builds the `WorkosCursorSessionToken` cookie the
-dashboard call expects. That is "a credential is where the tool put it",
-exactly as CLAUDE.md has it.
-
-**The nasty part is `rusqlite`.** `state.vscdb` is a SQLite file and every
-dependency in `tokengauge-core` today is justified in a comment as adding no
-new crate. `rusqlite` pulls C, and it would land on the `cross`-built aarch64
-and the Windows job. Settle that before writing a line: bundled SQLite in the
-release pipeline is the decision, not the parsing. **Effort: M**, almost all of
-it the dependency.
+**Cursor** shipped in this branch, and cost no dependency after all. The
+`rusqlite` question was a false alarm: `state.vscdb` is one of *two* sources,
+and the other is a plain `auth.json` the `cursor-agent` CLI writes. Reading the
+IDE's SQLite is still the only route for someone who runs the desktop app and
+never the CLI - worth adding behind an optional feature if anyone asks, and not
+before.
 
 **Devin** needs no new dependency and has the worst credential story: a bearer
 token the user copies out of `app.devin.ai` by hand, which expires. CodexBar
@@ -146,9 +136,9 @@ nor ai-usagebar has anything to copy.
 and message-count limits rather than anything the panel models. It is on the
 upstream-check Noise list for that reason.
 
-Meta's check is done and closed it. Cursor is next, and its token was verified
-present on a real install (`cursorAuth/accessToken`, a JWT, in the `ItemTable`
-of `state.vscdb`) - so the only open question there is the dependency.
+Meta's check is done and closed it. Cursor shipped. Devin is what is left, and
+it is a judgement call about the paste-and-expire workflow rather than a
+technical one.
 
 ### A macOS surface
 

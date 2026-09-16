@@ -32,6 +32,7 @@ pub struct ProvidersConfig {
     pub glm: Option<bool>,
     pub openrouter: Option<bool>,
     pub opencode: Option<bool>,
+    pub cursor: Option<bool>,
     /// Removed-provider keys (e.g. `[providers.zai]`) left over from older
     /// configs. Captured so `--doctor` can warn instead of silently ignoring.
     #[serde(flatten)]

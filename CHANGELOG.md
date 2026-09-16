@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The updater and the payload installer are now the
   [selvedge](https://github.com/Arzaroth/selvedge) crate, shared with
   TailGauge, rather than 1,500 lines kept in step by hand in two repositories.
-  Nothing changes for a user: the same archive is fetched, the same binaries
-  and frontends are replaced, and the cached update status stays at the path
-  it has always been written to.
+  The same binaries and frontends are replaced, and the cached update status
+  stays at the path it has always been written to. The Windows fix below is
+  the one thing a user could notice.
 
 ### Fixed
 

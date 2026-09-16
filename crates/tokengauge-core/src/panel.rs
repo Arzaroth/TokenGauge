@@ -19,7 +19,7 @@
 use serde::Serialize;
 
 use crate::sync::DeviceCost;
-use crate::{CostInfo, DayModelCost, ModelCost, ProviderRow, format_tokens};
+use crate::{CostInfo, CreditLimit, DayModelCost, ModelCost, ProviderRow, format_tokens};
 
 /// Colour tier for a row, resolved from the value rather than from a palette -
 /// each frontend maps these onto its own theme.
@@ -195,7 +195,7 @@ pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
     // A provider can have one without the other: a plan sells a window and a
     // reader prices its transcripts, while a prepaid provider sells a balance
     // and writes nothing to read.
-    let cost_rows = cost_rows(row.cost.as_ref(), row.credits);
+    let cost_rows = cost_rows(row.cost.as_ref(), row.credits, row.credit_limit.as_ref());
     if !cost_rows.is_empty() {
         out.push(Section {
             id: "cost",
@@ -509,7 +509,11 @@ fn limit_rows(row: &ProviderRow) -> Vec<PanelRow> {
 // Cost
 // ---------------------------------------------------------------------------
 
-fn cost_rows(cost: Option<&CostInfo>, credits: Option<f64>) -> Vec<PanelRow> {
+fn cost_rows(
+    cost: Option<&CostInfo>,
+    credits: Option<f64>,
+    credit_limit: Option<&CreditLimit>,
+) -> Vec<PanelRow> {
     let mut out = Vec::new();
     if let Some(cost) = cost {
         out.extend(spend_rows(cost));
@@ -520,6 +524,24 @@ fn cost_rows(cost: Option<&CostInfo>, credits: Option<f64>) -> Vec<PanelRow> {
     // this is the only row in the section; for Codex it sits below a month's spend.
     if let Some(remaining) = credits {
         out.push(PanelRow::new("Credits", balance(remaining)));
+    }
+
+    // A cap drawing on that balance goes under it, because it is the narrower
+    // of the two and reading it first would suggest the account has only that
+    // much. It is the one figure in this section with a threshold to tint
+    // against - a cap is exhaustible where a month's spend is not - so it is
+    // also the only one that carries a tone.
+    if let Some(cap) = credit_limit {
+        let mut r = PanelRow::new(cap.title.clone(), balance(cap.remaining()));
+        r.suffix = format!("of {}", balance(cap.limit));
+        if let Some(percent) = cap.used_percent() {
+            r.badge = format!("{percent}% used");
+            r.badge_tone = Tone::for_percent(percent);
+        }
+        if let Some(resets) = cap.resets_at.as_deref() {
+            r.tooltip = format!("{} resets {resets}", cap.title);
+        }
+        out.push(r);
     }
 
     // Sync stays last: it is the section's status line, not one of its figures.
@@ -896,6 +918,7 @@ mod tests {
     fn row() -> ProviderRow {
         ProviderRow {
             stale_reason: None,
+            credit_limit: None,
             provider: "Claude".into(),
             session_used: Some(31),
             session_window_minutes: Some(300),

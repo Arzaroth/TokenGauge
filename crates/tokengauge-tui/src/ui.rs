@@ -889,6 +889,7 @@ mod tests {
             tertiary_used: None,
             tertiary_reset: "—".into(),
             credits: None,
+            credit_limit: None,
             source: "oauth".into(),
             updated: "now".into(),
             updated_iso: None,

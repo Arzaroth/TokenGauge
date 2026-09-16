@@ -600,6 +600,7 @@ pub(crate) mod tests {
             tertiary_used: None,
             tertiary_reset: "—".to_string(),
             credits: None,
+            credit_limit: None,
             source: "oauth".to_string(),
             updated: "07:37".to_string(),
             updated_iso: None,

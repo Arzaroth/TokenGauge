@@ -32,6 +32,10 @@ pub struct ProviderRow {
     /// A prepaid balance in USD, for the providers that sell one instead of a
     /// window. [`crate::panel`] formats it; a row does not.
     pub credits: Option<f64>,
+    /// A named cap drawing on that same balance, for the providers that have
+    /// both. Kept beside `credits` rather than replacing it, so the shape of
+    /// `credits` in the snapshot every frontend parses does not move.
+    pub credit_limit: Option<CreditLimit>,
     pub source: String,
     pub updated: String,
     pub updated_iso: Option<String>,
@@ -251,7 +255,10 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
             .collect();
     }
 
-    let credits = payload.credits.and_then(|credits| credits.remaining);
+    let (credits, credit_limit) = match payload.credits {
+        Some(credits) => (credits.remaining, credits.limit),
+        None => (None, None),
+    };
 
     let source = match (payload.version, payload.source) {
         (Some(version), Some(source)) => format!("{version} ({source})"),
@@ -273,6 +280,7 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
         tertiary_used,
         tertiary_reset,
         credits,
+        credit_limit,
         source,
         updated,
         updated_iso,
@@ -563,6 +571,7 @@ mod tests {
             usage: None,
             credits: Some(Credits {
                 remaining: Some(42.567),
+                limit: None,
             }),
             error: None,
             stale: false,

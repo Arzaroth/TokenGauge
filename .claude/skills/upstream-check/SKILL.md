@@ -12,7 +12,7 @@ any of them move except this check.
 | Upstream | What we took | What can rot |
 | --- | --- | --- |
 | [steipete/CodexBar](https://github.com/steipete/CodexBar) (MIT, macOS/Swift) | The provider protocols behind `crates/tokengauge-core/src/{claude,codex,kimi,grok,glm}.rs`, `pace.rs` (a port of `UsagePace.swift`), and `assets/providers/ProviderIcon-*.svg` | An endpoint or auth shape moves, a payload grows a field we drop on the floor, a provider bug they fixed is still ours |
-| [basecamp/omarchy](https://github.com/basecamp/omarchy) (default branch `quattro`) | Nothing copied. `omarchy/arzaroth.tokengauge` is a third-party plugin loaded into omarchy-shell, adapted from their `omarchy.agents` widget | The shell internals we import have no stability promise (the project is `4.0.0.alpha`), and their widget grows panel features ours lacks |
+| [basecamp/omarchy](https://github.com/basecamp/omarchy) (MIT, default branch `quattro`) | `omarchy/arzaroth.tokengauge` is a third-party plugin loaded into omarchy-shell, adapted from their `omarchy.agents` plugin and carrying roughly a quarter of its lines - the Flickable and KeyboardPanel scaffolding, the IpcHandler surface. Their MIT notice rides in the payload's `NOTICE` | The shell internals we import have no stability promise (the project is `4.0.0.alpha`), and their widget grows panel features ours lacks |
 | [akitaonrails/ai-usagebar](https://github.com/akitaonrails/ai-usagebar) (MIT, Rust) | Nothing copied. A parallel implementation of the same idea, added 2026-09-14 | Same language and same serde as us, so a bug they fix is usually ours verbatim - their 1.12.x `null`-for-a-list fix was our bug on two Claude fields |
 
 Read `BASELINES.md` in this folder first: it records what each upstream looked

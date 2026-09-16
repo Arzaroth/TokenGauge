@@ -81,7 +81,10 @@ jobs:
           # GNOME extension's TypeScript compiled and dropped. Copying the
           # source directories instead would ship .ts files the shell refuses.
           cp -r build/frontends dist/frontends
-          tar -czf "dist/tokengauge-${SAFE_REF}-linux-x86_64.tar.gz" -C dist tokengauge tokengauge-waybar tokengauge-tui frontends
+          # MIT asks that its notice travel with a copy, and an archive is a
+          # copy. THIRD-PARTY.md is what points at the notices it applies to.
+          cp LICENSE LICENSE-MIT LICENSE-WTFPL THIRD-PARTY.md dist/
+          tar -czf "dist/tokengauge-${SAFE_REF}-linux-x86_64.tar.gz" -C dist tokengauge tokengauge-waybar tokengauge-tui frontends LICENSE LICENSE-MIT LICENSE-WTFPL THIRD-PARTY.md
 
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -156,7 +159,10 @@ jobs:
           # GNOME extension's TypeScript compiled and dropped. Copying the
           # source directories instead would ship .ts files the shell refuses.
           cp -r build/frontends dist/frontends
-          tar -czf "dist/tokengauge-${SAFE_REF}-linux-aarch64.tar.gz" -C dist tokengauge tokengauge-waybar tokengauge-tui frontends
+          # MIT asks that its notice travel with a copy, and an archive is a
+          # copy. THIRD-PARTY.md is what points at the notices it applies to.
+          cp LICENSE LICENSE-MIT LICENSE-WTFPL THIRD-PARTY.md dist/
+          tar -czf "dist/tokengauge-${SAFE_REF}-linux-aarch64.tar.gz" -C dist tokengauge tokengauge-waybar tokengauge-tui frontends LICENSE LICENSE-MIT LICENSE-WTFPL THIRD-PARTY.md
 
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -204,7 +210,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target/x86_64-pc-windows-msvc/release/tokengauge-tui.exe dist/
           Copy-Item target/x86_64-pc-windows-msvc/release/tokengauge-tray.exe dist/
-          Compress-Archive -Path dist/tokengauge-tui.exe,dist/tokengauge-tray.exe -DestinationPath "dist/tokengauge-$safe-windows-x86_64.zip" -Force
+          # MIT asks that its notice travel with a copy, and an archive is a copy.
+          Copy-Item LICENSE,LICENSE-MIT,LICENSE-WTFPL,THIRD-PARTY.md dist/
+          Compress-Archive -Path dist/tokengauge-tui.exe,dist/tokengauge-tray.exe,dist/LICENSE,dist/LICENSE-MIT,dist/LICENSE-WTFPL,dist/THIRD-PARTY.md -DestinationPath "dist/tokengauge-$safe-windows-x86_64.zip" -Force
 
       # The per-user MSI, for install and uninstall through Settings > Apps.
       # The zip stays the primary asset: an unsigned MSI trips SmartScreen,

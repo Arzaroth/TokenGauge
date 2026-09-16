@@ -3,6 +3,7 @@ name = "tokengauge-waybar"
 version = "0.35.1"
 edition = "2024"
 rust-version.workspace = true
+license.workspace = true
 
 # The crate grew out of a Waybar module and is now the shared backend every
 # frontend shells out to, so the binary is named for what it is. The old name

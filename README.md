@@ -1,6 +1,6 @@
 # TokenGauge
 
-[![GitHub release](https://img.shields.io/github/v/release/Arzaroth/TokenGauge)](https://github.com/Arzaroth/TokenGauge/releases)
+[![GitHub release](https://img.shields.io/github/v/release/Arzaroth/TokenGauge)](https://github.com/Arzaroth/TokenGauge/releases) [![License: MIT OR WTFPL](https://img.shields.io/badge/License-MIT%20OR%20WTFPL-brightgreen.svg)](LICENSE)
 
 Monitor token usage, costs, and limits for AI coding assistants from your Waybar, KDE Plasma panel, GNOME Shell panel, and TUI. Usage limits are fetched natively over HTTP for Claude, Codex, Kimi, Grok, GLM (z.ai), OpenRouter, opencode Go and Cursor, and costs are read natively too - straight from the transcripts the CLIs write, rated against [LiteLLM](https://github.com/BerriAI/litellm)'s price table. [ccusage](https://github.com/ryoppippi/ccusage) is optional, kept as a fallback and a cross-check. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
 
@@ -694,3 +694,41 @@ cargo build --release -p tokengauge-tray
 Usage limits are fetched natively over HTTP on Windows, same as on Linux - no
 extra binary is needed. Sign in to the `codex` and/or `claude` CLIs so
 TokenGauge can read their OAuth credentials, then run `tokengauge-tui`.
+
+## Acknowledgements
+
+**[CodexBar](https://github.com/steipete/CodexBar)** by Peter Steinberger is
+why most of this works. It is the macOS menu-bar app TokenGauge started from,
+and the place the provider protocols were worked out: which endpoint answers
+for a plan, what the payload looks like, where each CLI keeps its credential.
+`pace.rs` is a port of its `UsagePace.swift`, the provider icons are its files,
+and the credits model follows its `CreditsSnapshot`. MIT.
+
+**[Orestis Ioannou](https://github.com/oorestisime)** started TokenGauge -
+"Waybar & Tui support for codexbar" - and this fork's own history begins at
+0.5.0. Everyone who has written part of it since is on the
+[contributors page](https://github.com/Arzaroth/TokenGauge/graphs/contributors).
+
+**[basecamp/omarchy](https://github.com/basecamp/omarchy)** is what the
+Quickshell widget plugs into, and the widget is adapted from their own
+`omarchy.agents` plugin - about a quarter of its lines are theirs. MIT, and a
+third-party plugin rather than an endorsed one.
+
+**[akitaonrails/ai-usagebar](https://github.com/akitaonrails/ai-usagebar)** is a
+parallel implementation in the same language. Nothing is copied from it, but it
+is read: a bug they fix is usually ours too. MIT.
+
+Costs are rated against [LiteLLM](https://github.com/BerriAI/litellm)'s price
+table, and [ccusage](https://github.com/ryoppippi/ccusage) remains the
+cross-check.
+
+`THIRD-PARTY.md` has the details, including what each licence requires.
+
+## License
+
+Dual-licensed: use it under **either** the [MIT License](LICENSE-MIT) **or** the
+[WTFPL](LICENSE-WTFPL), whichever you prefer
+(`SPDX-License-Identifier: MIT OR WTFPL`).
+
+Work taken from other projects keeps its own terms - see
+[THIRD-PARTY.md](THIRD-PARTY.md).

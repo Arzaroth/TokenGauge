@@ -66,14 +66,17 @@ jobs:
         with:
           node-version: '22'
 
-      # qmllint reads QML; qml-qt6 is what runs it, and it ships no QML modules
-      # of its own, so QtQuick is a third package. The offscreen platform the
-      # harness renders on comes along inside libqt6gui6t64.
+      # qmllint reads QML; qml-qt6 is what runs it. Neither it nor
+      # qml6-module-qtquick depends on the QML modules QtQuick imports for you
+      # - QtQml.WorkerScript is the one that bit - so the modules are installed
+      # by pattern rather than named one CI round at a time. The offscreen
+      # platform the harness renders on is already inside libqt6gui6t64.
       - name: Install the Qt QML tooling
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qt6-declarative-dev-tools qml-qt6 qml6-module-qtquick
+            qt6-declarative-dev-tools qml-qt6 \
+            '^qml6-module-qtqml' '^qml6-module-qtquick'
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

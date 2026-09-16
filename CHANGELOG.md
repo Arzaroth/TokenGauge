@@ -7,14 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.1] - 2026-09-16
+
 ### Changed
 
 - The updater and the payload installer are now the
   [selvedge](https://github.com/Arzaroth/selvedge) crate, shared with
   TailGauge, rather than 1,500 lines kept in step by hand in two repositories.
   The same binaries and frontends are replaced, and the cached update status
-  stays at the path it has always been written to. The Windows fix below is
-  the one thing a user could notice.
+  stays at the path it has always been written to. What a user could notice is
+  the fixes below, three of which came out of moving this code somewhere it
+  could be tested.
 
 ### Fixed
 
@@ -1040,7 +1043,8 @@ Major feature batch on top of upstream v0.4.2.
 
 Released by the upstream project, [oorestisime/TokenGauge](https://github.com/oorestisime/TokenGauge/releases). This fork's own history starts at 0.5.0.
 
-[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.35.0...HEAD
+[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.35.1...HEAD
+[0.35.1]: https://github.com/Arzaroth/TokenGauge/compare/v0.35.0...v0.35.1
 [0.35.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.32.0...v0.33.0

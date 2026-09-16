@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "arzaroth.tokengauge",
   "name": "TokenGauge",
-  "version": "0.35.0",
+  "version": "0.35.1",
   "author": "Arzaroth",
   "license": "MIT",
   "description": "Token usage, limits, pace, and cost for Claude, Codex, Kimi, Grok, GLM, OpenRouter, opencode Go and Cursor in an Omarchy bar panel.",

@@ -153,6 +153,64 @@ pub struct ProviderPayload {
     /// restore, so it always names the fetch that failed most recently.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale_reason: Option<String>,
+    /// Spend the provider reported about itself. See [`ReportedCost`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_cost: Option<ReportedCost>,
+}
+
+/// Spend a provider reports about itself, in USD.
+///
+/// Costs are read, not asked for: `cost/` parses the transcripts the CLIs
+/// write and rates them against LiteLLM's table, and ccusage is the fallback
+/// for providers no reader covers. A third source needs a reason, and
+/// OpenRouter is it - there is no transcript anywhere to parse, and the figures
+/// come from the vendor doing the billing, so they are better than an estimate
+/// rather than merely different from one.
+///
+/// **It fills a gap; it never overrides a read.** A provider a reader covers
+/// keeps the reader's answer, because that is the one that produces the
+/// per-call events fleet sync buckets and history is drawn from - a total with
+/// no events behind it cannot do either. No provider currently reports both,
+/// and the day one does is the day that precedence is worth arguing about
+/// rather than guessing at now.
+/// Each period is optional on its own, because a provider can report one and
+/// not another. Collapsing an unreported period to zero would state a figure
+/// the response withheld - and worse, would overwrite a good estimate with it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportedCost {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub today_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekly_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monthly_usd: Option<f64>,
+}
+
+impl ReportedCost {
+    pub fn is_empty(&self) -> bool {
+        self.today_usd.is_none() && self.weekly_usd.is_none() && self.monthly_usd.is_none()
+    }
+
+    /// Write the periods this actually carries over `base`, leaving the rest
+    /// as they were.
+    ///
+    /// Per period rather than wholesale: a provider that reported today's
+    /// spend and not the month's would otherwise replace a month figure
+    /// ccusage had estimated with a zero nobody reported. The token counts are
+    /// never touched - the provider billed money and never said how many
+    /// tokens it was for.
+    pub fn apply_to(self, base: &mut CostInfo) {
+        if let Some(today) = self.today_usd {
+            base.today_usd = today;
+        }
+        if let Some(weekly) = self.weekly_usd {
+            base.weekly_usd = weekly;
+        }
+        if let Some(monthly) = self.monthly_usd {
+            base.monthly_usd = monthly;
+        }
+    }
 }
 
 impl ProviderPayload {
@@ -381,6 +439,7 @@ mod tests {
     fn provider_payload_has_error_true() {
         let payload = ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "test".to_string(),
             version: None,
             source: None,
@@ -400,6 +459,7 @@ mod tests {
     fn provider_payload_has_error_false() {
         let payload = ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "test".to_string(),
             version: None,
             source: None,

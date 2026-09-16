@@ -146,6 +146,8 @@ impl ProviderPayload {
     pub(crate) fn live(provider: &str, source: &str, usage: UsageSnapshot) -> Self {
         Self {
             stale_reason: None,
+            // A fetcher that has spend to report sets it after; almost none do.
+            reported_cost: None,
             provider: provider.to_string(),
             version: None,
             source: Some(source.to_string()),

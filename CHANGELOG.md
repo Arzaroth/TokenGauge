@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A provider can report its own spend, and OpenRouter does.** Costs are read
+  from transcripts and rated against LiteLLM's table, with ccusage as the
+  fallback for providers no reader covers. OpenRouter has no transcript
+  anywhere to read, and it reports what it billed - so its today, this-week
+  and this-month figures now reach the cost section instead of being dropped.
+
+  It fills a gap and never overrides a reader: a provider a transcript reader
+  covers keeps the reader's answer, because that is the one producing the
+  per-call events fleet sync buckets and history is drawn from. It does
+  outrank ccusage for its own provider, on the grounds that a figure from
+  whoever did the billing beats an estimate.
+
 ## [0.33.0] - 2026-09-16
 
 ### Added

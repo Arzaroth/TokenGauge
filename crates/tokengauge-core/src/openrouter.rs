@@ -16,14 +16,12 @@
 //! | --- | --- | --- |
 //! | `total_credits` - `total_usage` | [`Credits::remaining`] | the balance, the headline |
 //! | `limit`, `limit_remaining` | [`CreditLimit`], and a window | a cap is both money and exhaustible |
-//! | `usage_daily` / `weekly` / `monthly` | nowhere, yet | spend over a period is cost, not a limit |
+//! | `usage_daily` / `weekly` / `monthly` | [`ReportedCost`] | spend over a period is cost, not a limit |
 //!
-//! That last row is unfinished on purpose. The three figures are OpenRouter's
-//! own billing numbers and are better than anything a transcript reader could
-//! produce, but `CostInfo` is assembled from readers and ccusage, and there is
-//! no channel for a provider that reports its own cost. They are parsed and
-//! dropped until there is one; inventing a side door for one provider is how
-//! the cost pipeline stops having one shape.
+//! That last row is the reason `ReportedCost` exists. The three figures are
+//! OpenRouter's own billing numbers, there is no transcript anywhere to read
+//! for this provider, and a vendor's own total is better than an estimate
+//! rather than merely different from one.
 //!
 //! The third row is the one worth stating out loud: those three look like
 //! TokenGauge's three windows and are not. A window is a quota you can exhaust;
@@ -140,18 +138,11 @@ struct KeyData {
     /// does. A period name, not a timestamp.
     #[serde(default)]
     limit_reset: Option<String>,
-    // Read off the wire and routed nowhere yet - see the module note. Kept
-    // rather than dropped because they are the contract, and a test pins that
-    // they parse; deleting them means rediscovering the API shape when the
-    // channel for a self-reported cost arrives.
     #[serde(default)]
-    #[allow(dead_code)]
     usage_daily: Option<f64>,
     #[serde(default)]
-    #[allow(dead_code)]
     usage_weekly: Option<f64>,
     #[serde(default)]
-    #[allow(dead_code)]
     usage_monthly: Option<f64>,
     #[serde(default)]
     is_free_tier: Option<bool>,
@@ -258,6 +249,21 @@ fn to_payload(credits: CreditsData, key: KeyData, now: DateTime<Utc>) -> Provide
             remaining: balance,
             limit: cap,
         });
+    }
+
+    // OpenRouter bills in money and tells us what it billed, which is better
+    // than an estimate rather than merely different from one. There is no
+    // transcript anywhere to read for it, so nothing else can answer at all.
+    // Period by period: a figure OpenRouter did not report stays unreported
+    // rather than becoming a zero, or a period it happened to omit would
+    // overwrite whatever else had answered for it.
+    let spend = crate::ReportedCost {
+        today_usd: money(key.usage_daily),
+        weekly_usd: money(key.usage_weekly),
+        monthly_usd: money(key.usage_monthly),
+    };
+    if !spend.is_empty() {
+        payload.reported_cost = Some(spend);
     }
 
     payload
@@ -493,21 +499,39 @@ mod tests {
         );
     }
 
+    /// A period OpenRouter did not report stays unreported. Collapsing it to
+    /// zero would state a figure the response withheld, and downstream that
+    /// zero would overwrite whatever else had answered for the period.
+    #[test]
+    fn a_period_openrouter_omitted_is_absent_rather_than_zero() {
+        let mut k = key();
+        k.usage_weekly = None;
+        k.usage_monthly = None;
+        let payload = to_payload(credits(Some(100.0), Some(10.0)), k, at());
+        let spend = payload.reported_cost.expect("today was reported");
+        assert_eq!(spend.today_usd, Some(1.25));
+        assert_eq!(spend.weekly_usd, None);
+        assert_eq!(spend.monthly_usd, None);
+
+        // And a response reporting none of them carries nothing at all.
+        let mut silent = key();
+        silent.usage_daily = None;
+        silent.usage_weekly = None;
+        silent.usage_monthly = None;
+        let payload = to_payload(credits(Some(100.0), Some(10.0)), silent, at());
+        assert!(payload.reported_cost.is_none());
+    }
+
     /// The three `usage_*` fields look like TokenGauge's three windows and are
     /// not: they are money already spent, with nothing to be a fraction of.
-    /// They are read off the wire and deliberately go nowhere yet - routing
-    /// them needs a channel for a provider that reports its own cost, which
-    /// does not exist. What this holds is that they never become a window.
+    /// They leave as cost; what this holds is that they never become a window.
     #[test]
     fn period_spend_is_read_but_never_becomes_a_window() {
-        let parsed: Envelope<KeyData> = serde_json::from_str(
-            r#"{"data":{"usage_daily":1.25,"usage_weekly":8.0,"usage_monthly":31.5}}"#,
-        )
-        .unwrap();
-        assert_eq!(parsed.data.usage_daily, Some(1.25));
-        assert_eq!(parsed.data.usage_monthly, Some(31.5));
-
         let payload = to_payload(credits(Some(100.0), Some(10.0)), key(), at());
+        let spend = payload.reported_cost.expect("spend");
+        assert_eq!(spend.today_usd, Some(1.25));
+        assert_eq!(spend.monthly_usd, Some(31.5));
+
         let usage = payload.usage.expect("usage");
         assert!(usage.tertiary.is_none(), "monthly spend became a window");
         assert!(

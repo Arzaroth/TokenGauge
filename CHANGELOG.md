@@ -30,6 +30,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ever had - including the widget tree it draws, which nothing else in the
   repository could see. All three read the same recorded panel, so a frontend
   and the binary cannot quietly disagree about it.
+- **The extension's pure helpers are testable.** `shellQuote` and `isCancelled`
+  were copied into `extension.ts` and `prefs.ts` verbatim - one copy too many
+  for a function whose whole job is to be exactly right - and the drawing
+  helpers were private, so nothing could hold them to a value. They are
+  `util.ts` and `widgets.ts` now, with unit tests for the boundaries the
+  end-to-end harness cannot reach: a fraction above 1 from a provider over its
+  quota, a corner radius wider than the bar it rounds, a step that spent a
+  little never drawing as a step that spent nothing, and a tooltip on the first
+  row of the popup with no room above it.
+- **Three pieces of Rust logic that nothing tested now have tests.** Every
+  state file is asserted to be derived from the snapshot's parent - nine of
+  them, the rule the whole of `--config` rests on, and not one had been
+  checked. `kimi::usage_endpoint` normalises whichever part of the
+  `coding/v1` path a reseller's docs told the user to paste. And the waybar
+  bar's three Pango formatters are held to the same escaping the GNOME
+  extension already was, because a provider's error body reaches them
+  unescaped otherwise.
 - Plasma's data layer moved out of `main.qml` into `Service.qml` so it can be
   instantiated without a plasmoid around it. The applet draws the same thing;
   `CompactRep` and `FullRep` did not change a line, and a check holds every

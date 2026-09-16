@@ -19,10 +19,16 @@ sha2 = "0.10"
 chacha20poly1305 = "0.10"
 hmac = "0.12"
 flate2 = "1"
-# ponytail: blocking+json+rustls are already compiled via self_update, so this
-# adds zero new crates. Not feature-gated - tray needs it and popover already
-# links GTK4, so the weight is noise; gate later only if popover build bites.
+# ponytail. Not feature-gated - tray needs it and popover already links GTK4,
+# so the weight is noise; gate later only if popover build bites. It is why a
+# default build still links reqwest: `self-update` governs self_update, not the
+# network stack as a whole.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+# The updater and the payload installer, shared with TailGauge. Taken without
+# default features so the half that links a network stack arrives only with
+# `self-update`; `frontend` and `state` are always here, because a GUI reads
+# the cached check and installs payloads without ever fetching one.
+selvedge = { git = "https://github.com/Arzaroth/selvedge", tag = "v0.2.1", default-features = false }
 self_update = { version = "0.44", default-features = false, features = ["reqwest", "rustls", "archive-tar", "compression-flate2", "archive-zip", "compression-zip-deflate"], optional = true }
 http = { version = "1", optional = true }
 
@@ -41,4 +47,4 @@ keyring = { version = "3", default-features = false, features = ["apple-native"]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 [features]
-self-update = ["dep:self_update", "dep:http"]
+self-update = ["dep:self_update", "dep:http", "selvedge/self-update"]

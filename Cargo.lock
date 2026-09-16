@@ -4498,6 +4498,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "selvedge"
+version = "0.2.1"
+source = "git+https://github.com/Arzaroth/selvedge?tag=v0.2.1#5c73c4dd36be04024fc71981522e3549511282d8"
+dependencies = [
+ "anyhow",
+ "http",
+ "self_update",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5088,6 +5100,7 @@ dependencies = [
  "keyring",
  "reqwest",
  "self_update",
+ "selvedge",
  "serde",
  "serde_json",
  "sha2",

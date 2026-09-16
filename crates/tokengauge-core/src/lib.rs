@@ -31,6 +31,8 @@
 // `self-update` pulls in.
 pub mod frontend;
 
+pub mod project;
+
 #[cfg(feature = "self-update")]
 pub mod update;
 

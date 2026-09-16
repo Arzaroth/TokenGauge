@@ -5,7 +5,7 @@
   "version": "0.32.0",
   "author": "Arzaroth",
   "license": "MIT",
-  "description": "Token usage, limits, pace, and cost for Claude, Codex, Kimi, Grok, GLM and OpenRouter in an Omarchy bar panel.",
+  "description": "Token usage, limits, pace, and cost for Claude, Codex, Kimi, Grok, GLM, OpenRouter and opencode Go in an Omarchy bar panel.",
   "kinds": ["bar-widget"],
   "activation": "on-demand",
   "entryPoints": {

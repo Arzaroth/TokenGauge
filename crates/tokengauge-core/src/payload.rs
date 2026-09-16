@@ -178,6 +178,7 @@ impl Default for TokenGaugeConfig {
                 grok: None,
                 glm: None,
                 openrouter: None,
+                opencode: None,
                 unknown: HashMap::new(),
             },
             cost_source: CostSource::default(),

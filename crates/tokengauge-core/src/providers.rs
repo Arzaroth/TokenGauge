@@ -20,7 +20,9 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use chrono::Utc;
 
-use crate::{ProviderPayload, ProvidersConfig, claude, codex, glm, grok, kimi, openrouter};
+use crate::{
+    ProviderPayload, ProvidersConfig, claude, codex, glm, grok, kimi, opencode, openrouter,
+};
 
 /// Whether a provider's credentials are currently available, and where from.
 pub struct AuthStatus {
@@ -182,6 +184,33 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         auth: openrouter_auth,
         enabled_in: |c| c.openrouter,
     },
+    ProviderMeta {
+        id: "opencode",
+        // Go specifically, not Zen: the two are separate products on one
+        // account and only Go has limits to draw. If Zen's balance ever
+        // becomes readable it is its own row, not a second meaning for this
+        // one.
+        label: "opencode Go",
+        // The key is minted on the web and pasted into the TUI with
+        // `/connect`; opencode's own store has never been read here, so there
+        // is no CLI credential to name.
+        cli: None,
+        glyph: "\u{f121}",
+        color_hex: "#5B9DD9",
+        icon_slug: Some("opencode"),
+        urls: ProviderUrls {
+            dashboard: Some("https://opencode.ai/auth"),
+            status: None,
+        },
+        // opencode's caps are per-model dollar amounts, and the API aggregates
+        // them into these three periods before we see them: the 5-hour window
+        // is 20% of the monthly cap, the weekly 50%.
+        windows: ("5-hour", "Weekly", "Monthly"),
+        natively_read: false,
+        fetch: opencode::fetch,
+        auth: opencode_auth,
+        enabled_in: |c| c.opencode,
+    },
 ];
 
 /// The row for a provider, or `None` for a name from a config or a snapshot
@@ -193,7 +222,15 @@ pub fn provider_meta(id: &str) -> Option<&'static ProviderMeta> {
 
 /// Every provider id, in the order the table lists them - which is the order
 /// they appear in the bar and in the settings pane.
-pub const PROVIDERS: &[&str] = &["codex", "claude", "kimi", "grok", "glm", "openrouter"];
+pub const PROVIDERS: &[&str] = &[
+    "codex",
+    "claude",
+    "kimi",
+    "grok",
+    "glm",
+    "openrouter",
+    "opencode",
+];
 
 /// The providers a transcript reader can produce events for on its own.
 ///
@@ -437,6 +474,24 @@ fn kimi_auth() -> AuthStatus {
     }
 }
 
+fn opencode_auth() -> AuthStatus {
+    match ["OPENCODE_API_KEY", "OPENCODE_GO_API_KEY"]
+        .into_iter()
+        .find(|v| env_var_present(v))
+    {
+        Some(var) => AuthStatus {
+            ok: true,
+            detail: format!("{var} set"),
+            hint: "",
+        },
+        None => AuthStatus {
+            ok: false,
+            detail: "OPENCODE_API_KEY unset".to_string(),
+            hint: "subscribe to opencode Go and set OPENCODE_API_KEY from opencode.ai/auth",
+        },
+    }
+}
+
 /// Two credentials, one required. `/key` answers to any key; the account
 /// balance comes from `/credits`, which only a management key may ask. Say so
 /// when the second is absent rather than reporting a clean pass over a panel
@@ -648,6 +703,7 @@ mod tests {
                 "grok" => config.grok = Some(true),
                 "glm" => config.glm = Some(true),
                 "openrouter" => config.openrouter = Some(true),
+                "opencode" => config.opencode = Some(true),
                 other => panic!("{other} has no field in this test - add it with the row"),
             }
             assert_eq!(

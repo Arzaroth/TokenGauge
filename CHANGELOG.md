@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **opencode Go.** The $10/month subscription's three spend caps, drawn as the
+  5-hour, weekly and monthly windows they are. Enable it with
+  `opencode = true` under `[providers]` and set `OPENCODE_API_KEY` from
+  opencode.ai/auth. A window opencode reports as rate-limited says so rather
+  than leaving you to infer it from 100%.
+
+  Only Go, not Zen: they are separate products on one account, and Zen's
+  prepaid balance needs a browser session that a terminal panel has no way to
+  hold. If that changes it becomes its own provider rather than a second
+  meaning for this one.
+
 ## [0.32.0] - 2026-09-16
 
 ### Added

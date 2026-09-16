@@ -95,6 +95,55 @@ There are two routes and the cheap one is not the obvious one:
 
 Do (1) first.
 
+### Four more providers, and what actually blocks each
+
+`openrouter` and `opencode` landed in 0.32.0 and 0.33.0. The four below were
+scoped at the same time; the research is here so it is not redone. CodexBar
+ships all of them, but it is a macOS app with an embedded browser and automatic
+cookie import, so *how* it reaches one says little about whether we can.
+`akitaonrails/ai-usagebar` is the better precedent: same language, no browser.
+
+**Cursor** is the best of the four by data quality and the only one with a
+dependency question. `individual_usage.plan` gives `total_percent_used`,
+`auto_percent_used` and `api_percent_used` - three ready percentages - with
+`billing_cycle_end` as the reset, and `on_demand.used` / `.limit` is exactly a
+`CreditLimit`. The credential is not a browser session: ai-usagebar reads
+Cursor's own token out of `.../User/globalStorage/state.vscdb`, takes the `sub`
+claim off the JWT, and builds the `WorkosCursorSessionToken` cookie the
+dashboard call expects. That is "a credential is where the tool put it",
+exactly as CLAUDE.md has it.
+
+**The nasty part is `rusqlite`.** `state.vscdb` is a SQLite file and every
+dependency in `tokengauge-core` today is justified in a comment as adding no
+new crate. `rusqlite` pulls C, and it would land on the `cross`-built aarch64
+and the Windows job. Settle that before writing a line: bundled SQLite in the
+release pipeline is the decision, not the parsing. **Effort: M**, almost all of
+it the dependency.
+
+**Devin** needs no new dependency and has the worst credential story: a bearer
+token the user copies out of `app.devin.ai` by hand, which expires. CodexBar
+offers nothing better. It does carry an "Extra usage balance" alongside ACU
+consumption, which is a second `CreditLimit` case worth having. **Effort: S**
+for the fetcher, and the paste-and-expire workflow is the real cost - decide
+whether that is a provider worth shipping at all before building it.
+
+**Meta (Muse Spark)** is greenfield: neither upstream implements it. It is a
+credits provider in the same shape as OpenRouter - per-token pricing, $20 of
+credits on signup, a cheaper Contributor tier with a 100 rpm cap - so
+`Credits`, `CreditLimit` and `ReportedCost` already fit it without new
+vocabulary. **The unknown is at the front and it is the whole job:** find
+whether `ai.developer.meta.com` exposes a balance or usage endpoint at all, and
+whether it answers to an ordinary API key. If it does not, there is nothing to
+build. US-only preview at the time of writing, which also caps who it helps.
+**Effort: S if the endpoint exists, otherwise zero.**
+
+**T3 Chat** is the one to leave. A cookie with no local file behind it, no API,
+and message-count limits rather than anything the panel models. It is on the
+upstream-check Noise list for that reason.
+
+Do Meta's endpoint check first - it is an afternoon and it either opens a cheap
+provider or closes the question. Then decide Cursor's dependency.
+
 ### A macOS surface
 
 macOS is the strangest hole in the project. `claude.rs` reads the macOS keychain

@@ -28,4 +28,4 @@ serde_json = "1.0"
 # The updater and the payload installer, shared with TailGauge. Off by
 # default: `frontend` and `state` come without a network stack, and the crates
 # that fetch a release ask for `self-update` by name.
-selvedge = { git = "https://github.com/Arzaroth/selvedge", tag = "v0.2.1", default-features = false }
+selvedge = { git = "https://github.com/Arzaroth/selvedge", tag = "v0.3.0", default-features = false }

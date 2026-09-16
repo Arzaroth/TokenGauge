@@ -112,14 +112,21 @@ fn session_cookie(token: &str) -> Result<String> {
     Ok(format!("{user_id}%3A%3A{token}"))
 }
 
-fn summary_url(override_base: Option<&str>) -> Result<String> {
+fn request_base(override_base: Option<&str>) -> Result<&str> {
     let base = override_base
         .unwrap_or(DEFAULT_BASE_URL)
         .trim_end_matches('/');
     if !base.starts_with("https://") {
         return Err(anyhow!("Cursor base URL must use HTTPS"));
     }
-    Ok(format!("{base}/api/usage-summary"))
+    Ok(base)
+}
+
+fn summary_url(override_base: Option<&str>) -> Result<String> {
+    Ok(format!(
+        "{}/api/usage-summary",
+        request_base(override_base)?
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -274,17 +281,15 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let token = access_token()?;
     let cookie = session_cookie(&token)?;
     let base = env_clean(BASE_URL_ENV);
-    let url = summary_url(base.as_deref())?;
+    let origin = request_base(base.as_deref())?;
+    let url = summary_url(Some(origin))?;
     let client = http_client(timeout)?;
 
     let resp = client
         .get(&url)
         .header("cookie", format!("WorkosCursorSessionToken={cookie}"))
-        .header("origin", base.as_deref().unwrap_or(DEFAULT_BASE_URL))
-        .header(
-            "referer",
-            format!("{}/dashboard", base.as_deref().unwrap_or(DEFAULT_BASE_URL)),
-        )
+        .header("origin", origin)
+        .header("referer", format!("{origin}/dashboard"))
         .header("user-agent", BROWSER_UA)
         .header("accept", "application/json")
         .send()
@@ -497,5 +502,21 @@ mod tests {
             let err = summary_url(Some(bad)).unwrap_err().to_string();
             assert!(err.contains("HTTPS"), "{bad} was accepted: {err}");
         }
+    }
+
+    /// `Origin` carries a serialized origin, which has no trailing slash, and
+    /// the same string has to build the URL or the two describe different hosts.
+    #[test]
+    fn a_trailing_slash_on_the_base_reaches_neither_the_url_nor_the_headers() {
+        let origin = request_base(Some("https://proxy.test/")).unwrap();
+        assert_eq!(origin, "https://proxy.test");
+        assert_eq!(
+            format!("{origin}/dashboard"),
+            "https://proxy.test/dashboard"
+        );
+        assert_eq!(
+            summary_url(Some(origin)).unwrap(),
+            "https://proxy.test/api/usage-summary"
+        );
     }
 }

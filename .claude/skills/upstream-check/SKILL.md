@@ -1,17 +1,19 @@
 ---
 name: upstream-check
-description: Routine review of the two projects TokenGauge borrowed code from - steipete/CodexBar (the native provider fetchers, the pace metric, the provider icons) and basecamp/omarchy (the shell surfaces the bar widget rides on, plus the omarchy.agents widget ours was adapted from). Use for "did upstream move", "should we backport", "check codexbar", "check omarchy", "upstream check", or any periodic upstream drift review.
+description: Routine review of the three projects TokenGauge tracks - steipete/CodexBar (the native provider fetchers, the pace metric, the provider icons), basecamp/omarchy (the shell surfaces the bar widget rides on, plus the omarchy.agents widget ours was adapted from), and akitaonrails/ai-usagebar (nothing copied; a Rust sibling whose fixes port directly). Use for "did upstream move", "should we backport", "check codexbar", "check omarchy", "check ai-usagebar", "upstream check", or any periodic upstream drift review.
 ---
 
 # Upstream check
 
 TokenGauge internalized work from two projects and depends on neither at
-runtime. Nothing tells us when they move except this check.
+runtime, and watches a third that it took nothing from. Nothing tells us when
+any of them move except this check.
 
 | Upstream | What we took | What can rot |
 | --- | --- | --- |
 | [steipete/CodexBar](https://github.com/steipete/CodexBar) (MIT, macOS/Swift) | The provider protocols behind `crates/tokengauge-core/src/{claude,codex,kimi,grok,glm}.rs`, `pace.rs` (a port of `UsagePace.swift`), and `assets/providers/ProviderIcon-*.svg` | An endpoint or auth shape moves, a payload grows a field we drop on the floor, a provider bug they fixed is still ours |
 | [basecamp/omarchy](https://github.com/basecamp/omarchy) (default branch `quattro`) | Nothing copied. `omarchy/arzaroth.tokengauge` is a third-party plugin loaded into omarchy-shell, adapted from their `omarchy.agents` widget | The shell internals we import have no stability promise (the project is `4.0.0.alpha`), and their widget grows panel features ours lacks |
+| [akitaonrails/ai-usagebar](https://github.com/akitaonrails/ai-usagebar) (MIT, Rust) | Nothing copied. A parallel implementation of the same idea, added 2026-09-14 | Same language and same serde as us, so a bug they fix is usually ours verbatim - their 1.12.x `null`-for-a-list fix was our bug on two Claude fields |
 
 Read `BASELINES.md` in this folder first: it records what each upstream looked
 like at the last check. Update it at the end of every run.
@@ -112,6 +114,30 @@ removed in the same branch (`a1ddb5d`): polling GitHub on behalf of every
 TokenGauge user, for a project they may not run, does not belong in the product.
 It stays a local maintenance task, which is what this skill is.
 
+## ai-usagebar
+
+The newest of the three and the only one in our own language. Nothing was
+forked from it, so there is no drift to measure - what it is good for is
+**shared bugs**, and those transfer verbatim rather than needing translation
+out of Swift.
+
+```bash
+gh api repos/akitaonrails/ai-usagebar/releases --paginate \
+  --jq '.[] | select(.published_at > "<baseline date>") | "## \(.tag_name) (\(.published_at[0:10]))\n\(.body)\n"' \
+  > /tmp/ai-usagebar-releases.md
+```
+
+Read the notes for provider-response handling above all: both projects parse
+the same JSON from the same vendors with the same `serde`, so a deserialization
+trap they hit is one we almost certainly carry. That is how the
+present-but-null collection bug reached us - `#[serde(default)]` covers an
+absent field, not an explicit `null`, and the failure is not scoped to the
+field, it fails the whole response.
+
+It also covers providers we do not: check its list before designing a new
+fetcher, because a working Rust implementation of one beats transcribing
+CodexBar's Swift.
+
 ## Report
 
 Answer both questions plainly, then list backport candidates worth the work:
@@ -121,7 +147,8 @@ issues or start implementing without being asked - this check ends in a
 recommendation.
 
 Finish by rewriting `BASELINES.md` with today's date, the newest CodexBar
-release tag, and the current `basecamp/omarchy` HEAD sha on `quattro`:
+release tag, the current `basecamp/omarchy` HEAD sha on `quattro`, and the
+newest `akitaonrails/ai-usagebar` release tag:
 
 ```bash
 gh api repos/basecamp/omarchy/commits/quattro --jq '.sha'

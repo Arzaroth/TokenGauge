@@ -127,22 +127,28 @@ consumption, which is a second `CreditLimit` case worth having. **Effort: S**
 for the fetcher, and the paste-and-expire workflow is the real cost - decide
 whether that is a provider worth shipping at all before building it.
 
-**Meta (Muse Spark)** is greenfield: neither upstream implements it. It is a
+**Meta (Muse Spark)** is **closed for now, and the check is done.** It is a
 credits provider in the same shape as OpenRouter - per-token pricing, $20 of
 credits on signup, a cheaper Contributor tier with a 100 rpm cap - so
-`Credits`, `CreditLimit` and `ReportedCost` already fit it without new
-vocabulary. **The unknown is at the front and it is the whole job:** find
-whether `ai.developer.meta.com` exposes a balance or usage endpoint at all, and
-whether it answers to an ordinary API key. If it does not, there is nothing to
-build. US-only preview at the time of writing, which also caps who it helps.
-**Effort: S if the endpoint exists, otherwise zero.**
+`Credits`, `CreditLimit` and `ReportedCost` would have fitted it without new
+vocabulary. But the Meta Model API is `https://api.meta.ai/v1/messages`, an
+OpenAI-compatible chat endpoint with an API key, and **no credits or usage
+endpoint is documented**: the balance lives in the dashboard. That is the same
+position OpenAI's own API is in, and it is why there is no `openai` provider
+here either.
+
+Reopen it if any of these change: Meta documents a balance endpoint; the
+dashboard is found to call one an ordinary key can reach; or the preview leaves
+US-only with a fuller API. Nothing to build until then, and neither CodexBar
+nor ai-usagebar has anything to copy.
 
 **T3 Chat** is the one to leave. A cookie with no local file behind it, no API,
 and message-count limits rather than anything the panel models. It is on the
 upstream-check Noise list for that reason.
 
-Do Meta's endpoint check first - it is an afternoon and it either opens a cheap
-provider or closes the question. Then decide Cursor's dependency.
+Meta's check is done and closed it. Cursor is next, and its token was verified
+present on a real install (`cursorAuth/accessToken`, a JWT, in the `ItemTable`
+of `state.vscdb`) - so the only open question there is the dependency.
 
 ### A macOS surface
 

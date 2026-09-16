@@ -706,11 +706,8 @@ and the credits model follows its `CreditsSnapshot`. MIT.
 
 **[Orestis Ioannou](https://github.com/oorestisime)** started TokenGauge -
 "Waybar & Tui support for codexbar" - and this fork's own history begins at
-0.5.0. The install and update scripts, the CI and release workflows and parts
-of the README are still substantially his.
-
-**[boubou666](https://github.com/boubou666)** wrote the Windows half: the tray,
-the PowerShell installer, and the packaging behind them.
+0.5.0. Everyone who has written part of it since is on the
+[contributors page](https://github.com/Arzaroth/TokenGauge/graphs/contributors).
 
 **[basecamp/omarchy](https://github.com/basecamp/omarchy)** is what the
 Quickshell widget plugs into, and the widget is adapted from their own

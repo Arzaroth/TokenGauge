@@ -35,9 +35,7 @@ Tui support for codexbar". This fork's own history starts at 0.5.0.
 
 **It states no licence**, and that is recorded here rather than resolved. The
 terms in `LICENSE` are this project's own; they are not a grant anyone else
-made. Work by Orestis Ioannou survives in `scripts/install.sh`,
-`.github/workflows/`, `README.md` and `crates/tokengauge-waybar/src/main.rs`,
-and is credited below.
+made.
 
 ## basecamp/omarchy - MIT
 
@@ -65,18 +63,10 @@ two Claude fields.
 
 ## People
 
-TokenGauge is not the work of one person, and the licence covers what each of
-them wrote:
-
-- **[boubou666](https://github.com/boubou666)** wrote the Windows half: the
-  tray (`crates/tokengauge-tray`), `scripts/install.ps1`, and much of the
-  release workflow that packages them. Contributed through pull requests to
-  this repository, and has agreed to these terms.
-- **[Orestis Ioannou](https://github.com/oorestisime)** started the project.
-  `scripts/install.sh`, `scripts/update.sh`, the CI and release workflows and
-  parts of the README and the waybar binary are still substantially his.
-
-`git shortlog -sn` is the current count.
+TokenGauge is not the work of one person. `LICENSE` covers the contributions
+of everyone who has written part of it, and who that is stays where it cannot
+go stale: `git shortlog -sn`, or the
+[contributors page](https://github.com/Arzaroth/TokenGauge/graphs/contributors).
 
 ## Provider brand marks
 

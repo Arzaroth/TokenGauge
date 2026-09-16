@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The PATH walk behind the "open the TUI" command and `--doctor` answered for
   any readable file with the right name. A `kitty` that was never made
   executable was picked as the terminal, and `--doctor` called it green.
+- **An update could install binaries for another platform.** The release asset
+  was matched by archive suffix as well as by platform, but the matcher fell
+  back to the suffix alone, so a release whose aarch64 build failed handed an
+  aarch64 machine the x86_64 tarball and the update succeeded. A release that
+  does not carry this platform is refused as one.
 
 ## [0.35.0] - 2026-09-16
 

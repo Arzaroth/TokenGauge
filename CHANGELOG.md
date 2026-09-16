@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **TokenGauge has a licence.** It is dual-licensed MIT OR WTFPL: use it under
+  whichever you prefer. Release archives now carry the licence files and
+  `THIRD-PARTY.md`.
+- `THIRD-PARTY.md` and an Acknowledgements section credit the projects this one
+  is built on, first among them
+  [CodexBar](https://github.com/steipete/CodexBar), which is where most of the
+  provider protocols were worked out and which `pace.rs`, the provider icons
+  and the credits model all come from.
+
 ## [0.35.1] - 2026-09-16
 
 ### Changed

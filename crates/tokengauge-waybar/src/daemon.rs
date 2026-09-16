@@ -807,6 +807,7 @@ mod tests {
             ..Default::default()
         };
         let payload = ProviderPayload {
+            reported_cost: None,
             stale_reason: None,
             provider: "claude".into(),
             version: None,
@@ -895,6 +896,7 @@ mod tests {
             ..Default::default()
         };
         let payload = ProviderPayload {
+            reported_cost: None,
             stale_reason: None,
             provider: "claude".into(),
             version: None,

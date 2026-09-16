@@ -153,6 +153,46 @@ pub struct ProviderPayload {
     /// restore, so it always names the fetch that failed most recently.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale_reason: Option<String>,
+    /// Spend the provider reported about itself. See [`ReportedCost`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_cost: Option<ReportedCost>,
+}
+
+/// Spend a provider reports about itself, in USD.
+///
+/// Costs are read, not asked for: `cost/` parses the transcripts the CLIs
+/// write and rates them against LiteLLM's table, and ccusage is the fallback
+/// for providers no reader covers. A third source needs a reason, and
+/// OpenRouter is it - there is no transcript anywhere to parse, and the figures
+/// come from the vendor doing the billing, so they are better than an estimate
+/// rather than merely different from one.
+///
+/// **It fills a gap; it never overrides a read.** A provider a reader covers
+/// keeps the reader's answer, because that is the one that produces the
+/// per-call events fleet sync buckets and history is drawn from - a total with
+/// no events behind it cannot do either. No provider currently reports both,
+/// and the day one does is the day that precedence is worth arguing about
+/// rather than guessing at now.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportedCost {
+    pub today_usd: f64,
+    pub weekly_usd: f64,
+    pub monthly_usd: f64,
+}
+
+impl ReportedCost {
+    /// As a [`CostInfo`], with the token counts left at zero: the provider
+    /// billed in money and never said how many tokens it was for, and a zero
+    /// there is read as "not reported" by everything that draws it.
+    pub fn to_cost_info(self) -> CostInfo {
+        CostInfo {
+            today_usd: self.today_usd,
+            monthly_usd: self.monthly_usd,
+            weekly_usd: self.weekly_usd,
+            ..CostInfo::default()
+        }
+    }
 }
 
 impl ProviderPayload {
@@ -381,6 +421,7 @@ mod tests {
     fn provider_payload_has_error_true() {
         let payload = ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "test".to_string(),
             version: None,
             source: None,
@@ -400,6 +441,7 @@ mod tests {
     fn provider_payload_has_error_false() {
         let payload = ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "test".to_string(),
             version: None,
             source: None,

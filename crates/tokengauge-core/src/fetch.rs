@@ -229,11 +229,45 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
     // Only now are the provider windows known, and the session figures are
     // measured against the real one rather than an inferred block.
     cost::anchor_burn_rates(&mut report, &payloads);
+    fold_reported_costs(&mut report, &payloads);
     FetchResult {
         payloads,
         errors,
         costs: report.costs,
         sync: report.sync,
+    }
+}
+
+/// Fold in the spend a provider reported about itself.
+///
+/// The third cost source, and the narrowest: it fills a gap, it never
+/// overrides a read. A provider a transcript reader covers keeps the reader's
+/// answer, because that is the one producing the per-call events fleet sync
+/// buckets and history is drawn from - a monthly total with no events behind
+/// it can do neither.
+///
+/// It does outrank ccusage for its own provider, which is the one precedence
+/// worth stating: ccusage estimates from transcripts it can find, and a figure
+/// from the vendor doing the billing is better than an estimate rather than
+/// merely different from one. `fetch_costs` has already filled the gaps it
+/// could by the time this runs, so overwriting here is overwriting ccusage
+/// specifically.
+fn fold_reported_costs(report: &mut NativeCostReport, payloads: &[ProviderPayload]) {
+    for payload in payloads {
+        let Some(reported) = payload.reported_cost else {
+            continue;
+        };
+        let key = payload.provider.to_lowercase();
+        // A reader's answer stands, and whether one exists is already declared
+        // rather than inferred: `ProviderMeta.natively_read` is exactly "a
+        // transcript reader produces per-call events for this". Testing the
+        // cost map instead would not work here - `fetch_costs` has already
+        // filled its gaps from ccusage by now, so a present entry says nothing
+        // about which source put it there.
+        if crate::providers::natively_read().contains(&key.as_str()) {
+            continue;
+        }
+        report.costs.insert(key, reported.to_cost_info());
     }
 }
 
@@ -542,10 +576,98 @@ pub fn diagnose_costs(
 mod tests {
     use super::*;
 
+    fn reporting(provider: &str, today: f64, monthly: f64) -> ProviderPayload {
+        ProviderPayload {
+            stale_reason: None,
+            reported_cost: Some(ReportedCost {
+                today_usd: today,
+                weekly_usd: today * 4.0,
+                monthly_usd: monthly,
+            }),
+            provider: provider.into(),
+            version: None,
+            source: None,
+            usage: None,
+            credits: None,
+            error: None,
+            stale: false,
+        }
+    }
+
+    /// The third cost source, and the narrowest. A provider no reader covers
+    /// gets its own figures, because nothing else can answer at all.
+    #[test]
+    fn a_provider_that_reports_its_own_spend_fills_a_gap_no_reader_can() {
+        let mut report = NativeCostReport::default();
+        fold_reported_costs(&mut report, &[reporting("OpenRouter", 1.25, 31.5)]);
+
+        let cost = report.costs.get("openrouter").expect("a cost row");
+        assert_eq!(cost.today_usd, 1.25);
+        assert_eq!(cost.monthly_usd, 31.5);
+        assert_eq!(cost.weekly_usd, 5.0);
+        assert_eq!(
+            cost.today_tokens, 0,
+            "the vendor billed money and never said how many tokens for"
+        );
+    }
+
+    /// It outranks ccusage for its own provider - a figure from whoever did
+    /// the billing beats an estimate - and `fetch_costs` has already filled
+    /// what gaps it could by the time this runs, so an entry here is ccusage's.
+    #[test]
+    fn a_reported_figure_outranks_the_ccusage_estimate_it_replaces() {
+        let mut report = NativeCostReport::default();
+        report.costs.insert("openrouter".into(), zero_cost());
+        fold_reported_costs(&mut report, &[reporting("OpenRouter", 4.0, 40.0)]);
+        assert_eq!(report.costs["openrouter"].monthly_usd, 40.0);
+    }
+
+    /// But it never overrides a transcript reader. That answer is the one
+    /// producing the per-call events fleet sync buckets and history is drawn
+    /// from, and a monthly total with no events behind it can do neither.
+    ///
+    /// Whether a reader exists is declared rather than inferred: it is exactly
+    /// what `ProviderMeta.natively_read` means.
+    #[test]
+    fn a_reported_figure_never_overrides_a_provider_a_reader_covers() {
+        let read = crate::providers::natively_read();
+        let covered = read.first().expect("some provider has a reader");
+
+        let mut report = NativeCostReport::default();
+        report.costs.insert((*covered).into(), zero_cost());
+        fold_reported_costs(&mut report, &[reporting(covered, 99.0, 999.0)]);
+
+        assert_eq!(
+            report.costs[*covered].monthly_usd, 0.0,
+            "{covered} has a reader, so the reader's answer had to stand"
+        );
+    }
+
+    /// A payload with nothing to report changes nothing, which is every
+    /// provider but one.
+    #[test]
+    fn a_payload_with_no_reported_spend_is_left_alone() {
+        let mut report = NativeCostReport::default();
+        let quiet = ProviderPayload {
+            stale_reason: None,
+            reported_cost: None,
+            provider: "claude".into(),
+            version: None,
+            source: None,
+            usage: None,
+            credits: None,
+            error: None,
+            stale: false,
+        };
+        fold_reported_costs(&mut report, &[quiet]);
+        assert!(report.costs.is_empty());
+    }
+
     #[test]
     fn apply_stale_fallback_serves_last_good_and_keeps_uncovered_errors() {
         let good_claude = ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "claude".into(),
             version: None,
             source: None,
@@ -577,6 +699,7 @@ mod tests {
     fn apply_stale_fallback_skips_providers_with_a_live_payload() {
         let cached = ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "claude".into(),
             version: None,
             source: None,
@@ -591,6 +714,7 @@ mod tests {
         // sibling sub-payload; a stale clone must not be added (no dup row).
         let mut payloads = vec![ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "claude".into(),
             version: None,
             source: None,
@@ -620,6 +744,7 @@ mod tests {
         let previous = vec![
             ProviderPayload {
                 stale_reason: None,
+                reported_cost: None,
                 provider: "claude".into(),
                 version: None,
                 source: Some("oauth".into()),
@@ -630,6 +755,7 @@ mod tests {
             },
             ProviderPayload {
                 stale_reason: None,
+                reported_cost: None,
                 provider: "claude".into(),
                 version: None,
                 source: Some("cli".into()),

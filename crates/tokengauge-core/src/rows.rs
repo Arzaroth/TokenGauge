@@ -459,6 +459,7 @@ mod tests {
         };
         ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "claude".to_string(),
             version: None,
             source: None,
@@ -534,6 +535,7 @@ mod tests {
     fn payload_to_rows_filters_errors() {
         let good = ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "claude".to_string(),
             version: None,
             source: None,
@@ -544,6 +546,7 @@ mod tests {
         };
         let bad = ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "codex".to_string(),
             version: None,
             source: None,
@@ -565,6 +568,7 @@ mod tests {
     fn payload_to_rows_carries_the_credit_balance() {
         let payload = ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "zai".to_string(),
             version: None,
             source: None,
@@ -585,6 +589,7 @@ mod tests {
         // Both version and source
         let payload1 = ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "claude".to_string(),
             version: Some("2.1.12".to_string()),
             source: Some("oauth".to_string()),
@@ -599,6 +604,7 @@ mod tests {
         // Only version
         let payload2 = ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "claude".to_string(),
             version: Some("2.1.12".to_string()),
             source: None,
@@ -613,6 +619,7 @@ mod tests {
         // Only source
         let payload3 = ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "claude".to_string(),
             version: None,
             source: Some("oauth".to_string()),
@@ -627,6 +634,7 @@ mod tests {
         // Neither
         let payload4 = ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: "claude".to_string(),
             version: None,
             source: None,

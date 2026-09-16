@@ -16,14 +16,12 @@
 //! | --- | --- | --- |
 //! | `total_credits` - `total_usage` | [`Credits::remaining`] | the balance, the headline |
 //! | `limit`, `limit_remaining` | [`CreditLimit`], and a window | a cap is both money and exhaustible |
-//! | `usage_daily` / `weekly` / `monthly` | nowhere, yet | spend over a period is cost, not a limit |
+//! | `usage_daily` / `weekly` / `monthly` | [`ReportedCost`] | spend over a period is cost, not a limit |
 //!
-//! That last row is unfinished on purpose. The three figures are OpenRouter's
-//! own billing numbers and are better than anything a transcript reader could
-//! produce, but `CostInfo` is assembled from readers and ccusage, and there is
-//! no channel for a provider that reports its own cost. They are parsed and
-//! dropped until there is one; inventing a side door for one provider is how
-//! the cost pipeline stops having one shape.
+//! That last row is the reason `ReportedCost` exists. The three figures are
+//! OpenRouter's own billing numbers, there is no transcript anywhere to read
+//! for this provider, and a vendor's own total is better than an estimate
+//! rather than merely different from one.
 //!
 //! The third row is the one worth stating out loud: those three look like
 //! TokenGauge's three windows and are not. A window is a quota you can exhaust;
@@ -140,18 +138,11 @@ struct KeyData {
     /// does. A period name, not a timestamp.
     #[serde(default)]
     limit_reset: Option<String>,
-    // Read off the wire and routed nowhere yet - see the module note. Kept
-    // rather than dropped because they are the contract, and a test pins that
-    // they parse; deleting them means rediscovering the API shape when the
-    // channel for a self-reported cost arrives.
     #[serde(default)]
-    #[allow(dead_code)]
     usage_daily: Option<f64>,
     #[serde(default)]
-    #[allow(dead_code)]
     usage_weekly: Option<f64>,
     #[serde(default)]
-    #[allow(dead_code)]
     usage_monthly: Option<f64>,
     #[serde(default)]
     is_free_tier: Option<bool>,
@@ -257,6 +248,18 @@ fn to_payload(credits: CreditsData, key: KeyData, now: DateTime<Utc>) -> Provide
         payload.credits = Some(Credits {
             remaining: balance,
             limit: cap,
+        });
+    }
+
+    // OpenRouter bills in money and tells us what it billed, which is better
+    // than an estimate rather than merely different from one. There is no
+    // transcript anywhere to read for it, so nothing else can answer at all.
+    let spend = [key.usage_daily, key.usage_weekly, key.usage_monthly];
+    if spend.iter().any(|v| money(*v).is_some()) {
+        payload.reported_cost = Some(crate::ReportedCost {
+            today_usd: money(key.usage_daily).unwrap_or(0.0),
+            weekly_usd: money(key.usage_weekly).unwrap_or(0.0),
+            monthly_usd: money(key.usage_monthly).unwrap_or(0.0),
         });
     }
 

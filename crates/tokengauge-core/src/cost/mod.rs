@@ -652,6 +652,7 @@ mod tests {
     fn payload_with_window(provider: &str, resets_at: &str, minutes: u32) -> ProviderPayload {
         ProviderPayload {
             stale_reason: None,
+            reported_cost: None,
             provider: provider.into(),
             version: None,
             source: None,

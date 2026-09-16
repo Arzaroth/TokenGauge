@@ -74,17 +74,18 @@ fn main() -> Result<()> {
 /// `--update` / `--check-update`: run outside the TTY UI so the Windows build
 /// (which has no waybar binary) can self-update too.
 fn run_update(config: Option<PathBuf>, check_only: bool) -> Result<()> {
-    use tokengauge_core::{load_config, update};
+    use selvedge::update;
+    use tokengauge_core::{load_config, project::TOKENGAUGE, update_status_path};
     let config = load_config(config)?;
     if check_only {
-        let status = update::check(&config.cache_file)?;
+        let status = update::check(&TOKENGAUGE, &update_status_path(&config.cache_file))?;
         println!("{}", serde_json::to_string(&status)?);
         return Ok(());
     }
-    let current = update::current_version();
+    let current = TOKENGAUGE.version;
     println!("Current version: {current}");
     println!("Checking for updates...");
-    let applied = update::apply_full(&config.cache_file)?;
+    let applied = update::apply(&TOKENGAUGE, &update_status_path(&config.cache_file))?;
     if applied.installer_launched {
         // The installer is replacing this executable, so there is nothing to
         // wait for and nowhere to wait from: returning here is what lets it.

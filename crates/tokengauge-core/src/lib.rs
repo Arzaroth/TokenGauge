@@ -27,14 +27,7 @@
 //! ([`panel::Tone`]) is decided here while its colour is decided per frontend,
 //! which is what keeps five palettes from each growing their own thresholds.
 
-// Path-and-copy only, so every crate gets it without the network stack that
-// `self-update` pulls in.
-pub mod frontend;
-
 pub mod project;
-
-#[cfg(feature = "self-update")]
-pub mod update;
 
 mod ccusage;
 mod claude;
@@ -80,6 +73,9 @@ pub use providers::*;
 pub use rows::*;
 pub use snapshot::*;
 pub use statefiles::*;
+// The on-disk shape is selvedge's. Re-exported so `crate::UpdateStatus` keeps
+// naming one type across the crates that read and write it.
+pub use selvedge::UpdateStatus;
 pub use theme::*;
 
 pub use cost::{CostSource, NativeCostReport};

@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 tokengauge-core = { path = "../tokengauge-core", features = ["self-update"] }
+selvedge = { workspace = true, features = ["self-update"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }

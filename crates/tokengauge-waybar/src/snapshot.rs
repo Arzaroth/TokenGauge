@@ -196,7 +196,9 @@ pub(crate) fn json_snapshot(
         WaybarWindow::Daily => "daily",
         WaybarWindow::Weekly => "weekly",
     };
-    let update_status = tokengauge_core::read_update_status(&config.cache_file);
+    let update_status = selvedge::state::read_update_status(&tokengauge_core::update_status_path(
+        &config.cache_file,
+    ));
     serde_json::json!({
         // Frontends show this in their settings pane; `update` only carries a
         // version once a release check has run, and is null until then.

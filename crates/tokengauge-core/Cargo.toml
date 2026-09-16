@@ -28,9 +28,7 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 # default features so the half that links a network stack arrives only with
 # `self-update`; `frontend` and `state` are always here, because a GUI reads
 # the cached check and installs payloads without ever fetching one.
-selvedge = { git = "https://github.com/Arzaroth/selvedge", tag = "v0.2.1", default-features = false }
-self_update = { version = "0.44", default-features = false, features = ["reqwest", "rustls", "archive-tar", "compression-flate2", "archive-zip", "compression-zip-deflate"], optional = true }
-http = { version = "1", optional = true }
+selvedge = { workspace = true }
 
 [dev-dependencies]
 # The cost fixture test builds dates and reads the ccusage golden.
@@ -47,4 +45,4 @@ keyring = { version = "3", default-features = false, features = ["apple-native"]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 [features]
-self-update = ["dep:self_update", "dep:http", "selvedge/self-update"]
+self-update = ["selvedge/self-update"]

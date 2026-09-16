@@ -6,6 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 tokengauge-core = { path = "../tokengauge-core", features = ["self-update"] }
+selvedge = { workspace = true, features = ["self-update"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
 ratatui = { version = "0.29", features = ["crossterm"] }

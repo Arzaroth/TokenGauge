@@ -15,8 +15,9 @@ use std::process::{Command, Stdio};
 
 use anyhow::Result;
 use clap::Parser;
+use selvedge::update;
 use tokengauge_core::now_ms;
-use tokengauge_core::update;
+use tokengauge_core::project::TOKENGAUGE;
 use tokengauge_core::{
     TokenGaugeConfig, WaybarState, cache_is_stale, config_set_oauth_provider, config_set_primary,
     ensure_cache_dir, load_config, payload_to_rows_with_costs, read_waybar_state,
@@ -450,19 +451,27 @@ fn handle_set_primary(config: &TokenGaugeConfig, config_path: &Path, name: &str)
     Ok(())
 }
 
+/// selvedge takes the cached-status path as an argument, and TokenGauge's is
+/// derived from the snapshot's parent like every other state file rather than
+/// from the crate's own default. The GUIs read this file; they have to be
+/// looking at the one written here.
+fn update_cache(config: &TokenGaugeConfig) -> std::path::PathBuf {
+    tokengauge_core::update_status_path(&config.cache_file)
+}
+
 /// `--check-update`: live GitHub check, cache result, print JSON status.
 fn handle_check_update(config: &TokenGaugeConfig) -> Result<()> {
-    let status = update::check(&config.cache_file)?;
+    let status = update::check(&TOKENGAUGE, &update_cache(config))?;
     println!("{}", serde_json::to_string(&status)?);
     Ok(())
 }
 
 /// `--update`: download the latest release and swap the installed binaries.
 fn handle_update(config: &TokenGaugeConfig) -> Result<()> {
-    let current = update::current_version();
+    let current = TOKENGAUGE.version;
     println!("Current version: {current}");
     println!("Checking for updates...");
-    let applied = update::apply_full(&config.cache_file)?;
+    let applied = update::apply(&TOKENGAUGE, &update_cache(config))?;
     if !update::version_gt(&applied.version, current) {
         println!("Already up to date ({current}).");
         report_frontend_skew(current);
@@ -515,8 +524,7 @@ fn report_frontends(outcomes: &[update::FrontendOutcome]) {
 /// An installed frontend that disagrees with the binary is the failure this all
 /// exists to catch, so say so even on the path where nothing was updated.
 fn report_frontend_skew(binary: &str) {
-    use tokengauge_core::frontend;
-    for f in frontend::installed() {
+    for f in selvedge::frontend::installed(&TOKENGAUGE) {
         match f.installed_version() {
             Some(v) if v == binary => {}
             Some(v) => println!(
@@ -546,25 +554,25 @@ fn handle_backfill(config: &TokenGaugeConfig) -> Result<()> {
 }
 
 fn handle_install_frontend(spec: &str) -> Result<()> {
-    use tokengauge_core::frontend;
+    use selvedge::frontend;
 
     // Same normalization `find` applies, so `ALL` and a stray space behave.
     let spec = spec.trim().to_lowercase();
     let wanted: Vec<&'static frontend::Frontend> = if spec == "all" {
-        frontend::FRONTENDS.iter().collect()
+        TOKENGAUGE.frontends.iter().collect()
     } else {
-        vec![frontend::find(&spec).ok_or_else(|| {
-            let ids: Vec<&str> = frontend::FRONTENDS.iter().map(|f| f.id).collect();
+        vec![frontend::find(&TOKENGAUGE, &spec).ok_or_else(|| {
+            let ids: Vec<&str> = TOKENGAUGE.frontends.iter().map(|f| f.id).collect();
             anyhow::anyhow!("unknown frontend '{spec}' (known: {}, all)", ids.join(", "))
         })?]
     };
 
-    let version = update::current_version();
+    let version = TOKENGAUGE.version;
     for target in &wanted {
         println!("Installing the {} from v{version}...", target.label);
     }
 
-    let outcomes = update::install_frontends(&wanted, version)?;
+    let outcomes = update::install_frontends(&TOKENGAUGE, &wanted, version)?;
     report_frontends(&outcomes);
 
     // The error is returned rather than printed here: main prints it once.

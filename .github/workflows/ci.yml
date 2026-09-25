@@ -181,8 +181,8 @@ jobs:
           key: ${{ runner.os }}-cargo-ci-${{ hashFiles('**/Cargo.lock') }}
 
       # Windows builds the cross-platform crates plus tokengauge-tray, whose
-      # GUI deps are cfg(windows)-gated and so cannot be type-checked in the
-      # Linux job. The waybar crate is Linux-only. Formatting and clippy are
+      # GUI deps are gated to Windows and macOS and so cannot be type-checked
+      # in the Linux job. The waybar crate is Linux-only. Formatting and clippy are
       # OS-independent and run in the Linux `build` job.
       - name: Build
         run: cargo build -p tokengauge-core -p tokengauge-tui -p tokengauge-tray
@@ -190,10 +190,8 @@ jobs:
       - name: Test
         run: cargo test -p tokengauge-core -p tokengauge-tui
 
-      # The only job that can lint the tray: its GUI deps are
-      # cfg(windows)-gated, so on Linux the whole crate compiles away to a
-      # stub. Without this the tray is built here but never linted anywhere,
-      # and checking it locally means hand-editing its Cargo.toml.
+      # The tray's Windows half is linted only here: on Linux the whole crate
+      # compiles away to a stub, and the macOS job sees the other half.
       - name: Clippy (tray)
         run: cargo clippy -p tokengauge-tray --all-targets -- -D warnings
 
@@ -207,3 +205,41 @@ jobs:
           $env:PATH = "$env:PATH;$env:USERPROFILE\.dotnet\tools"
           wix build -arch x64 -d Version=0.0.1 -d BinDir=target/debug `
             -o "$env:RUNNER_TEMP/tokengauge-ci.msi" packaging/windows/tokengauge.wxs
+
+  # The keychain credential path, the launchd restart and the menu-bar tray
+  # compile only on macOS, so this is the only job that builds them. Both
+  # architectures ship; the runner is arm64 and cross-builds x86_64 natively.
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+          targets: x86_64-apple-darwin
+          components: clippy
+
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-ci-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --workspace
+
+      - name: Build (x86_64)
+        run: cargo build --workspace --target x86_64-apple-darwin
+
+      - name: Test
+        run: cargo test --workspace --all-features
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings

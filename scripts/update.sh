@@ -49,8 +49,8 @@ get_latest_tag() {
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$api_json" | jq -r '.tag_name // empty'
   else
-    fail "Missing jq for JSON parsing"
-    return 1
+    # macOS before 15 ships no jq, and this is the only field needed.
+    printf '%s' "$api_json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1
   fi
 }
 
@@ -60,6 +60,12 @@ if [[ -z "$latest" ]]; then
   exit 1
 fi
 
+case "$(uname -s)" in
+  Linux) asset_os="linux"; IS_MACOS=false ;;
+  Darwin) asset_os="macos"; IS_MACOS=true ;;
+  *) fail "Unsupported OS: $(uname -s)"; exit 1 ;;
+esac
+
 arch=$(uname -m)
 case "$arch" in
   x86_64) asset_arch="x86_64" ;;
@@ -67,7 +73,7 @@ case "$arch" in
   *) fail "Unsupported arch: $arch"; exit 1 ;;
  esac
 
-asset="tokengauge-$latest-linux-$asset_arch.tar.gz"
+asset="tokengauge-$latest-$asset_os-$asset_arch.tar.gz"
 url="https://github.com/$REPO/releases/download/$latest/$asset"
 
 info "Downloading TokenGauge $latest"
@@ -83,6 +89,15 @@ ln -s tokengauge "$INSTALL_DIR/tokengauge-waybar"
 install -m 0755 "$TMP_DIR/tokengauge-tui" "$INSTALL_DIR/tokengauge-tui"
 
 success "Updated tokengauge to $latest in $INSTALL_DIR"
+
+if $IS_MACOS; then
+  install -m 0755 "$TMP_DIR/tokengauge-tray" "$INSTALL_DIR/tokengauge-tray"
+  # kickstart fails on an agent install.sh was told not to load; that is fine.
+  for label in org.tokengauge.daemon org.tokengauge.tray; do
+    launchctl kickstart -k "gui/$(id -u)/$label" 2>/dev/null || true
+  done
+  exit 0
+fi
 
 if command -v omarchy-restart-waybar >/dev/null 2>&1; then
   info "Restart Waybar: omarchy-restart-waybar"

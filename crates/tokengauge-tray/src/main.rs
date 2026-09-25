@@ -1188,15 +1188,20 @@ mod gui {
     /// On Windows it is spawned directly: the console it opens is the
     /// terminal. A macOS GUI child has no terminal at all, so it goes through
     /// the launcher every other frontend's "open" button uses.
-    fn spawn_tui(args: &[&str]) {
+    ///
+    /// Whether anything was started, so the update item knows whether it may
+    /// quit.
+    fn spawn_tui(args: &[&str]) -> bool {
         #[cfg(windows)]
         {
-            let _ = tui_command().args(args).spawn();
+            tui_command().args(args).spawn().is_ok()
         }
         #[cfg(target_os = "macos")]
-        if let Ok(config) = load_config(Some(default_config_path())) {
-            let command = tokengauge_core::launch::tui_command_with(&config, args);
-            tokengauge_core::launch::spawn_shell(&command);
+        {
+            load_config(Some(default_config_path())).is_ok_and(|config| {
+                let command = tokengauge_core::launch::tui_command_with(&config, args);
+                tokengauge_core::launch::spawn_shell(&command)
+            })
         }
     }
 
@@ -1215,8 +1220,8 @@ mod gui {
 
     /// Spawn `tokengauge-tui --update` (which owns the self-update code) to
     /// download the latest release and replace the installed binaries.
-    fn spawn_update() {
-        spawn_tui(&["--update"]);
+    fn spawn_update() -> bool {
+        spawn_tui(&["--update"])
     }
 
     fn tray_event_loop(
@@ -1243,10 +1248,11 @@ mod gui {
                     // stop to ask about it; and even on the in-place path a
                     // tray left running keeps executing the old code until it
                     // is restarted anyway.
-                    spawn_update();
-                    quit.store(true, Ordering::SeqCst);
-                    ctx.send_viewport_cmd(ViewportCommand::Close);
-                    ctx.request_repaint();
+                    if spawn_update() {
+                        quit.store(true, Ordering::SeqCst);
+                        ctx.send_viewport_cmd(ViewportCommand::Close);
+                        ctx.request_repaint();
+                    }
                 } else if ev.id == ids.quit {
                     // Ask the app to close so Drop runs (removes the tray icon)
                     // instead of exiting the process abruptly.

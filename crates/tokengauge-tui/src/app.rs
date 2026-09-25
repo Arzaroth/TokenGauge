@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -335,12 +334,7 @@ impl App {
             OpenWhich::Status => urls.status,
         };
         let Some(url) = url else { return };
-        let _ = Command::new("xdg-open")
-            .arg(url)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
+        tokengauge_core::launch::open_url(url);
     }
 }
 

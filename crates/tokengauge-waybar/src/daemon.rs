@@ -12,13 +12,14 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use selvedge::update;
+use tokengauge_core::launch::{Urgency, notify};
 use tokengauge_core::project::TOKENGAUGE;
 use tokengauge_core::{
     FetchResult, TokenGaugeConfig, cache_is_stale, load_config, payload_to_rows_with_costs,
@@ -60,19 +61,12 @@ pub(crate) fn notify_update_available(config: &TokenGaugeConfig) {
     let _ = selvedge::state::announce_if_new(
         &tokengauge_core::update_status_path(&config.cache_file),
         |latest, current| {
-            Command::new("notify-send")
-                .arg("--app-name")
-                .arg("tokengauge")
-                .arg("--hint=int:transient:1")
-                .arg("TokenGauge: update available")
-                .arg(format!(
-                    "v{latest} is available (you have v{current}). Run tokengauge --update."
-                ))
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .is_ok()
+            notify(
+                "TokenGauge: update available",
+                &format!("v{latest} is available (you have v{current}). Run tokengauge --update."),
+                Urgency::Normal,
+                true,
+            )
         },
     );
 }

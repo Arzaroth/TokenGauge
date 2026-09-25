@@ -61,10 +61,33 @@ so `CACHE_SCHEMA_VERSION` goes to 2. Everything that keys on the provider string
 provider plus credential.
 
 A provider with one credential and no store renders exactly as it does today.
-Several credentials add a combined header to the provider's section (used
-against total capacity, the earliest reset) and one meters group per
-credential, with the active one marked. The panel spec resolves this, so it
-lands on all six frontends at once, or not at all.
+Several credentials add a combined header to the provider's section and one
+meters group per credential, with the active one marked. The panel spec
+resolves this, so it lands on all six frontends at once, or not at all.
+
+The combined header weighs each credential by its plan's multiplier, not by a
+vote each. A Max 20x and a Pro plan are not two equal halves of a pool. Claude's
+weight is the multiplier `plan_label` already reads out of `rateLimitTier`
+(Pro 1, Max 5x 5, Max 20x 20, Team seats by their own `Nx`). The header counts
+in units of the largest plan: each credential contributes
+`used × weight ÷ largest weight`, so a Max 20x and a Pro both at 100% read
+"105% of 105%", and a Max 20x at 50% beside a Max 5x at 100% reads "75% of
+125%". The bar fills to the pooled fraction, `Σ used × weight ÷ Σ weight`
+(60% in the second case), so an idle Pro cannot make a busy pool look free.
+
+- The multipliers are the nominal ones the plans are sold with, relative to
+  Pro. The real limits are not published and need not scale exactly in every
+  window, so the combined figure is an estimate, and the panel does not
+  present it as more.
+- A credential whose tier carries no `Nx` (Enterprise, or a tier string not
+  seen before) has no known weight. It stays out of the combined figure and is
+  marked unweighted. Guessing 1x would understate a large plan without saying
+  so.
+- Weights are per provider. Codex plans need their own table, and credentials
+  of two providers never share a header.
+- The header's reset is the earliest among the credentials. Whether the reset
+  that frees the most weighted capacity is the more useful instant is left to
+  the panel work.
 
 Every refresh makes one usage request per credential. The Claude usage endpoint
 already rate-limits, so the inactive credentials may need a slower cadence than

@@ -32,7 +32,7 @@ fn main() -> eframe::Result<()> {
     let hidden = std::env::args().any(|arg| arg == "--hidden");
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([win::PANEL_WIDTH, win::PANEL_HEIGHT])
+            .with_inner_size([gui::PANEL_WIDTH, gui::PANEL_HEIGHT])
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
@@ -44,12 +44,12 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "TokenGauge",
         options,
-        Box::new(|cc| Ok(Box::new(win::TrayApp::new(cc)?))),
+        Box::new(|cc| Ok(Box::new(gui::TrayApp::new(cc)?))),
     )
 }
 
 #[cfg(windows)]
-mod win {
+mod gui {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, mpsc};
     use std::thread;

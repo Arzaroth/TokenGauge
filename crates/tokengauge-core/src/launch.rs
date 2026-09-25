@@ -240,8 +240,11 @@ mod tests {
             !sync.starts_with("omarchy-launch-or-focus-tui"),
             "the wrapper would swallow --sync: {sync}"
         );
+        // Terminal.app on macOS receives the command quoted as one word.
         assert!(
-            sync.is_empty() || sync.ends_with("-e tokengauge-tui --sync"),
+            sync.is_empty()
+                || sync.ends_with("-e tokengauge-tui --sync")
+                || (cfg!(target_os = "macos") && sync.ends_with(" --sync'")),
             "{sync}"
         );
     }

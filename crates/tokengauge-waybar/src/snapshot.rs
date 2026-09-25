@@ -8,8 +8,10 @@
 
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
+
 use std::thread;
 use std::time::Duration;
+use tokengauge_core::launch::{Urgency, notify};
 
 use anyhow::Result;
 use tokengauge_core::{
@@ -324,27 +326,13 @@ pub(crate) fn fire_notification(provider: &str, window: &str, pct: u8, threshold
         format!("resets {reset}")
     };
     let urgency = if threshold >= 90 {
-        "critical"
+        Urgency::Critical
     } else if threshold >= 70 {
-        "normal"
+        Urgency::Normal
     } else {
-        "low"
+        Urgency::Low
     };
-    let _ = Command::new("notify-send")
-        .arg("--urgency")
-        .arg(urgency)
-        .arg("--app-name")
-        .arg("tokengauge")
-        .arg(format!(
-            "--hint=int:transient:{}",
-            if threshold < 90 { 1 } else { 0 }
-        ))
-        .arg(&title)
-        .arg(&body)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+    notify(&title, &body, urgency, threshold < 90);
 }
 
 /// Send SIGRTMIN+8 to every running `waybar` process.

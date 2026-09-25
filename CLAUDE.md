@@ -11,7 +11,7 @@ on all of them, or it is not done.**
 | Plasma     | `plasma/org.tokengauge.plasmoid`              | yes |
 | GNOME      | `gnome/tokengauge@arzaroth.github.io` (TypeScript, see below) | yes |
 | Quickshell | `omarchy/arzaroth.tokengauge`                 | yes |
-| Tray (Windows) | `crates/tokengauge-tray`                  | yes |
+| Tray (Windows, macOS menu bar) | `crates/tokengauge-tray` | yes |
 | TUI        | `crates/tokengauge-tui`                       | yes - exempt from layout parity only |
 
 Shipping a feature on one frontend and leaving the rest "for later" is the
@@ -216,9 +216,10 @@ Two rules fall out of this and are easy to regress:
   a state file under `~/.claude`, route it through there.
 
 The keychain / Credential Manager path is `cfg(any(windows, target_os =
-"macos"))` and compiles away on Linux, so it is exercised only by the Windows CI
-job and never on Mac - treat that path the way the tray crate is treated: build
-it on the platform that has it, or it is unverified.
+"macos"))` and compiles away on Linux, so it is built only by the Windows and
+macOS CI jobs - treat that path the way the tray crate is treated: build it on
+the platform that has it, or it is unverified. CI compiles the macOS half; no
+test reads a real keychain.
 
 ## Costs are read, not shelled out for
 
@@ -376,7 +377,7 @@ Two things follow from this and are easy to regress:
 
 Waybar and the tray are absent: waybar's surface is the binary's own output,
 which the e2e tests already assert, and the tray is Rust that only builds on
-Windows.
+Windows and macOS.
 
 ## The binary is `tokengauge`, the crate is not
 
@@ -435,6 +436,23 @@ Three things are easy to get wrong:
   only in selvedge's CI, which has a `windows-latest` job for exactly that
   reason.
 
+## macOS is two LaunchAgents
+
+On macOS `scripts/install.sh` installs the `tokengauge` binary, the TUI and the
+tray into `~/.local/bin`, like Linux, and registers two LaunchAgents in place
+of the systemd unit: `org.tokengauge.daemon` (`tokengauge --daemon`) and
+`org.tokengauge.tray` (the menu-bar tray, `--hidden`). The daemon label is also
+`LAUNCHD_LABEL` in `daemon.rs`, which `--update` kickstarts to load the new
+binary. The two have to agree, and a disagreement fails nowhere: the update
+succeeds and the old daemon keeps running.
+
+Config and state stay on the XDG paths rather than moving to
+`~/Library/Application Support`, so install.sh, the binaries and the docs
+all name one place on every Unix. Everything else the daemon does is shared
+with Linux: `launch::notify` and `launch::open_url` use `osascript` and `open`
+there, and opening the TUI with no `TERMINAL` set goes to Terminal.app through
+AppleScript.
+
 ## Windows installs itself three ways, into one directory
 
 `scripts/install.ps1`, `packaging/windows/tokengauge.wxs` and selvedge's
@@ -486,14 +504,16 @@ still catch schema mistakes.
   pointing at are the process surfaces (event loops, `main`, the daemon accept
   loop) and they stay uncovered on purpose; what is worth reading is a *logic*
   file drifting down the list.
-- `tokengauge-tray` is `cfg(windows)`-gated with Windows-only GUI deps, so it
-  does not type-check on Linux. CI's Windows job runs `cargo clippy -p
-  tokengauge-tray` and is the authority. To check a change locally before
-  pushing, temporarily lift the `[target.'cfg(windows)'.dependencies]` header in
-  its `Cargo.toml` and swap the three `#[cfg(windows)]` / `#[cfg(not(windows))]`
+- `tokengauge-tray` is gated to Windows and macOS, with GUI deps only there,
+  so it does not type-check on Linux. CI's Windows and macOS jobs run clippy
+  on it and are the authority. To check a change locally before pushing,
+  temporarily lift the `[target.'cfg(any(windows, target_os = "macos"))'.dependencies]`
+  header in its `Cargo.toml` and swap the three
+  `#[cfg(any(windows, target_os = "macos"))]` / `#[cfg(not(any(...)))]`
   attributes in `main.rs` for `#[cfg(all())]` / `#[cfg(any())]`, run
   `cargo clippy -p tokengauge-tray`, then revert both. eframe and tray-icon do
-  build on Linux.
+  build on Linux. What that leaves unchecked is the per-platform code inside:
+  the Windows TUI spawn and the macOS Dock policy.
 - A running `tokengauge --daemon` (the installed binary in
   `~/.local/bin`) serves the bar, the tooltip and `--json` over
   `<cache_file parent>/tokengauge.sock`, so a freshly built binary invoked with

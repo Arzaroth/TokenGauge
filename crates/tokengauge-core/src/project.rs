@@ -6,9 +6,12 @@ use selvedge::{Frontend, Project, Restart, VersionSource};
 /// Every executable the release archive carries, the primary one first. That
 /// one also names the assets, so on Windows - where the archive is built
 /// around the tray rather than the waybar binary - the order differs from the
-/// Linux one rather than being a translation of it.
-#[cfg(not(target_os = "windows"))]
+/// Linux one rather than being a translation of it. macOS carries the Linux
+/// pair for the daemon and the CLI, and the tray for the menu bar.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const BINARIES: &[&str] = &["tokengauge", "tokengauge-tui"];
+#[cfg(target_os = "macos")]
+const BINARIES: &[&str] = &["tokengauge", "tokengauge-tui", "tokengauge-tray"];
 #[cfg(target_os = "windows")]
 const BINARIES: &[&str] = &["tokengauge-tui.exe", "tokengauge-tray.exe"];
 
@@ -130,6 +133,31 @@ mod tests {
                 .any(|token| token.contains(target) && token.ends_with(ARCHIVE_SUFFIX)),
             "no {target}{ARCHIVE_SUFFIX} asset in the release workflow"
         );
+    }
+
+    /// The test above sees only the platform running it, and CI runs it on
+    /// three. A job dropped from the release workflow for a fourth would leave
+    /// every machine on it with nothing to update to, and nothing here red.
+    #[test]
+    fn the_workflow_publishes_an_archive_for_every_platform() {
+        let workflow = release_workflow();
+        let tokens: Vec<_> = workflow
+            .split(|c: char| c.is_whitespace() || c == '"' || c == ',')
+            .collect();
+        for (target, suffix) in [
+            ("linux-x86_64", ".tar.gz"),
+            ("linux-aarch64", ".tar.gz"),
+            ("macos-x86_64", ".tar.gz"),
+            ("macos-aarch64", ".tar.gz"),
+            ("windows-x86_64", ".zip"),
+        ] {
+            assert!(
+                tokens
+                    .iter()
+                    .any(|t| t.contains(target) && t.ends_with(suffix)),
+                "no {target}{suffix} asset in the release workflow"
+            );
+        }
     }
 
     /// The MSI is named `win64` rather than `windows-x86_64` on purpose: a

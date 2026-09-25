@@ -348,10 +348,10 @@ pub fn doctor_lines(
             detail: "no cost data".into(),
         });
     }
-    // Both are Linux desktop tools. On Windows they are not missing, they are
-    // not the mechanism, and a red cross next to one is a fault invented by
-    // the report.
-    #[cfg(unix)]
+    // Both are Linux desktop tools. On Windows and macOS they are not missing,
+    // they are not the mechanism, and a red cross next to one is a fault
+    // invented by the report.
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         if cfg.notifications.enabled {
             record(check_binary(

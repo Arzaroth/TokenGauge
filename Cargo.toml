@@ -6,10 +6,10 @@ members = [
   "crates/tokengauge-tui",
   "crates/tokengauge-tray"
 ]
-# The waybar crate is Linux-only (Waybar) and does
-# not build on Windows or macOS. `default-members` limits a bare `cargo build`
-# (and `cargo test`) to the cross-platform crates so the workspace builds on any
-# OS. On Linux you can still build everything with `cargo build --workspace`.
+# The waybar crate builds the `tokengauge` binary, which runs on Linux and
+# macOS and does not build on Windows. `default-members` limits a bare
+# `cargo build` (and `cargo test`) to the crates that build on every OS. On
+# Linux and macOS build everything with `cargo build --workspace`.
 default-members = [
   "crates/tokengauge-core",
   "crates/tokengauge-tui"
@@ -29,4 +29,4 @@ serde_json = "1.0"
 # The updater and the payload installer, shared with TailGauge. Off by
 # default: `frontend` and `state` come without a network stack, and the crates
 # that fetch a release ask for `self-update` by name.
-selvedge = { git = "https://github.com/Arzaroth/selvedge", tag = "v0.3.1", default-features = false }
+selvedge = { git = "https://github.com/Arzaroth/selvedge", tag = "v0.4.0", default-features = false }

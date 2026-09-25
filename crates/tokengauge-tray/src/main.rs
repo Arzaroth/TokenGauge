@@ -1,25 +1,24 @@
-//! TokenGauge system-tray GUI for Windows.
+//! TokenGauge system-tray GUI for Windows and the macOS menu bar.
 //!
 //! A small always-available window drawing the same panel every other frontend
 //! draws - limits, cost, tokens by day, tokens by model - from
-//! [`tokengauge_core::panel_spec`], backed by a system-tray icon that renders
-//! the current peak usage percentage. Windows-only; on other platforms this is
-//! a stub (the Linux surfaces are the Waybar module, KDE applet, GNOME
-//! extension and Quickshell widget).
+//! [`tokengauge_core::panel_spec`], backed by a tray icon that renders the
+//! current peak usage percentage. On Linux this is a stub (the Linux surfaces
+//! are the Waybar module, KDE applet, GNOME extension and Quickshell widget).
 
 // Build as a GUI (windowless) binary on Windows so launching it doesn't pop a
 // console window - important when it runs at login / from the tray.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn main() {
     eprintln!(
-        "tokengauge-tray is Windows-only; on Linux use the Waybar module, the KDE \
-         applet, the GNOME extension or the Quickshell widget."
+        "tokengauge-tray runs on Windows and macOS; on Linux use the Waybar module, \
+         the KDE applet, the GNOME extension or the Quickshell widget."
     );
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn main() -> eframe::Result<()> {
     // A flyout, not a window: no title bar, no taskbar button, above whatever
     // it is opened over, and placed against the tray icon that opened it. It
@@ -32,24 +31,30 @@ fn main() -> eframe::Result<()> {
     let hidden = std::env::args().any(|arg| arg == "--hidden");
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([win::PANEL_WIDTH, win::PANEL_HEIGHT])
+            .with_inner_size([gui::PANEL_WIDTH, gui::PANEL_HEIGHT])
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
             .with_always_on_top()
             .with_visible(!hidden)
             .with_title("TokenGauge"),
+        // A menu-bar extra, not an application: no Dock icon, no app menu.
+        #[cfg(target_os = "macos")]
+        event_loop_builder: Some(Box::new(|builder| {
+            use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+            builder.with_activation_policy(ActivationPolicy::Accessory);
+        })),
         ..Default::default()
     };
     eframe::run_native(
         "TokenGauge",
         options,
-        Box::new(|cc| Ok(Box::new(win::TrayApp::new(cc)?))),
+        Box::new(|cc| Ok(Box::new(gui::TrayApp::new(cc)?))),
     )
 }
 
-#[cfg(windows)]
-mod win {
+#[cfg(any(windows, target_os = "macos"))]
+mod gui {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
@@ -58,9 +63,9 @@ mod win {
     use eframe::egui::{self, Color32, ProgressBar, RichText, ViewportCommand};
     use tokengauge_core::{
         HistoryPanel, PROVIDERS, ProviderRow, Section, SectionKind, TokenGaugeConfig, Tone,
-        config_set_oauth_provider, config_set_primary, default_config_path, fetch_all_providers,
-        load_config, panel_spec, payload_to_rows_with_costs, read_cache_full, retain_enabled,
-        write_cache_full, write_default_config,
+        cache_is_stale, config_set_oauth_provider, config_set_primary, default_config_path,
+        fetch_all_providers, load_config, panel_spec, payload_to_rows_with_costs, read_cache_full,
+        retain_enabled, write_cache_full, write_default_config,
     };
     use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem};
     use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -1174,16 +1179,34 @@ mod win {
     }
 
     /// Open the TUI on its sync screen.
-    ///
-    /// The TUI is spawned directly rather than through `--sync-setup`, whose
-    /// terminal discovery is Unix-shaped; on Windows the console the TUI opens
-    /// in is the terminal.
     fn spawn_sync_setup() {
-        let mut cmd = tui_command();
-        let _ = cmd.arg("--sync").spawn();
+        spawn_tui(&["--sync"]);
+    }
+
+    /// Run the TUI where the user can see it.
+    ///
+    /// On Windows it is spawned directly: the console it opens is the
+    /// terminal. A macOS GUI child has no terminal at all, so it goes through
+    /// the launcher every other frontend's "open" button uses.
+    ///
+    /// Whether anything was started, so the update item knows whether it may
+    /// quit.
+    fn spawn_tui(args: &[&str]) -> bool {
+        #[cfg(windows)]
+        {
+            tui_command().args(args).spawn().is_ok()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            load_config(Some(default_config_path())).is_ok_and(|config| {
+                let command = tokengauge_core::launch::tui_command_with(&config, args);
+                tokengauge_core::launch::spawn_shell(&command)
+            })
+        }
     }
 
     /// The installed TUI beside this binary, falling back to `PATH`.
+    #[cfg(windows)]
     fn tui_command() -> std::process::Command {
         let beside = std::env::current_exe()
             .ok()
@@ -1197,9 +1220,8 @@ mod win {
 
     /// Spawn `tokengauge-tui --update` (which owns the self-update code) to
     /// download the latest release and replace the installed binaries.
-    fn spawn_update() {
-        let mut cmd = tui_command();
-        let _ = cmd.arg("--update").spawn();
+    fn spawn_update() -> bool {
+        spawn_tui(&["--update"])
     }
 
     fn tray_event_loop(
@@ -1226,10 +1248,11 @@ mod win {
                     // stop to ask about it; and even on the in-place path a
                     // tray left running keeps executing the old code until it
                     // is restarted anyway.
-                    spawn_update();
-                    quit.store(true, Ordering::SeqCst);
-                    ctx.send_viewport_cmd(ViewportCommand::Close);
-                    ctx.request_repaint();
+                    if spawn_update() {
+                        quit.store(true, Ordering::SeqCst);
+                        ctx.send_viewport_cmd(ViewportCommand::Close);
+                        ctx.request_repaint();
+                    }
                 } else if ev.id == ids.quit {
                     // Ask the app to close so Drop runs (removes the tray icon)
                     // instead of exiting the process abruptly.
@@ -1316,15 +1339,19 @@ mod win {
         action_rx: mpsc::Receiver<Action>,
         cfg_path: std::path::PathBuf,
     ) {
+        let mut forced = false;
         loop {
-            {
-                shared.lock().unwrap_or_else(|e| e.into_inner()).fetching = true;
-            }
-            ctx.request_repaint();
-
             let mut refresh_secs = 600u64;
             match load_config(Some(cfg_path.clone())) {
+                // A daemon, or the TUI, fetched recently enough: serve what it
+                // wrote rather than asking every provider again.
+                Ok(config) if !forced && !cache_is_stale(&config) => {
+                    refresh_secs = config.refresh_secs.max(30);
+                    load_from_cache(&shared, &cfg_path);
+                }
                 Ok(config) => {
+                    shared.lock().unwrap_or_else(|e| e.into_inner()).fetching = true;
+                    ctx.request_repaint();
                     refresh_secs = config.refresh_secs.max(30);
                     let result = fetch_all_providers(&config);
                     let _ = write_cache_full(
@@ -1382,6 +1409,7 @@ mod win {
                 .into_iter()
                 .chain(action_rx.try_iter())
                 .collect();
+            forced = queued.iter().any(|a| matches!(a, Action::Refresh));
             for action in queued {
                 let result = match action {
                     Action::SetProvider(name, enable) => {

@@ -12,13 +12,14 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use selvedge::update;
+use tokengauge_core::launch::{Urgency, notify};
 use tokengauge_core::project::TOKENGAUGE;
 use tokengauge_core::{
     FetchResult, TokenGaugeConfig, cache_is_stale, load_config, payload_to_rows_with_costs,
@@ -27,9 +28,36 @@ use tokengauge_core::{
 
 use crate::*;
 
+/// The launchd label `scripts/install.sh` gives the daemon's LaunchAgent.
+#[cfg(target_os = "macos")]
+pub(crate) const LAUNCHD_LABEL: &str = "org.tokengauge.daemon";
+
+/// How to restart the daemon by hand, for when [`restart_daemon`] could not.
+#[cfg(target_os = "macos")]
+pub(crate) const RESTART_HINT: &str = "launchctl kickstart -k gui/$(id -u)/org.tokengauge.daemon";
+#[cfg(not(target_os = "macos"))]
+pub(crate) const RESTART_HINT: &str = "systemctl --user restart tokengauge-daemon.service";
+
+/// Restart the launchd agent so the freshly-installed binary is loaded.
+/// `kickstart` fails on a label that is not loaded, which is the no-daemon
+/// case.
+#[cfg(target_os = "macos")]
+pub(crate) fn restart_daemon() -> bool {
+    Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "launchctl kickstart -k \"gui/$(id -u)/{LAUNCHD_LABEL}\""
+        ))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 /// Restart the systemd user daemon so the freshly-installed binary is loaded.
 /// Best effort: returns false when there's no active unit to restart (plain
 /// polling mode) or systemctl is unavailable.
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn restart_daemon() -> bool {
     let active = Command::new("systemctl")
         .args([
@@ -60,19 +88,12 @@ pub(crate) fn notify_update_available(config: &TokenGaugeConfig) {
     let _ = selvedge::state::announce_if_new(
         &tokengauge_core::update_status_path(&config.cache_file),
         |latest, current| {
-            Command::new("notify-send")
-                .arg("--app-name")
-                .arg("tokengauge")
-                .arg("--hint=int:transient:1")
-                .arg("TokenGauge: update available")
-                .arg(format!(
-                    "v{latest} is available (you have v{current}). Run tokengauge --update."
-                ))
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .is_ok()
+            notify(
+                "TokenGauge: update available",
+                &format!("v{latest} is available (you have v{current}). Run tokengauge --update."),
+                Urgency::Normal,
+                true,
+            )
         },
     );
 }
@@ -719,7 +740,14 @@ mod tests {
     fn unique_test_dir(tag: &str) -> PathBuf {
         let counter = std::sync::atomic::AtomicU64::new(0);
         let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
+        // A socket path is capped at 104 bytes on macOS, and its temp dir
+        // alone takes half of that.
+        let root = if cfg!(target_os = "macos") {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let dir = root.join(format!(
             "tokengauge-test-{tag}-{}-{}-{}",
             std::process::id(),
             now_ms(),

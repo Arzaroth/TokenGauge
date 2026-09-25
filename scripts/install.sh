@@ -46,6 +46,7 @@ trap cleanup EXIT
 
 PLACEMENT_OVERRIDE="${TOKENGAUGE_PLACEMENT:-}"
 INSTALL_DAEMON=true
+INSTALL_TRAY=true
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --placement=*) PLACEMENT_OVERRIDE="${1#*=}" ;;
@@ -58,6 +59,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --no-daemon) INSTALL_DAEMON=false ;;
+    --no-tray) INSTALL_TRAY=false ;;
     *) ;;
   esac
   shift
@@ -81,10 +83,16 @@ get_latest_tag() {
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$api_json" | jq -r '.tag_name // empty'
   else
-    fail "Missing jq for JSON parsing"
-    return 1
+    # macOS before 15 ships no jq, and this is the only field needed.
+    printf '%s' "$api_json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1
   fi
 }
+
+case "$(uname -s)" in
+  Linux) asset_os="linux"; IS_MACOS=false ;;
+  Darwin) asset_os="macos"; IS_MACOS=true ;;
+  *) echo "Unsupported OS: $(uname -s)" >&2; exit 1 ;;
+esac
 
 arch=$(uname -m)
 case "$arch" in
@@ -99,7 +107,7 @@ if [[ -z "$latest" ]]; then
   exit 1
 fi
 
-asset="tokengauge-$latest-linux-$asset_arch.tar.gz"
+asset="tokengauge-$latest-$asset_os-$asset_arch.tar.gz"
 url="https://github.com/$REPO/releases/download/$latest/$asset"
 
 info "Downloading TokenGauge $latest"
@@ -113,6 +121,98 @@ install -m 0755 "$TMP_DIR/tokengauge" "$INSTALL_DIR/tokengauge"
 rm -f "$INSTALL_DIR/tokengauge-waybar"
 ln -s tokengauge "$INSTALL_DIR/tokengauge-waybar"
 install -m 0755 "$TMP_DIR/tokengauge-tui" "$INSTALL_DIR/tokengauge-tui"
+
+# A path with & or < in it is otherwise invalid XML, and launchctl refuses the
+# whole plist after the old agent has already been booted out.
+xml_escape() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+plist_env() {
+  printf '    <key>%s</key>\n    <string>%s</string>\n' "$1" "$(xml_escape "$2")"
+}
+
+# launchd starts what a LaunchAgent names with a bare PATH, so the agent sets
+# its own - with Homebrew's prefixes, where bunx and npx live for ccusage. An
+# XDG directory the installer ran under is carried too, or the agents would
+# read a different config and snapshot from the one just written.
+install_launch_agent() {
+  local label="$1" plist="$HOME/Library/LaunchAgents/$1.plist"
+  shift
+  mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
+  {
+    cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$(xml_escape "$label")</string>
+  <key>ProgramArguments</key>
+  <array>
+PLIST
+    for arg in "$@"; do
+      printf '    <string>%s</string>\n' "$(xml_escape "$arg")"
+    done
+    cat <<PLIST
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+PLIST
+    plist_env PATH "$INSTALL_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    [[ -n "${XDG_CONFIG_HOME:-}" ]] && plist_env XDG_CONFIG_HOME "$XDG_CONFIG_HOME"
+    [[ -n "${XDG_STATE_HOME:-}" ]] && plist_env XDG_STATE_HOME "$XDG_STATE_HOME"
+    cat <<PLIST
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>StandardErrorPath</key>
+  <string>$(xml_escape "$HOME/Library/Logs/$label.log")</string>
+PLIST
+    [[ "$label" == *.daemon ]] && printf '  <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n'
+    printf '</dict>\n</plist>\n'
+  } > "$plist"
+  # bootout first so a reinstall picks up the new binary and the new plist.
+  # It returns before the old job is gone, and bootstrapping over a job still
+  # being torn down fails, so give it a moment.
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null && return 0
+    sleep 1
+  done
+  warn "Could not load $label; it will start at next login ($plist)"
+  return 1
+}
+
+if $IS_MACOS; then
+  install -m 0755 "$TMP_DIR/tokengauge-tray" "$INSTALL_DIR/tokengauge-tray"
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    cat <<TOML > "$CONFIG_FILE"
+# TokenGauge configuration
+refresh_secs = 600
+
+[providers]
+codex = true
+claude = true
+TOML
+  fi
+  if $INSTALL_DAEMON && install_launch_agent org.tokengauge.daemon "$INSTALL_DIR/tokengauge" --daemon; then
+    success "tokengauge-daemon enabled via launchd"
+  fi
+  if $INSTALL_TRAY && install_launch_agent org.tokengauge.tray "$INSTALL_DIR/tokengauge-tray" --hidden; then
+    success "TokenGauge is in the menu bar, and starts at login"
+  fi
+  info "Installed tokengauge to $INSTALL_DIR"
+  case ":$PATH:" in
+    *":$INSTALL_DIR:"*) ;;
+    *) warn "$INSTALL_DIR is not on your PATH. Add it to run tokengauge and tokengauge-tui from a shell." ;;
+  esac
+  exit 0
+fi
+
 # Provider brand SVG logos for the desktop frontends' tab strips. Fetched from
 # the repo (not bundled in the binary tarball) and recoloured so the monochrome
 # (currentColor) marks are visible on a dark background. Best effort - a

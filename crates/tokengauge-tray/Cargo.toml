@@ -9,8 +9,13 @@ license.workspace = true
 tokengauge-core = { path = "../tokengauge-core" }
 anyhow = { workspace = true }
 
-# GUI + tray deps are Windows-only so non-Windows targets (and Linux CI) don't
-# pull eframe/winit/GTK. On other platforms this crate builds a trivial stub.
-[target.'cfg(windows)'.dependencies]
+# GUI + tray deps are Windows and macOS only so Linux (and Linux CI) doesn't
+# pull eframe/winit/GTK. On Linux this crate builds a trivial stub.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 eframe = "0.35"
 tray-icon = "0.24"
+
+# eframe does not re-export winit's platform extensions, and keeping the app out
+# of the Dock is one of them.
+[target.'cfg(target_os = "macos")'.dependencies]
+winit = "0.30"

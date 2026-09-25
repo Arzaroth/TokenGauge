@@ -604,7 +604,15 @@ mod tests {
         // Exactly what CI hit on Windows: a path in a TOML *basic* string, so
         // `\U` reads as an invalid escape. Falling back to a default config
         // would put this fleet's key in the real state directory.
-        let dir = std::env::temp_dir().join(format!(
+        //
+        // The error quotes the path, and macOS's long temp dir wraps the
+        // message this looks for across two lines of the panel.
+        let root = if cfg!(target_os = "macos") {
+            std::path::PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let dir = root.join(format!(
             "tokengauge-syncview-{}-badtoml",
             std::process::id()
         ));

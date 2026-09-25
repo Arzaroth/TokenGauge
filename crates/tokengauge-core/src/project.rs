@@ -6,9 +6,12 @@ use selvedge::{Frontend, Project, Restart, VersionSource};
 /// Every executable the release archive carries, the primary one first. That
 /// one also names the assets, so on Windows - where the archive is built
 /// around the tray rather than the waybar binary - the order differs from the
-/// Linux one rather than being a translation of it.
-#[cfg(not(target_os = "windows"))]
+/// Linux one rather than being a translation of it. macOS carries the Linux
+/// pair for the daemon and the CLI, and the tray for the menu bar.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const BINARIES: &[&str] = &["tokengauge", "tokengauge-tui"];
+#[cfg(target_os = "macos")]
+const BINARIES: &[&str] = &["tokengauge", "tokengauge-tui", "tokengauge-tray"];
 #[cfg(target_os = "windows")]
 const BINARIES: &[&str] = &["tokengauge-tui.exe", "tokengauge-tray.exe"];
 

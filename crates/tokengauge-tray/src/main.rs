@@ -1,25 +1,24 @@
-//! TokenGauge system-tray GUI for Windows.
+//! TokenGauge system-tray GUI for Windows and the macOS menu bar.
 //!
 //! A small always-available window drawing the same panel every other frontend
 //! draws - limits, cost, tokens by day, tokens by model - from
-//! [`tokengauge_core::panel_spec`], backed by a system-tray icon that renders
-//! the current peak usage percentage. Windows-only; on other platforms this is
-//! a stub (the Linux surfaces are the Waybar module, KDE applet, GNOME
-//! extension and Quickshell widget).
+//! [`tokengauge_core::panel_spec`], backed by a tray icon that renders the
+//! current peak usage percentage. On Linux this is a stub (the Linux surfaces
+//! are the Waybar module, KDE applet, GNOME extension and Quickshell widget).
 
 // Build as a GUI (windowless) binary on Windows so launching it doesn't pop a
 // console window - important when it runs at login / from the tray.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn main() {
     eprintln!(
-        "tokengauge-tray is Windows-only; on Linux use the Waybar module, the KDE \
-         applet, the GNOME extension or the Quickshell widget."
+        "tokengauge-tray runs on Windows and macOS; on Linux use the Waybar module, \
+         the KDE applet, the GNOME extension or the Quickshell widget."
     );
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn main() -> eframe::Result<()> {
     // A flyout, not a window: no title bar, no taskbar button, above whatever
     // it is opened over, and placed against the tray icon that opened it. It
@@ -39,6 +38,12 @@ fn main() -> eframe::Result<()> {
             .with_always_on_top()
             .with_visible(!hidden)
             .with_title("TokenGauge"),
+        // A menu-bar extra, not an application: no Dock icon, no app menu.
+        #[cfg(target_os = "macos")]
+        event_loop_builder: Some(Box::new(|builder| {
+            use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+            builder.with_activation_policy(ActivationPolicy::Accessory);
+        })),
         ..Default::default()
     };
     eframe::run_native(
@@ -48,7 +53,7 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod gui {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, mpsc};
@@ -1174,16 +1179,29 @@ mod gui {
     }
 
     /// Open the TUI on its sync screen.
-    ///
-    /// The TUI is spawned directly rather than through `--sync-setup`, whose
-    /// terminal discovery is Unix-shaped; on Windows the console the TUI opens
-    /// in is the terminal.
     fn spawn_sync_setup() {
-        let mut cmd = tui_command();
-        let _ = cmd.arg("--sync").spawn();
+        spawn_tui(&["--sync"]);
+    }
+
+    /// Run the TUI where the user can see it.
+    ///
+    /// On Windows it is spawned directly: the console it opens is the
+    /// terminal. A macOS GUI child has no terminal at all, so it goes through
+    /// the launcher every other frontend's "open" button uses.
+    fn spawn_tui(args: &[&str]) {
+        #[cfg(windows)]
+        {
+            let _ = tui_command().args(args).spawn();
+        }
+        #[cfg(target_os = "macos")]
+        if let Ok(config) = load_config(Some(default_config_path())) {
+            let command = tokengauge_core::launch::tui_command_with(&config, args);
+            tokengauge_core::launch::spawn_shell(&command);
+        }
     }
 
     /// The installed TUI beside this binary, falling back to `PATH`.
+    #[cfg(windows)]
     fn tui_command() -> std::process::Command {
         let beside = std::env::current_exe()
             .ok()
@@ -1198,8 +1216,7 @@ mod gui {
     /// Spawn `tokengauge-tui --update` (which owns the self-update code) to
     /// download the latest release and replace the installed binaries.
     fn spawn_update() {
-        let mut cmd = tui_command();
-        let _ = cmd.arg("--update").spawn();
+        spawn_tui(&["--update"]);
     }
 
     fn tray_event_loop(

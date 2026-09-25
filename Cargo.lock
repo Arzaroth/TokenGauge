@@ -5114,6 +5114,7 @@ dependencies = [
  "eframe",
  "tokengauge-core",
  "tray-icon",
+ "winit",
 ]
 
 [[package]]

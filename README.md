@@ -2,7 +2,7 @@
 
 [![GitHub release](https://img.shields.io/github/v/release/Arzaroth/TokenGauge)](https://github.com/Arzaroth/TokenGauge/releases) [![License: MIT OR WTFPL](https://img.shields.io/badge/License-MIT%20OR%20WTFPL-brightgreen.svg)](LICENSE)
 
-Monitor token usage, costs, and limits for AI coding assistants from your Waybar, KDE Plasma panel, GNOME Shell panel, and TUI. Usage limits are fetched natively over HTTP for Claude, Codex, Kimi, Grok, GLM (z.ai), OpenRouter, opencode Go and Cursor, and costs are read natively too - straight from the transcripts the CLIs write, rated against [LiteLLM](https://github.com/BerriAI/litellm)'s price table. [ccusage](https://github.com/ryoppippi/ccusage) is optional, kept as a fallback and a cross-check. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
+Monitor token usage, costs, and limits for AI coding assistants from your Waybar, KDE Plasma panel, GNOME Shell panel, macOS menu bar, Windows tray, and TUI. Usage limits are fetched natively over HTTP for Claude, Codex, Kimi, Grok, GLM (z.ai), OpenRouter, opencode Go and Cursor, and costs are read natively too - straight from the transcripts the CLIs write, rated against [LiteLLM](https://github.com/BerriAI/litellm)'s price table. [ccusage](https://github.com/ryoppippi/ccusage) is optional, kept as a fallback and a cross-check. Built for [Omarchy](https://omarchy.org) ([GitHub](https://github.com/basecamp/omarchy)) but works with any Waybar setup on Linux.
 
 | Waybar | TUI | KDE Plasma |
 |--------|-----|------------|
@@ -14,7 +14,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **TUI dashboard** (ratatui): per-provider sidebar, Session / Weekly / Sonnet-only / Tertiary windows, Extra usage rates, cost breakdown
 - **Spend history**: a second screen with 30 days, 90 days or 12 months as a chart, on every frontend that has room for one. Past months are rated at the prices that were in effect, not at today's. See [Spend history](#spend-history).
 - **Fleet sync**: add up tokens and cost across every machine you code on. One encrypted object per machine, moved through a folder your sync tool already handles or an S3-compatible bucket. No service to run, no account to make. See [Fleet sync](#fleet-sync).
-- **One panel, five surfaces**: the waybar tooltip, the KDE Plasma applet, the GNOME extension, the Quickshell widget and the Windows tray window all render the same sections in the same order - LIMITS, COST, TOKENS BY DAY, TOKENS BY MODEL, TOKENS BY DEVICE - from a single layout resolved in `tokengauge-core`. Hovering the icon gets the same summary on the four that have one - Plasma, GNOME, Quickshell and the Windows tray - each limit window with its tier, then one money line; the waybar module has no icon to hover, because its tooltip already is the panel. See [CLAUDE.md](CLAUDE.md) for the parity rule.
+- **One panel, five surfaces**: the waybar tooltip, the KDE Plasma applet, the GNOME extension, the Quickshell widget and the tray window (Windows and the macOS menu bar) all render the same sections in the same order - LIMITS, COST, TOKENS BY DAY, TOKENS BY MODEL, TOKENS BY DEVICE - from a single layout resolved in `tokengauge-core`. Hovering the icon gets the same summary on the four that have one - Plasma, GNOME, Quickshell and the tray - each limit window with its tier, then one money line; the waybar module has no icon to hover, because its tooltip already is the panel. See [CLAUDE.md](CLAUDE.md) for the parity rule.
 - **KDE Plasma 6 applet**: native panel widget (QML plasmoid) - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
 - **Native cost tracking**: today, month, 7-day rolling, per-model split, burn rate $/hr anchored to the provider's real session window, 7-day chart, today's spend vs the average of the prior days
 - **Multi-provider**: Claude, Codex, Kimi, Grok, GLM (z.ai), OpenRouter, opencode Go, and Cursor
@@ -52,6 +52,8 @@ omarchy-restart-waybar
 ```
 
 The installer detects `systemd --user`, drops in a `tokengauge-daemon.service`, and enables it. Pass `--no-daemon` to opt out and run in plain polling mode.
+
+The same command installs on macOS, where it sets up the menu bar instead of Waybar. See [macOS](#macos).
 
 ### Placement
 
@@ -139,7 +141,7 @@ belong above the limit gauges:
 | KDE Plasma | the chart button in the popup toolbar |
 | GNOME | the chart button in the popup header |
 | Omarchy | `.`, or the chart button (digits `1`-`3` pick a range) |
-| Windows tray | the **History** button in the flyout header |
+| Tray (Windows, macOS) | the **History** button in the flyout header |
 | Waybar | none - left-click opens the TUI, which has it |
 
 Waybar's tooltip is a hover surface with no second screen and no way to gain
@@ -225,7 +227,7 @@ only authentication there is.
 
 The desktop frontends all have a button for this: the Plasma applet's settings
 pane, the GNOME popup header, `y` in the Omarchy widget's settings, and the
-Windows tray menu.
+tray menu.
 
 ### An S3-compatible bucket instead
 
@@ -433,7 +435,7 @@ threshold notifications are untouched.
 
 ## Diagnostics
 
-Run `tokengauge --doctor` (Linux) or `tokengauge-tui --doctor` (any platform)
+Run `tokengauge --doctor` (Linux, macOS) or `tokengauge-tui --doctor` (any platform)
 to print a grouped checklist:
 
 ```
@@ -455,15 +457,16 @@ The report itself lives in `tokengauge-core`, so it is the same on every
 platform. The `tokengauge` binary adds the sections only it can answer for -
 bar wiring, the click-action launcher and fleet sync - and the Linux-only
 checks (`notify-send`, `xdg-open`, the desktop frontends) are omitted on
-Windows rather than reported as failures.
+Windows and macOS rather than reported as failures.
 
 ## Updates
 
 The binaries self-update from GitHub releases, pulling the archive matching your
-platform (`linux-x86_64` / `linux-aarch64` / `windows-x86_64`):
+platform (`linux-x86_64` / `linux-aarch64` / `macos-x86_64` / `macos-aarch64` /
+`windows-x86_64`):
 
 ```bash
-# Linux
+# Linux, macOS
 tokengauge --update        # download the latest release and swap the binaries
 tokengauge --check-update  # just report the latest version (prints JSON)
 ```
@@ -480,9 +483,10 @@ available - set `update.check = false` to opt out. The desktop frontends
 surface an **Update** button when a newer release is cached; clicking it
 runs `--update`. After a Linux update the daemon is restarted automatically to
 load the new binary (falls back to printing the `systemctl --user restart
-tokengauge-daemon.service` command when not managed by systemd). On Windows the
-tray's **Update TokenGauge** menu item runs the updater; restart the app to load
-the new binaries.
+tokengauge-daemon.service` command when not managed by systemd). On macOS the
+`org.tokengauge.daemon` LaunchAgent is kickstarted the same way. On Windows and
+macOS the tray's **Update TokenGauge** menu item runs the updater; restart the
+app to load the new binaries.
 
 Set `TOKENGAUGE_REPO=owner/repo` to update from a fork's releases.
 
@@ -573,6 +577,45 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 6. (Optional) Set up the daemon - see **Daemon mode** above.
 
 7. Restart Waybar.
+
+## macOS
+
+The same installer works on macOS (Apple silicon and Intel):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/master/scripts/install.sh | bash
+```
+
+It puts `tokengauge`, `tokengauge-tui` and `tokengauge-tray` in `~/.local/bin`
+and registers two LaunchAgents in `~/Library/LaunchAgents`:
+
+- `org.tokengauge.daemon` runs `tokengauge --daemon`: the fetches, the
+  threshold notifications and the update check.
+- `org.tokengauge.tray` runs the [tray](#tray-gui-tokengauge-tray) in the menu
+  bar, with no Dock icon, and starts it at login.
+
+Pass `--no-daemon` or `--no-tray` to skip either. Config and state live where
+they do on Linux, under `~/.config/tokengauge` and `~/.local/state/tokengauge`.
+Logs go to `~/Library/Logs/org.tokengauge.*.log`. Add `~/.local/bin` to your
+`PATH` to run the CLI and the TUI from a shell.
+
+Claude Code keeps its token in the macOS keychain, and TokenGauge reads it
+from there. The first read may ask you to allow access.
+
+The binaries are not signed or notarized. The installer downloads them with
+`curl`, which Gatekeeper does not block. If you download the archive with a
+browser instead, clear the quarantine flag before running it:
+`xattr -d com.apple.quarantine tokengauge tokengauge-tui tokengauge-tray`.
+
+To uninstall:
+
+```bash
+for agent in daemon tray; do
+  launchctl bootout "gui/$(id -u)/org.tokengauge.$agent"
+  rm ~/Library/LaunchAgents/org.tokengauge.$agent.plist
+done
+rm ~/.local/bin/tokengauge{,-waybar,-tui,-tray}
+```
 
 ## Windows 10
 
@@ -670,24 +713,25 @@ cargo build --release -p tokengauge-tui
 
 ### Tray GUI (`tokengauge-tray`)
 
-Prefer a window over the terminal? `tokengauge-tray` is a Windows system-tray
-app (egui) that draws the same panel every other frontend draws - limits, cost,
+Prefer a window over the terminal? `tokengauge-tray` is a system-tray app
+for Windows and the macOS menu bar (egui) that draws the same panel every other frontend draws - limits, cost,
 tokens by day and by model - in a flyout anchored to its tray icon, backed by an
 icon showing the current peak percentage. It shares the same config and cache as
-the TUI and refreshes in the background. `scripts\install.ps1` installs it; to
-build it yourself:
+the TUI and refreshes in the background. `scripts\install.ps1` installs it on
+Windows and `scripts/install.sh` on macOS; to build it yourself:
 
 ```powershell
 cargo build --release -p tokengauge-tray
 .\target\release\tokengauge-tray.exe
 ```
 
-- Left-click the tray icon (near the clock) to open the panel over it; click
+- Left-click the tray icon (near the clock, or in the macOS menu bar) to open the panel over it; click
   away, press `Esc`, or use the `×` button to send it back to the tray.
 - Right-click the tray icon for **Show / Refresh now / Update TokenGauge / Quit**
   (**Update** runs `tokengauge-tui --update`; restart the tray afterward).
 - It reads the same OAuth credentials as the TUI, so sign in to the `codex`
-  and/or `claude` CLIs first. This crate is Windows-only.
+  and/or `claude` CLIs first. This crate runs on Windows and macOS; on Linux
+  it builds a stub.
 
 ### Limits on Windows
 

@@ -22,6 +22,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the credits model all come from. The Omarchy widget carries
   [omarchy](https://github.com/basecamp/omarchy)'s MIT notice, which it owed:
   it is adapted from their own `omarchy.agents` plugin.
+- **macOS.** Releases carry `macos-aarch64` and `macos-x86_64` archives, and
+  `scripts/install.sh` installs them: the `tokengauge` CLI and daemon, the TUI,
+  and the tray, which runs in the menu bar with no Dock icon. The daemon and the
+  tray run as LaunchAgents and start at login. `--update` fetches the macOS
+  archive and restarts the daemon through launchd. Notifications go through
+  Notification Center, and dashboard links open in the default browser.
+  Opening the TUI from the tray uses Terminal.app unless `TERMINAL` names
+  another terminal.
+- A copy installed by Homebrew refuses `--update` and says to run
+  `brew upgrade` instead, so brew's record of the installed version stays true.
+
+### Fixed
+
+- The Windows tray fetched every provider when it started and again every
+  `refresh_secs`, whatever the snapshot said. It now serves a snapshot that is
+  still fresh, as the TUI does, and only **Refresh now** forces a fetch.
+- `scripts/install.sh` and `scripts/update.sh` no longer need `jq` to find the
+  latest release.
 
 ## [0.35.1] - 2026-09-16
 

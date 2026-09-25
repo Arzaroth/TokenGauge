@@ -480,9 +480,9 @@ fn handle_update(config: &TokenGaugeConfig) -> Result<()> {
 
     println!("Updated to {}.", applied.version);
     if restart_daemon() {
-        println!("Restarted tokengauge-daemon.service.");
+        println!("Restarted the daemon.");
     } else {
-        println!("Restart to load it: systemctl --user restart tokengauge-daemon.service");
+        println!("Restart to load it: {RESTART_HINT}");
     }
     report_frontends(&applied.frontends);
     Ok(())

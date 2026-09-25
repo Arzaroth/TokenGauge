@@ -28,9 +28,36 @@ use tokengauge_core::{
 
 use crate::*;
 
+/// The launchd label `scripts/install.sh` gives the daemon's LaunchAgent.
+#[cfg(target_os = "macos")]
+pub(crate) const LAUNCHD_LABEL: &str = "org.tokengauge.daemon";
+
+/// How to restart the daemon by hand, for when [`restart_daemon`] could not.
+#[cfg(target_os = "macos")]
+pub(crate) const RESTART_HINT: &str = "launchctl kickstart -k gui/$(id -u)/org.tokengauge.daemon";
+#[cfg(not(target_os = "macos"))]
+pub(crate) const RESTART_HINT: &str = "systemctl --user restart tokengauge-daemon.service";
+
+/// Restart the launchd agent so the freshly-installed binary is loaded.
+/// `kickstart` fails on a label that is not loaded, which is the no-daemon
+/// case.
+#[cfg(target_os = "macos")]
+pub(crate) fn restart_daemon() -> bool {
+    Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "launchctl kickstart -k \"gui/$(id -u)/{LAUNCHD_LABEL}\""
+        ))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 /// Restart the systemd user daemon so the freshly-installed binary is loaded.
 /// Best effort: returns false when there's no active unit to restart (plain
 /// polling mode) or systemctl is unavailable.
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn restart_daemon() -> bool {
     let active = Command::new("systemctl")
         .args([

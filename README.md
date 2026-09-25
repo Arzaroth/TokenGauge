@@ -21,7 +21,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **GNOME Shell extension**: panel indicator for GNOME 45+ mirroring the Plasma applet - brand icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and pin-to-bar, plus an Adwaita preferences window for the provider toggles. Shares the same config, cache, and daemon as the Waybar module.
 - **Pace tracking**: every usage window - including Claude's model-scoped weeklies like `Fable only` - projects where it lands at reset from the current burn rate (`ends ~16%`, or `empty in 2h 15m` when it runs out first), shown next to each reset on every frontend (hidden until 3% of the window has elapsed)
 - **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary
-- **Threshold notifications**: `notify-send` alerts at 50/80/95% (configurable) - one-shot per threshold, resets on window roll-over
+- **Threshold notifications**: desktop alerts (`notify-send` on Linux, Notification Center on macOS) at 50/80/95% (configurable) - one-shot per threshold, resets on window roll-over
 - **Daemon mode**: optional long-lived process for near-instant waybar polls, background notifications, and SIGHUP config reload
 - **Self-update**: `tokengauge --update` pulls the arch-matching build from GitHub releases; the daemon checks periodically and notifies, and the desktop frontends expose an **Update** button
 - **`--doctor`**: diagnostic checklist for credentials, cost source (including a native-vs-ccusage cross-check), notifications, providers, waybar wiring, click action launcher - on every platform, via `tokengauge --doctor` or `tokengauge-tui --doctor`
@@ -478,11 +478,11 @@ tokengauge-tui.exe --check-update
 ```
 
 When the daemon is running it checks GitHub every `update.check_interval_secs`
-(default 6h) and fires a one-shot `notify-send` when a newer version is
-available - set `update.check = false` to opt out. The desktop frontends
-surface an **Update** button when a newer release is cached; clicking it
-runs `--update`. After a Linux update the daemon is restarted automatically to
-load the new binary (falls back to printing the `systemctl --user restart
+(default 6h) and fires a one-shot desktop notification when a newer version is
+available (`notify-send` on Linux, Notification Center on macOS) - set
+`update.check = false` to opt out. The desktop frontends surface an **Update**
+button when a newer release is cached; clicking it runs `--update`. After a
+Linux update the daemon is restarted automatically to load the new binary (falls back to printing the `systemctl --user restart
 tokengauge-daemon.service` command when not managed by systemd). On macOS the
 `org.tokengauge.daemon` LaunchAgent is kickstarted the same way. On Windows and
 macOS the tray's **Update TokenGauge** menu item runs the updater; restart the

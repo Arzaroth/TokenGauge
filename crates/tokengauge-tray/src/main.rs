@@ -63,9 +63,9 @@ mod gui {
     use eframe::egui::{self, Color32, ProgressBar, RichText, ViewportCommand};
     use tokengauge_core::{
         HistoryPanel, PROVIDERS, ProviderRow, Section, SectionKind, TokenGaugeConfig, Tone,
-        config_set_oauth_provider, config_set_primary, default_config_path, fetch_all_providers,
-        load_config, panel_spec, payload_to_rows_with_costs, read_cache_full, retain_enabled,
-        write_cache_full, write_default_config,
+        cache_is_stale, config_set_oauth_provider, config_set_primary, default_config_path,
+        fetch_all_providers, load_config, panel_spec, payload_to_rows_with_costs, read_cache_full,
+        retain_enabled, write_cache_full, write_default_config,
     };
     use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem};
     use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -1333,15 +1333,19 @@ mod gui {
         action_rx: mpsc::Receiver<Action>,
         cfg_path: std::path::PathBuf,
     ) {
+        let mut forced = false;
         loop {
-            {
-                shared.lock().unwrap_or_else(|e| e.into_inner()).fetching = true;
-            }
-            ctx.request_repaint();
-
             let mut refresh_secs = 600u64;
             match load_config(Some(cfg_path.clone())) {
+                // A daemon, or the TUI, fetched recently enough: serve what it
+                // wrote rather than asking every provider again.
+                Ok(config) if !forced && !cache_is_stale(&config) => {
+                    refresh_secs = config.refresh_secs.max(30);
+                    load_from_cache(&shared, &cfg_path);
+                }
                 Ok(config) => {
+                    shared.lock().unwrap_or_else(|e| e.into_inner()).fetching = true;
+                    ctx.request_repaint();
                     refresh_secs = config.refresh_secs.max(30);
                     let result = fetch_all_providers(&config);
                     let _ = write_cache_full(
@@ -1399,6 +1403,7 @@ mod gui {
                 .into_iter()
                 .chain(action_rx.try_iter())
                 .collect();
+            forced = queued.iter().any(|a| matches!(a, Action::Refresh));
             for action in queued {
                 let result = match action {
                     Action::SetProvider(name, enable) => {

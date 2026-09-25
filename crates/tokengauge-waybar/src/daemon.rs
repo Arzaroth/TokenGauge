@@ -740,7 +740,14 @@ mod tests {
     fn unique_test_dir(tag: &str) -> PathBuf {
         let counter = std::sync::atomic::AtomicU64::new(0);
         let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
+        // A socket path is capped at 104 bytes on macOS, and its temp dir
+        // alone takes half of that.
+        let root = if cfg!(target_os = "macos") {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let dir = root.join(format!(
             "tokengauge-test-{tag}-{}-{}-{}",
             std::process::id(),
             now_ms(),

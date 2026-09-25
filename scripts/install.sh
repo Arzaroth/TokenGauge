@@ -122,8 +122,20 @@ rm -f "$INSTALL_DIR/tokengauge-waybar"
 ln -s tokengauge "$INSTALL_DIR/tokengauge-waybar"
 install -m 0755 "$TMP_DIR/tokengauge-tui" "$INSTALL_DIR/tokengauge-tui"
 
+# A path with & or < in it is otherwise invalid XML, and launchctl refuses the
+# whole plist after the old agent has already been booted out.
+xml_escape() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+plist_env() {
+  printf '    <key>%s</key>\n    <string>%s</string>\n' "$1" "$(xml_escape "$2")"
+}
+
 # launchd starts what a LaunchAgent names with a bare PATH, so the agent sets
-# its own - with Homebrew's prefixes, where bunx and npx live for ccusage.
+# its own - with Homebrew's prefixes, where bunx and npx live for ccusage. An
+# XDG directory the installer ran under is carried too, or the agents would
+# read a different config and snapshot from the one just written.
 install_launch_agent() {
   local label="$1" plist="$HOME/Library/LaunchAgents/$1.plist"
   shift
@@ -135,26 +147,29 @@ install_launch_agent() {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>$label</string>
+  <string>$(xml_escape "$label")</string>
   <key>ProgramArguments</key>
   <array>
 PLIST
     for arg in "$@"; do
-      printf '    <string>%s</string>\n' "$arg"
+      printf '    <string>%s</string>\n' "$(xml_escape "$arg")"
     done
     cat <<PLIST
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key>
-    <string>$INSTALL_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+PLIST
+    plist_env PATH "$INSTALL_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    [[ -n "${XDG_CONFIG_HOME:-}" ]] && plist_env XDG_CONFIG_HOME "$XDG_CONFIG_HOME"
+    [[ -n "${XDG_STATE_HOME:-}" ]] && plist_env XDG_STATE_HOME "$XDG_STATE_HOME"
+    cat <<PLIST
   </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>LimitLoadToSessionType</key>
   <string>Aqua</string>
   <key>StandardErrorPath</key>
-  <string>$HOME/Library/Logs/$label.log</string>
+  <string>$(xml_escape "$HOME/Library/Logs/$label.log")</string>
 PLIST
     [[ "$label" == *.daemon ]] && printf '  <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n'
     printf '</dict>\n</plist>\n'

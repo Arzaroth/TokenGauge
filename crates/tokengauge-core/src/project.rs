@@ -132,6 +132,31 @@ mod tests {
         );
     }
 
+    /// The test above sees only the platform running it, and CI runs it on
+    /// three. A job dropped from the release workflow for a fourth would leave
+    /// every machine on it with nothing to update to, and nothing here red.
+    #[test]
+    fn the_workflow_publishes_an_archive_for_every_platform() {
+        let workflow = release_workflow();
+        let tokens: Vec<_> = workflow
+            .split(|c: char| c.is_whitespace() || c == '"' || c == ',')
+            .collect();
+        for (target, suffix) in [
+            ("linux-x86_64", ".tar.gz"),
+            ("linux-aarch64", ".tar.gz"),
+            ("macos-x86_64", ".tar.gz"),
+            ("macos-aarch64", ".tar.gz"),
+            ("windows-x86_64", ".zip"),
+        ] {
+            assert!(
+                tokens
+                    .iter()
+                    .any(|t| t.contains(target) && t.ends_with(suffix)),
+                "no {target}{suffix} asset in the release workflow"
+            );
+        }
+    }
+
     /// The MSI is named `win64` rather than `windows-x86_64` on purpose: a
     /// 0.22.x updater asks for no suffix at all and takes whichever asset
     /// matches the platform first, so an MSI carrying the platform string

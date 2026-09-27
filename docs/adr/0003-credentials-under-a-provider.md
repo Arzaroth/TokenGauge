@@ -23,10 +23,12 @@ alive are all the switcher's job.
   Codex), so the existing parsers read it unchanged. It holds the login only:
   Claude's `mcpOAuth` block stays in the live file, shared by every
   credential.
-- A sidecar `<name>.meta.json` holds what the credential file lacks: the stable
-  identity (Claude's `accountUuid`, Codex's `account_id`), the email, when it
-  was captured, an optional display label, and the block the switcher restores
-  into the CLI's config on a switch (Claude's `oauthAccount`).
+- A sidecar `<name>.meta.json` holds what the credential file lacks:
+  `accountId`, the stable identity (Claude's `accountUuid`, Codex's
+  `account_id`), `email`, `capturedAt`, an optional `label` the panel shows
+  beside the name, and, for Claude only, the `oauthAccount` block the switcher
+  restores into `.claude.json` on a switch. Codex's `auth.json` is the login
+  whole, so it has no such block.
 - The **active credential** is found by identity, not by token: TokenGauge
   reads the live source exactly as it does today and matches its identity
   against the sidecars. Tokens rotate, and identities do not. The live source

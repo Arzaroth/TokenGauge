@@ -32,6 +32,12 @@ alive are all the switcher's job.
   beside the name, and, for Claude only, the `oauthAccount` block the switcher
   restores into `.claude.json` on a switch. Codex's `auth.json` is the login
   whole, so it has no such block.
+- The sidecar also records `credsDigest`, the SHA-256 of the credential file it
+  was written for. The two files are two renames, so a crash between them can
+  leave a sidecar describing other tokens; when the digest does not match,
+  TokenGauge must not trust the sidecar's identity for that credential (remuda
+  re-identifies it on its next run). A sidecar without the key predates it and
+  is trusted.
 - The **active credential** is found by identity, not by token: TokenGauge
   reads the live source exactly as it does today and matches its identity
   against the sidecars, deriving it the way remuda does (for Codex, the seat

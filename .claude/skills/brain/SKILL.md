@@ -45,11 +45,13 @@ green.
   rule and the incident or reason behind it. Name the test that asserts it, if
   one does. If no section fits, add one; keep sections about subsystems, not
   about features.
-- **New or renamed domain term** -> `CONTEXT.md`, via the `domain-modeling`
-  skill, which owns that file's format.
+- **New or renamed domain term** -> `CONTEXT.md`: bold term, one-paragraph
+  definition, `_Avoid_:` line, under the matching `###` heading.
 - **New non-obvious decision with real alternatives** -> a new
-  `docs/adr/NNNN-*.md` (next number, `status: proposed` until it ships), also
-  via `domain-modeling`.
+  `docs/adr/NNNN-*.md` (next number, `status: proposed` until it ships, the
+  shape of the existing ones).
+- Both are the format a `domain-modeling` skill writes, if one is installed
+  (it is a personal skill, not part of this repository).
 - **Subsystem design moved** -> the matching `docs/*.md`.
 - **User-visible behaviour, config key or flag** -> `README.md` and
   `CHANGELOG.md` `[Unreleased]`.
@@ -70,8 +72,8 @@ not documents).
    paths, section and kind lists (`panel::SECTION_IDS`, `SectionKind`), CLI
    flags (`tokengauge --help`).
 3. The code wins: correct the doc and note what changed.
-4. The `docs-update` skill does the scoping and the rewrite; this skill is the
-   map it should follow for this repository.
+4. A personal `docs-update` skill, where installed, can do the scoping and the
+   rewrite; this skill is the map it should follow for this repository.
 
 For a broad audit, fan out read-only agents one per `CLAUDE.md` top-level
 section plus one per `docs/*.md`, each returning `{doc, claim, reality, fix}`,

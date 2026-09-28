@@ -18,8 +18,9 @@ reset instant. Credential-scoped, so it reads the same on every machine.
 _Avoid_: quota, limit period
 
 **Credential**:
-One signed-in identity at a provider, carrying its own windows and plan. A
-provider holds one or more.
+One set of tokens signed in to a provider, carrying its own windows and plan.
+A provider holds one or more. Its identity is how it is matched, and two
+credentials can share one.
 _Avoid_: account, auth file, login
 
 **Active credential**:
@@ -28,8 +29,8 @@ CLI's live source.
 _Avoid_: current, default, primary
 
 **Credential store**:
-The directory of inactive credentials that a switcher tool writes and
-TokenGauge only reads.
+The directory of every captured credential, a stored copy of the active one
+included, that a switcher tool writes and TokenGauge only reads.
 _Avoid_: vault, keyring, pool
 
 **Snapshot**:

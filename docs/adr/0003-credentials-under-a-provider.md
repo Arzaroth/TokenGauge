@@ -16,22 +16,26 @@ alive are all the switcher's job.
 ## The store contract
 
 - The switcher is [remuda](https://github.com/Arzaroth/remuda). Its store is
-  `$REMUDA_STORE`, else `$XDG_DATA_HOME/remuda/credentials`.
+  `$REMUDA_STORE`, else `$XDG_DATA_HOME/remuda/credentials`, else
+  `~/.local/share/remuda/credentials`.
 - One directory per provider, one file per credential:
   `<store>/<provider>/<name>.json`. The file has the shape of the provider
   CLI's own credential file (`.credentials.json` for Claude, `auth.json` for
   Codex), so the existing parsers read it unchanged. It holds the login only:
   Claude's `mcpOAuth` block stays in the live file, shared by every
-  credential.
+  credential. A file whose name starts with `.` is never a credential: the
+  store keeps its lock and set-aside tokens there.
 - A sidecar `<name>.meta.json` holds what the credential file lacks:
-  `accountId`, the stable identity (Claude's `accountUuid`, Codex's
-  `account_id`), `email`, `capturedAt`, an optional `label` the panel shows
+  `accountId`, the stable identity (Claude's `accountUuid`; for Codex the
+  seat, the access token's `chatgpt_account_user_id`, not `tokens.account_id`,
+  which names only the workspace every seat of a Team plan shares), `email`, `capturedAt`, an optional `label` the panel shows
   beside the name, and, for Claude only, the `oauthAccount` block the switcher
   restores into `.claude.json` on a switch. Codex's `auth.json` is the login
   whole, so it has no such block.
 - The **active credential** is found by identity, not by token: TokenGauge
   reads the live source exactly as it does today and matches its identity
-  against the sidecars. Tokens rotate, and identities do not. The live source
+  against the sidecars, deriving it the way remuda does (for Codex, the seat
+  claim in the live access token). Tokens rotate, and identities do not. The live source
   always wins over the stored copy of the same credential, which may be hours
   behind.
 - TokenGauge reads the store path from a config key that defaults to
@@ -44,7 +48,8 @@ alive are all the switcher's job.
   A gauge running as a daemon on every machine is the worst place to hold that
   race. Codex's in-place refresh of the *live* `auth.json` stays as it is: it
   predates this, runs under `auth.json.lock`, and touches only the active
-  credential.
+  credential. remuda takes the same lock while it replaces `auth.json` on a
+  switch, so the two never interleave.
 - **Symlinking the CLI's credential file into the store.** Rejected. A CLI that
   writes its file with a temp file and a rename replaces the symlink, and
   then the store silently stops following it.

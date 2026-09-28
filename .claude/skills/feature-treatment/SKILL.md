@@ -58,7 +58,9 @@ than rediscovering them.
   handled everywhere? New JSON field declared in `gnome/*/panel.ts` with the
   exact JSON name? New data work on `Service.qml`'s side of the line? A frontend
   that reads a credential, a cache file or a provider endpoint itself is a
-  finding.
+  finding. The recorded exceptions are not: waybar draws no history screen and
+  the TUI is exempt from layout parity (see "History is a second screen" and
+  the parity table in `CLAUDE.md`).
 - **Credentials / security** - a credential check that stats instead of
   validates; a hollow source shadowing a good one; tokens in logs, errors that
   reach the snapshot, or `--doctor` output; `CLAUDE_CONFIG_DIR` not routed

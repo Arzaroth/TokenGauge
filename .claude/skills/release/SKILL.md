@@ -83,6 +83,7 @@ CI's `build` and `frontends` jobs run (`build-windows` and `build-macos` cover
 what Linux cannot compile):
 
 ```bash
+cargo build --workspace
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features

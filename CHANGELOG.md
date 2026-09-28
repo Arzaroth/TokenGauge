@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tray run as LaunchAgents and start at login. `--update` fetches the macOS
   archive and restarts the daemon through launchd. Notifications go through
   Notification Center, and dashboard links open in the default browser.
+- **TokenGauge.app, in a DMG.** `tokengauge-<version>-macos-universal.dmg`
+  holds the menu-bar tray as a universal app for Apple silicon and Intel. Drag
+  it to Applications and open it. It updates by downloading the next DMG: its
+  **Update TokenGauge** item opens the latest release, and `--update` refuses
+  to patch binaries inside the signed bundle.
+- The macOS binaries and the DMG are signed with a Developer ID and notarized
+  by Apple, so they run without a Gatekeeper prompt, including when downloaded
+  with a browser.
   Opening the TUI from the tray uses Terminal.app unless `TERMINAL` names
   another terminal.
 - A copy installed by Homebrew refuses `--update` and says to run

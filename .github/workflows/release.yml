@@ -249,6 +249,11 @@ jobs:
   # arm64 and cross-builds x86_64 with its own Xcode, so no `cross` here.
   build-macos:
     runs-on: macos-latest
+    # Signing and notarization need the Developer ID secrets; a fork without
+    # them still releases, unsigned, the way it did before they existed.
+    env:
+      APPLE_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+      APPLE_NOTARY: ${{ secrets.APPLE_API_KEY_P8 != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -270,11 +275,93 @@ jobs:
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-macos-${{ hashFiles('**/Cargo.lock') }}
 
+      # rsvg-convert renders the app icon from assets/tokengauge.svg.
+      - name: Install librsvg
+        run: brew install librsvg
+
       - name: Build
         run: |
           for target in aarch64-apple-darwin x86_64-apple-darwin; do
             cargo build --release --target "$target" -p tokengauge-waybar -p tokengauge-tui -p tokengauge-tray
           done
+
+      - name: Developer ID certificate
+        if: env.APPLE_SIGNING == 'true'
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -hex 16)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          existing=()
+          while IFS= read -r line; do existing+=("$(echo "$line" | tr -d '" ')"); done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$keychain" "${existing[@]}"
+          identity=$(security find-identity -v -p codesigning "$keychain" | awk -F'"' -v team="($TEAM_ID)" '/Developer ID Application/ && index($2, team) {print $2; exit}')
+          if [ -z "$identity" ]; then echo "::error::no Developer ID Application identity for team $TEAM_ID in the certificate"; exit 1; fi
+          echo "MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      # Signs the per-architecture binaries the tarballs carry, and builds
+      # TokenGauge.app and its DMG from them.
+      - name: Sign, and build the app
+        run: scripts/package-macos.sh "${{ github.event.inputs.tag || github.ref_name }}"
+
+      # A bare binary cannot carry a stapled ticket, so the tarballs' binaries
+      # are notarized online: Gatekeeper asks Apple the first time one runs.
+      # The DMG gets its ticket stapled, so the app opens offline too.
+      - name: Notarization
+        if: env.APPLE_SIGNING == 'true' && env.APPLE_NOTARY == 'true'
+        env:
+          API_KEY: ${{ secrets.APPLE_API_KEY_P8 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          key="$RUNNER_TEMP/notary.p8"
+          printf '%s' "$API_KEY" | base64 --decode > "$key"
+          notarize() {
+            local file="$1" out="$RUNNER_TEMP/notary.json" id status
+            xcrun notarytool submit "$file" --key "$key" --key-id "$API_KEY_ID" --issuer "$API_ISSUER_ID" \
+              --wait --timeout 60m --output-format json > "$out" || true
+            cat "$out"
+            id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id", ""))' "$out" 2>/dev/null || true)
+            status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$out" 2>/dev/null || true)
+            if [ "$status" != Accepted ]; then
+              if [ -n "$id" ]; then
+                xcrun notarytool log "$id" --key "$key" --key-id "$API_KEY_ID" --issuer "$API_ISSUER_ID" || true
+              fi
+              echo "::error::notarization of $file: ${status:-no answer}"
+              exit 1
+            fi
+          }
+          mkdir -p "$RUNNER_TEMP/binaries"
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            mkdir -p "$RUNNER_TEMP/binaries/$target"
+            cp "target/$target/release/tokengauge" "target/$target/release/tokengauge-tui" \
+              "target/$target/release/tokengauge-tray" "$RUNNER_TEMP/binaries/$target/"
+          done
+          ditto -c -k --keepParent "$RUNNER_TEMP/binaries" "$RUNNER_TEMP/binaries.zip"
+          notarize "$RUNNER_TEMP/binaries.zip"
+          dmg=$(ls dist/*.dmg)
+          notarize "$dmg"
+          xcrun stapler staple "$dmg"
+          rm "$key"
+
+      - name: What Gatekeeper will say
+        if: env.APPLE_SIGNING == 'true'
+        run: |
+          codesign -dv --verbose=2 dist/TokenGauge.app 2>&1 | grep -E "Authority|TeamIdentifier|Runtime|flags"
+          spctl --assess --type execute -vv dist/TokenGauge.app
+          if [ "$APPLE_NOTARY" = true ]; then
+            xcrun stapler validate dist/*.dmg
+            spctl --assess --type open --context context:primary-signature -vv dist/*.dmg
+          fi
 
       - name: Package
         env:
@@ -296,7 +383,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: tokengauge-macos
-          path: dist/tokengauge-*-macos-*.tar.gz
+          path: |
+            dist/tokengauge-*-macos-*.tar.gz
+            dist/tokengauge-*-macos-universal.dmg
           if-no-files-found: error
 
   release:
@@ -339,3 +428,4 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/*.msi
+            dist/*.dmg

@@ -38,16 +38,17 @@ alive are all the switcher's job.
   `accountId`, the stable identity (Claude's `accountUuid`; for Codex the
   seat, the access token's `chatgpt_account_user_id`, not `tokens.account_id`,
   which names only the workspace every seat of a Team plan shares), `email`,
-  `capturedAt`, an optional `label` the panel shows beside the name, and, for Claude only, the `oauthAccount` block the switcher
-  restores into `.claude.json` on a switch. Codex's `auth.json` is the whole
+  `capturedAt`, an optional `label` the panel shows beside the name, and,
+  for Claude only, the `oauthAccount` block the switcher restores into
+  `.claude.json` on a switch. Codex's `auth.json` is the whole
   credential, so it has no such block.
 - The sidecar also records `credsDigest`, the SHA-256 of the credential file it
   was written for: over the file's exact bytes, as 64 lowercase hex
   characters, so it can be checked without parsing anything. The two files
-  are two renames, so a crash between them can leave a sidecar describing other tokens; when the digest does not match,
-  TokenGauge must not trust the sidecar's identity for that credential (remuda
-  re-identifies it on its next run). A sidecar without the key predates it and
-  is trusted.
+  are two renames, so a crash between them can leave a sidecar describing
+  other tokens; when the digest does not match, TokenGauge must not trust the
+  sidecar's identity for that credential (remuda re-identifies it on its next
+  run). A sidecar without the key predates it and is trusted.
 - The **active credential** is found by identity, not by token: TokenGauge
   reads the live source's tokens as it does today, derives the live identity
   the way remuda does, and matches it against the sidecars. Tokens rotate, and
@@ -118,8 +119,8 @@ in units of the largest plan: each credential contributes
   present it as more.
 - A credential that is neither Pro nor a tier carrying an `Nx` (Enterprise, or
   a tier string not seen before) has no known weight. It stays out of the
-  combined figure and is marked unweighted. Guessing 1x would understate a large plan without saying
-  so.
+  combined figure and is marked unweighted. Guessing 1x would understate a
+  large plan without saying so.
 - Weights are per provider. Codex plans need their own table, and credentials
   of two providers never share a header.
 - The header's reset is the earliest among the credentials. Whether the reset

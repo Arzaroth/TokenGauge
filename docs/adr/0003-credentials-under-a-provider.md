@@ -21,31 +21,38 @@ alive are all the switcher's job.
 - One directory per provider, one file per credential:
   `<store>/<provider>/<name>.json`. The file has the shape of the provider
   CLI's own credential file (`.credentials.json` for Claude, `auth.json` for
-  Codex), so the existing parsers read it unchanged. It holds the login only:
-  Claude's `mcpOAuth` block stays in the live file, shared by every
-  credential. A file whose name starts with `.` is never a credential: the
-  store keeps its lock and set-aside tokens there.
+  Codex), so the existing parsers read it unchanged. It holds the credential's
+  tokens only: Claude's `mcpOAuth` block stays in the live file, shared by
+  every credential.
+- A credential file is a `.json` file directly under `<store>/<provider>/`
+  whose name neither starts with `.` nor ends in `.meta.json`. Dot-files,
+  anywhere in the store, are the switcher's own (`.dirs.json`, its lock,
+  set-aside tokens) and are never credentials. So no credential is named with
+  a trailing `.meta`: its file would read as another credential's sidecar.
 - A sidecar `<name>.meta.json` holds what the credential file lacks:
   `accountId`, the stable identity (Claude's `accountUuid`; for Codex the
   seat, the access token's `chatgpt_account_user_id`, not `tokens.account_id`,
   which names only the workspace every seat of a Team plan shares), `email`, `capturedAt`, an optional `label` the panel shows
   beside the name, and, for Claude only, the `oauthAccount` block the switcher
-  restores into `.claude.json` on a switch. Codex's `auth.json` is the login
-  whole, so it has no such block.
+  restores into `.claude.json` on a switch. Codex's `auth.json` is the whole
+  credential, so it has no such block.
 - The sidecar also records `credsDigest`, the SHA-256 of the credential file it
   was written for: over the file's exact bytes, as 64 lowercase hex
   characters, so it can be checked without parsing anything. The two files are two renames, so a crash between them can
   leave a sidecar describing other tokens; when the digest does not match,
   TokenGauge must not trust the sidecar's identity for that credential (remuda
   re-identifies it on its next run). A sidecar without the key predates it and
-  is trusted. The store also holds `.dirs.json` and set-aside tokens, both
-  dot-files, which are never credentials.
+  is trusted.
 - The **active credential** is found by identity, not by token: TokenGauge
-  reads the live source exactly as it does today and matches its identity
-  against the sidecars, deriving it the way remuda does (for Codex, the seat
-  claim in the live access token). Tokens rotate, and identities do not. The live source
-  always wins over the stored copy of the same credential, which may be hours
-  behind.
+  reads the live source's tokens as it does today, derives the live identity
+  the way remuda does, and matches it against the sidecars. Tokens rotate, and
+  identities do not. The live source always wins over the stored copy of the
+  same credential, which may be hours behind.
+- Deriving the live identity is new work. Nothing TokenGauge reads today
+  carries one: Claude's `Oauth` holds tokens, expiry, scopes and tier, and the
+  identity is `oauthAccount.accountUuid` in `.claude.json`, which no reader
+  parses yet. For Codex it is the seat claim in the live access token, which
+  exists only on a ChatGPT sign-in.
 - TokenGauge reads the store path from a config key that defaults to
   remuda's.
 
@@ -70,10 +77,14 @@ alive are all the switcher's job.
 
 ## Consequences
 
-The snapshot carries one payload per credential instead of one per provider,
-so `CACHE_SCHEMA_VERSION` goes to 2. Everything that keys on the provider string
-(stale fallback, `retain_enabled`, `covers`, the selected tab) has to key on
-provider plus credential.
+`CachedData::Full.payloads` is already a list, and a provider can already
+return several payloads. What is new is that a payload names its credential,
+and that everything keying on the provider string alone (stale fallback,
+`retain_enabled`, `covers`) has to key on provider plus credential. The
+selected tab stays a provider: credentials live inside its section.
+`CACHE_SCHEMA_VERSION` goes to 2, but `schema_version` is written and never
+checked on read today, so the bump protects nothing until a reader refuses a
+snapshot of another version.
 
 A provider with one credential and no store renders exactly as it does today.
 Several credentials add a combined header to the provider's section and one
@@ -81,21 +92,24 @@ meters group per credential, with the active one marked. The panel spec
 resolves this, so it lands on all six frontends at once, or not at all.
 
 The combined header weighs each credential by its plan's multiplier, not by a
-vote each. A Max 20x and a Pro plan are not two equal halves of a pool. Claude's
-weight is the multiplier `plan_label` already reads out of `rateLimitTier`
-(Pro 1, Max 5x 5, Max 20x 20, Team seats by their own `Nx`). The header counts
+vote each. A Max 20x and a Pro plan are not two equal halves of one allowance.
+Claude's weight comes from the credential's plan: Pro 1, and for a
+`rateLimitTier` carrying an `Nx` (Max 5x, Max 20x, Team seats such as
+`default_claude_team_5x`), N. That is a new reading of the tier: `plan_label`
+extracts the multiplier only for Max and drops Team's, and has none for Pro,
+which is identified by its subscription type instead. The header counts
 in units of the largest plan: each credential contributes
 `used × weight ÷ largest weight`, so a Max 20x and a Pro both at 100% read
 "105% of 105%", and a Max 20x at 50% beside a Max 5x at 100% reads "75% of
 125%". The bar fills to the pooled fraction, `Σ used × weight ÷ Σ weight`
-(60% in the second case), so an idle Pro cannot make a busy pool look free.
+(60% in the second case), so an idle Pro cannot make busy plans look free.
 
 - The multipliers are the nominal ones the plans are sold with, relative to
   Pro. The real limits are not published and need not scale exactly in every
   window, so the combined figure is an estimate, and the panel does not
   present it as more.
-- A credential whose tier carries no `Nx` (Enterprise, or a tier string not
-  seen before) has no known weight. It stays out of the combined figure and is
+- A credential that is neither Pro nor a tier carrying an `Nx` (Enterprise, or
+  a tier string not seen before) has no known weight. It stays out of the combined figure and is
   marked unweighted. Guessing 1x would understate a large plan without saying
   so.
 - Weights are per provider. Codex plans need their own table, and credentials
@@ -110,4 +124,54 @@ already rate-limits, so the inactive credentials may need a slower cadence than
 
 A stored credential whose access token has expired renders as an expired row
 in its provider's section. It is not a provider error: the rest of the section
-still renders, and the fix is the switcher's, not a re-login.
+still renders, and the fix is the switcher's, not a re-login. Today an expired
+token is a fetch error, `payload_to_rows_with_costs` filters errored payloads
+out, and `apply_stale_fallback` drops a provider's errors once it has any live
+payload, so this needs a payload state that is expired without being an error.
+
+## Open questions
+
+Left for the implementation to settle, each before the code that depends on it:
+
+- **A live source with no identity.** `TOKENGAUGE_CLAUDE_OAUTH_TOKEN`, and a
+  Codex personal access token or API key, carry none, so no stored credential
+  can be matched as active and the active plan would be counted twice. Also
+  unsettled: two store files with the same `accountId`, and a sidecar whose
+  credential file is gone.
+- **Which window anchors session cost.** `cost::anchor_burn_rates` takes the
+  session window per payload and writes one figure per provider, so with a
+  payload per credential the last one wins. Session cost and burn rate should
+  follow the active credential. `docs/sync.md` still calls the window
+  account-scoped, and changes with this.
+- **Who may refresh the stored copy of the active credential.** The CLI, and
+  Codex's in-place refresh, rotate its refresh token under the live file's
+  lock, not the store's. The contract should forbid the switcher refreshing a
+  credential while it is the active one.
+- **A digest mismatch, rendered.** Whether the credential still shows (with no
+  identity, label or active mark) or is hidden; whether `label`, `email` and
+  `plan` are distrusted with the identity; whether trusting a digest-less
+  sidecar ever ends; and that the digest is computed over the same bytes that
+  are parsed, read once.
+- **The store's security.** Refuse a store or file that is not the user's own
+  and private, as `write_auth` keeps `auth.json` at 0600. No store token
+  reaches the snapshot, `--json`, `--doctor` or `stale_reason`, and `email`
+  stays out of the snapshot as sync keeps account detail on the machine.
+- **Cadence and freshness.** `cache_is_stale()` is the single fetch decision
+  and marks the whole snapshot stale when any window resets, so an inactive
+  credential's reset refetches every credential. A slower cadence for inactive
+  credentials needs a place in that decision, and a store change (a credential
+  added, the active one switched) has to make the snapshot stale, which
+  `covers()` cannot see.
+- **Where the store path comes from.** Resolved from the environment, the
+  daemon and a frontend's in-process fetch can see different stores. The
+  config key should be the source, and Windows and macOS need defaults.
+- **`--doctor`.** One validated check per stored credential, and a status for
+  a store that is missing, unreadable or empty, under the rule that the
+  Credentials check validates rather than stats.
+- **The panel spec's input.** `panel_spec` and `bar_tooltip` take one
+  `ProviderRow`, and `SECTION_IDS` is fixed, so a combined header needs a
+  grouped input and several `limits` groups need ids. The active and unweighted
+  markers should fit `badge` or `footnote`; a new field or `SectionKind` is a
+  six-frontend change.
+- **Codex weights.** No table exists yet, so a Codex header has no combined
+  figure until one does.

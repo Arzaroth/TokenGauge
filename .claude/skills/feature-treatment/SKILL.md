@@ -11,19 +11,26 @@ release -> clean up**. Nothing merges without an adversarial review and a green
 gate.
 
 The branch comes from the argument. If none is given, `wt list` and pick the
-non-master worktree under `../TokenGauge.worktrees/`; ask if more than one is a
-candidate. Work inside that worktree, never in the main checkout (the user
-works in it live, and it may be on another branch).
+non-master worktree under `<main checkout>.worktrees/`; ask if more than one is
+a candidate. Work inside that worktree, never in the main checkout (the user
+works in it live, and it may be on another branch). Paths are absolute, since
+`wt switch` cannot move the agent's shell and worktrees nest by branch name:
+
+```bash
+MAIN=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+WT="$MAIN.worktrees/<branch>"
+```
 
 ## 1. Rebase onto master
 
+First decide whether history may be rewritten. If the branch is already pushed
+with a PR that has review on it (`gh pr list -R Arzaroth/TokenGauge --head <branch>`),
+do not rebase: merge `origin/master` in, or ask. Otherwise:
+
 ```bash
-cd ../TokenGauge.worktrees/<branch>
-git fetch origin && git rebase origin/master
+cd "$WT" && git branch --show-current && git fetch origin && git rebase origin/master
 ```
 
-Only if the branch has not been pushed and reviewed yet. If a PR already exists
-with review on it, do not rewrite that history: merge `origin/master` in, or ask.
 Use the `resolving-merge-conflicts` skill on conflicts.
 
 Then check the size rule: `git diff --name-only origin/master...HEAD | wc -l`
@@ -32,7 +39,7 @@ first, then frontends; or one subsystem per PR) before reviewing anything.
 
 ## 2. Max-effort review (parallel finders)
 
-Diff: `git diff origin/master...HEAD -- . ':(exclude)Cargo.lock' ':(exclude)pnpm-lock.yaml' ':(exclude)tests/qml/fixtures' ':(exclude)crates/*/tests/fixtures' ':(exclude)crates/tokengauge-core/src/cost/prices.json'`
+Diff: `git diff origin/master...HEAD -- . ':(exclude)Cargo.lock' ':(exclude)pnpm-lock.yaml' ':(exclude)tests/qml/fixtures' ':(exclude)crates/*/tests/fixtures/*' ':(exclude)crates/tokengauge-core/src/cost/prices.json' ':(exclude)crates/tokengauge-core/src/cost/price-archive.json'`
 (generated files; read them only if a finder needs to confirm a regen).
 
 Spawn independent finder agents in one message, each over the same diff with a
@@ -105,7 +112,7 @@ same merge.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
-pnpm typecheck && scripts/build.sh
+pnpm install --frozen-lockfile && pnpm typecheck && scripts/build.sh
 tests/qml/run.sh
 tests/gnome/run.sh
 ```

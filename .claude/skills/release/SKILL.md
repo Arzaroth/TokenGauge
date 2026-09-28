@@ -10,9 +10,20 @@ knowing every file the version lives in and what CI does with the tag.
 
 ## 1. Pre-flight
 
-- **Never switch branches in the main checkout** - the user works in it live.
-  Run the release from a master worktree: `wt switch master` (creates
-  `../TokenGauge.worktrees/master` if needed), then `git pull --ff-only`.
+- **Never switch branches in, or release from, the main checkout** - the user
+  works in it live. Find it and the master worktree by absolute path, since
+  `wt switch` cannot move the agent's shell:
+
+  ```bash
+  MAIN=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+  git -C "$MAIN" branch --show-current   # master here: stop and ask
+  wt switch master                       # creates $MAIN.worktrees/master if absent
+  cd "$MAIN.worktrees/master" && git branch --show-current   # must print master
+  git pull --ff-only
+  ```
+
+  Note whether this run created the worktree; step "Done when" depends on it.
+  Every later command runs from `$MAIN.worktrees/master`.
 - Tree clean, up to date with `origin/master`. Every PR meant for this release
   is merged (`gh pr list -R Arzaroth/TokenGauge`). Always pass
   `-R Arzaroth/TokenGauge`: `gh` otherwise resolves to the `upstream` fork.
@@ -40,7 +51,10 @@ knowing every file the version lives in and what CI does with the tag.
 
 ## 3. Bump
 
-The version lives in exactly these places (`git grep -n '<old>' -- ':!Cargo.lock' ':!CHANGELOG.md'` must come back empty afterwards):
+The version lives in exactly these places. Afterwards
+`git grep -nF '"<old>"' -- ':!Cargo.lock' ':!CHANGELOG.md' ':!crates/*/tests/fixtures'`
+must come back empty (the quotes keep `pnpm@10.33.0` and prose out; the cost
+fixtures carry CLI versions that are not ours and must not be touched):
 
 | File | Field |
 | --- | --- |
@@ -63,24 +77,32 @@ body and falls back to auto-generated notes (with only a warning) if it misses.
 
 ## 4. Gate (all green before the commit)
 
-The same set CI's `build` and `frontends` jobs run (`build-windows` and
-`build-macos` cover what Linux cannot compile):
+CI runs only on `pull_request`, so nothing checks the release commit after it
+is pushed straight to master: this gate is the only one it gets. It is the set
+CI's `build` and `frontends` jobs run (`build-windows` and `build-macos` cover
+what Linux cannot compile):
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 pnpm install --frozen-lockfile && pnpm typecheck && scripts/build.sh
+for f in build/frontends/gnome/**/*.js; do node --input-type=module --check < "$f"; done
+for f in gnome/**/metadata.json omarchy/**/manifest.json plasma/**/*.json; do
+  node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$f"
+done
 tests/qml/run.sh
 tests/gnome/run.sh
 ```
 
-Plus qmllint over `plasma/**/*.qml omarchy/**/*.qml` (a `[syntax]` diagnostic is
+(`shopt -s globstar` first in bash.) The manifest check matters most here: the
+bump hand-edits exactly those files. Plus qmllint over `plasma/**/*.qml omarchy/**/*.qml` (a `[syntax]` diagnostic is
 the failure, not the exit code - see `Lint QML` in `ci.yml`). The tray and the
 keychain path only compile on Windows and macOS: if `crates/tokengauge-tray` or
 any `cfg(windows)` / `cfg(target_os = "macos")` code changed since the tag,
-clippy it cross-target (see the `cross-target-clippy` memory) or confirm CI's
-Windows and macOS jobs were green on the merge commit.
+clippy it cross-target (see the `cross-target-clippy` memory) or confirm the
+`build-windows` and `build-macos` checks were green on the PR that changed it
+(`gh pr checks <n> -R Arzaroth/TokenGauge`); nothing runs on the merge commit.
 
 ## 5. Commit, tag, push
 
@@ -116,6 +138,8 @@ tag.
 ## Done when
 
 The tag is on origin, the GitHub release exists with all six assets (the
-`linux-*` and `macos-*` tarballs, the `windows-x86_64` zip and the `win64` MSI), and its body is the changelog section. Report the version, the
-release URL and the one-line theme. Remove the master worktree only if this run
+`linux-*` and `macos-*` tarballs, the `windows-x86_64` zip and the `win64` MSI),
+and its body opens with the changelog section (GitHub's generated "What's
+Changed" follows it; that is expected). Report the version, the release URL
+and the one-line theme. Remove the master worktree only if this run
 created it.

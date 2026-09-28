@@ -5,7 +5,7 @@ description: Use and maintain TokenGauge's knowledge base - CLAUDE.md (the load-
 
 # The brain
 
-TokenGauge has no `brain/` directory. Its knowledge base is four layers, each
+TokenGauge has no `brain/` directory. Its knowledge base is five layers, each
 with one job. Use them as the first stop for understanding, and keep them true
 to the code.
 
@@ -22,21 +22,23 @@ to the code.
 1. Match the question to a `CLAUDE.md` section heading first - it is the index.
    `grep -n '^##' CLAUDE.md` lists them. Most "how does X work" questions land
    in one of: frontend parity / panel spec, snapshot and staleness, credentials,
-   costs, history, the frontend harnesses, the binary name, the updater, Windows
-   install.
+   costs, history, the frontend harnesses, the binary name, the updater, macOS
+   LaunchAgents, Windows install.
 2. A term you do not recognise goes to `CONTEXT.md` before the code.
 3. For sync or history, `docs/sync.md` / `docs/history.md` carry the detail the
    CLAUDE.md section only points at.
 4. For "why not the other way", check `docs/adr/` - and its `status:`. A
-   `proposed` ADR is not yet the code.
+   `proposed` ADR is not yet the code; one with no frontmatter (0001, 0002)
+   predates the field and is accepted.
 5. Only then open the source the doc names. If the doc and the code disagree,
    the code wins and the doc is the bug.
 
 ## Maintaining (after a change)
 
 A change that makes one of these wrong fixes it **in the same branch**, as its
-own docs layer on top of the behaviour commit (see the layered-commit rule in
-the global CLAUDE.md).
+own docs layer on top of the behaviour commit: one kind of work per commit,
+mechanical first, then behaviour, then tests and docs, each leaving the tree
+green.
 
 - **New rule a future change could break** (an invariant, an ordering, a
   platform trap) -> a paragraph in the matching `CLAUDE.md` section, stating the

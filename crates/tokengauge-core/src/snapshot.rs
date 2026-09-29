@@ -60,9 +60,12 @@ pub struct StoreSeen {
 impl StoreSeen {
     /// The store's names now.
     pub fn now(config: &TokenGaugeConfig) -> Self {
+        // The instant first: a switch landing while the store is listed must
+        // read as after it, not before.
+        let at_ms = now_ms();
         Self {
             names: store_listing(config),
-            at_ms: now_ms(),
+            at_ms,
         }
     }
 }

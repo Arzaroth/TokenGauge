@@ -74,8 +74,14 @@ dmg="dist/tokengauge-$safe_tag-macos-universal.dmg"
 mkdir -p dist/dmg
 cp -R "$app" dist/dmg/
 ln -s /Applications dist/dmg/Applications
-rm -f "$dmg"
-hdiutil create -quiet -volname TokenGauge -srcfolder dist/dmg -format UDZO "$dmg"
+# hdiutil fails now and then on a busy runner ("Resource busy") and succeeds
+# on the next attempt.
+for attempt in 1 2 3 4 5; do
+  rm -f "$dmg"
+  hdiutil create -volname TokenGauge -srcfolder dist/dmg -format UDZO "$dmg" && break
+  if [ "$attempt" = 5 ]; then exit 1; fi
+  sleep $((attempt * 5))
+done
 rm -rf dist/dmg
 if [ "$identity" != - ]; then codesign --force --sign "$identity" --timestamp "$dmg"; fi
 echo "$dmg"

@@ -122,8 +122,11 @@ the Co-Authored-By trailer. Look at `git log -1 --format=%B v<last>` for the ton
 
 The tag push triggers `.github/workflows/release.yml`: Linux x86_64 and aarch64
 archives (binaries + compiled frontend payloads), the Windows zip and MSI, the
-macOS aarch64 and x86_64 archives (binaries + tray, no desktop payloads), then
-the `release` job publishes.
+macOS aarch64 and x86_64 archives (binaries + tray, no desktop payloads) and
+the universal `TokenGauge.app` DMG, then the `release` job publishes. The
+macOS job signs everything with the Developer ID from the repository secrets
+and notarizes it; a rejected notarization fails the job and prints Apple's
+log rather than publishing unsigned files.
 
 ```bash
 gh run list -R Arzaroth/TokenGauge --workflow release.yml -L 1
@@ -138,8 +141,9 @@ tag.
 
 ## Done when
 
-The tag is on origin, the GitHub release exists with all six assets (the
-`linux-*` and `macos-*` tarballs, the `windows-x86_64` zip and the `win64` MSI),
+The tag is on origin, the GitHub release exists with all seven assets (the
+`linux-*` and `macos-*` tarballs, the `macos-universal` DMG, the
+`windows-x86_64` zip and the `win64` MSI),
 and its body opens with the changelog section (GitHub's generated "What's
 Changed" follows it; that is expected). Report the version, the release URL
 and the one-line theme. Remove the master worktree only if this run

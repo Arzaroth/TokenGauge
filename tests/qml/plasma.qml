@@ -51,6 +51,19 @@ Item {
         check.equal("the bar is resolved", row.bar.percent, 68)
         check.equal("with its tier", row.bar.tone, "warn")
         check.equal("the hover summary is the core's", row.bar_tooltip.title, "Claude")
+
+        // Several credentials are still one provider: one row, a group per
+        // credential in its panel, told apart by `group`, the active one first.
+        var grouped = null
+        for (var r = 0; r < service.snapshot.rows.length; r++)
+            if (String(service.snapshot.rows[r].provider).toLowerCase() === "codex") grouped = service.snapshot.rows[r]
+        check.ok("the fixture carries a provider with several credentials", grouped !== null)
+        if (grouped) {
+            var groups = grouped.panel.filter(function (s) { return s.id === "limits" })
+            check.ok("one group per credential", groups.length > 1)
+            check.ok("each names its credential", groups.every(function (s) { return !!s.group }))
+            check.ok("the active one leads", groups[0].title.indexOf("active") !== -1)
+        }
         check.equal("the theme came along", service.snapshot.theme.red, "#f38ba8")
 
         // An action runs the flag and the read in one source, so the applet

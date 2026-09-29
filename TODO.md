@@ -229,10 +229,6 @@ treats as worse than visibly broken.
   survives to say otherwise, and the data cannot tell you which. See
   `docs/history.md` §6.
 
-- **The QML harnesses assert nothing about grouped credentials**, and no
-  harness or e2e test drives the Claude `plans` header (the seeded
-  multi-credential provider is Codex, which has no weights).
-
 ## Chrome inconsistencies
 
 Small, cheap, and the kind of thing that makes the set of frontends feel like

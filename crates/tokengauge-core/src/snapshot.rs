@@ -224,7 +224,7 @@ fn store_listing(config: &TokenGaugeConfig) -> BTreeMap<String, Vec<String>> {
         .map(|provider| {
             (
                 provider.to_string(),
-                crate::credentials::credential_names(store, provider),
+                crate::credentials::credential_names(&store, provider),
             )
         })
         .filter(|(_, names)| !names.is_empty())
@@ -253,8 +253,11 @@ fn store_moved(
     crate::stored_providers()
         .into_iter()
         .filter(|provider| config.providers.is_enabled(provider))
-        .filter_map(|provider| crate::credentials::last_switch_ms(store, provider))
-        .any(|switched| switched > written_at.timestamp_millis())
+        .filter_map(|provider| crate::credentials::last_switch_ms(&store, provider))
+        // A switch stamped in the future is a clock that stepped back, not a
+        // switch still to come: honouring it would refetch on every render
+        // until the clock caught up.
+        .any(|switched| switched > written_at.timestamp_millis() && switched <= crate::now_ms())
 }
 
 /// True when a window this snapshot reported has reset since it was written.
@@ -616,13 +619,26 @@ mod tests {
         // Switched before the write: the snapshot already describes it.
         std::fs::write(store.join(".last-switch.json"), r#"{"claude": 1}"#).unwrap();
         assert!(!cache_is_stale(&config));
-        let later = crate::now_ms() + 60_000;
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let later = crate::now_ms();
         std::fs::write(
             store.join(".last-switch.json"),
             format!(r#"{{"claude": {later}, "codex": 1}}"#),
         )
         .unwrap();
         assert!(cache_is_stale(&config), "a switch after the write");
+
+        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None).unwrap();
+        let ahead = crate::now_ms() + 3_600_000;
+        std::fs::write(
+            store.join(".last-switch.json"),
+            format!(r#"{{"claude": {ahead}}}"#),
+        )
+        .unwrap();
+        assert!(
+            !cache_is_stale(&config),
+            "a clock that stepped back is not a switch"
+        );
 
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&store);

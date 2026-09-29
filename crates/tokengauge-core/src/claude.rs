@@ -303,9 +303,12 @@ fn login_tokens(oauth: &Oauth) -> LoginTokens {
 /// that file describes their login and not the override's.
 pub(crate) fn live_login() -> LiveLogin {
     let found = load_oauth(Utc::now()).ok().or_else(|| {
-        loaders()
-            .into_iter()
-            .find_map(|(source, loader)| Some((loader()?.ok()?, source)))
+        loaders().into_iter().find_map(|(source, loader)| {
+            let oauth = loader()?.ok()?;
+            // A hollow file is present and says nothing: it must not
+            // shadow a store that holds the real, if expired, token.
+            (!oauth.access_token.trim().is_empty()).then_some((oauth, source))
+        })
     });
     let Some((oauth, source)) = found else {
         return LiveLogin::default();

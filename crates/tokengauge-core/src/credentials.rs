@@ -133,7 +133,7 @@ pub fn read_provider(store: &Path, provider: &str) -> ProviderStore {
         return ProviderStore::default();
     }
     for path in [store, dir.as_path()] {
-        if let Err(why) = private(path, true) {
+        if let Err(why) = private(path, Guard::Writes) {
             return ProviderStore {
                 refused: Some(why),
                 ..ProviderStore::default()
@@ -152,7 +152,7 @@ pub fn read_provider(store: &Path, provider: &str) -> ProviderStore {
 
 fn read_one(dir: &Path, name: &str) -> std::result::Result<StoredCredential, String> {
     let path = dir.join(format!("{name}.json"));
-    private(&path, false)?;
+    private(&path, Guard::Reads)?;
     let bytes = std::fs::read(&path).map_err(|e| format!("cannot read it: {e}"))?;
     let digest = hex_sha256(&bytes);
     let text = String::from_utf8(bytes).map_err(|_| "it is not UTF-8".to_string())?;
@@ -160,6 +160,11 @@ fn read_one(dir: &Path, name: &str) -> std::result::Result<StoredCredential, Str
         return Err("it is not valid JSON".to_string());
     }
     let meta_path = dir.join(format!("{name}.meta.json"));
+    // The sidecar is where identity and label come from: anyone who can write
+    // it can make an entry answer for another account.
+    if meta_path.exists() {
+        private(&meta_path, Guard::Writes)?;
+    }
     let meta = match std::fs::read_to_string(&meta_path) {
         Ok(meta) => meta,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -191,30 +196,40 @@ fn hex_sha256(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// A store directory must be the user's and not writable by anyone else, and
-/// a credential file the user's and closed to everyone else.
+/// What a path must keep others from doing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Guard {
+    /// Nobody else may write it: the store's directories and the sidecars.
+    Writes,
+    /// Nobody else may touch it at all: a credential file.
+    Reads,
+}
+
+/// A store path must be the user's, and closed to others as far as `guard`
+/// says.
 ///
 /// "The user" is the owner of the home directory: this crate has no `unsafe`,
 /// and that is the one uid it can read without asking the kernel for its own.
+/// With no home directory to ask, nothing is the user's.
 #[cfg(unix)]
-fn private(path: &Path, is_dir: bool) -> std::result::Result<(), String> {
+fn private(path: &Path, guard: Guard) -> std::result::Result<(), String> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let meta =
         std::fs::metadata(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let owner = dirs::home_dir()
         .and_then(|home| std::fs::metadata(home).ok())
         .map(|home| home.uid());
-    if owner.is_some_and(|uid| uid != meta.uid()) {
+    if owner != Some(meta.uid()) {
         return Err(format!("{} does not belong to you", path.display()));
     }
     let mode = meta.permissions().mode() & 0o777;
-    if is_dir && mode & 0o022 != 0 {
+    if guard == Guard::Writes && mode & 0o022 != 0 {
         return Err(format!(
             "{} is writable by others (mode {mode:o})",
             path.display()
         ));
     }
-    if !is_dir && mode & 0o077 != 0 {
+    if guard == Guard::Reads && mode & 0o077 != 0 {
         return Err(format!(
             "{} is open to others (mode {mode:o}); it should be 600",
             path.display()
@@ -224,7 +239,7 @@ fn private(path: &Path, is_dir: bool) -> std::result::Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn private(_path: &Path, _is_dir: bool) -> std::result::Result<(), String> {
+fn private(_path: &Path, _guard: Guard) -> std::result::Result<(), String> {
     Ok(())
 }
 
@@ -364,7 +379,7 @@ pub(crate) fn fetch_provider(
     let read = config
         .credentials
         .store_root()
-        .map(|store| read_provider(store, provider))
+        .map(|store| read_provider(&store, provider))
         .unwrap_or_default();
     let live = (reader.live)();
     let resolved = resolve(
@@ -532,7 +547,7 @@ pub fn doctor_checks(config: &TokenGaugeConfig, now: DateTime<Utc>) -> Vec<Docto
         let Some(reader) = crate::providers::store_reader(provider) else {
             continue;
         };
-        let read = read_provider(store, provider);
+        let read = read_provider(&store, provider);
         if let Some(why) = read.refused {
             out.push(check(
                 format!("{provider} store"),
@@ -639,11 +654,9 @@ pub(crate) mod tests {
             "label": format!("{name} label"),
             "credsDigest": hex_sha256(creds.as_bytes()),
         });
-        std::fs::write(
-            dir.join(format!("{name}.meta.json")),
-            serde_json::to_string(&meta).unwrap(),
-        )
-        .unwrap();
+        let meta_path = dir.join(format!("{name}.meta.json"));
+        std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()).unwrap();
+        set_mode(&meta_path, 0o600);
     }
 
     fn tokens_of(text: &str) -> LoginTokens {
@@ -761,6 +774,17 @@ pub(crate) mod tests {
         let read = read_provider(&store, "claude");
         assert_eq!(read.entries.len(), 1);
         assert!(read.skipped[0].1.contains("open to others"), "{read:?}");
+        let _ = std::fs::remove_file(store.join("claude/open.json"));
+
+        put(&store, "claude", "forged", "{}", "u-3");
+        set_mode(&store.join("claude/forged.meta.json"), 0o666);
+        let read = read_provider(&store, "claude");
+        assert!(
+            read.skipped
+                .iter()
+                .any(|(n, why)| n == "forged" && why.contains("writable by others")),
+            "{read:?}"
+        );
 
         set_mode(&store.join("claude"), 0o777);
         let read = read_provider(&store, "claude");

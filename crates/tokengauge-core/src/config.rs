@@ -212,9 +212,20 @@ impl CredentialsConfig {
         }
     }
 
-    /// The store root, or `None` when the store is turned off.
-    pub fn store_root(&self) -> Option<&Path> {
-        (!self.store.as_os_str().is_empty()).then_some(self.store.as_path())
+    /// The store root, or `None` when the store is turned off. A leading `~`
+    /// is the home directory: a relative path would resolve against whichever
+    /// directory the reading process happened to start in.
+    pub fn store_root(&self) -> Option<PathBuf> {
+        if self.store.as_os_str().is_empty() {
+            return None;
+        }
+        let text = self.store.to_string_lossy();
+        let rest = match text.strip_prefix("~/") {
+            Some(rest) => rest,
+            None if text == "~" => "",
+            None => return Some(self.store.clone()),
+        };
+        Some(dirs::home_dir()?.join(rest))
     }
 }
 

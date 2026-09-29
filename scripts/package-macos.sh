@@ -17,6 +17,10 @@ safe_tag=${tag//[^A-Za-z0-9._-]/_}
 # CFBundleShortVersionString is numeric only.
 version=${tag#v}
 version=${version%%[-+]*}
+if ! [[ $version =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+  echo "package-macos.sh: no numeric version in tag '$tag'" >&2
+  exit 1
+fi
 targets=(aarch64-apple-darwin x86_64-apple-darwin)
 binaries=(tokengauge tokengauge-tui tokengauge-tray)
 profile=${PROFILE:-release}

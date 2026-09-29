@@ -221,7 +221,7 @@ jobs:
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           toolchain: stable
-          targets: x86_64-apple-darwin
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
           components: clippy
 
       - name: Cache Cargo
@@ -235,8 +235,18 @@ jobs:
       - name: Build
         run: cargo build --workspace
 
-      - name: Build (x86_64)
-        run: cargo build --workspace --target x86_64-apple-darwin
+      - name: Build (both architectures)
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --workspace --target "$target"
+          done
+
+      # The release job packages the same way, signed; this is the check that
+      # the bundle and the DMG still build before a tag finds out.
+      - name: Package the app (unsigned)
+        run: |
+          brew install librsvg
+          PROFILE=debug scripts/package-macos.sh v0.0.0-ci
 
       - name: Test
         run: cargo test --workspace --all-features

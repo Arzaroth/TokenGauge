@@ -1,0 +1,51 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="16" x2="448" y2="496" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2B2F5E"/>
+      <stop offset="1" stop-color="#12132B"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="256" cy="250" r="230" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5B63D6" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#5B63D6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fill" x1="150" y1="386" x2="354" y2="140" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2EE6A6"/>
+      <stop offset="0.55" stop-color="#8FE36B"/>
+      <stop offset="1" stop-color="#FFC24B"/>
+    </linearGradient>
+    <linearGradient id="needle" x1="256" y1="280" x2="340" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#FFE3A8"/>
+    </linearGradient>
+    <linearGradient id="hub" x1="226" y1="250" x2="286" y2="310" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#C9CCF5"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#glow)"/>
+  <rect x="17.5" y="17.5" width="477" height="477" rx="110.5" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="3"/>
+
+  <path d="M149.93 386.07A150 150 0 1 1 362.07 386.07" stroke="#FFFFFF" stroke-opacity="0.1" stroke-width="36" stroke-linecap="round"/>
+  <path d="M353.41 165.94A150 150 0 0 1 362.07 386.07" stroke="#FF6B6B" stroke-opacity="0.28" stroke-width="36" stroke-linecap="round"/>
+  <path d="M149.93 386.07A150 150 0 0 1 353.41 165.94" stroke="url(#fill)" stroke-width="36" stroke-linecap="round"/>
+
+  <g fill="#FFFFFF" fill-opacity="0.3">
+    <circle cx="178.2" cy="357.8" r="6"/>
+    <circle cx="151.4" cy="314.0" r="4"/>
+    <circle cx="147.4" cy="262.8" r="4"/>
+    <circle cx="167.0" cy="215.3" r="4"/>
+    <circle cx="206.1" cy="182.0" r="4"/>
+    <circle cx="256" cy="170" r="6"/>
+    <circle cx="305.9" cy="182.0" r="4"/>
+    <circle cx="345.0" cy="215.3" r="4"/>
+    <circle cx="364.6" cy="262.8" r="4"/>
+    <circle cx="360.6" cy="314.0" r="4"/>
+    <circle cx="333.8" cy="357.8" r="6"/>
+  </g>
+
+  <path d="M244.6 268.5L336.6 185.2Q341 181.5 344.2 186.2Q346.5 190.6 342.2 194.1L267.4 291.5Z" fill="url(#needle)"/>
+  <path d="M256 250L282 265V295L256 310L230 295V265Z" fill="url(#hub)"/>
+  <path d="M256 268L266.4 274V286L256 292L245.6 286V274Z" fill="#2B2F5E"/>
+</svg>

@@ -1218,6 +1218,17 @@ mod gui {
         }
     }
 
+    /// Running from TokenGauge.app, which updates by being replaced whole: a
+    /// binary swapped inside a signed bundle breaks its signature, and macOS
+    /// then calls the app damaged.
+    #[cfg(target_os = "macos")]
+    fn in_app_bundle() -> bool {
+        std::env::current_exe().is_ok_and(|exe| {
+            exe.ancestors()
+                .any(|dir| dir.extension().is_some_and(|ext| ext == "app"))
+        })
+    }
+
     /// Spawn `tokengauge-tui --update` (which owns the self-update code) to
     /// download the latest release and replace the installed binaries.
     fn spawn_update() -> bool {
@@ -1242,6 +1253,13 @@ mod gui {
                 } else if ev.id == ids.sync {
                     spawn_sync_setup();
                 } else if ev.id == ids.update {
+                    #[cfg(target_os = "macos")]
+                    if in_app_bundle() {
+                        let repo = tokengauge_core::project::TOKENGAUGE.repo();
+                        let url = format!("https://github.com/{repo}/releases/latest");
+                        tokengauge_core::launch::open_url(&url);
+                        continue;
+                    }
                     // Quit as well: this binary is one of the two the update
                     // replaces. An MSI install goes through msiexec, which
                     // cannot replace a file this process holds open and would

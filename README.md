@@ -580,7 +580,19 @@ Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot
 
 ## macOS
 
-The same installer works on macOS (Apple silicon and Intel):
+Two ways in, for Apple silicon and Intel alike.
+
+**The app.** Download `tokengauge-<version>-macos-universal.dmg` from
+[GitHub Releases](https://github.com/Arzaroth/TokenGauge/releases), open it and
+drag TokenGauge to Applications. Opening it puts the gauge in the menu bar,
+with no Dock icon. It is signed and notarized, so macOS asks only its usual
+first-open confirmation, not the unverified-developer warning. To start it at login, add it under System Settings >
+General > Login Items. The app is the tray alone: no daemon, and the CLI and
+the TUI stay inside the bundle. To update, its **Update TokenGauge** item opens
+the latest release; download the new DMG and replace the app. Updating a
+signed app in place would break its signature, so `--update` refuses to try.
+
+**The installer**, for the daemon, the CLI and the TUI on your `PATH` as well:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/master/scripts/install.sh | bash
@@ -602,12 +614,11 @@ Logs go to `~/Library/Logs/org.tokengauge.*.log`. Add `~/.local/bin` to your
 Claude Code keeps its token in the macOS keychain, and TokenGauge reads it
 from there. The first read may ask you to allow access.
 
-The binaries are not signed or notarized. The installer downloads them with
-`curl`, which Gatekeeper does not block. If you download the archive with a
-browser instead, clear the quarantine flag before running it:
-`xattr -d com.apple.quarantine tokengauge tokengauge-tui tokengauge-tray`.
+The binaries are signed and notarized, so a copy downloaded with a browser
+runs too. The first run of each asks Apple over the network to confirm it.
 
-To uninstall:
+To uninstall the app, drag it from Applications to the Bin. To uninstall
+what the installer put in place:
 
 ```bash
 for agent in daemon tray; do

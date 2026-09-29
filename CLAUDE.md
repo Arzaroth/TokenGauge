@@ -453,6 +453,22 @@ with Linux: `launch::notify` and `launch::open_url` use `osascript` and `open`
 there, and opening the TUI with no `TERMINAL` set goes to Terminal.app through
 AppleScript.
 
+### The DMG is the same binaries, sealed
+
+`scripts/package-macos.sh` signs the per-architecture binaries the tarballs
+ship, then `lipo`s them into `TokenGauge.app` (the tray as the main executable,
+the CLI and the TUI beside it) and wraps that in a DMG. The release job imports
+the Developer ID certificate from `MACOS_CERTIFICATE_P12` and notarizes with
+the `APPLE_API_KEY_*` secrets; without them it still releases, unsigned. A bare
+binary cannot carry a stapled ticket, so the tarballs are notarized online and
+only the DMG is stapled. PR CI runs the same script unsigned on a debug build,
+so a broken bundle fails a PR rather than a tag.
+
+The bundle cannot self-update. A binary swapped inside a signed `.app` breaks
+its seal and macOS calls the app damaged, so selvedge refuses under
+`.app/Contents/` the way it refuses a Homebrew keg, and the tray's Update item
+opens the latest release instead of running `--update`.
+
 ## Windows installs itself three ways, into one directory
 
 `scripts/install.ps1`, `packaging/windows/tokengauge.wxs` and selvedge's

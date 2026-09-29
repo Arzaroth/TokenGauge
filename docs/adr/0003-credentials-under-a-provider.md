@@ -208,10 +208,11 @@ each.
   rollover rule: a rollover of an inactive window makes the snapshot stale, and
   the fetch that follows asks that credential again and carries the others.
 - **A store change makes the snapshot stale.** `CacheMeta.credentials` records
-  the store's credential names per provider at the write, and
+  the store's credential names per provider as the fetch found them, before it
+  read the store (`credentialsAtMs` says when), and
   `cache_is_stale()` compares them with the store as it is now, so a credential
   added, removed or renamed refetches. `<store>/.last-switch.json` is relied on:
-  a provider whose entry is later than the snapshot's write refetches, because
+  a provider whose entry is later than `credentialsAtMs` refetches, because
   its active credential changed. A missing or unreadable file is no signal
   rather than an error, and neither is an entry stamped in the future (a clock
   that stepped back), which would otherwise refetch on every render.

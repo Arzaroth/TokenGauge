@@ -468,6 +468,7 @@ pub(crate) fn fetch_and_write(config: &TokenGaugeConfig, wipe_snapshot: bool) ->
         &result.costs,
         config,
         Some(&result.sync),
+        Some(&result.store),
     ) {
         dlog("cache", &format!("write failed: {e}"));
     }

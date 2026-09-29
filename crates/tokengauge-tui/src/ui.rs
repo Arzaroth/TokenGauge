@@ -362,7 +362,7 @@ fn render_meters(frame: &mut Frame, area: Rect, section: &Section) {
     }
     let constraints: Vec<Constraint> = (0..rows.len() + 2).map(|_| Constraint::Length(1)).collect();
     let chunks = Layout::vertical(constraints).split(area);
-    frame.render_widget(section_header(section.title), chunks[0]);
+    frame.render_widget(section_header(&section.title), chunks[0]);
 
     // Size the label column to the widest label, capped, so a full name like
     // "Weekly (Sonnet)" does not ellipsize when there is room for it.
@@ -465,7 +465,7 @@ fn render_meters(frame: &mut Frame, area: Rect, section: &Section) {
 /// One line per row with the share bar between the name and the value. Tokens
 /// by model and tokens by device both land here.
 fn render_bars(frame: &mut Frame, area: Rect, section: &Section) {
-    let block = section_block(section.title);
+    let block = section_block(&section.title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -544,7 +544,7 @@ fn render_bars(frame: &mut Frame, area: Rect, section: &Section) {
 /// is why it is drawn here and not only on the sync screen.
 fn render_rows(frame: &mut Frame, area: Rect, section: &Section) {
     let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
-    frame.render_widget(section_header(section.title), chunks[0]);
+    frame.render_widget(section_header(&section.title), chunks[0]);
 
     let rows = section_rows(section);
     let label_w = rows
@@ -598,7 +598,7 @@ fn render_rows(frame: &mut Frame, area: Rect, section: &Section) {
 /// the weekday letters used to be counted back from `now`, which relabelled the
 /// whole week in a shell left open past midnight.
 fn render_day_chart(frame: &mut Frame, area: Rect, section: &Section) {
-    let block = section_block(section.title);
+    let block = section_block(&section.title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -897,6 +897,11 @@ mod tests {
             extra_windows: Vec::new(),
             cost: Some(cost),
             stale: false,
+            credential: None,
+            credentials: Vec::new(),
+            session_resets_at: None,
+            weekly_resets_at: None,
+            tertiary_resets_at: None,
         }
     }
 
@@ -986,7 +991,7 @@ mod tests {
             let out = screen(|frame| render_section(frame, frame.area(), &section));
             assert!(
                 out.trim()
-                    .contains(section.title.split(' ').next().unwrap_or(section.title)),
+                    .contains(section.title.split(' ').next().unwrap_or(&section.title)),
                 "{} drew no title:\n{out}",
                 section.id
             );

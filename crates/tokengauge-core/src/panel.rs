@@ -136,15 +136,25 @@ pub enum SectionKind {
 pub struct Section {
     /// Stable identifier - frontends key off this, never off the title.
     pub id: &'static str,
-    pub title: &'static str,
+    /// Resolved here like every other string: a credential's group names the
+    /// credential in its title.
+    pub title: String,
     pub kind: SectionKind,
     pub rows: Vec<PanelRow>,
+    /// The credential a `limits` section belongs to, when a provider has
+    /// several and each gets its own. They share the id; this tells them
+    /// apart. No frontend has to read it to draw the panel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 }
 
 /// Section ids in canonical order. A frontend that renders the panel renders
 /// these, in this order, skipping the ones the spec omits for lack of data.
+/// `limits` repeats once per credential when a provider has several, each
+/// carrying its [`Section::group`].
 pub const SECTION_IDS: &[&str] = &[
     "status",
+    "plans",
     "limits",
     "cost",
     "tokens_by_day",
@@ -173,25 +183,31 @@ pub struct SyncNote {
 pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
     let mut out = Vec::new();
 
-    // First, because it says whether to believe anything under it.
-    let status = status_rows(row);
-    if !status.is_empty() {
-        out.push(Section {
-            id: "status",
-            title: "STATUS",
-            kind: SectionKind::Rows,
-            rows: status,
-        });
-    }
+    if row.credentials.len() > 1 {
+        out.extend(credential_sections(&row.credentials));
+    } else {
+        // First, because it says whether to believe anything under it.
+        let status = status_rows(row, None);
+        if !status.is_empty() {
+            out.push(Section {
+                id: "status",
+                title: "STATUS".into(),
+                kind: SectionKind::Rows,
+                rows: status,
+                group: None,
+            });
+        }
 
-    let limits = limit_rows(row);
-    if !limits.is_empty() {
-        out.push(Section {
-            id: "limits",
-            title: "LIMITS",
-            kind: SectionKind::Meters,
-            rows: limits,
-        });
+        let limits = limit_rows(row);
+        if !limits.is_empty() {
+            out.push(Section {
+                id: "limits",
+                title: "LIMITS".into(),
+                kind: SectionKind::Meters,
+                rows: limits,
+                group: None,
+            });
+        }
     }
 
     // A provider can have one without the other: a plan sells a window and a
@@ -201,9 +217,10 @@ pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
     if !cost_rows.is_empty() {
         out.push(Section {
             id: "cost",
-            title: "COST",
+            title: "COST".into(),
             kind: SectionKind::Rows,
             rows: cost_rows,
+            group: None,
         });
     }
 
@@ -212,9 +229,10 @@ pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
         if !days.is_empty() {
             out.push(Section {
                 id: "tokens_by_day",
-                title: "TOKENS BY DAY",
+                title: "TOKENS BY DAY".into(),
                 kind: SectionKind::Bars,
                 rows: days,
+                group: None,
             });
         }
 
@@ -225,9 +243,10 @@ pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
                 // The cost layer is scoped to the calendar month. A bare
                 // "Tokens by model" next to a panel counting all-time is worse
                 // than a longer heading.
-                title: "TOKENS BY MODEL · THIS MONTH",
+                title: "TOKENS BY MODEL · THIS MONTH".into(),
                 kind: SectionKind::Bars,
                 rows: models,
+                group: None,
             });
         }
 
@@ -235,9 +254,10 @@ pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
         if !devices.is_empty() {
             out.push(Section {
                 id: "tokens_by_device",
-                title: "TOKENS BY DEVICE · THIS MONTH",
+                title: "TOKENS BY DEVICE · THIS MONTH".into(),
                 kind: SectionKind::Bars,
                 rows: devices,
+                group: None,
             });
         }
     }
@@ -345,8 +365,18 @@ pub fn bar_tooltip(row: &ProviderRow) -> BarTooltip {
         tone,
     };
 
-    if let Some(limits) = sections.iter().find(|s| s.id == "limits") {
+    // With several credentials, the first group is the active one: the plan
+    // being spent from is what a glance is for, and the combined figures
+    // follow it.
+    let first = sections.iter().find(|s| s.id == "limits");
+    if let Some(limits) = first {
         lines.extend(limits.rows.iter().map(|r| line(r, r.tone)));
+    }
+    if let Some(plans) = sections.iter().find(|s| s.id == "plans") {
+        lines.extend(plans.rows.iter().map(|r| BarTooltipLine {
+            label: format!("{} · all plans", r.label),
+            ..line(r, r.tone)
+        }));
     }
     // One money line, not the whole cost section: a hover is a glance, and the
     // rest of it is one click away in the panel. The first row is the section's
@@ -362,8 +392,12 @@ pub fn bar_tooltip(row: &ProviderRow) -> BarTooltip {
         lines.push(line(money, Tone::Normal));
     }
 
+    let provider = crate::provider_label(&row.provider);
     BarTooltip {
-        title: crate::provider_label(&row.provider).to_string(),
+        title: match first.and_then(|s| s.group.as_deref()) {
+            Some(group) => format!("{provider} · {group}"),
+            None => provider.to_string(),
+        },
         lines,
     }
 }
@@ -421,7 +455,7 @@ pub fn ago(then_ms: i64, now_ms: i64) -> String {
 /// it. Without this section a panel says `stale` and nothing else, which is the
 /// same thing whether the network blipped once or a credential expired weeks
 /// ago and no fetch has succeeded since.
-fn status_rows(row: &ProviderRow) -> Vec<PanelRow> {
+fn status_rows(row: &ProviderRow, credential: Option<&str>) -> Vec<PanelRow> {
     if !row.stale {
         return Vec::new();
     }
@@ -438,7 +472,11 @@ fn status_rows(row: &ProviderRow) -> Vec<PanelRow> {
         .filter(|r| !r.is_empty())
         .unwrap_or("the last live fetch failed");
 
-    let mut r = PanelRow::new("Stale", age);
+    let label = match credential {
+        Some(name) => format!("Stale · {name}"),
+        None => "Stale".to_string(),
+    };
+    let mut r = PanelRow::new(label, age);
     r.badge = ellipsize(reason, 72);
     r.badge_tone = Tone::Warn;
     r.tooltip = format!("Showing the last figures that arrived.\n{reason}");
@@ -449,62 +487,328 @@ fn status_rows(row: &ProviderRow) -> Vec<PanelRow> {
 // Limits
 // ---------------------------------------------------------------------------
 
-fn limit_rows(row: &ProviderRow) -> Vec<PanelRow> {
+/// One window a row reports, before it is drawn.
+struct Window<'a> {
+    label: &'a str,
+    used: u8,
+    reset: &'a str,
+    resets_at: Option<&'a str>,
+    pace: Option<&'a crate::UsagePace>,
+}
+
+/// Every window a row has a figure for, in panel order. A window the provider
+/// does not report has no meter, rather than a permanently empty one.
+fn windows(row: &ProviderRow) -> Vec<Window<'_>> {
     let (session, weekly, tertiary) = crate::window_labels(&row.provider);
+    let fixed = [
+        (
+            session,
+            row.session_used,
+            row.session_reset.as_str(),
+            row.session_resets_at.as_deref(),
+            row.session_pace.as_ref(),
+        ),
+        (
+            weekly,
+            row.weekly_used,
+            row.weekly_reset.as_str(),
+            row.weekly_resets_at.as_deref(),
+            row.weekly_pace.as_ref(),
+        ),
+        (
+            tertiary,
+            row.tertiary_used,
+            row.tertiary_reset.as_str(),
+            row.tertiary_resets_at.as_deref(),
+            None,
+        ),
+    ];
+    // A slot the provider exposes but reports nothing in is a permanently
+    // empty meter. Only the waybar tooltip used to keep them, to hold its
+    // line count steady; it now shares this list, so they go everywhere.
+    let extra = row
+        .extra_windows
+        .iter()
+        .filter(|e| !e.placeholder)
+        .map(|e| {
+            (
+                e.title.as_str(),
+                e.used,
+                e.reset.as_str(),
+                e.resets_at.as_deref(),
+                e.pace.as_ref(),
+            )
+        });
+    fixed
+        .into_iter()
+        .chain(extra)
+        .filter_map(|(label, used, reset, resets_at, pace)| {
+            Some(Window {
+                label,
+                used: used?,
+                reset,
+                resets_at,
+                pace,
+            })
+        })
+        .collect()
+}
+
+/// `Resets in 2h`, or what to say when there is no reset to count to.
+///
+/// A window at 0% with no reset time has nowhere to reset to because nothing
+/// has started it. Say so here rather than in one frontend, or the other four
+/// render the line blank. Above 0% the same missing reset means the opposite -
+/// the window is counting and the provider is not saying when it ends - and
+/// "not started" beside a full bar is the sentence that reads as broken.
+fn reset_footnote(used: u8, reset: &str) -> String {
+    if reset == "—" || reset.is_empty() {
+        if used == 0 {
+            "not started".to_string()
+        } else {
+            String::new()
+        }
+    } else {
+        format!("Resets {reset}")
+    }
+}
+
+fn limit_rows(row: &ProviderRow) -> Vec<PanelRow> {
+    windows(row)
+        .into_iter()
+        .map(|w| {
+            let mut r = PanelRow::new(w.label, format!("{}%", w.used));
+            r.fraction = Some(f64::from(w.used) / 100.0);
+            r.tone = Tone::for_percent(w.used);
+            r.footnote = reset_footnote(w.used, w.reset);
+            if let Some(pace) = w.pace {
+                r.badge = pace.badge();
+                r.badge_tone = Tone::for_pace(pace);
+            }
+            r
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Credentials
+// ---------------------------------------------------------------------------
+
+/// What a credential is called in its group's title: the store name, or what
+/// a live login no stored credential matches is.
+fn credential_name(row: &ProviderRow) -> String {
+    row.credential
+        .as_ref()
+        .and_then(|c| c.name.clone())
+        .unwrap_or_else(|| "live login".to_string())
+}
+
+/// Whether a credential is in the combined figure: it was asked, and its
+/// plan has a known weight.
+fn counted(row: &ProviderRow) -> Option<u32> {
+    let credential = row.credential.as_ref()?;
+    credential
+        .state
+        .is_none()
+        .then_some(credential.plan_weight)
+        .flatten()
+        .filter(|w| *w > 0)
+}
+
+/// The sections a provider with several credentials draws in place of its
+/// one `status` and `limits`: every stale group's reason, the combined
+/// header, then one group per credential, active first.
+fn credential_sections(groups: &[ProviderRow]) -> Vec<Section> {
     let mut out = Vec::new();
 
-    let mut push = |label: &str, used: Option<u8>, reset: &str, pace: Option<&crate::UsagePace>| {
-        let Some(used) = used else { return };
-        let mut r = PanelRow::new(label, format!("{used}%"));
-        r.fraction = Some(f64::from(used) / 100.0);
-        r.tone = Tone::for_percent(used);
-        // A window at 0% with no reset time has nowhere to reset to because
-        // nothing has started it. Say so here rather than in one frontend, or
-        // the other four render the line blank. Above 0% the same missing
-        // reset means the opposite - the window is counting and the provider
-        // is not saying when it ends - and "not started" beside a full bar is
-        // the sentence that reads as broken.
-        r.footnote = if reset == "—" || reset.is_empty() {
-            if used == 0 {
-                "not started".to_string()
-            } else {
-                String::new()
-            }
-        } else {
-            format!("Resets {reset}")
-        };
-        if let Some(pace) = pace {
-            r.badge = pace.badge();
-            r.badge_tone = Tone::for_pace(pace);
-        }
-        out.push(r);
-    };
-
-    push(
-        session,
-        row.session_used,
-        &row.session_reset,
-        row.session_pace.as_ref(),
-    );
-    push(
-        weekly,
-        row.weekly_used,
-        &row.weekly_reset,
-        row.weekly_pace.as_ref(),
-    );
-    push(tertiary, row.tertiary_used, &row.tertiary_reset, None);
-
-    for extra in &row.extra_windows {
-        // A slot the provider exposes but reports nothing in is a permanently
-        // empty meter. Only the waybar tooltip used to keep them, to hold its
-        // line count steady; it now shares this list, so they go everywhere.
-        if extra.placeholder {
-            continue;
-        }
-        push(&extra.title, extra.used, &extra.reset, extra.pace.as_ref());
+    let status: Vec<PanelRow> = groups
+        .iter()
+        .flat_map(|g| status_rows(g, Some(&credential_name(g))))
+        .collect();
+    if !status.is_empty() {
+        out.push(Section {
+            id: "status",
+            title: "STATUS".into(),
+            kind: SectionKind::Rows,
+            rows: status,
+            group: None,
+        });
     }
 
+    let plans = plan_rows(groups);
+    let has_total = !plans.is_empty();
+    if has_total {
+        out.push(Section {
+            id: "plans",
+            title: "ALL PLANS".into(),
+            kind: SectionKind::Meters,
+            rows: plans,
+            group: None,
+        });
+    }
+
+    for g in groups {
+        let credential = g.credential.clone().unwrap_or_default();
+        let name = credential_name(g);
+        let mut title = vec![name.clone()];
+        title.extend(credential.label.clone());
+        title.extend(g.plan_label.clone().filter(|p| !p.is_empty()));
+        if credential.active == Some(true) {
+            title.push("active".to_string());
+        }
+        if has_total && credential.state.is_none() && counted(g).is_none() {
+            title.push("not in total".to_string());
+        }
+        let (kind, rows) = match credential.state {
+            Some(state) => (SectionKind::Rows, vec![state_row(state)]),
+            None => {
+                let rows = limit_rows(g);
+                if rows.is_empty() {
+                    (
+                        SectionKind::Rows,
+                        vec![PanelRow::new("Limits", "none reported")],
+                    )
+                } else {
+                    (SectionKind::Meters, rows)
+                }
+            }
+        };
+        out.push(Section {
+            id: "limits",
+            title: title.join(" · "),
+            kind,
+            rows,
+            group: Some(name),
+        });
+    }
     out
+}
+
+/// The one line a credential that was not asked about draws.
+fn state_row(state: crate::CredentialState) -> PanelRow {
+    use crate::CredentialState;
+    let (label, badge, tooltip) = match state {
+        CredentialState::Expired => (
+            "Expired",
+            "remuda refreshes it",
+            "Its access token has expired, so it was not asked about. remuda's timer refreshes stored credentials every 30 minutes; `remuda refresh` does it now.",
+        ),
+        CredentialState::Unverified => (
+            "Unverified",
+            "remuda re-identifies it",
+            "Its sidecar was written for other tokens, so whose they are is unknown. remuda re-identifies it on its next run.",
+        ),
+        CredentialState::Other => (
+            "Unknown state",
+            "",
+            "A newer build wrote a state this one cannot draw.",
+        ),
+    };
+    let mut r = PanelRow::new(label, "not asked");
+    r.badge = badge.to_string();
+    r.badge_tone = Tone::Warn;
+    r.tooltip = tooltip.to_string();
+    r
+}
+
+/// The combined header: one meter per window at least two weighted
+/// credentials report.
+///
+/// Counted in units of the largest plan, so a Max 20x and a Pro both at 100%
+/// read "105% of 105%": each contributes `used × weight ÷ largest`, and the
+/// capacity is the same sum at 100%. The bar fills to the pooled fraction,
+/// `Σ used × weight ÷ Σ weight`, so an idle Pro cannot make two busy plans look
+/// free. The weights are the nominal multipliers the plans are sold with, so
+/// the figure is an estimate and says so.
+fn plan_rows(groups: &[ProviderRow]) -> Vec<PanelRow> {
+    struct Share<'a> {
+        name: String,
+        weight: u32,
+        window: Window<'a>,
+    }
+    let mut by_label: Vec<(&str, Vec<Share<'_>>)> = Vec::new();
+    for g in groups {
+        let Some(weight) = counted(g) else { continue };
+        for window in windows(g) {
+            let share = Share {
+                name: credential_name(g),
+                weight,
+                window,
+            };
+            match by_label.iter_mut().find(|(l, _)| *l == share.window.label) {
+                Some((_, shares)) => shares.push(share),
+                None => by_label.push((share.window.label, vec![share])),
+            }
+        }
+    }
+    let left_out: Vec<String> = groups
+        .iter()
+        .filter(|g| {
+            g.credential.as_ref().is_some_and(|c| c.state.is_none()) && counted(g).is_none()
+        })
+        .map(credential_name)
+        .collect();
+
+    by_label
+        .into_iter()
+        .filter(|(_, shares)| shares.len() >= 2)
+        .map(|(label, shares)| {
+            let largest = f64::from(shares.iter().map(|s| s.weight).max().unwrap_or(1));
+            let total: f64 = shares.iter().map(|s| f64::from(s.weight)).sum();
+            let weighted: f64 = shares
+                .iter()
+                .map(|s| f64::from(s.window.used) * f64::from(s.weight))
+                .sum();
+            let pooled = weighted / total;
+            let mut r = PanelRow::new(
+                label,
+                format!(
+                    "{:.0}% of {:.0}%",
+                    weighted / largest,
+                    total / largest * 100.0
+                ),
+            );
+            r.fraction = Some((pooled / 100.0).clamp(0.0, 1.0));
+            r.tone = Tone::for_percent(crate::pct_u8(pooled));
+            let earliest = shares
+                .iter()
+                .filter_map(|s| {
+                    let at = chrono::DateTime::parse_from_rfc3339(s.window.resets_at?).ok()?;
+                    Some((at, s))
+                })
+                .min_by_key(|(at, _)| *at)
+                .map(|(_, s)| s);
+            r.footnote = earliest
+                .map(|s| reset_footnote(s.window.used, s.window.reset))
+                .unwrap_or_default();
+            r.badge = "estimate".to_string();
+            r.badge_tone = Tone::Dim;
+            let mut lines: Vec<String> = shares
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}  {}% × {}{}",
+                        s.name,
+                        s.window.used,
+                        s.weight,
+                        match reset_footnote(s.window.used, s.window.reset) {
+                            f if f.is_empty() => String::new(),
+                            f => format!(" · {}", f.to_lowercase()),
+                        }
+                    )
+                })
+                .collect();
+            lines.push(
+                "Weighted by each plan's nominal multiplier. The real limits are not published, so this is an estimate."
+                    .to_string(),
+            );
+            if !left_out.is_empty() {
+                lines.push(format!("Not in the total: {}", left_out.join(", ")));
+            }
+            r.tooltip = lines.join("\n");
+            r
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -953,6 +1257,11 @@ mod tests {
             extra_windows: Vec::new(),
             cost: None,
             stale: false,
+            credential: None,
+            credentials: Vec::new(),
+            session_resets_at: None,
+            weekly_resets_at: None,
+            tertiary_resets_at: None,
         }
     }
 
@@ -1046,7 +1355,170 @@ mod tests {
         r.stale = true;
         r.stale_reason = Some("Claude token expired".into());
         let ids: Vec<&str> = panel_spec(&r).iter().map(|s| s.id).collect();
-        assert_eq!(ids, SECTION_IDS);
+        // `plans` is the one section a provider with one credential never has.
+        let single: Vec<&str> = SECTION_IDS
+            .iter()
+            .copied()
+            .filter(|id| *id != "plans")
+            .collect();
+        assert_eq!(ids, single);
+    }
+
+    // ------------------------------------------------------------------------
+    // Several credentials
+    // ------------------------------------------------------------------------
+
+    fn credential(
+        name: &str,
+        active: bool,
+        weight: Option<u32>,
+        session: u8,
+        weekly: u8,
+    ) -> ProviderRow {
+        let mut r = row();
+        r.session_used = Some(session);
+        r.weekly_used = Some(weekly);
+        r.plan_label = Some(format!("{name} plan"));
+        r.credential = Some(crate::CredentialInfo {
+            name: Some(name.into()),
+            active: Some(active),
+            plan_weight: weight,
+            ..Default::default()
+        });
+        r
+    }
+
+    fn grouped(groups: Vec<ProviderRow>) -> ProviderRow {
+        let mut top = groups[0].clone();
+        top.cost = Some(cost());
+        top.credentials = groups;
+        top
+    }
+
+    fn section<'a>(spec: &'a [Section], id: &str, group: Option<&str>) -> &'a Section {
+        spec.iter()
+            .find(|s| s.id == id && s.group.as_deref() == group)
+            .unwrap_or_else(|| panic!("no {id} section for {group:?}"))
+    }
+
+    /// The ADR's two worked examples, in units of the largest plan.
+    #[test]
+    fn the_combined_header_weighs_each_plan_by_its_multiplier() {
+        let spec = panel_spec(&grouped(vec![
+            credential("work", true, Some(20), 100, 50),
+            credential("perso", false, Some(1), 100, 100),
+        ]));
+        let plans = section(&spec, "plans", None);
+        let session = &plans.rows[0];
+        assert_eq!(session.value, "105% of 105%");
+        assert_eq!(session.fraction, Some(1.0));
+        assert_eq!(session.badge, "estimate");
+
+        let spec = panel_spec(&grouped(vec![
+            credential("big", true, Some(20), 50, 0),
+            credential("small", false, Some(5), 100, 0),
+        ]));
+        let session = &section(&spec, "plans", None).rows[0];
+        assert_eq!(session.value, "75% of 125%");
+        // Pooled: an idle small plan cannot make a busy big one look free.
+        assert!((session.fraction.unwrap() - 0.6).abs() < 1e-9);
+        assert_eq!(session.tone, Tone::Warn);
+    }
+
+    #[test]
+    fn several_credentials_draw_a_header_then_a_group_each_active_first() {
+        let mut expired = credential("old", false, Some(5), 0, 0);
+        expired.credential.as_mut().unwrap().state = Some(crate::CredentialState::Expired);
+        let mut stale = credential("perso", false, Some(1), 40, 40);
+        stale.stale = true;
+        stale.stale_reason = Some("Claude rate-limited - try again shortly".into());
+        let spec = panel_spec(&grouped(vec![
+            credential("work", true, Some(20), 30, 10),
+            stale,
+            credential("corp", false, None, 90, 90),
+            expired,
+        ]));
+
+        let ids: Vec<(&str, Option<&str>)> =
+            spec.iter().map(|s| (s.id, s.group.as_deref())).collect();
+        assert_eq!(
+            &ids[..6],
+            [
+                ("status", None),
+                ("plans", None),
+                ("limits", Some("work")),
+                ("limits", Some("perso")),
+                ("limits", Some("corp")),
+                ("limits", Some("old")),
+            ]
+        );
+        assert_eq!(
+            section(&spec, "status", None).rows[0].label,
+            "Stale · perso"
+        );
+        assert_eq!(
+            section(&spec, "limits", Some("work")).title,
+            "work · work plan · active"
+        );
+        // Unweighted, so out of the total, and the title says so.
+        assert_eq!(
+            section(&spec, "limits", Some("corp")).title,
+            "corp · corp plan · not in total"
+        );
+        let plans = section(&spec, "plans", None);
+        assert!(
+            plans.rows[0].tooltip.contains("Not in the total: corp"),
+            "{}",
+            plans.rows[0].tooltip
+        );
+        // Not asked, so a line saying why rather than meters.
+        let old = section(&spec, "limits", Some("old"));
+        assert_eq!(old.kind, SectionKind::Rows);
+        assert_eq!(old.rows[0].label, "Expired");
+        assert!(!old.title.contains("not in total"));
+        // Cost stays provider-scoped, once.
+        assert_eq!(spec.iter().filter(|s| s.id == "cost").count(), 1);
+    }
+
+    #[test]
+    fn the_header_resets_when_capacity_first_comes_back() {
+        let mut work = credential("work", true, Some(20), 50, 0);
+        work.session_reset = "in 3h".into();
+        work.session_resets_at = Some("2099-01-01T15:00:00Z".into());
+        let mut perso = credential("perso", false, Some(1), 50, 0);
+        perso.session_reset = "in 1h".into();
+        perso.session_resets_at = Some("2099-01-01T13:00:00Z".into());
+        let spec = panel_spec(&grouped(vec![work, perso]));
+        assert_eq!(
+            section(&spec, "plans", None).rows[0].footnote,
+            "Resets in 1h"
+        );
+    }
+
+    /// No weights, no header - and no "not in total" beside a total that is
+    /// not there.
+    #[test]
+    fn credentials_without_weights_draw_groups_and_no_header() {
+        let spec = panel_spec(&grouped(vec![
+            credential("work", true, None, 30, 10),
+            credential("perso", false, None, 40, 40),
+        ]));
+        assert!(spec.iter().all(|s| s.id != "plans"));
+        assert!(spec.iter().all(|s| !s.title.contains("not in total")));
+        assert_eq!(spec.iter().filter(|s| s.id == "limits").count(), 2);
+    }
+
+    #[test]
+    fn the_bar_icon_names_the_active_credential_and_the_total() {
+        let tip = bar_tooltip(&grouped(vec![
+            credential("work", true, Some(20), 30, 10),
+            credential("perso", false, Some(1), 40, 40),
+        ]));
+        assert_eq!(tip.title, "Claude · work");
+        let labels: Vec<&str> = tip.lines.iter().map(|l| l.label.as_str()).collect();
+        assert_eq!(labels[0], "Session");
+        assert!(labels.contains(&"Session · all plans"), "{labels:?}");
+        assert!(!labels.iter().any(|l| l.contains("perso")));
     }
 
     #[test]
@@ -1260,6 +1732,7 @@ mod tests {
                 reset: "—".into(),
                 pace: None,
                 placeholder: true,
+                resets_at: None,
             },
             ExtraWindowRow {
                 title: "Fable only".into(),
@@ -1267,6 +1740,7 @@ mod tests {
                 reset: "in 4d".into(),
                 pace: None,
                 placeholder: false,
+                resets_at: None,
             },
         ];
         let spec = panel_spec(&r);

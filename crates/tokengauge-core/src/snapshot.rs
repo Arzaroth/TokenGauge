@@ -13,7 +13,7 @@
 //! [`retain_enabled`] handles the other direction, filtering a provider
 //! switched off out of a snapshot that is otherwise fine.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 
@@ -25,7 +25,8 @@ use crate::*;
 use std::time::Duration;
 
 /// Bumped when the on-disk snapshot grows a field a reader has to know about.
-pub const CACHE_SCHEMA_VERSION: u32 = 1;
+/// 2: payloads name their credential (ADR 0003).
+pub const CACHE_SCHEMA_VERSION: u32 = 2;
 
 /// Provenance of one snapshot write.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +39,10 @@ pub struct CacheMeta {
     pub updated_at_ms: i64,
     /// Providers enabled at fetch time. See `CachedData::covers`.
     pub providers: Vec<String>,
+    /// The credential store's names per provider at the write. See
+    /// [`store_moved`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub credentials: BTreeMap<String, Vec<String>>,
 }
 
 /// Cached data format - stores both payloads and errors.
@@ -143,15 +148,15 @@ pub fn read_cache_full(path: &Path) -> Result<CachedData> {
 
 /// Write cache with payloads, errors and optional costs.
 ///
-/// `providers` is the set the fetch ran with, not the set that answered: a
-/// provider that errored still counts as covered, or a failing provider would
-/// put every reader into a refetch loop.
+/// The provider set recorded is the one the fetch ran with, not the set that
+/// answered: a provider that errored still counts as covered, or a failing
+/// provider would put every reader into a refetch loop.
 pub fn write_cache_full(
     path: &Path,
     payloads: &[ProviderPayload],
     errors: &[ProviderFetchError],
     costs: &HashMap<String, CostInfo>,
-    providers: &ProvidersConfig,
+    config: &TokenGaugeConfig,
     sync: Option<&sync::SyncStatus>,
 ) -> Result<()> {
     let data = CachedData::Full {
@@ -163,11 +168,13 @@ pub fn write_cache_full(
             schema_version: CACHE_SCHEMA_VERSION,
             device: device_identity(path),
             updated_at_ms: now_ms(),
-            providers: providers
+            providers: config
+                .providers
                 .enabled_providers()
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
+            credentials: store_listing(config),
         }),
     };
     let contents = serde_json::to_string(&data)?;
@@ -198,10 +205,56 @@ pub fn cache_is_stale(config: &TokenGaugeConfig) -> bool {
     match read_cache_full(&config.cache_file) {
         Ok(cached) => {
             !cached.covers(&config.providers)
+                || store_moved(cached.meta(), config, written_at.into())
                 || rolled_over(cached.payloads(), written_at.into(), Utc::now())
         }
         Err(_) => true,
     }
+}
+
+/// Every enabled provider's stored credential names, for the providers that
+/// have any.
+fn store_listing(config: &TokenGaugeConfig) -> BTreeMap<String, Vec<String>> {
+    let Some(store) = config.credentials.store_root() else {
+        return BTreeMap::new();
+    };
+    crate::stored_providers()
+        .into_iter()
+        .filter(|provider| config.providers.is_enabled(provider))
+        .map(|provider| {
+            (
+                provider.to_string(),
+                crate::credentials::credential_names(store, provider),
+            )
+        })
+        .filter(|(_, names)| !names.is_empty())
+        .collect()
+}
+
+/// True when the credential store changed under the snapshot.
+///
+/// Neither change is visible in the payloads: a credential added since the
+/// write has no payload yet and never will, and a switch makes another
+/// credential the active one without touching any file the snapshot names.
+/// So the write records the store's names, and remuda's `.last-switch.json`
+/// says when a provider last switched.
+fn store_moved(
+    meta: Option<&CacheMeta>,
+    config: &TokenGaugeConfig,
+    written_at: DateTime<Utc>,
+) -> bool {
+    let recorded = meta.map(|m| m.credentials.clone()).unwrap_or_default();
+    if store_listing(config) != recorded {
+        return true;
+    }
+    let Some(store) = config.credentials.store_root() else {
+        return false;
+    };
+    crate::stored_providers()
+        .into_iter()
+        .filter(|provider| config.providers.is_enabled(provider))
+        .filter_map(|provider| crate::credentials::last_switch_ms(store, provider))
+        .any(|switched| switched > written_at.timestamp_millis())
 }
 
 /// True when a window this snapshot reported has reset since it was written.
@@ -355,7 +408,12 @@ mod tests {
     }
 
     fn write_test_cache(path: &Path, providers: &ProvidersConfig) {
-        write_cache_full(path, &[], &[], &HashMap::new(), providers, None).expect("write cache");
+        let config = TokenGaugeConfig {
+            providers: providers.clone(),
+            credentials: CredentialsConfig::off(),
+            ..TokenGaugeConfig::default()
+        };
+        write_cache_full(path, &[], &[], &HashMap::new(), &config, None).expect("write cache");
     }
 
     #[test]
@@ -512,5 +570,61 @@ mod tests {
         assert_eq!(payloads.len(), 1);
         assert!(errors.is_empty());
         assert!(costs.is_empty());
+    }
+
+    fn store_config(cache: &Path, store: &Path) -> TokenGaugeConfig {
+        TokenGaugeConfig {
+            cache_file: cache.to_path_buf(),
+            providers: ProvidersConfig {
+                claude: Some(true),
+                ..Default::default()
+            },
+            credentials: CredentialsConfig {
+                store: store.to_path_buf(),
+                ..CredentialsConfig::default()
+            },
+            ..TokenGaugeConfig::default()
+        }
+    }
+
+    /// A credential captured since the write has no payload and never will,
+    /// and a switch changes which one is active without touching anything the
+    /// snapshot names. Age alone would leave both invisible for ten minutes.
+    #[test]
+    fn a_store_that_changed_since_the_write_makes_the_snapshot_stale() {
+        use crate::credentials::tests::{put, temp_store};
+        let dir = cache_test_dir("store-moved");
+        let cache = dir.join("tokengauge-usage.json");
+        let store = temp_store("store-moved");
+        put(&store, "claude", "work", "{}", "u-1");
+        let config = store_config(&cache, &store);
+
+        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None).unwrap();
+        assert!(!cache_is_stale(&config), "a snapshot fresh from the fetch");
+        let meta = read_cache_full(&cache).unwrap().meta().unwrap().clone();
+        assert_eq!(meta.credentials["claude"], ["work"]);
+        assert_eq!(meta.schema_version, 2);
+
+        put(&store, "claude", "perso", "{}", "u-2");
+        assert!(
+            cache_is_stale(&config),
+            "a credential added since the write"
+        );
+
+        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None).unwrap();
+        assert!(!cache_is_stale(&config));
+        // Switched before the write: the snapshot already describes it.
+        std::fs::write(store.join(".last-switch.json"), r#"{"claude": 1}"#).unwrap();
+        assert!(!cache_is_stale(&config));
+        let later = crate::now_ms() + 60_000;
+        std::fs::write(
+            store.join(".last-switch.json"),
+            format!(r#"{{"claude": {later}, "codex": 1}}"#),
+        )
+        .unwrap();
+        assert!(cache_is_stale(&config), "a switch after the write");
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&store);
     }
 }

@@ -447,7 +447,7 @@ pub(crate) fn fetch_and_write(config: &TokenGaugeConfig, wipe_snapshot: bool) ->
         &result.payloads,
         &result.errors,
         &result.costs,
-        &config.providers,
+        config,
         Some(&result.sync),
     ) {
         dlog("cache", &format!("write failed: {e}"));

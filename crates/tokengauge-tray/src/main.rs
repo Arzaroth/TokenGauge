@@ -1377,7 +1377,7 @@ mod gui {
                         &result.payloads,
                         &result.errors,
                         &result.costs,
-                        &config.providers,
+                        &config,
                         Some(&result.sync),
                     );
                     let errors = result

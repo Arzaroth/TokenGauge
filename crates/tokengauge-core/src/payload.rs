@@ -578,6 +578,63 @@ mod tests {
         assert_eq!(primary.window_minutes, Some(300));
     }
 
+    /// remuda reads these keys by name (ADR 0003's snapshot contract). A
+    /// rename here is a break there, and nothing on this side would notice.
+    #[test]
+    fn the_credential_keys_remuda_reads_are_spelled_as_the_adr_says() {
+        let mut payload =
+            ProviderPayload::live("claude", "store", UsageSnapshot::at(chrono::Utc::now()));
+        payload.credential = CredentialInfo {
+            name: Some("work".into()),
+            active: Some(false),
+            state: Some(CredentialState::Expired),
+            label: Some("Acme".into()),
+            plan_weight: Some(20),
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["credential"], "work");
+        assert_eq!(json["active"], false);
+        assert_eq!(json["credentialState"], "expired");
+        assert_eq!(json["credentialLabel"], "Acme");
+        assert_eq!(json["planWeight"], 20);
+        let back: ProviderPayload = serde_json::from_value(json).unwrap();
+        assert_eq!(back.credential, payload.credential);
+
+        let mut error = crate::ProviderFetchError::new("claude".into(), "boom");
+        error.credential = Some("work".into());
+        error.active = true;
+        let json = serde_json::to_value(&error).unwrap();
+        assert_eq!(json["credential"], "work");
+        assert_eq!(json["active"], true);
+
+        // A provider with no store writes none of them, and a state from a
+        // newer build reads rather than failing the snapshot.
+        let plain = serde_json::to_value(ProviderPayload::live(
+            "glm",
+            "z.ai",
+            UsageSnapshot::at(chrono::Utc::now()),
+        ))
+        .unwrap();
+        for key in [
+            "credential",
+            "active",
+            "credentialState",
+            "credentialLabel",
+            "planWeight",
+        ] {
+            assert!(
+                plain.get(key).is_none(),
+                "{key} written for a provider with no store"
+            );
+        }
+        let newer: ProviderPayload =
+            serde_json::from_str(r#"{"provider":"claude","credentialState":"revoked"}"#).unwrap();
+        assert_eq!(newer.credential.state, Some(CredentialState::Other));
+        let plain_error =
+            serde_json::to_value(crate::ProviderFetchError::new("glm".into(), "x")).unwrap();
+        assert!(plain_error.get("credential").is_none() && plain_error.get("active").is_none());
+    }
+
     #[test]
     fn today_vs_avg_excludes_today_from_the_baseline() {
         let cost = CostInfo {

@@ -311,7 +311,9 @@ jobs:
       # Signs the per-architecture binaries the tarballs carry, and builds
       # TokenGauge.app and its DMG from them.
       - name: Sign, and build the app
-        run: scripts/package-macos.sh "${{ github.event.inputs.tag || github.ref_name }}"
+        env:
+          REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+        run: scripts/package-macos.sh "$REF_NAME"
 
       # A bare binary cannot carry a stapled ticket, so the tarballs' binaries
       # are notarized online: Gatekeeper asks Apple the first time one runs.

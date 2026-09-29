@@ -487,6 +487,23 @@ pub(crate) fn check_stored(text: &str, now: DateTime<Utc>) -> Result<Option<Cred
     stored_state(&stored_oauth(text)?, now)
 }
 
+/// Ask about a stored credential, or say why it was not asked.
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    let tokens = stored_oauth(text)?;
+    match stored_state(&tokens, now)? {
+        None => usage_for(oauth(tokens), timeout, now),
+        Some(state) => {
+            let mut payload = ProviderPayload::live("codex", "store", UsageSnapshot::at(now));
+            payload.credential.state = Some(state);
+            Ok(payload)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Wire response
 // ---------------------------------------------------------------------------
@@ -1362,6 +1379,9 @@ mod tests {
             check_stored(&past, now).unwrap(),
             Some(CredentialState::Expired)
         );
+        let payload = fetch_stored(&past, Duration::from_secs(1), now).unwrap();
+        assert_eq!(payload.credential.state, Some(CredentialState::Expired));
+        assert!(payload.usage.unwrap().primary.is_none());
 
         assert_eq!(
             check_stored(&stored(now.timestamp() + 3600), now).unwrap(),

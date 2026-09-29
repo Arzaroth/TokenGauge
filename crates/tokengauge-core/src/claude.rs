@@ -343,6 +343,37 @@ pub(crate) fn check_stored(text: &str, now: DateTime<Utc>) -> Result<Option<Cred
     stored_state(&parse_credentials(text)?, now)
 }
 
+/// Ask about a stored credential, or say why it was not asked.
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    let oauth = parse_credentials(text)?;
+    match stored_state(&oauth, now)? {
+        None => usage_for(&oauth, timeout, now),
+        Some(state) => {
+            let mut payload = ProviderPayload::live(
+                "claude",
+                "store",
+                UsageSnapshot {
+                    login_method: plan_label(
+                        oauth.subscription_type.as_deref(),
+                        oauth.rate_limit_tier.as_deref(),
+                    ),
+                    ..UsageSnapshot::at(now)
+                },
+            );
+            payload.credential.state = Some(state);
+            payload.credential.plan_weight = plan_weight(
+                oauth.subscription_type.as_deref(),
+                oauth.rate_limit_tier.as_deref(),
+            );
+            Ok(payload)
+        }
+    }
+}
+
 #[cfg(test)]
 fn read_credentials(path: &Path, now: DateTime<Utc>) -> Result<Oauth> {
     match load_from_file(path) {
@@ -1048,6 +1079,13 @@ mod tests {
         assert_eq!(
             check_stored(&expired, now).unwrap(),
             Some(CredentialState::Expired)
+        );
+        let payload = fetch_stored(&expired, Duration::from_secs(1), now).unwrap();
+        assert_eq!(payload.credential.state, Some(CredentialState::Expired));
+        assert_eq!(payload.credential.plan_weight, Some(1));
+        assert_eq!(
+            payload.usage.unwrap().login_method.as_deref(),
+            Some("Claude Pro")
         );
 
         let fine = stored(now.timestamp_millis() + 3_600_000, r#"["user:profile"]"#);

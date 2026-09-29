@@ -96,6 +96,7 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         store: Some(StoreReader {
             live: codex::live_login,
             tokens: codex::stored_tokens,
+            fetch: codex::fetch_stored,
             check: codex::check_stored,
         }),
         auth: codex_auth,
@@ -118,6 +119,7 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         store: Some(StoreReader {
             live: claude::live_login,
             tokens: claude::stored_tokens,
+            fetch: claude::fetch_stored,
             check: claude::check_stored,
         }),
         auth: claude_auth,

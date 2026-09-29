@@ -273,7 +273,9 @@ pub(crate) fn check_and_notify(
     let thresholds = &config.notifications.thresholds;
 
     for payload in payloads {
-        if payload.has_error() {
+        // Keyed by provider and window, so an inactive credential's windows
+        // would fire in the active one's name. Only the plan in use notifies.
+        if payload.has_error() || payload.credential.active == Some(false) {
             continue;
         }
         let Some(usage) = &payload.usage else {

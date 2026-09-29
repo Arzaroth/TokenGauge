@@ -16,6 +16,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -23,7 +24,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::doctor::DoctorCheck;
-use crate::{CredentialState, TokenGaugeConfig};
+use crate::{CredentialState, ProviderFetchError, ProviderPayload, TokenGaugeConfig};
 
 /// remuda's own refresh period: asking an inactive credential more often than
 /// its tokens can change buys nothing but rate limits.
@@ -265,6 +266,9 @@ pub(crate) struct StoreReader {
     pub live: fn() -> LiveLogin,
     /// A stored credential's tokens.
     pub tokens: fn(&str) -> LoginTokens,
+    /// Ask about a stored credential: a payload with usage, or one in a
+    /// [`CredentialState`] when it is not worth asking.
+    pub fetch: fn(&str, Duration, DateTime<Utc>) -> Result<ProviderPayload>,
     /// The fetch's checks without the request, for `--doctor`.
     pub check: fn(&str, DateTime<Utc>) -> Result<Option<CredentialState>>,
 }
@@ -333,6 +337,161 @@ pub(crate) fn resolve(
         }
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Fetching
+// ---------------------------------------------------------------------------
+
+/// Everything a provider's credentials say: the live login as it always was,
+/// then every stored credential it is not.
+///
+/// The live login is asked on every refresh. An inactive credential is asked
+/// only once its last payload is older than `inactive_refresh_secs` or a
+/// window it reported has reset since; otherwise that payload is carried
+/// unchanged, its own `updatedAt` and all. Each one that is asked gets its own
+/// thread, spaced by `stagger_ms`, so a store of several credentials costs one
+/// request's time rather than their sum.
+pub(crate) fn fetch_provider(
+    provider: &'static str,
+    reader: &StoreReader,
+    config: &TokenGaugeConfig,
+    previous: &[ProviderPayload],
+    live_fetch: impl FnOnce() -> Result<Vec<ProviderPayload>>,
+) -> (Vec<ProviderPayload>, Vec<ProviderFetchError>) {
+    let now = Utc::now();
+    let timeout = Duration::from_secs(config.timeout_secs);
+    let read = config
+        .credentials
+        .store_root()
+        .map(|store| read_provider(store, provider))
+        .unwrap_or_default();
+    let live = (reader.live)();
+    let resolved = resolve(
+        (live != LiveLogin::default()).then_some(&live),
+        &read.entries,
+        reader.tokens,
+    );
+    let matched = resolved.live.map(|i| &read.entries[i]);
+
+    let (mut payloads, mut errors) = crate::fetch::settle(provider, live_fetch());
+    // A live login that matches nothing may still be one of the stored
+    // credentials read beside it. With no identity to rule that out, or an
+    // unverified entry it could be, it stays out of the combined figure.
+    let may_be_stored = matched.is_none()
+        && !read.entries.is_empty()
+        && (live.account.is_none() || read.entries.iter().any(|e| !e.verified()));
+    for payload in &mut payloads {
+        payload.credential.active = Some(true);
+        payload.credential.name = matched.map(|e| e.name.clone());
+        payload.credential.label = matched.and_then(|e| e.label.clone());
+        if may_be_stored {
+            payload.credential.plan_weight = None;
+        }
+    }
+    for error in &mut errors {
+        error.active = true;
+        error.credential = matched.map(|e| e.name.clone());
+    }
+
+    let max_age = i64::try_from(config.credentials.inactive_refresh_secs)
+        .ok()
+        .and_then(chrono::Duration::try_seconds)
+        .unwrap_or(chrono::Duration::MAX);
+    let mut slots: Vec<Option<ProviderPayload>> = Vec::new();
+    let mut asks = Vec::new();
+    for &i in &resolved.others {
+        let entry = &read.entries[i];
+        if !entry.verified() {
+            let mut payload =
+                ProviderPayload::live(provider, "store", crate::UsageSnapshot::at(now));
+            payload.credential.state = Some(CredentialState::Unverified);
+            slots.push(Some(stored(payload, entry)));
+            continue;
+        }
+        if let Some(payload) = carried(provider, &entry.name, previous, now, max_age) {
+            slots.push(Some(stored(payload, entry)));
+            continue;
+        }
+        let stagger = Duration::from_millis(config.stagger_ms).saturating_mul(asks.len() as u32);
+        let (text, fetch) = (entry.text.clone(), reader.fetch);
+        asks.push((
+            slots.len(),
+            i,
+            std::thread::spawn(move || {
+                if !stagger.is_zero() {
+                    std::thread::sleep(stagger);
+                }
+                fetch(&text, timeout, now)
+            }),
+        ));
+        slots.push(None);
+    }
+    for (slot, i, handle) in asks {
+        let entry = &read.entries[i];
+        match handle
+            .join()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("thread panicked")))
+        {
+            Ok(payload) => slots[slot] = Some(stored(payload, entry)),
+            Err(e) => {
+                let mut error = ProviderFetchError::new(provider.to_string(), &format!("{e:#}"));
+                error.credential = Some(entry.name.clone());
+                errors.push(error);
+            }
+        }
+    }
+    payloads.extend(slots.into_iter().flatten());
+    (payloads, errors)
+}
+
+/// A payload made a stored credential's.
+fn stored(mut payload: ProviderPayload, entry: &StoredCredential) -> ProviderPayload {
+    payload.credential.name = Some(entry.name.clone());
+    payload.credential.active = Some(false);
+    payload.credential.label = entry.label.clone();
+    payload
+}
+
+/// The last payload a stored credential produced, when it is still worth
+/// serving: asked within `max_age`, a live answer rather than a fallback, and
+/// with no window that has reset since it was asked.
+fn carried(
+    provider: &str,
+    name: &str,
+    previous: &[ProviderPayload],
+    now: DateTime<Utc>,
+    max_age: chrono::Duration,
+) -> Option<ProviderPayload> {
+    let payload = previous.iter().find(|p| {
+        p.provider.eq_ignore_ascii_case(provider)
+            && p.credential.name.as_deref() == Some(name)
+            && !p.stale
+            && !p.has_error()
+            && p.credential.state.is_none()
+    })?;
+    let usage = payload.usage.as_ref()?;
+    let asked = DateTime::parse_from_rfc3339(usage.updated_at.as_deref()?)
+        .ok()?
+        .with_timezone(&Utc);
+    if now - asked >= max_age || asked > now {
+        return None;
+    }
+    let reset_since = [&usage.primary, &usage.secondary, &usage.tertiary]
+        .into_iter()
+        .flatten()
+        .chain(
+            usage
+                .extra_rate_windows
+                .iter()
+                .filter_map(|e| e.window.as_ref()),
+        )
+        .filter_map(|w| DateTime::parse_from_rfc3339(w.resets_at.as_deref()?).ok())
+        .any(|reset| {
+            let reset = reset.with_timezone(&Utc);
+            reset > asked && reset <= now
+        });
+    (!reset_since).then(|| payload.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -740,5 +899,219 @@ pub(crate) mod tests {
         let absent = doctor_checks(&config, now);
         assert!(absent[0].ok && absent.len() == 1);
         let _ = std::fs::remove_dir_all(&store);
+    }
+
+    // -----------------------------------------------------------------------
+    // fetch_provider
+    // -----------------------------------------------------------------------
+
+    fn fake_live() -> LiveLogin {
+        live("a-work", "r-work", Some("u-work"))
+    }
+
+    /// Answers from the credential's own text: `"fail"` errors, `"expired"`
+    /// comes back in that state, anything else is asked and answers `fetched`.
+    fn fake_fetch(text: &str, _: Duration, now: DateTime<Utc>) -> Result<ProviderPayload> {
+        let access = tokens_of(text).access.unwrap_or_default();
+        if access == "fail" {
+            anyhow::bail!("Claude rate-limited - try again shortly");
+        }
+        let mut payload = ProviderPayload::live("claude", "fetched", crate::UsageSnapshot::at(now));
+        if access == "expired" {
+            payload.credential.state = Some(CredentialState::Expired);
+        }
+        payload.credential.plan_weight = Some(5);
+        Ok(payload)
+    }
+
+    fn fake_check(_: &str, _: DateTime<Utc>) -> Result<Option<CredentialState>> {
+        Ok(None)
+    }
+
+    const FAKE: StoreReader = StoreReader {
+        live: fake_live,
+        tokens: tokens_of,
+        fetch: fake_fetch,
+        check: fake_check,
+    };
+
+    fn live_payload() -> Result<Vec<ProviderPayload>> {
+        let mut payload =
+            ProviderPayload::live("claude", "oauth", crate::UsageSnapshot::at(Utc::now()));
+        payload.credential.plan_weight = Some(20);
+        Ok(vec![payload])
+    }
+
+    fn store_with_every_kind(tag: &str) -> (PathBuf, TokenGaugeConfig) {
+        let store = temp_store(tag);
+        put(
+            &store,
+            "claude",
+            "work",
+            &creds("a-work", "r-work"),
+            "u-work",
+        );
+        put(
+            &store,
+            "claude",
+            "perso",
+            &creds("a-perso", "r-perso"),
+            "u-perso",
+        );
+        put(
+            &store,
+            "claude",
+            "broken",
+            &creds("fail", "r-fail"),
+            "u-broken",
+        );
+        put(&store, "claude", "old", &creds("expired", "r-old"), "u-old");
+        put(
+            &store,
+            "claude",
+            "moved",
+            &creds("a-moved", "r-moved"),
+            "u-moved",
+        );
+        let moved = store.join("claude/moved.json");
+        std::fs::write(&moved, creds("a-moved-2", "r-moved-2")).unwrap();
+        set_mode(&moved, 0o600);
+        let mut config = TokenGaugeConfig::default();
+        config.credentials.store = store.clone();
+        config.timeout_secs = 1;
+        (store, config)
+    }
+
+    fn named<'a>(payloads: &'a [ProviderPayload], name: &str) -> &'a ProviderPayload {
+        payloads
+            .iter()
+            .find(|p| p.credential.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("no payload for {name}"))
+    }
+
+    #[test]
+    fn every_stored_credential_comes_through_named_and_in_its_state() {
+        let (store, config) = store_with_every_kind("fetch");
+        let (payloads, errors) = fetch_provider("claude", &FAKE, &config, &[], live_payload);
+
+        // The live login is work's, and work's stored copy is never asked.
+        assert_eq!(payloads[0].credential.name.as_deref(), Some("work"));
+        assert_eq!(payloads[0].credential.active, Some(true));
+        assert_eq!(payloads[0].credential.label.as_deref(), Some("work label"));
+        assert_eq!(payloads[0].source.as_deref(), Some("oauth"));
+        assert_eq!(
+            payloads
+                .iter()
+                .filter(|p| p.credential.name.as_deref() == Some("work"))
+                .count(),
+            1
+        );
+
+        let perso = named(&payloads, "perso");
+        assert_eq!(perso.credential.active, Some(false));
+        assert_eq!(perso.source.as_deref(), Some("fetched"));
+        assert_eq!(
+            named(&payloads, "old").credential.state,
+            Some(CredentialState::Expired)
+        );
+        let moved = named(&payloads, "moved");
+        assert_eq!(moved.credential.state, Some(CredentialState::Unverified));
+        assert_eq!(moved.credential.label, None);
+
+        // A failure is an error attributed to its credential, not a payload.
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].credential.as_deref(), Some("broken"));
+        assert!(!errors[0].active);
+        // Store order after the live login, whatever order the threads end in.
+        let order: Vec<_> = payloads
+            .iter()
+            .filter_map(|p| p.credential.name.as_deref())
+            .collect();
+        assert_eq!(order, ["work", "moved", "old", "perso"]);
+        let _ = std::fs::remove_dir_all(&store);
+    }
+
+    /// Asked recently and nothing has reset since: carried, not asked again.
+    /// A window that has reset since makes the carried figures wrong however
+    /// young they are.
+    #[test]
+    fn an_inactive_credential_is_carried_until_it_is_due() {
+        let (store, config) = store_with_every_kind("carry");
+        let now = Utc::now();
+        let mut recent = ProviderPayload::live(
+            "claude",
+            "carried",
+            crate::UsageSnapshot {
+                primary: Some(crate::UsageWindow {
+                    used_percent: Some(40),
+                    reset_description: None,
+                    resets_at: Some((now + chrono::Duration::hours(2)).to_rfc3339()),
+                    window_minutes: Some(300),
+                }),
+                ..crate::UsageSnapshot::at(now - chrono::Duration::minutes(5))
+            },
+        );
+        recent.credential.name = Some("perso".into());
+        recent.credential.active = Some(false);
+
+        let (payloads, _) =
+            fetch_provider("claude", &FAKE, &config, &[recent.clone()], live_payload);
+        assert_eq!(named(&payloads, "perso").source.as_deref(), Some("carried"));
+
+        let mut rolled = recent.clone();
+        rolled
+            .usage
+            .as_mut()
+            .unwrap()
+            .primary
+            .as_mut()
+            .unwrap()
+            .resets_at = Some((now - chrono::Duration::minutes(1)).to_rfc3339());
+        let (payloads, _) = fetch_provider("claude", &FAKE, &config, &[rolled], live_payload);
+        assert_eq!(named(&payloads, "perso").source.as_deref(), Some("fetched"));
+
+        let mut due = recent;
+        due.usage.as_mut().unwrap().updated_at =
+            Some((now - chrono::Duration::hours(1)).to_rfc3339());
+        let (payloads, _) = fetch_provider("claude", &FAKE, &config, &[due], live_payload);
+        assert_eq!(named(&payloads, "perso").source.as_deref(), Some("fetched"));
+        let _ = std::fs::remove_dir_all(&store);
+    }
+
+    /// A live login that matches nothing, with no identity to tell it from the
+    /// stored ones being read beside it, may be one of them: it stays out of
+    /// the combined figure rather than counting a plan twice.
+    #[test]
+    fn a_live_login_that_matches_nothing_is_not_counted_twice() {
+        fn anonymous() -> LiveLogin {
+            live("a-env", "r-env", None)
+        }
+        let reader = StoreReader {
+            live: anonymous,
+            ..FAKE
+        };
+        let (store, config) = store_with_every_kind("unmatched");
+        let (payloads, _) = fetch_provider("claude", &reader, &config, &[], live_payload);
+        let live = &payloads[0];
+        assert_eq!(live.credential.active, Some(true));
+        assert_eq!(live.credential.name, None);
+        assert_eq!(live.credential.plan_weight, None);
+        // Every stored credential is read, work included.
+        assert_eq!(named(&payloads, "work").credential.active, Some(false));
+        let _ = std::fs::remove_dir_all(&store);
+    }
+
+    #[test]
+    fn with_no_store_the_live_login_is_still_marked_active() {
+        let config = TokenGaugeConfig {
+            credentials: crate::CredentialsConfig::off(),
+            ..TokenGaugeConfig::default()
+        };
+        let (payloads, errors) = fetch_provider("claude", &FAKE, &config, &[], live_payload);
+        assert_eq!(payloads.len(), 1);
+        assert!(errors.is_empty());
+        assert_eq!(payloads[0].credential.active, Some(true));
+        assert_eq!(payloads[0].credential.name, None);
+        assert_eq!(payloads[0].credential.plan_weight, Some(20));
     }
 }

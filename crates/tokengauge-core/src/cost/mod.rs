@@ -524,6 +524,11 @@ pub fn anchor_burn_rates(report: &mut NativeCostReport, payloads: &[ProviderPayl
         if payload.stale {
             continue;
         }
+        // One figure per provider, and it follows the plan in use: an inactive
+        // credential's session window is not the one being billed.
+        if payload.credential.active == Some(false) {
+            continue;
+        }
         let Some((start, end)) = session_window(payload) else {
             continue;
         };
@@ -889,6 +894,28 @@ mod tests {
         let mut payload = payload_with_window("claude", &resets_at, 300);
         payload.stale = true;
         anchor_burn_rates(&mut report, &[payload]);
+        assert!(report.costs["claude"].burn_rate.is_none());
+    }
+
+    /// Session cost follows the plan in use. With a payload per credential,
+    /// whichever was read last used to write the provider's one figure.
+    #[test]
+    fn an_inactive_credential_never_measures_the_session() {
+        let now = Utc::now();
+        let prices = pricing::PriceTable::vendored();
+        let today = now.with_timezone(&Local).date_naive();
+        let mut report = build_report(
+            &[event("claude", "claude-opus-5", today, 100)],
+            &prices,
+            today,
+        );
+        let mut inactive = payload_with_window(
+            "claude",
+            &(now + ChronoDuration::hours(2)).to_rfc3339(),
+            300,
+        );
+        inactive.credential.active = Some(false);
+        anchor_burn_rates(&mut report, &[inactive]);
         assert!(report.costs["claude"].burn_rate.is_none());
     }
 

@@ -23,6 +23,9 @@ pub struct AppState {
     pub status_message: Option<String>,
     pub spinner_index: usize,
     pub active_tab: usize,
+    /// Sections scrolled off the top of the detail pane. It has no room to
+    /// spare, and a provider with several credentials draws more than fits.
+    pub detail_offset: usize,
     pub initial_provider: Option<String>,
     pub overlay: Overlay,
 }
@@ -55,6 +58,7 @@ impl AppState {
             status_message: None,
             spinner_index: 0,
             active_tab: 0,
+            detail_offset: 0,
             initial_provider: None,
             overlay: Overlay::default(),
         }
@@ -268,8 +272,13 @@ impl App {
             self.state.status_message = Some("Refreshing…".into());
             self.pending_refresh = Some(spawn_refresh(self.config_override.clone(), true));
         }
+        let tab = self.state.active_tab;
         match key.code {
             KeyCode::Char('?') => self.state.overlay = Overlay::Help,
+            KeyCode::Char('J') | KeyCode::PageDown => self.state.detail_offset += 1,
+            KeyCode::Char('K') | KeyCode::PageUp => {
+                self.state.detail_offset = self.state.detail_offset.saturating_sub(1);
+            }
             KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => self.state.next_tab(),
             KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => self.state.prev_tab(),
             KeyCode::Char('l') | KeyCode::Right => self.state.next_tab(),
@@ -285,6 +294,9 @@ impl App {
             KeyCode::Char('S') => self.open_sync(),
             KeyCode::Char('H') => self.open_history(),
             _ => {}
+        }
+        if self.state.active_tab != tab {
+            self.state.detail_offset = 0;
         }
         Ok(())
     }

@@ -223,29 +223,69 @@ fn render_sidebar(frame: &mut Frame, area: Rect, state: &mut AppState) {
 
 fn render_detail(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let row = &state.rows[state.active_tab];
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .title(detail_title_line(row))
-        .border_style(Style::default().fg(dim()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
+    let title = detail_title_line(row);
     // The core resolves the whole panel: which sections exist, in what order,
     // and every string in them. This frontend picks a shape per kind and loops,
     // so a section added in panel.rs reaches the terminal with no edit here.
     let spec = panel_spec(row);
+    state.detail_offset = state.detail_offset.min(spec.len().saturating_sub(1));
 
-    let mut constraints: Vec<Constraint> = spec
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(title)
+        .border_style(Style::default().fg(dim()));
+    let inner = block.inner(area);
+    let (shown, below) = visible_sections(&spec, state.detail_offset, inner.height);
+    if let Some(hint) = scroll_hint(state.detail_offset, below) {
+        block = block.title_bottom(Line::from(Span::styled(hint, Style::default().fg(dim()))));
+    }
+    frame.render_widget(block, area);
+
+    // Whole sections, never a clipped one: a meter cut in half reads as a
+    // figure that is not there.
+    let sections = &spec[state.detail_offset..state.detail_offset + shown];
+    let mut constraints: Vec<Constraint> = sections
         .iter()
         .map(|section| Constraint::Length(section_height(section)))
         .collect();
     constraints.push(Constraint::Min(0));
-
     let chunks = Layout::vertical(constraints).split(inner);
-    for (i, section) in spec.iter().enumerate() {
+    for (i, section) in sections.iter().enumerate() {
         render_section(frame, chunks[i], section);
     }
+}
+
+/// How many sections from `offset` fit whole in `height` (always at least one,
+/// so a tiny terminal still shows something), and how many are left below.
+fn visible_sections(spec: &[Section], offset: usize, height: u16) -> (usize, usize) {
+    let rest = &spec[offset.min(spec.len())..];
+    let mut used = 0u16;
+    let mut shown = 0;
+    for section in rest {
+        let needed = section_height(section);
+        if shown > 0 && used + needed > height {
+            break;
+        }
+        used = used.saturating_add(needed);
+        shown += 1;
+    }
+    (shown, rest.len() - shown)
+}
+
+/// What the pane's bottom border says when sections are off screen.
+fn scroll_hint(above: usize, below: usize) -> Option<String> {
+    if above == 0 && below == 0 {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if above > 0 {
+        parts.push(format!("↑ {above} above"));
+    }
+    if below > 0 {
+        parts.push(format!("↓ {below} below"));
+    }
+    Some(format!(" {} · J/K scroll ", parts.join(" · ")))
 }
 
 fn detail_title_line(row: &ProviderRow) -> Line<'static> {
@@ -726,6 +766,9 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing:
         Span::styled("j/k", key),
         Span::styled(" select", dim_s),
         Span::styled("  ", sep),
+        Span::styled("J/K", key),
+        Span::styled(" scroll", dim_s),
+        Span::styled("  ", sep),
         Span::styled("r", key),
         Span::styled(" refresh", dim_s),
         Span::styled("  ", sep),
@@ -779,6 +822,7 @@ fn render_help_popup(frame: &mut Frame, area: Rect) {
         binding_line("k / ↑", "select previous provider", key, desc),
         binding_line("h / l", "select prev / next provider", key, desc),
         binding_line("g / G", "first / last provider", key, desc),
+        binding_line("J / K", "scroll the panel (PgDn / PgUp)", key, desc),
         binding_line("r", "refresh now", key, desc),
         binding_line("u", "open provider dashboard", key, desc),
         binding_line("s", "open provider status page", key, desc),
@@ -830,6 +874,29 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
+
+    /// Several credentials draw more sections than a terminal has lines for.
+    /// The pane shows whole sections from the offset and says what is hidden.
+    #[test]
+    fn a_panel_taller_than_the_pane_shows_whole_sections_and_says_what_is_hidden() {
+        let row = provider_with_sync_note();
+        let spec = panel_spec(&row);
+        let heights: Vec<u16> = spec.iter().map(section_height).collect();
+        let (shown, below) = visible_sections(&spec, 0, heights[0] + heights[1]);
+        assert_eq!((shown, below), (2, spec.len() - 2));
+        let (shown, below) = visible_sections(&spec, 1, 1);
+        assert_eq!(
+            (shown, below),
+            (1, spec.len() - 2),
+            "one section always shows"
+        );
+        assert_eq!(scroll_hint(0, 0), None);
+        assert_eq!(
+            scroll_hint(1, 2).as_deref(),
+            Some(" ↑ 1 above · ↓ 2 below · J/K scroll ")
+        );
+    }
+
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

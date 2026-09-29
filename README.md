@@ -86,9 +86,9 @@ terminal TUI. The waybar panel itself is the tooltip - hover the module.
 | Key | Action |
 |-----|--------|
 | `r` | Refresh now |
-| `h` / `l` / arrows / Tab / Shift-Tab | Previous / next provider tab |
-| `j` / `k` / arrows | Scroll body |
-| `g` / `G` / Home / End | Top / bottom |
+| `h` / `l` / `j` / `k` / arrows / Tab / Shift-Tab | Previous / next provider tab |
+| `J` / `K` / PgDn / PgUp | Scroll the panel, a section at a time |
+| `g` / `G` / Home / End | First / last provider |
 | `u` | Open active provider's usage dashboard |
 | `s` | Open active provider's status page |
 | `S` | Fleet sync setup |

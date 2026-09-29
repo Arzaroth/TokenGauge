@@ -34,8 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Update TokenGauge** item opens the latest release, and `--update` refuses
   to patch binaries inside the signed bundle.
 - The macOS binaries and the DMG are signed with a Developer ID and notarized
-  by Apple, so they run without a Gatekeeper prompt, including when downloaded
-  with a browser.
+  by Apple, so Gatekeeper does not block them as unverified, including when
+  downloaded with a browser.
   Opening the TUI from the tray uses Terminal.app unless `TERMINAL` names
   another terminal.
 - A copy installed by Homebrew refuses `--update` and says to run

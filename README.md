@@ -585,8 +585,8 @@ Two ways in, for Apple silicon and Intel alike.
 **The app.** Download `tokengauge-<version>-macos-universal.dmg` from
 [GitHub Releases](https://github.com/Arzaroth/TokenGauge/releases), open it and
 drag TokenGauge to Applications. Opening it puts the gauge in the menu bar,
-with no Dock icon. It is signed and notarized, so it opens without a
-Gatekeeper prompt. To start it at login, add it under System Settings >
+with no Dock icon. It is signed and notarized, so macOS asks only its usual
+first-open confirmation, not the unverified-developer warning. To start it at login, add it under System Settings >
 General > Login Items. The app is the tray alone: no daemon, and the CLI and
 the TUI stay inside the bundle. To update, its **Update TokenGauge** item opens
 the latest release; download the new DMG and replace the app. Updating a

@@ -311,6 +311,7 @@ impl Default for TokenGaugeConfig {
             theme: ThemeConfig::default(),
             update: UpdateConfig::default(),
             sync: SyncConfig::default(),
+            credentials: CredentialsConfig::default(),
             unknown: HashMap::new(),
         }
     }

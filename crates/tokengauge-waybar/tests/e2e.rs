@@ -41,6 +41,8 @@ impl Machine {
             "refresh_secs = 3600\n\
              cache_file = {:?}\n\
              ccusage_enabled = false\n\n\
+             [credentials]\n\
+             store = \"\"\n\n\
              [providers]\n",
             root.join("state/tokengauge-usage.json"),
         );

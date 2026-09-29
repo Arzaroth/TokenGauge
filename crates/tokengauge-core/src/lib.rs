@@ -12,6 +12,7 @@
 //! | Module | What it owns |
 //! | ------ | ------------ |
 //! | [`providers`] | One table of everything a provider *is*. Adding one is a row. |
+//! | [`credentials`] | The credential store a switcher writes, and which stored credential the live login is. |
 //! | [`fetch`] | Asking every enabled provider at once, and serving the last good answer when one fails. |
 //! | [`payload`] | What a fetcher produces, and the on-disk shape it is stored in. |
 //! | [`rows`] | A payload turned into the row every frontend renders. Past here, nothing knows which provider it is looking at. |
@@ -34,6 +35,7 @@ mod claude;
 mod codex;
 pub mod config;
 pub mod cost;
+pub mod credentials;
 mod cursor;
 mod device;
 pub mod doctor;

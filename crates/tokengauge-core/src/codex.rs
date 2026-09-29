@@ -15,10 +15,11 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::{check_status, epoch_to_rfc3339, json_int, json_num, jwt_claims, trimmed};
 use crate::{
-    Credits, ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8,
-    slug,
+    CredentialState, Credits, ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow,
+    http_client, pct_u8, slug,
 };
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -391,6 +392,99 @@ fn ensure_access_token(timeout: Duration) -> Result<Credential> {
     let new = refresh(&client, &fresh_tokens, &refresh_token)?;
     write_auth(&path, root, &new, Utc::now())?;
     Ok(oauth(new))
+}
+
+// ---------------------------------------------------------------------------
+// The credential store
+// ---------------------------------------------------------------------------
+
+/// The JWT claim namespace OpenAI puts its account claims under.
+const AUTH_CLAIMS: &str = "https://api.openai.com/auth";
+
+/// One person in one ChatGPT workspace, the identity remuda files a Codex
+/// credential under. `tokens.account_id` is not it: that names only the
+/// workspace, which every seat of a Team plan shares.
+fn seat_of(access_token: &str, id_token: Option<&str>) -> Option<String> {
+    let claim = |claims: &Value, key: &str| {
+        claims
+            .get(AUTH_CLAIMS)?
+            .get(key)?
+            .as_str()
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    jwt_claims(access_token)
+        .and_then(|c| claim(&c, "chatgpt_account_user_id"))
+        .or_else(|| {
+            let c = jwt_claims(id_token?)?;
+            let user = claim(&c, "chatgpt_user_id").or_else(|| claim(&c, "user_id"))?;
+            Some(format!("{user}__{}", claim(&c, "chatgpt_account_id")?))
+        })
+}
+
+fn oauth_tokens(tokens: &Tokens) -> LoginTokens {
+    let present = |t: &str| (!t.is_empty()).then(|| t.to_string());
+    LoginTokens {
+        access: present(&tokens.access_token),
+        refresh: tokens.refresh_token.as_deref().and_then(present),
+    }
+}
+
+/// The login Codex is signed into, for finding it in the credential store.
+///
+/// Only an OAuth sign-in has an identity. A personal access token resolves
+/// through `whoami` to the workspace, not the seat, and matching that against
+/// seats would mark every seat in the workspace active.
+pub(crate) fn live_login() -> LiveLogin {
+    let Ok(auth) = read_auth(&auth_path()) else {
+        return LiveLogin::default();
+    };
+    match auth.tokens {
+        Some(tokens) => LiveLogin {
+            account: seat_of(&tokens.access_token, tokens.id_token.as_deref()),
+            tokens: oauth_tokens(&tokens),
+        },
+        None => LiveLogin {
+            tokens: LoginTokens {
+                access: trimmed(auth.personal_access_token).or_else(|| trimmed(auth.api_key)),
+                refresh: None,
+            },
+            account: None,
+        },
+    }
+}
+
+pub(crate) fn stored_tokens(text: &str) -> LoginTokens {
+    serde_json::from_str::<AuthFile>(text)
+        .ok()
+        .and_then(|auth| auth.tokens)
+        .map(|tokens| oauth_tokens(&tokens))
+        .unwrap_or_default()
+}
+
+/// Why a stored credential is not worth a request, if it is not.
+///
+/// Expiry is the access token's own `exp` claim. The stored copy is never
+/// refreshed here: its refresh token rotates on use, and it is the switcher's.
+fn stored_state(tokens: &Tokens, now: DateTime<Utc>) -> Result<Option<CredentialState>> {
+    if tokens.access_token.trim().is_empty() {
+        return Err(anyhow!("the stored credential holds no token"));
+    }
+    if jwt_expiry(&tokens.access_token).is_some_and(|expires_at| expires_at <= now) {
+        return Ok(Some(CredentialState::Expired));
+    }
+    Ok(None)
+}
+
+fn stored_oauth(text: &str) -> Result<Tokens> {
+    serde_json::from_str::<AuthFile>(text)
+        .context("the stored auth.json was invalid")?
+        .tokens
+        .ok_or_else(|| anyhow!("the stored credential holds no OAuth tokens"))
+}
+
+pub(crate) fn check_stored(text: &str, now: DateTime<Utc>) -> Result<Option<CredentialState>> {
+    stored_state(&stored_oauth(text)?, now)
 }
 
 // ---------------------------------------------------------------------------
@@ -881,8 +975,11 @@ mod tests {
 
     /// A JWT carrying `exp`, the shape Codex writes into `auth.json`.
     fn jwt(exp: i64) -> String {
+        jwt_with(&format!(r#"{{"exp":{exp}}}"#))
+    }
+
+    fn jwt_with(claims: &str) -> String {
         const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-        let claims = format!(r#"{{"exp":{exp}}}"#);
         let mut payload = String::new();
         for chunk in claims.as_bytes().chunks(3) {
             let mut buf = [0u8; 3];
@@ -1230,5 +1327,51 @@ mod tests {
         assert!(!path.exists());
         let tmp = path.with_file_name(format!("auth.json.tmp.{}", std::process::id()));
         assert!(!tmp.exists(), "staging temp must be cleaned up on failure");
+    }
+
+    /// The seat, not the workspace: every seat of a Team plan shares
+    /// `tokens.account_id`, and matching on it would make them all active.
+    #[test]
+    fn the_seat_is_the_identity() {
+        let access = jwt_with(
+            r#"{"https://api.openai.com/auth":{"chatgpt_account_user_id":"user-1__ws","chatgpt_account_id":"ws"}}"#,
+        );
+        assert_eq!(seat_of(&access, None).as_deref(), Some("user-1__ws"));
+
+        // An older access token without the seat claim: remuda builds it from
+        // the id token, and so does this.
+        let bare = jwt_with(r#"{"exp":1}"#);
+        let id = jwt_with(
+            r#"{"https://api.openai.com/auth":{"chatgpt_user_id":"user-2","chatgpt_account_id":"ws"}}"#,
+        );
+        assert_eq!(seat_of(&bare, Some(&id)).as_deref(), Some("user-2__ws"));
+        assert_eq!(seat_of("opaque", None), None);
+    }
+
+    #[test]
+    fn a_stored_credential_past_its_exp_is_expired_not_refreshed() {
+        let now = Utc::now();
+        let stored = |exp: i64| {
+            format!(
+                r#"{{"tokens":{{"access_token":"{}","refresh_token":"r-1"}}}}"#,
+                jwt(exp)
+            )
+        };
+        let past = stored(now.timestamp() - 60);
+        assert_eq!(
+            check_stored(&past, now).unwrap(),
+            Some(CredentialState::Expired)
+        );
+
+        assert_eq!(
+            check_stored(&stored(now.timestamp() + 3600), now).unwrap(),
+            None
+        );
+        assert!(check_stored(r#"{"OPENAI_API_KEY":"sk"}"#, now).is_err());
+        assert_eq!(
+            stored_tokens(&past).refresh.as_deref(),
+            Some("r-1"),
+            "the refresh token is what finds the live login"
+        );
     }
 }

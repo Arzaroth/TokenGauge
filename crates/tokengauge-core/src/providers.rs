@@ -20,6 +20,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use chrono::Utc;
 
+use crate::credentials::StoreReader;
 use crate::{
     ProviderPayload, ProvidersConfig, claude, codex, cursor, glm, grok, kimi, opencode, openrouter,
 };
@@ -68,6 +69,9 @@ pub struct ProviderMeta {
     /// before falling back to ccusage.
     pub natively_read: bool,
     fetch: fn(Duration) -> Result<Vec<ProviderPayload>>,
+    /// How its credentials are read from a switcher's credential store, for
+    /// the providers remuda keeps. `None` for everything else.
+    store: Option<StoreReader>,
     auth: fn() -> AuthStatus,
     /// `[providers]` is a serde struct with named fields, so the toggle cannot
     /// be a table lookup. This is the accessor for this provider's field.
@@ -89,6 +93,11 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Session", "Weekly", "Tertiary"),
         natively_read: true,
         fetch: codex::fetch,
+        store: Some(StoreReader {
+            live: codex::live_login,
+            tokens: codex::stored_tokens,
+            check: codex::check_stored,
+        }),
         auth: codex_auth,
         enabled_in: |c| c.codex,
     },
@@ -106,6 +115,11 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Session", "Weekly (all)", "Weekly (Sonnet)"),
         natively_read: true,
         fetch: claude::fetch,
+        store: Some(StoreReader {
+            live: claude::live_login,
+            tokens: claude::stored_tokens,
+            check: claude::check_stored,
+        }),
         auth: claude_auth,
         enabled_in: |c| c.claude,
     },
@@ -123,6 +137,7 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Weekly", "Rate Limit", "Tertiary"),
         natively_read: true,
         fetch: kimi::fetch,
+        store: None,
         auth: kimi_auth,
         enabled_in: |c| c.kimi,
     },
@@ -140,6 +155,7 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Weekly", "On-demand", "Tertiary"),
         natively_read: true,
         fetch: grok::fetch,
+        store: None,
         auth: grok_auth,
         enabled_in: |c| c.grok,
     },
@@ -158,6 +174,7 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Weekly", "30-day", "5-hour"),
         natively_read: false,
         fetch: glm::fetch,
+        store: None,
         auth: glm_auth,
         enabled_in: |c| c.glm,
     },
@@ -181,6 +198,7 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Credit", "Key limit", "Tertiary"),
         natively_read: false,
         fetch: openrouter::fetch,
+        store: None,
         auth: openrouter_auth,
         enabled_in: |c| c.openrouter,
     },
@@ -208,6 +226,7 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("5-hour", "Weekly", "Monthly"),
         natively_read: false,
         fetch: opencode::fetch,
+        store: None,
         auth: opencode_auth,
         enabled_in: |c| c.opencode,
     },
@@ -230,6 +249,7 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Included", "Cursor models", "Other models"),
         natively_read: false,
         fetch: cursor::fetch,
+        store: None,
         auth: cursor_auth,
         enabled_in: |c| c.cursor,
     },
@@ -318,6 +338,20 @@ pub fn window_labels(provider: &str) -> (&'static str, &'static str, &'static st
         Some(meta) => meta.windows,
         None => ("Session", "Weekly", "Tertiary"),
     }
+}
+
+/// How a provider's stored credentials are read, when a switcher stores them.
+pub(crate) fn store_reader(provider: &str) -> Option<&'static StoreReader> {
+    provider_meta(provider)?.store.as_ref()
+}
+
+/// Every provider whose credentials a switcher can store, in table order.
+pub fn stored_providers() -> Vec<&'static str> {
+    PROVIDER_META
+        .iter()
+        .filter(|meta| meta.store.is_some())
+        .map(|meta| meta.id)
+        .collect()
 }
 
 pub fn fetch_single_provider(provider: &str, timeout: Duration) -> Result<Vec<ProviderPayload>> {

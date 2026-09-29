@@ -772,6 +772,7 @@ mod tests {
             notifications: Default::default(),
             theme: Default::default(),
             update: Default::default(),
+            credentials: tokengauge_core::CredentialsConfig::off(),
             unknown: Default::default(),
         }
     }

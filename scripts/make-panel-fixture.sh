@@ -36,6 +36,9 @@ refresh_secs = 3600
 cache_file = "$WORK/state/tokengauge-usage.json"
 ccusage_enabled = false
 
+[credentials]
+store = ""
+
 [providers]
 claude = true
 codex = true

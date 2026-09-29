@@ -23,9 +23,11 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::check_status;
 use crate::{
-    ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8, slug,
+    CredentialState, ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client,
+    pct_u8, slug,
 };
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -58,6 +60,9 @@ struct Credentials {
 struct Oauth {
     #[serde(rename = "accessToken")]
     access_token: String,
+    /// Read only to tell one login from another; never sent and never used.
+    #[serde(rename = "refreshToken", default)]
+    refresh_token: Option<String>,
     /// Milliseconds since epoch. Absent => unknown, left for the server to
     /// reject; see `validate_oauth`.
     #[serde(rename = "expiresAt")]
@@ -75,6 +80,9 @@ struct Oauth {
 /// and writes only a hollow `.credentials.json`, so a user there can point us
 /// at a token from `claude setup-token` instead.
 const ENV_TOKEN: &str = "TOKENGAUGE_CLAUDE_OAUTH_TOKEN";
+/// What a stored credential's 401 says. Logging the CLI in again changes the
+/// live login, not the stored one.
+const STORED_HINT: &str = "remuda refreshes stored credentials (`remuda refresh`)";
 const ENV_SCOPES: &str = "TOKENGAUGE_CLAUDE_OAUTH_SCOPES";
 
 /// The OS credential store Claude Code writes to on macOS (a keychain item) and
@@ -108,7 +116,9 @@ fn parse_credentials(data: &str) -> Result<Oauth> {
     {
         return Ok(oauth);
     }
-    serde_json::from_str::<Oauth>(data).context("credentials JSON was invalid")
+    // Never serde's message: it quotes the value it rejected, and a file that
+    // is a bare token string would put the token in the error.
+    serde_json::from_str::<Oauth>(data).map_err(|_| anyhow!("credentials JSON was invalid"))
 }
 
 /// Whether a parsed credential can actually be sent.
@@ -155,6 +165,7 @@ fn load_from_env() -> Source {
         .unwrap_or_else(|| vec!["user:profile".to_string()]);
     Some(Ok(Oauth {
         access_token: token,
+        refresh_token: None,
         expires_at: None,
         scopes,
         rate_limit_tier: None,
@@ -216,6 +227,14 @@ fn load_from_keyring() -> Source {
     None
 }
 
+fn loaders() -> [Loader; 3] {
+    [
+        (ENV_TOKEN, load_from_env),
+        (".credentials.json", || load_from_file(&credentials_path())),
+        ("OS credential store", load_from_keyring),
+    ]
+}
+
 /// The first credential that is present *and* usable, from - in order - the
 /// env override, the file, and the OS credential store.
 ///
@@ -225,13 +244,8 @@ fn load_from_keyring() -> Source {
 /// first concrete one, because a present-but-broken source (an expired file)
 /// is more actionable than a merely-absent one.
 fn load_oauth(now: DateTime<Utc>) -> Result<(Oauth, &'static str)> {
-    let loaders: [Loader; 3] = [
-        ("TOKENGAUGE_CLAUDE_OAUTH_TOKEN", load_from_env),
-        (".credentials.json", || load_from_file(&credentials_path())),
-        ("OS credential store", load_from_keyring),
-    ];
     let mut first_err: Option<anyhow::Error> = None;
-    for (source, loader) in loaders {
+    for (source, loader) in loaders() {
         if let Some(parsed) = loader() {
             match parsed.and_then(|oauth| validate_oauth(oauth, now)) {
                 Ok(oauth) => return Ok((oauth, source)),
@@ -248,6 +262,130 @@ fn load_oauth(now: DateTime<Utc>) -> Result<(Oauth, &'static str)> {
 /// fetch. `Err` carries the same message the fetch would surface.
 pub(crate) fn credential_status(now: DateTime<Utc>) -> Result<&'static str> {
     load_oauth(now).map(|(_, source)| source)
+}
+
+/// `.claude.json`, where Claude Code records whose login it holds. Beside
+/// `~/.claude` rather than inside it, unless `CLAUDE_CONFIG_DIR` is set.
+fn claude_json_path() -> PathBuf {
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR")
+        && !dir.trim().is_empty()
+    {
+        return PathBuf::from(dir.trim()).join(".claude.json");
+    }
+    dirs::home_dir().unwrap_or_default().join(".claude.json")
+}
+
+fn account_uuid(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let config: Value = serde_json::from_str(&text).ok()?;
+    config["oauthAccount"]["accountUuid"]
+        .as_str()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
+fn login_tokens(oauth: &Oauth) -> LoginTokens {
+    let present = |t: &str| (!t.trim().is_empty()).then(|| t.to_string());
+    LoginTokens {
+        access: present(&oauth.access_token),
+        refresh: oauth.refresh_token.as_deref().and_then(present),
+    }
+}
+
+/// The login Claude Code is signed into, for finding it in the credential
+/// store.
+///
+/// The token the fetch would send when one is usable, else the first one
+/// present: an expired live login is still the live login, and its stored copy
+/// must not be asked about as though it were another. The identity comes from
+/// `.claude.json` only when the token came from Claude Code's own stores, since
+/// that file describes their login and not the override's.
+pub(crate) fn live_login() -> LiveLogin {
+    let found = load_oauth(Utc::now()).ok().or_else(|| {
+        loaders().into_iter().find_map(|(source, loader)| {
+            let oauth = loader()?.ok()?;
+            // A hollow file is present and says nothing: it must not
+            // shadow a store that holds the real, if expired, token.
+            (!oauth.access_token.trim().is_empty()).then_some((oauth, source))
+        })
+    });
+    let Some((oauth, source)) = found else {
+        return LiveLogin::default();
+    };
+    LiveLogin {
+        tokens: login_tokens(&oauth),
+        account: live_account(source, &claude_json_path()),
+    }
+}
+
+/// `.claude.json` describes Claude Code's own login, so it names the account
+/// of a token read from Claude Code's own stores and of nothing else.
+fn live_account(source: &str, claude_json: &Path) -> Option<String> {
+    (source != ENV_TOKEN)
+        .then(|| account_uuid(claude_json))
+        .flatten()
+}
+
+pub(crate) fn stored_tokens(text: &str) -> LoginTokens {
+    parse_credentials(text)
+        .map(|oauth| login_tokens(&oauth))
+        .unwrap_or_default()
+}
+
+/// Why a stored credential is not worth a request, if it is not. Worded for a
+/// credential the switcher keeps: the fix is never the CLI's login.
+fn stored_state(oauth: &Oauth, now: DateTime<Utc>) -> Result<Option<CredentialState>> {
+    if oauth.access_token.trim().is_empty() {
+        return Err(anyhow!("the stored credential holds no token"));
+    }
+    if oauth
+        .expires_at
+        .is_some_and(|ms| now.timestamp_millis() >= ms)
+    {
+        return Ok(Some(CredentialState::Expired));
+    }
+    if !oauth.scopes.iter().any(|s| s == "user:profile") {
+        return Err(anyhow!(
+            "the stored credential lacks the user:profile scope"
+        ));
+    }
+    Ok(None)
+}
+
+pub(crate) fn check_stored(text: &str, now: DateTime<Utc>) -> Result<Option<CredentialState>> {
+    stored_state(&parse_credentials(text)?, now)
+}
+
+/// Ask about a stored credential, or say why it was not asked.
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    let oauth = parse_credentials(text)?;
+    match stored_state(&oauth, now)? {
+        None => usage_for(&oauth, timeout, now, STORED_HINT),
+        Some(state) => {
+            let mut payload = ProviderPayload::live(
+                "claude",
+                "store",
+                UsageSnapshot {
+                    login_method: plan_label(
+                        oauth.subscription_type.as_deref(),
+                        oauth.rate_limit_tier.as_deref(),
+                    ),
+                    ..UsageSnapshot::at(now)
+                },
+            );
+            payload.credential.state = Some(state);
+            payload.credential.plan_weight = plan_weight(
+                oauth.subscription_type.as_deref(),
+                oauth.rate_limit_tier.as_deref(),
+            );
+            Ok(payload)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -370,6 +508,30 @@ fn plan_label(subscription_type: Option<&str>, tier: Option<&str>) -> Option<Str
         Kind::Enterprise => "Claude Enterprise".to_string(),
     };
     Some(label)
+}
+
+/// A plan's nominal multiplier against Pro: the `Nx` in a rate-limit tier
+/// (`default_claude_max_20x`, a Team seat's `default_claude_team_5x`), else 1
+/// for Pro, which its subscription type names.
+///
+/// `None` for anything else - Enterprise, or a tier not seen before. Guessing
+/// 1x would understate a large plan without saying so.
+fn plan_weight(subscription_type: Option<&str>, tier: Option<&str>) -> Option<u32> {
+    let multiplier = tier.and_then(|tier| {
+        tier.split(|c: char| !c.is_ascii_alphanumeric())
+            .filter_map(|word| word.strip_suffix(['x', 'X']))
+            .filter(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
+            .find_map(|digits| digits.parse::<u32>().ok())
+            .filter(|n| *n > 0)
+    });
+    multiplier.or_else(|| {
+        let sub = subscription_type?.to_lowercase();
+        (sub.contains("pro")
+            && !["max", "team", "enterprise"]
+                .iter()
+                .any(|k| sub.contains(k)))
+        .then_some(1)
+    })
 }
 
 /// The routines extra window, if any alias key is present.
@@ -542,6 +704,7 @@ fn to_payload(
         credits: None,
         error: None,
         stale: false,
+        credential: Default::default(),
     })
 }
 
@@ -552,7 +715,21 @@ fn to_payload(
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let (oauth, _source) = load_oauth(now)?;
+    Ok(vec![usage_for(
+        &oauth,
+        timeout,
+        now,
+        "run `claude` to log in",
+    )?])
+}
 
+/// One usage request with one credential's token.
+fn usage_for(
+    oauth: &Oauth,
+    timeout: Duration,
+    now: DateTime<Utc>,
+    unauthorized_hint: &str,
+) -> Result<ProviderPayload> {
     let client = http_client(timeout)?;
     let resp = client
         .get(USAGE_URL)
@@ -564,14 +741,19 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         .send()
         .context("Claude usage request failed")?;
 
-    check_status(resp.status(), "Claude", "run `claude` to log in")?;
+    check_status(resp.status(), "Claude", unauthorized_hint)?;
 
     let body: UsageResponse = resp.json().context("Claude usage JSON was invalid")?;
     let plan = plan_label(
         oauth.subscription_type.as_deref(),
         oauth.rate_limit_tier.as_deref(),
     );
-    Ok(vec![to_payload(body, plan, now)?])
+    let mut payload = to_payload(body, plan, now)?;
+    payload.credential.plan_weight = plan_weight(
+        oauth.subscription_type.as_deref(),
+        oauth.rate_limit_tier.as_deref(),
+    );
+    Ok(payload)
 }
 
 #[cfg(test)]
@@ -882,5 +1064,92 @@ mod tests {
         assert_eq!(wrapped.access_token, "a");
         let bare = parse_credentials(r#"{"accessToken":"b","scopes":["user:profile"]}"#).unwrap();
         assert_eq!(bare.access_token, "b");
+    }
+
+    /// The combined header weighs a Max 20x and a Pro as 20 to 1, not as two
+    /// equal halves, and takes a Team seat's `Nx` that the plan label drops.
+    #[test]
+    fn a_plan_weighs_its_nominal_multiplier() {
+        assert_eq!(
+            plan_weight(Some("max"), Some("default_claude_max_20x")),
+            Some(20)
+        );
+        assert_eq!(
+            plan_weight(Some("max"), Some("default_claude_max_5x")),
+            Some(5)
+        );
+        assert_eq!(
+            plan_weight(Some("team"), Some("default_claude_team_5x")),
+            Some(5)
+        );
+        assert_eq!(plan_weight(Some("pro"), Some("default_claude_ai")), Some(1));
+        // Nothing known: out of the total rather than guessed at 1x.
+        assert_eq!(
+            plan_weight(Some("enterprise"), Some("default_claude_ai")),
+            None
+        );
+        assert_eq!(plan_weight(None, None), None);
+    }
+
+    #[test]
+    fn a_stored_credential_is_checked_without_sending_it_to_a_login() {
+        let now = Utc::now();
+        let stored = |expires: i64, scopes: &str| {
+            format!(
+                r#"{{"claudeAiOauth":{{"accessToken":"a-1","refreshToken":"r-1","expiresAt":{expires},"scopes":{scopes},"subscriptionType":"pro"}}}}"#
+            )
+        };
+        let expired = stored(now.timestamp_millis() - 1, r#"["user:profile"]"#);
+        assert_eq!(
+            check_stored(&expired, now).unwrap(),
+            Some(CredentialState::Expired)
+        );
+        let payload = fetch_stored(&expired, Duration::from_secs(1), now).unwrap();
+        assert_eq!(payload.credential.state, Some(CredentialState::Expired));
+        assert_eq!(payload.credential.plan_weight, Some(1));
+        assert_eq!(
+            payload.usage.unwrap().login_method.as_deref(),
+            Some("Claude Pro")
+        );
+
+        let fine = stored(now.timestamp_millis() + 3_600_000, r#"["user:profile"]"#);
+        assert_eq!(check_stored(&fine, now).unwrap(), None);
+        let unscoped = stored(now.timestamp_millis() + 3_600_000, "[]");
+        let err = check_stored(&unscoped, now).unwrap_err().to_string();
+        assert!(!err.contains("run `claude`"), "{err}");
+        assert_eq!(stored_tokens(&fine).refresh.as_deref(), Some("r-1"));
+    }
+
+    #[test]
+    fn the_identity_is_the_account_claude_json_names() {
+        let dir = std::env::temp_dir().join(format!("tg-claude-json-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".claude.json");
+        std::fs::write(
+            &path,
+            r#"{"numStartups":3,"oauthAccount":{"accountUuid":"u-1","emailAddress":"x@y"}}"#,
+        )
+        .unwrap();
+        assert_eq!(account_uuid(&path).as_deref(), Some("u-1"));
+        assert_eq!(
+            live_account(".credentials.json", &path).as_deref(),
+            Some("u-1")
+        );
+        assert_eq!(
+            live_account(ENV_TOKEN, &path),
+            None,
+            "the override is not the file's login"
+        );
+        std::fs::write(&path, r#"{"numStartups":3}"#).unwrap();
+        assert_eq!(account_uuid(&path), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// serde quotes what it rejected, and a credential file holding a bare
+    /// token string would carry the token into errors[], --json and --doctor.
+    #[test]
+    fn a_malformed_credential_never_quotes_itself() {
+        let err = check_stored(r#""sk-ant-oat01-secret""#, Utc::now()).unwrap_err();
+        assert!(!format!("{err:#}").contains("secret"), "{err:#}");
     }
 }

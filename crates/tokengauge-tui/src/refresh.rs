@@ -50,7 +50,7 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
                 &payloads,
                 &errors,
                 &costs,
-                &config.providers,
+                &config,
                 Some(&sync),
             )
             .ok();

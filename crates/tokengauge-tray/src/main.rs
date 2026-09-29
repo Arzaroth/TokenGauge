@@ -618,7 +618,12 @@ mod gui {
 
                 for section in &row.panel {
                     ui.add_space(10.0);
-                    ui.label(RichText::new(section.title).small().strong().color(SUB));
+                    ui.label(
+                        RichText::new(section.title.as_str())
+                            .small()
+                            .strong()
+                            .color(SUB),
+                    );
                     ui.add_space(2.0);
                     for panel_row in &section.rows {
                         match section.kind {
@@ -1377,7 +1382,7 @@ mod gui {
                         &result.payloads,
                         &result.errors,
                         &result.costs,
-                        &config.providers,
+                        &config,
                         Some(&result.sync),
                     );
                     let errors = result

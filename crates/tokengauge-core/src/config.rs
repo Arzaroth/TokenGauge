@@ -132,6 +132,7 @@ pub struct TokenGaugeConfig {
     pub theme: ThemeConfig,
     pub update: UpdateConfig,
     pub sync: SyncConfig,
+    pub credentials: CredentialsConfig,
     /// Unknown top-level keys (e.g. the removed `codexbar_bin`) left over from
     /// older configs. Captured so `--doctor` can warn instead of ignoring.
     #[serde(flatten)]
@@ -166,8 +167,72 @@ impl TokenGaugeConfig {
                 .map(|k| format!("sync.dir.{k}")),
         );
         keys.extend(self.sync.s3.unknown.keys().map(|k| format!("sync.s3.{k}")));
+        keys.extend(
+            self.credentials
+                .unknown
+                .keys()
+                .map(|k| format!("credentials.{k}")),
+        );
         keys.sort();
         keys
+    }
+}
+
+/// `[credentials]`: where the credential store a switcher writes lives, and
+/// how often a credential the CLI is not signed into is asked about.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CredentialsConfig {
+    /// The store root. An empty path turns the store off.
+    pub store: PathBuf,
+    /// Seconds an inactive credential's last payload is carried before it is
+    /// asked again. The live login is asked on every refresh regardless.
+    pub inactive_refresh_secs: u64,
+    #[serde(flatten)]
+    pub unknown: HashMap<String, toml::Value>,
+}
+
+impl Default for CredentialsConfig {
+    fn default() -> Self {
+        Self {
+            // Off in this crate's own tests, which build configs by default
+            // all over: the default is the developer's store, and a test
+            // reading it would ask about their logins.
+            store: if cfg!(test) {
+                PathBuf::new()
+            } else {
+                crate::credentials::default_store()
+            },
+            inactive_refresh_secs: crate::credentials::DEFAULT_INACTIVE_REFRESH_SECS,
+            unknown: HashMap::new(),
+        }
+    }
+}
+
+impl CredentialsConfig {
+    /// The store turned off. What a test's config wants: the default is the
+    /// developer's own store, and a test reading it depends on their logins.
+    pub fn off() -> Self {
+        Self {
+            store: PathBuf::new(),
+            ..Self::default()
+        }
+    }
+
+    /// The store root, or `None` when the store is turned off. A leading `~`
+    /// is the home directory: a relative path would resolve against whichever
+    /// directory the reading process happened to start in.
+    pub fn store_root(&self) -> Option<PathBuf> {
+        if self.store.as_os_str().is_empty() {
+            return None;
+        }
+        let text = self.store.to_string_lossy();
+        let rest = match text.strip_prefix("~/") {
+            Some(rest) => rest,
+            None if text == "~" => "",
+            None => return Some(self.store.clone()),
+        };
+        Some(dirs::home_dir()?.join(rest))
     }
 }
 
@@ -283,6 +348,16 @@ click_action = "tui"
 # Optional explicit launcher for click_action = "tui". Empty = auto-detect
 # (omarchy-launch-or-focus-tui if present, else $TERMINAL -e tokengauge-tui).
 # tui_command = "ghostty -e tokengauge-tui"
+
+[credentials]
+# The credential store remuda (github.com/Arzaroth/remuda) keeps every captured
+# Claude and Codex login in. Each one gets its own limits in the panel, and
+# the panel adds them up by plan. Read, never written. Defaults to
+# ~/.local/share/remuda/credentials (%LOCALAPPDATA%\remuda\credentials on
+# Windows); set it if remuda's store is elsewhere, or to "" to turn it off.
+# store = "/home/you/.local/share/remuda/credentials"
+# Seconds before a credential the CLI is not signed into is asked again.
+# inactive_refresh_secs = 1800
 
 [providers]
 # OAuth providers - set to true/false to enable/disable

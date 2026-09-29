@@ -15,12 +15,37 @@
       "provider": "codex",
       "source": "oauth",
       "stale": false,
+      "credential": "work",
+      "active": true,
+      "credentialLabel": "Acme",
       "usage": {
         "primary": {"usedPercent": 12, "resetsAt": "{{SESSION_RESET}}", "windowMinutes": 300},
         "secondary": {"usedPercent": 44, "resetsAt": "{{WEEKLY_RESET}}", "windowMinutes": 10080},
         "updatedAt": "{{UPDATED_AT}}",
         "loginMethod": "chatgpt"
       }
+    },
+    {
+      "provider": "codex",
+      "source": "oauth",
+      "stale": false,
+      "credential": "perso",
+      "active": false,
+      "usage": {
+        "primary": {"usedPercent": 83, "resetsAt": "{{SESSION_RESET}}", "windowMinutes": 300},
+        "secondary": {"usedPercent": 20, "resetsAt": "{{WEEKLY_RESET}}", "windowMinutes": 10080},
+        "updatedAt": "{{UPDATED_AT}}",
+        "loginMethod": "plus"
+      }
+    },
+    {
+      "provider": "codex",
+      "source": "store",
+      "stale": false,
+      "credential": "old",
+      "active": false,
+      "credentialState": "expired",
+      "usage": {"updatedAt": "{{UPDATED_AT}}"}
     }
   ],
   "errors": [],
@@ -39,7 +64,7 @@
     }
   },
   "meta": {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "device": {"machineId": "e2e", "hostname": "e2e"},
     "updatedAtMs": {{UPDATED_AT_MS}},
     "providers": ["claude", "codex"]

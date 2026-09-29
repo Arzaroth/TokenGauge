@@ -33,6 +33,23 @@ The directory of every captured credential, a stored copy of the active one
 included, that a switcher tool writes and TokenGauge only reads.
 _Avoid_: vault, keyring, pool
 
+**Inactive credential**:
+A stored credential the CLI is not signed into. Asked on its own, at a slower
+cadence than the active one, and never refreshed by TokenGauge.
+_Avoid_: spare, secondary, other account
+
+**Plan weight**:
+A plan's nominal multiplier against the provider's smallest plan (Pro 1, Max
+5x 5, Max 20x 20). What the combined header weighs a credential by. Unknown
+for a plan sold as no multiple, which stays out of the total.
+_Avoid_: quota, share, capacity
+
+**Combined header**:
+The `plans` section drawn above a provider's credential groups: each window
+several weighted credentials report, in units of the largest plan. An
+estimate, and labelled as one.
+_Avoid_: total, aggregate, sum
+
 **Snapshot**:
 The single state file every frontend renders from, holding provider payloads,
 errors and costs as of the last fetch.

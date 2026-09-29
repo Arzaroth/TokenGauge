@@ -42,6 +42,13 @@ pub struct ProviderFetchError {
     pub message: String,
     /// Full raw error message for debugging
     pub raw: String,
+    /// The stored credential whose fetch failed, when the failure is
+    /// attributed to one. See [`CredentialInfo::name`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+    /// True when the fetch that failed was the live login's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub active: bool,
 }
 
 impl ProviderFetchError {
@@ -51,6 +58,8 @@ impl ProviderFetchError {
             provider,
             message: clean_error_message(raw_message),
             raw: raw_message.to_string(),
+            credential: None,
+            active: false,
         }
     }
 }
@@ -162,67 +171,61 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
         }
     });
 
+    // The previous snapshot answers twice: an inactive credential asked
+    // recently is carried from it, and a provider that fails is served from it.
+    let previous: std::sync::Arc<Vec<ProviderPayload>> = std::sync::Arc::new(
+        read_cache_full(&config.cache_file)
+            .map(|cached| cached.payloads().to_vec())
+            .unwrap_or_default(),
+    );
+
     // Spawn threads for each provider. Each thread self-delays by its index
     // times `stagger_ms` so provider fetches are spread out (rate-limit relief)
     // without blocking the main spawn loop or the ccusage thread.
     let stagger = Duration::from_millis(config.stagger_ms);
+    let shared = std::sync::Arc::new(config.clone());
     let handles: Vec<_> = enabled
         .into_iter()
         .enumerate()
         .map(|(i, provider)| {
+            let (config, previous) = (shared.clone(), previous.clone());
             thread::spawn(move || {
                 if !stagger.is_zero() && i > 0 {
                     thread::sleep(stagger.saturating_mul(i as u32));
                 }
-                let result = fetch_single_provider(provider, timeout);
-                (provider.to_string(), result)
+                let live = || fetch_single_provider(provider, timeout);
+                match crate::providers::store_reader(provider) {
+                    Some(reader) => crate::credentials::fetch_provider(
+                        provider, reader, &config, &previous, live,
+                    ),
+                    None => settle(provider, live()),
+                }
             })
         })
         .collect();
 
-    // Collect results
     let mut payloads = Vec::new();
     let mut errors = Vec::new();
-
     for handle in handles {
         match handle.join() {
-            Ok((provider_name, Ok(provider_payloads))) => {
-                // Filter out payloads with errors and add successful ones
-                for payload in provider_payloads {
-                    if payload.has_error() {
-                        let msg = payload
-                            .error
-                            .as_ref()
-                            .and_then(|e| e.message.clone())
-                            .unwrap_or_else(|| "Unknown error".to_string());
-                        errors.push(ProviderFetchError::new(provider_name.clone(), &msg));
-                    } else {
-                        payloads.push(payload);
-                    }
-                }
-            }
-            Ok((provider_name, Err(e))) => {
-                // {:#} prints the full anyhow cause chain ("ctx: cause1: cause2");
-                // {} alone drops everything after the topmost context wrap.
-                errors.push(ProviderFetchError::new(provider_name, &format!("{e:#}")));
+            Ok((provider_payloads, provider_errors)) => {
+                payloads.extend(provider_payloads);
+                errors.extend(provider_errors);
             }
             Err(_) => {
                 // Thread panicked - shouldn't happen normally
-                errors.push(ProviderFetchError {
-                    provider: "unknown".to_string(),
-                    message: "thread panicked".to_string(),
-                    raw: "thread panicked".to_string(),
-                });
+                errors.push(ProviderFetchError::new(
+                    "unknown".to_string(),
+                    "thread panicked",
+                ));
             }
         }
     }
 
     // Serve last-good cached data for providers that failed this round, so a
     // transient 429 / network blip surfaces as `stale` instead of a blank bar.
-    if !errors.is_empty()
-        && let Ok(previous) = read_cache_full(&config.cache_file)
-    {
-        apply_stale_fallback(&mut payloads, &mut errors, previous.payloads());
+    if !errors.is_empty() {
+        apply_stale_fallback(&mut payloads, &mut errors, &previous);
     }
 
     let mut report = ccusage_handle.join().unwrap_or_default();
@@ -235,6 +238,40 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
         errors,
         costs: report.costs,
         sync: report.sync,
+    }
+}
+
+/// One provider's fetch split into what answered and what failed. A payload
+/// carrying an error is a failure, whichever way it arrived.
+pub(crate) fn settle(
+    provider: &str,
+    result: Result<Vec<ProviderPayload>>,
+) -> (Vec<ProviderPayload>, Vec<ProviderFetchError>) {
+    match result {
+        Ok(fetched) => {
+            let (failed, answered): (Vec<_>, Vec<_>) =
+                fetched.into_iter().partition(ProviderPayload::has_error);
+            let errors = failed
+                .into_iter()
+                .map(|payload| {
+                    let msg = payload
+                        .error
+                        .and_then(|e| e.message)
+                        .unwrap_or_else(|| "Unknown error".to_string());
+                    ProviderFetchError::new(provider.to_string(), &msg)
+                })
+                .collect();
+            (answered, errors)
+        }
+        // {:#} prints the full anyhow cause chain ("ctx: cause1: cause2");
+        // {} alone drops everything after the topmost context wrap.
+        Err(e) => (
+            Vec::new(),
+            vec![ProviderFetchError::new(
+                provider.to_string(),
+                &format!("{e:#}"),
+            )],
+        ),
     }
 }
 
@@ -273,31 +310,50 @@ fn fold_reported_costs(report: &mut NativeCostReport, payloads: &[ProviderPayloa
     }
 }
 
-/// Replace each failed provider's error with its previous good payload (marked
-/// stale) when the cache still holds one. Providers with no cached fallback
-/// keep their error.
+/// Replace each failed fetch's error with its previous good payload (marked
+/// stale) when the cache still holds one. A failure with no cached fallback
+/// keeps its error.
+///
+/// Per credential, not per provider: an inactive credential that failed is
+/// served from its own last payload even while the live login answered, and
+/// never from another credential's.
 fn apply_stale_fallback(
     payloads: &mut Vec<ProviderPayload>,
     errors: &mut Vec<ProviderFetchError>,
     previous: &[ProviderPayload],
 ) {
     errors.retain(|err| {
-        // A provider can return several payloads (one per account/window); if
-        // one succeeded and another errored, the provider name is in both lists.
-        // A per-name stale clone would then duplicate the live row - and a
-        // second error for the same provider would clone it again. Skip once the
-        // provider already has any payload (live or an earlier stale restore).
-        if payloads
-            .iter()
-            .any(|p| p.provider.eq_ignore_ascii_case(&err.provider))
-        {
+        // An error with no credential stands for the live login, or for a
+        // provider that has no store: whatever was not a stored credential's.
+        let same_slot = |p: &ProviderPayload| {
+            p.provider.eq_ignore_ascii_case(&err.provider)
+                && match &err.credential {
+                    Some(name) => p.credential.name.as_deref() == Some(name.as_str()),
+                    None => p.credential.active != Some(false),
+                }
+        };
+        // A provider can return several payloads; if one succeeded and another
+        // errored, a per-slot stale clone would duplicate the live row - and a
+        // second error for the same slot would clone it again. Skip once the
+        // slot already has any payload (live or an earlier stale restore).
+        if payloads.iter().any(same_slot) {
             return false;
         }
-        // Restore every cached payload for the provider (accounts/windows), not
-        // just the first, so a full outage doesn't drop all but one row.
+        let answered = |p: &ProviderPayload| {
+            p.credential.name.as_ref().is_some_and(|name| {
+                payloads.iter().any(|q| {
+                    q.provider.eq_ignore_ascii_case(&p.provider)
+                        && q.credential.name.as_ref() == Some(name)
+                })
+            })
+        };
+        // Restore every cached payload for the slot, not just the first, so a
+        // full outage doesn't drop all but one row - except a credential this
+        // round already answered for, which a switch can leave in the live
+        // slot of the previous snapshot.
         let cached: Vec<ProviderPayload> = previous
             .iter()
-            .filter(|p| !p.has_error() && p.provider.eq_ignore_ascii_case(&err.provider))
+            .filter(|p| !p.has_error() && same_slot(p) && !answered(p))
             .cloned()
             .collect();
         if cached.is_empty() {
@@ -309,6 +365,9 @@ fn apply_stale_fallback(
                 // of why these figures stopped moving. A cached payload can
                 // already carry an older reason; this round's is the true one.
                 payload.stale_reason = Some(err.message.clone());
+                if payload.credential.active.is_some() {
+                    payload.credential.active = Some(err.active);
+                }
                 payload
             }));
             false // drop the error, we have last-good data
@@ -593,6 +652,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         }
     }
 
@@ -697,9 +757,62 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         fold_reported_costs(&mut report, &[quiet]);
         assert!(report.costs.is_empty());
+    }
+
+    fn credential(name: Option<&str>, active: bool) -> ProviderPayload {
+        let mut payload =
+            ProviderPayload::live("claude", "oauth", UsageSnapshot::at(chrono::Utc::now()));
+        payload.credential.name = name.map(str::to_string);
+        payload.credential.active = Some(active);
+        payload
+    }
+
+    /// An inactive credential that failed is served from its own last payload
+    /// while the live login answered beside it - and never from another's.
+    #[test]
+    fn a_failed_credential_falls_back_to_its_own_last_payload() {
+        let previous = vec![
+            credential(Some("work"), true),
+            credential(Some("perso"), false),
+        ];
+        let mut payloads = vec![credential(Some("work"), true)];
+        let mut failed = ProviderFetchError::new("claude".into(), "rate-limited");
+        failed.credential = Some("perso".into());
+        let mut errors = vec![failed];
+
+        apply_stale_fallback(&mut payloads, &mut errors, &previous);
+
+        assert!(errors.is_empty());
+        assert_eq!(payloads.len(), 2);
+        let perso = &payloads[1];
+        assert_eq!(perso.credential.name.as_deref(), Some("perso"));
+        assert!(perso.stale && perso.credential.active == Some(false));
+        assert_eq!(perso.stale_reason.as_deref(), Some("rate-limited"));
+    }
+
+    /// After a switch, the previous snapshot's live payload belongs to a
+    /// credential this round read as a stored one. Restoring it for a failed
+    /// live login would draw that credential twice.
+    #[test]
+    fn a_failed_live_login_is_not_restored_as_a_credential_already_read() {
+        let previous = vec![credential(Some("work"), true)];
+        let mut payloads = vec![credential(Some("work"), false)];
+        let mut failed = ProviderFetchError::new("claude".into(), "timed out");
+        failed.active = true;
+        let mut errors = vec![failed];
+
+        apply_stale_fallback(&mut payloads, &mut errors, &previous);
+
+        assert_eq!(payloads.len(), 1, "work drawn twice");
+        assert_eq!(
+            errors.len(),
+            1,
+            "the live login's failure has nowhere to go"
+        );
     }
 
     #[test]
@@ -714,6 +827,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let previous = vec![good_claude];
 
@@ -746,6 +860,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let previous = vec![cached];
 
@@ -761,6 +876,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         }];
         let mut errors = vec![
             ProviderFetchError::new("claude".into(), "429"),
@@ -791,6 +907,7 @@ mod tests {
                 credits: None,
                 error: None,
                 stale: false,
+                credential: Default::default(),
             },
             ProviderPayload {
                 stale_reason: None,
@@ -802,6 +919,7 @@ mod tests {
                 credits: None,
                 error: None,
                 stale: false,
+                credential: Default::default(),
             },
         ];
 

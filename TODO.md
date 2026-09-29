@@ -229,6 +229,17 @@ treats as worse than visibly broken.
   survives to say otherwise, and the data cannot tell you which. See
   `docs/history.md` §6.
 
+- **A store change during a fetch can go unnoticed.** `CacheMeta.credentials`
+  is sampled at the write, not from the listing the fetch read, so a credential
+  captured (or a switch made) in the seconds between the two is recorded as
+  covered and shows only at the next `refresh_secs`.
+- **The TUI clips a provider with many credentials.** Its detail pane has no
+  scroll, and three groups plus the `plans` header push the lower sections off
+  a 30-40 row terminal.
+- **The QML harnesses assert nothing about grouped credentials**, and no
+  harness or e2e test drives the Claude `plans` header (the seeded
+  multi-credential provider is Codex, which has no weights).
+
 ## Chrome inconsistencies
 
 Small, cheap, and the kind of thing that makes the set of frontends feel like

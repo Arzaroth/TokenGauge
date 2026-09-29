@@ -364,7 +364,7 @@ pub(crate) fn format_panel_section(section: &Section) -> Vec<String> {
     std::iter::once(String::new())
         .chain(std::iter::once(format!(
             "  <span foreground=\"{dim}\">{}</span>",
-            pango_escape(section.title)
+            pango_escape(&section.title)
         )))
         .chain(lines)
         .collect()
@@ -608,6 +608,11 @@ pub(crate) mod tests {
             extra_windows: Vec::new(),
             cost: None,
             stale: false,
+            credential: None,
+            credentials: Vec::new(),
+            session_resets_at: None,
+            weekly_resets_at: None,
+            tertiary_resets_at: None,
         }
     }
 
@@ -638,6 +643,8 @@ pub(crate) mod tests {
             provider: hostile.to_string(),
             message: "quota < 0 & rising".to_string(),
             raw: String::new(),
+            credential: None,
+            active: false,
         });
         assert!(card.contains("quota &lt; 0 &amp; rising"), "{card}");
         assert!(card.contains("A &amp; B &lt;span"), "{card}");
@@ -686,6 +693,8 @@ pub(crate) mod tests {
             provider: "Claude".to_string(),
             message: "not signed in".to_string(),
             raw: String::new(),
+            credential: None,
+            active: false,
         });
         assert!(
             card.starts_with("<tt>") && card.ends_with("</tt>"),

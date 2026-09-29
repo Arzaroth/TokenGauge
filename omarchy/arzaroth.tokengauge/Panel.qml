@@ -43,8 +43,14 @@ Panel {
   // this file decides how a section looks and never what is in one.
   readonly property var sections: provider && Array.isArray(provider.panel) ? provider.panel : []
   readonly property var headline: {
+    // Several credentials and none of them active: the core leaves the row's
+    // own figures empty, and the headline must not borrow another plan's.
+    var grouped = false
+    for (var g = 0; g < sections.length; g++)
+      if (sections[g].group) grouped = true
+    if (grouped && provider && provider.session_used == null && provider.weekly_used == null) return null
     for (var i = 0; i < sections.length; i++)
-      if (sections[i].id === "limits" && sections[i].rows.length > 0) return sections[i].rows[0]
+      if (sections[i].id === "limits" && sections[i].kind === "meters" && sections[i].rows.length > 0) return sections[i].rows[0]
     return null
   }
   readonly property bool alarming: !!headline && (Number(headline.fraction) || 0) >= 0.9

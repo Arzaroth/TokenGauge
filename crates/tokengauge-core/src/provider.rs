@@ -190,6 +190,7 @@ impl ProviderPayload {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         }
     }
 }

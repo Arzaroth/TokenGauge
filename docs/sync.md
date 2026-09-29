@@ -291,8 +291,12 @@ TUI, and reached from anywhere.
 ### Status is content, so it has no per-frontend cost
 
 Cost and token sections show fleet totals for the providers that sync,
-**session cost and burn rate included**: the 5h window is account-scoped, so a
-session figure counting one machine answers a question nobody asked. Merging
+**session cost and burn rate included**: the 5h window is the active
+credential's (ADR 0003), the same on every machine signed into it, so a session
+figure counting one machine answers a question nobody asked. A fleet whose
+machines are signed into different credentials of one provider is the case
+this gets wrong: the merged figure counts every machine against this machine's
+window, and transcripts carry no credential to split it by. Merging
 them from hour buckets costs at most one partial hour at the window edge, which
 is less than the error already accepted from a peer polling every ten minutes.
 

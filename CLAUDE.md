@@ -40,8 +40,9 @@ frontend implements exactly three primitives and loops:
 | `Rows` | label, value, tinted `badge`, dim `suffix` on one line, no bar. The cost figures. |
 
 Canonical sections, in order (`panel::SECTION_IDS`), each dropped when it has no
-data: `status`, `limits`, `cost`, `tokens_by_day`, `tokens_by_model`,
-`tokens_by_device`. `status` is how a stale row says why - the fetch error that
+data: `status`, `plans`, `limits`, `cost`, `tokens_by_day`, `tokens_by_model`,
+`tokens_by_device`. `plans` and a repeated `limits` exist only for a provider
+with several credentials (see below). `status` is how a stale row says why - the fetch error that
 `apply_stale_fallback` drops rides on the payload as `stale_reason` and is
 rendered as a section rather than as a per-frontend badge, because a `stale`
 chip on its own is the same word whether the network blipped once or a
@@ -142,7 +143,10 @@ holds the only record of past days' tokens and costs.
 stale when it is missing, older than `refresh_secs`, **or** was written before a
 provider that is enabled now was switched on - `CacheMeta.providers` records the
 set each fetch ran with - **or** a window it reported has reset since it was
-written, because those percentages describe a window that no longer exists. Age
+written, because those percentages describe a window that no longer exists -
+**or** the credential store changed under it (a credential added, removed or
+renamed against `CacheMeta.credentials`, or a switch in remuda's
+`.last-switch.json` after the write). Age
 alone was the old rule, and it is why enabling a provider used to do nothing for
 ten minutes. The rollover test compares against the write, not against now
 alone: a provider reporting an instant already past reports the same one on the
@@ -220,6 +224,48 @@ The keychain / Credential Manager path is `cfg(any(windows, target_os =
 macOS CI jobs - treat that path the way the tray crate is treated: build it on
 the platform that has it, or it is unverified. CI compiles the macOS half; no
 test reads a real keychain.
+
+## A provider holds several credentials, and TokenGauge only reads them
+
+ADR 0003 is the design and, in its last section, the contract with
+[remuda](https://github.com/Arzaroth/remuda), which keeps every captured Claude
+and Codex login under `[credentials] store` and reads TokenGauge's snapshot
+back. `credentials.rs` reads the store; `providers.rs` gives Claude and Codex a
+`StoreReader`; `fetch_all_providers` asks the live login as before and every
+other stored credential beside it, tagging each payload with `credential`,
+`active`, `credentialState`, `credentialLabel` and `planWeight`.
+`payload::tests::the_credential_keys_remuda_reads_are_spelled_as_the_adr_says`
+pins those names: renaming one is a change to the ADR and to remuda.
+
+Rules that are easy to regress:
+
+- **Nothing here writes, moves or refreshes a stored credential.** A refresh
+  token rotates on use; remuda owns the inactive ones and the CLI owns the
+  active one. A stored credential whose token expired is the `expired` state,
+  not a fetch error and not a reason to refresh.
+- **The live login is found the way remuda finds it** - refresh token, then
+  access token, then the identity - and an identity counts only when it
+  describes the token actually sent: `.claude.json`'s `accountUuid` never for
+  `TOKENGAUGE_CLAUDE_OAUTH_TOKEN`, the Codex seat claim never a PAT's
+  workspace. `.claude.json` sits beside `~/.claude`, not in it.
+- **A sidecar is trusted only when `credsDigest` matches the bytes that were
+  read, and those bytes are the ones parsed.** Read the file once.
+- **Every test config turns the store off** (`CredentialsConfig::off()`, or
+  `[credentials] store = ""` in the e2e and fixture configs). The default is
+  the developer's own store, and a test reading it depends on their logins -
+  and, through `cache_is_stale`, makes the e2e binary fetch.
+- **A provider is still one row.** `payload_to_rows_with_costs` groups the
+  tagged payloads; the top level is the active credential's, so the bar text,
+  refresh hint and notifications follow the plan in use, and the per-credential
+  rows sit under `credentials`. `panel_spec` draws the `plans` header and one
+  `limits` section per credential, told apart by `Section.group`. There is no
+  new `SectionKind`: a group title carries its markers, and every frontend
+  draws the result as it is.
+- **Session cost and threshold notifications skip `active: false`.** One
+  figure per provider, and it follows the plan being spent from.
+- **The combined header weighs by nominal plan multiplier** (`plan_weight` in
+  `claude.rs`; Codex has no table and so no header). A plan with no known
+  weight is out of the total and says so, rather than guessed at 1x.
 
 ## Costs are read, not shelled out for
 

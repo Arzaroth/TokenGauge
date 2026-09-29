@@ -273,7 +273,7 @@ pub(crate) fn check_and_notify(
     let thresholds = &config.notifications.thresholds;
 
     for payload in payloads {
-        if payload.has_error() {
+        if !notifies(payload) {
             continue;
         }
         let Some(usage) = &payload.usage else {
@@ -294,7 +294,7 @@ pub(crate) fn check_and_notify(
                 continue;
             };
             let source = payload.source.as_deref().unwrap_or_default();
-            let key = format!("{}:{}:{}", payload.provider.to_lowercase(), source, slot);
+            let key = notify_key(payload, source, slot);
             let entry = state.entries.entry(key).or_default();
             let resets_at = window.resets_at.as_deref();
             let (to_fire, new_notified) = thresholds_to_fire(
@@ -316,6 +316,25 @@ pub(crate) fn check_and_notify(
     }
 
     let _ = write_notify_state(&path, &state);
+}
+
+/// Whether a payload's windows may notify. A notification names the provider
+/// and the window, so an inactive credential's would fire in the active one's
+/// name: only the plan in use notifies.
+fn notifies(payload: &ProviderPayload) -> bool {
+    !payload.has_error() && payload.credential.active != Some(false)
+}
+
+/// Which notify-state entry a window's thresholds live in. Per credential, so
+/// switching plans neither replays thresholds a window already fired nor
+/// swallows the ones the new plan has not.
+fn notify_key(payload: &ProviderPayload, source: &str, slot: &str) -> String {
+    let mut key = format!("{}:{}:{}", payload.provider.to_lowercase(), source, slot);
+    if let Some(name) = &payload.credential.name {
+        key.push(':');
+        key.push_str(name);
+    }
+    key
 }
 
 pub(crate) fn fire_notification(provider: &str, window: &str, pct: u8, threshold: u8, reset: &str) {
@@ -447,7 +466,7 @@ pub(crate) fn fetch_and_write(config: &TokenGaugeConfig, wipe_snapshot: bool) ->
         &result.payloads,
         &result.errors,
         &result.costs,
-        &config.providers,
+        config,
         Some(&result.sync),
     ) {
         dlog("cache", &format!("write failed: {e}"));
@@ -472,6 +491,27 @@ pub(crate) fn maybe_refresh(config: &TokenGaugeConfig) -> Result<RefreshSnapshot
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_the_plan_in_use_notifies_and_each_plan_keeps_its_own_thresholds() {
+        let mut payload: ProviderPayload =
+            serde_json::from_str(r#"{"provider":"claude","source":"oauth"}"#).unwrap();
+        assert!(notifies(&payload));
+        assert_eq!(
+            notify_key(&payload, "oauth", "weekly"),
+            "claude:oauth:weekly"
+        );
+        payload.credential.name = Some("work".into());
+        payload.credential.active = Some(true);
+        assert!(notifies(&payload));
+        assert_eq!(
+            notify_key(&payload, "oauth", "weekly"),
+            "claude:oauth:weekly:work"
+        );
+        payload.credential.active = Some(false);
+        assert!(!notifies(&payload));
+    }
+
     use super::*;
     use crate::render::tests::sample_row;
 

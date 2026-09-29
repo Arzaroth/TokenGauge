@@ -199,6 +199,11 @@ pub fn doctor_lines(
         }
     }
 
+    section("Credential store");
+    for check in crate::credentials::doctor_checks(&cfg, chrono::Utc::now()) {
+        record(check);
+    }
+
     // Unknown / removed config keys
     let unknown = cfg.unknown_config_keys();
     if !unknown.is_empty() {
@@ -692,7 +697,7 @@ mod tests {
                 // `ccusage_enabled = false` keeps the cost section from
                 // writing its price table beside the bogus path, which would
                 // create the directory this test is about not creating.
-                "refresh_secs = 600\nccusage_enabled = false\ncache_file = \"{rel}/usage.json\"\n[providers]\n"
+                "refresh_secs = 600\nccusage_enabled = false\ncache_file = \"{rel}/usage.json\"\n[credentials]\nstore = \"\"\n[providers]\n"
             ),
         )
         .expect("write");
@@ -737,7 +742,7 @@ mod tests {
                 // invalid escapes that fail the parse - which would silently
                 // fall back to the default config (providers enabled) and break
                 // this test's premise that the Credentials section is empty.
-                "refresh_secs = 600\nccusage_enabled = false\ncache_file = '{}'\n[providers]\n",
+                "refresh_secs = 600\nccusage_enabled = false\ncache_file = '{}'\n[credentials]\nstore = \"\"\n[providers]\n",
                 dir.join("usage.json").display()
             ),
         )
@@ -782,7 +787,7 @@ mod tests {
         std::fs::write(
             &path,
             format!(
-                "refresh_secs = 600\nccusage_enabled = false\ncache_file = '{}'\n[providers]\n",
+                "refresh_secs = 600\nccusage_enabled = false\ncache_file = '{}'\n[credentials]\nstore = \"\"\n[providers]\n",
                 dir.join("usage.json").display()
             ),
         )
@@ -890,7 +895,7 @@ mod tests {
         std::fs::write(
             &path,
             format!(
-                "refresh_secs = 600\nccusage_enabled = false\ncodexbar_bin = \"codexbar\"\ncache_file = '{}'\n[providers]\n",
+                "refresh_secs = 600\nccusage_enabled = false\ncodexbar_bin = \"codexbar\"\ncache_file = '{}'\n[credentials]\nstore = \"\"\n[providers]\n",
                 dir.join("usage.json").display()
             ),
         )

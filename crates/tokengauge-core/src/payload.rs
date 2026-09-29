@@ -159,6 +159,77 @@ pub struct ProviderPayload {
     /// Spend the provider reported about itself. See [`ReportedCost`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reported_cost: Option<ReportedCost>,
+    /// Which credential this payload belongs to. Flattened, so its keys sit
+    /// beside the others: remuda reads them by these names (ADR 0003).
+    #[serde(flatten)]
+    pub credential: CredentialInfo,
+}
+
+/// A payload's place among its provider's credentials.
+///
+/// Every key is optional on the wire. A provider without a credential store
+/// writes none of them, and a snapshot from before they existed reads as
+/// exactly that.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct CredentialInfo {
+    /// The store name, `<name>` in `<store>/<provider>/<name>.json`. `None`
+    /// for a live login no stored credential matches.
+    #[serde(
+        rename = "credential",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub name: Option<String>,
+    /// `Some(true)` for the payload fetched with the CLI's live login,
+    /// `Some(false)` for one fetched with a stored credential, `None` for a
+    /// provider that has no store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
+    /// Why no usage was fetched for a stored credential. `None` when it was.
+    #[serde(
+        rename = "credentialState",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub state: Option<CredentialState>,
+    /// The sidecar's `label`, when it has one and its digest matches.
+    #[serde(
+        rename = "credentialLabel",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub label: Option<String>,
+    /// The plan's nominal multiplier against the provider's smallest plan,
+    /// when one is known. What the combined header weighs a credential by.
+    #[serde(
+        rename = "planWeight",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub plan_weight: Option<u32>,
+    /// A short digest of the credential's account, so a carried payload is
+    /// never served under a name that now holds another account. TokenGauge's
+    /// own: no reader needs it.
+    #[serde(
+        rename = "accountDigest",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub account_digest: Option<String>,
+}
+
+/// A stored credential that was not asked about, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialState {
+    /// Its access token has expired. The switcher refreshes it, not a login.
+    Expired,
+    /// Its sidecar was written for other tokens, so whose they are is unknown
+    /// until the switcher re-identifies them.
+    Unverified,
+    /// A state from a newer build: one this build cannot draw, not a failure.
+    #[serde(other)]
+    Other,
 }
 
 /// Spend a provider reports about itself, in USD.
@@ -249,6 +320,7 @@ impl Default for TokenGaugeConfig {
             theme: ThemeConfig::default(),
             update: UpdateConfig::default(),
             sync: SyncConfig::default(),
+            credentials: CredentialsConfig::default(),
             unknown: HashMap::new(),
         }
     }
@@ -455,6 +527,7 @@ mod tests {
                 kind: None,
             }),
             stale: false,
+            credential: Default::default(),
         };
         assert!(payload.has_error());
     }
@@ -471,6 +544,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         assert!(!payload.has_error());
     }
@@ -511,6 +585,64 @@ mod tests {
         let primary = usage.primary.as_ref().unwrap();
         assert_eq!(primary.used_percent, Some(19));
         assert_eq!(primary.window_minutes, Some(300));
+    }
+
+    /// remuda reads these keys by name (ADR 0003's snapshot contract). A
+    /// rename here is a break there, and nothing on this side would notice.
+    #[test]
+    fn the_credential_keys_remuda_reads_are_spelled_as_the_adr_says() {
+        let mut payload =
+            ProviderPayload::live("claude", "store", UsageSnapshot::at(chrono::Utc::now()));
+        payload.credential = CredentialInfo {
+            name: Some("work".into()),
+            active: Some(false),
+            state: Some(CredentialState::Expired),
+            label: Some("Acme".into()),
+            plan_weight: Some(20),
+            account_digest: None,
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["credential"], "work");
+        assert_eq!(json["active"], false);
+        assert_eq!(json["credentialState"], "expired");
+        assert_eq!(json["credentialLabel"], "Acme");
+        assert_eq!(json["planWeight"], 20);
+        let back: ProviderPayload = serde_json::from_value(json).unwrap();
+        assert_eq!(back.credential, payload.credential);
+
+        let mut error = crate::ProviderFetchError::new("claude".into(), "boom");
+        error.credential = Some("work".into());
+        error.active = true;
+        let json = serde_json::to_value(&error).unwrap();
+        assert_eq!(json["credential"], "work");
+        assert_eq!(json["active"], true);
+
+        // A provider with no store writes none of them, and a state from a
+        // newer build reads rather than failing the snapshot.
+        let plain = serde_json::to_value(ProviderPayload::live(
+            "glm",
+            "z.ai",
+            UsageSnapshot::at(chrono::Utc::now()),
+        ))
+        .unwrap();
+        for key in [
+            "credential",
+            "active",
+            "credentialState",
+            "credentialLabel",
+            "planWeight",
+        ] {
+            assert!(
+                plain.get(key).is_none(),
+                "{key} written for a provider with no store"
+            );
+        }
+        let newer: ProviderPayload =
+            serde_json::from_str(r#"{"provider":"claude","credentialState":"revoked"}"#).unwrap();
+        assert_eq!(newer.credential.state, Some(CredentialState::Other));
+        let plain_error =
+            serde_json::to_value(crate::ProviderFetchError::new("glm".into(), "x")).unwrap();
+        assert!(plain_error.get("credential").is_none() && plain_error.get("active").is_none());
     }
 
     #[test]

@@ -130,6 +130,32 @@ test('the panel it draws is the panel the core resolved', () => {
         assert.ok(costLabels.includes(row.label), `${row.label} is not drawn`);
 });
 
+test('a provider with several credentials draws a group each, as the core titled them', () => {
+    const {indicator} = enabled();
+    answer();
+    indicator._onScroll(new Clutter.Event({scroll: Clutter.ScrollDirection.DOWN}));
+    const codex = panel.rows[1];
+    assert.equal(indicator._selectedProviderId, codex.provider);
+    const box = open(indicator);
+
+    const titles = Harness.byStyle(box, 'tokengauge-section-title').map(l => l.text);
+    const expected = codex.panel.map(s => s.title);
+    assert.ok(
+        codex.panel.filter(s => s.id === 'limits').length > 1,
+        'the fixture no longer carries a provider with several credentials',
+    );
+    assert.deepEqual(titles.slice(0, expected.length), expected);
+    // Every group that was asked draws its meters; the expired one draws the
+    // line saying why it was not.
+    const meters = codex.panel.filter(s => s.kind === 'meters').flatMap(s => s.rows);
+    assert.equal(Harness.byStyle(box, 'tokengauge-meter').length, meters.length);
+    const expired = codex.panel.find(s => s.kind === 'rows' && s.id === 'limits');
+    assert.ok(
+        Harness.byStyle(box, 'tokengauge-cost-label').some(l => l.text === expired.rows[0].label),
+        'the expired credential says so',
+    );
+});
+
 test('a meter fill is painted rather than merely laid out', () => {
     const {indicator} = enabled();
     answer();

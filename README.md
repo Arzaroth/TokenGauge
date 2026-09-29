@@ -18,6 +18,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **KDE Plasma 6 applet**: native panel widget (QML plasmoid) - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
 - **Native cost tracking**: today, month, 7-day rolling, per-model split, burn rate $/hr anchored to the provider's real session window, 7-day chart, today's spend vs the average of the prior days
 - **Multi-provider**: Claude, Codex, Kimi, Grok, GLM (z.ai), OpenRouter, opencode Go, and Cursor
+- **Several plans at one vendor**: with [remuda](https://github.com/Arzaroth/remuda) keeping your Claude and Codex logins, every one of them gets its own limits in the panel, the active one first, and Claude's plans are added up by their multiplier. See [Several plans per provider](#several-plans-per-provider).
 - **GNOME Shell extension**: panel indicator for GNOME 45+ mirroring the Plasma applet - brand icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and pin-to-bar, plus an Adwaita preferences window for the provider toggles. Shares the same config, cache, and daemon as the Waybar module.
 - **Pace tracking**: every usage window - including Claude's model-scoped weeklies like `Fable only` - projects where it lands at reset from the current burn rate (`ends ~16%`, or `empty in 2h 15m` when it runs out first), shown next to each reset on every frontend (hidden until 3% of the window has elapsed)
 - **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary
@@ -117,6 +118,8 @@ Edit `~/.config/tokengauge/config.toml`:
 | `waybar.tui_command` | Override TUI launcher (empty = auto-detect) | unset |
 | `notifications.enabled` | Send desktop notifications | `true` |
 | `notifications.thresholds` | Percent thresholds to fire on | `[50, 80, 95]` |
+| `credentials.store` | remuda's credential store, read to show every stored Claude and Codex login. Empty turns it off | `~/.local/share/remuda/credentials` (`%LOCALAPPDATA%\remuda\credentials` on Windows) |
+| `credentials.inactive_refresh_secs` | How long a credential the CLI is not signed into is carried before it is asked again | `1800` |
 | `update.check` | Daemon checks GitHub releases and notifies when a newer version exists | `true` |
 | `update.check_interval_secs` | Seconds between daemon update checks | `21600` |
 
@@ -299,6 +302,37 @@ The COST section also carries a **Sync** row that leads with problems: a
 transport that is down, an object it could not use, a fleet gone stale.
 Configured-but-not-working under-reports silently, and a total that is quietly
 too low is worse than one that is visibly missing.
+
+## Several plans per provider
+
+If you hold more than one plan at a vendor - a work Max 20x and a personal
+Pro, say - and switch between them with
+[remuda](https://github.com/Arzaroth/remuda), TokenGauge shows all of them. It
+reads remuda's credential store (`[credentials] store`, which defaults to where
+remuda keeps it) and never writes it: switching, signing in and keeping the
+stored tokens alive are remuda's job.
+
+The provider stays one tab. Its panel gets one group of limits per credential,
+titled with the store name, remuda's label and the plan, the active one first
+and marked; the bar keeps showing the plan the CLI is signed into. For Claude,
+an **ALL PLANS** header above them adds the plans up by their multiplier, in
+units of the largest: a Max 20x and a Pro both spent read `105% of 105%`, a Max
+20x at 50% beside a Max 5x at 100% reads `75% of 125%`, and the bar fills to
+the pooled share. The multipliers are the nominal ones the plans are sold with,
+so the header says `estimate`. A plan with no known multiplier (Enterprise) is
+left out of it and marked `not in total`.
+
+The CLI's own login is asked on every refresh. A credential it is not signed
+into is asked every `inactive_refresh_secs` (30 minutes, remuda's own refresh
+period) or as soon as one of its windows resets. A stored credential whose
+token has expired shows as expired rather than as an error: remuda's timer
+refreshes it. Adding a credential or switching with `remuda use` refreshes the
+panel straight away.
+
+`tokengauge --doctor` checks every stored credential without asking anyone.
+On Linux and macOS the store, its provider directories and its sidecars have
+to be yours and not writable by anyone else, as remuda leaves them; a
+credential file with any group or other permission bit is skipped.
 
 ## CSS tier classes (waybar theming)
 

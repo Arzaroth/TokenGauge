@@ -48,6 +48,23 @@ pub struct ProviderRow {
     /// What that failed fetch said. [`crate::panel`] turns it into the status
     /// section; a frontend never formats it itself.
     pub stale_reason: Option<String>,
+    /// Which credential this row's figures belong to, for a provider whose
+    /// credentials a switcher stores. `None` for every other provider.
+    #[serde(skip)]
+    pub credential: Option<CredentialInfo>,
+    /// One row per credential when the provider has more than one, the active
+    /// one first. Empty otherwise. The row itself is then the active
+    /// credential's, so the bar text follows the plan in use.
+    #[serde(skip)]
+    pub credentials: Vec<ProviderRow>,
+    /// The instants the three windows reset at, for the combined header's
+    /// earliest reset. The formatted countdowns above are for reading.
+    #[serde(skip)]
+    pub session_resets_at: Option<String>,
+    #[serde(skip)]
+    pub weekly_resets_at: Option<String>,
+    #[serde(skip)]
+    pub tertiary_resets_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,22 +76,101 @@ pub struct ExtraWindowRow {
     pub pace: Option<UsagePace>,
     /// See [`ExtraRateWindow::placeholder`].
     pub placeholder: bool,
+    /// See [`ProviderRow::session_resets_at`].
+    #[serde(skip)]
+    pub resets_at: Option<String>,
 }
 
+/// One row per provider, whatever its credentials.
+///
+/// A provider whose payloads name their credentials is one row: the selected
+/// tab stays a provider, and the credentials live inside its panel. That row
+/// is the active credential's, with every credential's own row under
+/// [`ProviderRow::credentials`] and the provider's cost attached once, to the
+/// top. Payloads that name no credential stay a row each, as they always were.
 pub fn payload_to_rows_with_costs(
     payloads: Vec<ProviderPayload>,
     costs: &HashMap<String, CostInfo>,
 ) -> Vec<ProviderRow> {
-    payloads
+    let mut groups: Vec<(Option<String>, Vec<ProviderRow>)> = Vec::new();
+    for payload in payloads.into_iter().filter(|p| !p.has_error()) {
+        let key = payload
+            .credential
+            .active
+            .is_some()
+            .then(|| payload.provider.to_lowercase());
+        let cost = lookup_cost(&payload.provider, costs);
+        let mut row = provider_to_row(payload);
+        row.cost = cost;
+        match groups.iter_mut().find(|(k, _)| key.is_some() && *k == key) {
+            Some((_, rows)) => rows.push(row),
+            None => groups.push((key, vec![row])),
+        }
+    }
+    groups
         .into_iter()
-        .filter(|payload| !payload.has_error())
-        .map(|payload| {
-            let cost = lookup_cost(&payload.provider, costs);
-            let mut row = provider_to_row(payload);
-            row.cost = cost;
-            row
+        .map(|(key, mut rows)| {
+            let active =
+                |r: &ProviderRow| r.credential.as_ref().and_then(|c| c.active) == Some(true);
+            let plain = |r: &ProviderRow| {
+                key.is_none()
+                    || (active(r) && r.credential.as_ref().is_some_and(|c| c.state.is_none()))
+            };
+            if rows.len() == 1 && plain(&rows[0]) {
+                return rows.remove(0);
+            }
+            // Active first, then store order: a payload restored after a failed
+            // fetch arrives last, and the groups must not reorder when one does.
+            rows.sort_by_key(|r| {
+                (
+                    !active(r),
+                    r.credential.as_ref().and_then(|c| c.name.clone()),
+                )
+            });
+            // With no active credential the top level is nobody's: another
+            // plan's figures in the bar would read as the plan in use.
+            let mut head = if active(&rows[0]) {
+                rows[0].clone()
+            } else {
+                vacant(&rows[0])
+            };
+            head.cost = rows[0].cost.clone();
+            for row in &mut rows {
+                row.cost = None;
+            }
+            head.credentials = rows;
+            head
         })
         .collect()
+}
+
+/// A provider row with no figures of its own, for a provider whose credentials
+/// answered but whose live login did not.
+fn vacant(row: &ProviderRow) -> ProviderRow {
+    ProviderRow {
+        session_used: None,
+        session_window_minutes: None,
+        session_reset: "—".into(),
+        session_pace: None,
+        weekly_used: None,
+        weekly_window_minutes: None,
+        weekly_reset: "—".into(),
+        weekly_pace: None,
+        tertiary_used: None,
+        tertiary_reset: "—".into(),
+        credits: None,
+        credit_limit: None,
+        plan_label: None,
+        extra_windows: Vec::new(),
+        stale: false,
+        stale_reason: None,
+        credential: None,
+        credentials: Vec::new(),
+        session_resets_at: None,
+        weekly_resets_at: None,
+        tertiary_resets_at: None,
+        ..row.clone()
+    }
 }
 
 fn lookup_cost(provider: &str, costs: &HashMap<String, CostInfo>) -> Option<CostInfo> {
@@ -185,6 +281,9 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
 
     let mut session_pace = None;
     let mut weekly_pace = None;
+    let mut session_resets_at = None;
+    let mut weekly_resets_at = None;
+    let mut tertiary_resets_at = None;
 
     if let Some(usage) = payload.usage {
         let now = Utc::now();
@@ -213,6 +312,10 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
                 .as_ref()
                 .and_then(|w| window_pace(w, anchor, now));
         }
+
+        session_resets_at = usage.primary.as_ref().and_then(|w| w.resets_at.clone());
+        weekly_resets_at = usage.secondary.as_ref().and_then(|w| w.resets_at.clone());
+        tertiary_resets_at = usage.tertiary.as_ref().and_then(|w| w.resets_at.clone());
 
         let (s_used, s_win, s_reset) = format_window(usage.primary);
         session_used = s_used;
@@ -243,6 +346,7 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
                         .as_ref()
                         .and_then(|window| window_pace(window, anchor, now))
                 });
+                let resets_at = w.window.as_ref().and_then(|w| w.resets_at.clone());
                 let (used, _, reset) = format_window(w.window);
                 Some(ExtraWindowRow {
                     title,
@@ -250,6 +354,7 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
                     reset,
                     pace,
                     placeholder,
+                    resets_at,
                 })
             })
             .collect();
@@ -289,6 +394,15 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
         cost: None,
         stale: payload.stale,
         stale_reason: payload.stale_reason,
+        credential: payload
+            .credential
+            .active
+            .is_some()
+            .then_some(payload.credential),
+        credentials: Vec::new(),
+        session_resets_at,
+        weekly_resets_at,
+        tertiary_resets_at,
     }
 }
 
@@ -476,6 +590,7 @@ mod tests {
             credits: None,
             error: None,
             stale,
+            credential: Default::default(),
         }
     }
 
@@ -543,6 +658,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let bad = ProviderPayload {
             stale_reason: None,
@@ -558,6 +674,7 @@ mod tests {
                 kind: None,
             }),
             stale: false,
+            credential: Default::default(),
         };
         let rows = rows_of(vec![good, bad]);
         assert_eq!(rows.len(), 1);
@@ -579,6 +696,7 @@ mod tests {
             }),
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let rows = rows_of(vec![payload]);
         assert_eq!(rows[0].credits, Some(42.567));
@@ -597,6 +715,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let rows = rows_of(vec![payload1]);
         assert_eq!(rows[0].source, "2.1.12 (oauth)");
@@ -612,6 +731,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let rows = rows_of(vec![payload2]);
         assert_eq!(rows[0].source, "2.1.12");
@@ -627,6 +747,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let rows = rows_of(vec![payload3]);
         assert_eq!(rows[0].source, "oauth");
@@ -642,6 +763,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let rows = rows_of(vec![payload4]);
         assert_eq!(rows[0].source, "—");
@@ -693,5 +815,86 @@ mod tests {
         // And a longer spelling only matches across a separator.
         assert_eq!(lookup_cost("claude-code", &costs).unwrap().today_usd, 1.0);
         assert!(lookup_cost("claudexyz", &costs).is_none());
+    }
+
+    /// The selected tab stays a provider: a provider's credentials are one
+    /// row, whose top level is the active credential's and which carries the
+    /// provider's cost once.
+    #[test]
+    fn a_providers_credentials_are_one_row_led_by_the_active_one() {
+        let tagged = |provider: &str, name: &str, active: bool, used: u8| {
+            let mut p = paced(used, 1, 120, false);
+            p.provider = provider.into();
+            p.credential.name = Some(name.into());
+            p.credential.active = Some(active);
+            p
+        };
+        let mut untagged = paced(5, 1, 120, false);
+        untagged.provider = "glm".into();
+        let mut costs = HashMap::new();
+        costs.insert("claude".to_string(), CostInfo::default());
+
+        let rows = payload_to_rows_with_costs(
+            vec![
+                tagged("claude", "perso", false, 70),
+                tagged("claude", "work", true, 20),
+                untagged,
+                tagged("codex", "only", true, 10),
+            ],
+            &costs,
+        );
+        assert_eq!(rows.len(), 3);
+        let claude = &rows[0];
+        assert_eq!(
+            claude.weekly_used,
+            Some(20),
+            "the bar follows the plan in use"
+        );
+        let names: Vec<_> = claude
+            .credentials
+            .iter()
+            .map(|r| r.credential.as_ref().unwrap().name.clone().unwrap())
+            .collect();
+        assert_eq!(names, ["work", "perso"]);
+        assert!(claude.cost.is_some());
+        assert!(claude.credentials.iter().all(|r| r.cost.is_none()));
+        // One credential draws as it always did.
+        assert!(rows[2].credentials.is_empty());
+        assert!(rows[1].credential.is_none());
+    }
+
+    /// The live login failed and nothing was restored for it: the stored
+    /// credentials still draw, but none of them stands in for the plan in use,
+    /// and a lone expired one still says it is expired.
+    #[test]
+    fn with_no_active_credential_the_bar_is_nobodys() {
+        let stored = |name: &str, used: u8| {
+            let mut p = paced(used, 1, 120, false);
+            p.credential.name = Some(name.into());
+            p.credential.active = Some(false);
+            p
+        };
+        let rows = rows_of(vec![stored("work", 20), stored("perso", 70)]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].weekly_used, None);
+        let names: Vec<_> = rows[0]
+            .credentials
+            .iter()
+            .map(|r| r.credential.as_ref().unwrap().name.clone().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            ["perso", "work"],
+            "store order, whatever order they arrived in"
+        );
+
+        let mut expired = stored("old", 0);
+        expired.credential.state = Some(CredentialState::Expired);
+        let rows = rows_of(vec![expired]);
+        assert_eq!(
+            rows[0].credentials.len(),
+            1,
+            "the state has a group to be drawn in"
+        );
     }
 }

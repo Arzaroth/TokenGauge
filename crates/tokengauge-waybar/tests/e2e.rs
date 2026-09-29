@@ -41,6 +41,8 @@ impl Machine {
             "refresh_secs = 3600\n\
              cache_file = {:?}\n\
              ccusage_enabled = false\n\n\
+             [credentials]\n\
+             store = \"\"\n\n\
              [providers]\n",
             root.join("state/tokengauge-usage.json"),
         );
@@ -239,6 +241,56 @@ fn the_panel_a_frontend_draws_comes_out_of_the_binary() {
     assert_eq!(labels(cost), ["Today", "This month"]);
     assert_eq!(cost["rows"][0]["value"], "$12.50");
     assert_eq!(cost["rows"][0]["suffix"], "384.0K tokens");
+}
+
+/// A provider with several credentials is still one provider: one row, one
+/// tab, and a group per credential in its panel, the active one first. Codex
+/// has no plan weights, so there is no combined header to draw.
+#[test]
+fn several_credentials_are_one_provider_with_a_group_each() {
+    let machine = Machine::with(
+        &[("claude", true), ("codex", true)],
+        Some("codex"),
+        "weekly",
+    );
+    machine.seed();
+    let snapshot = machine.json();
+    assert_eq!(providers_in(&snapshot), ["claude", "codex"]);
+    let codex = row(&snapshot, "codex");
+
+    let groups: Vec<(&str, &str, &str)> = codex["panel"]
+        .as_array()
+        .expect("panel")
+        .iter()
+        .filter(|s| s["id"] == "limits")
+        .map(|s| {
+            (
+                s["group"].as_str().unwrap_or(""),
+                s["title"].as_str().unwrap_or(""),
+                s["kind"].as_str().unwrap_or(""),
+            )
+        })
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            ("work", "work · Acme · chatgpt · active", "meters"),
+            ("old", "old", "rows"),
+            ("perso", "perso · plus", "meters"),
+        ]
+    );
+    assert!(
+        codex["panel"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["id"] != "plans")
+    );
+    // The bar follows the plan in use, not the busiest one beside it.
+    assert_eq!(codex["bar"]["percent"], 44);
+    assert_eq!(codex["bar_tooltip"]["title"], "Codex · work");
+    // Cost is the provider's, once.
+    assert_eq!(section(codex, "cost")["rows"][0]["value"], "$3.25");
 }
 
 /// The bar icon's hover summary can never name a window the panel under it

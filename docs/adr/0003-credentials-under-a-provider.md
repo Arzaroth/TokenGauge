@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # A provider holds several credentials, and TokenGauge only reads them
@@ -19,8 +19,8 @@ alive are all the switcher's job.
   resolves its own store from `$REMUDA_STORE`, else
   `$XDG_DATA_HOME/remuda/credentials`, else
   `~/.local/share/remuda/credentials`. TokenGauge does not repeat that
-  resolution; it reads the path from its own config key (see the open
-  questions for that key's default).
+  resolution; it reads the path from its own config key,
+  `[credentials] store` (see the snapshot contract below for its default).
 - The store holds every captured credential, the active one's stored copy
   included.
 - One directory per provider, one file per credential:
@@ -138,56 +138,151 @@ token is a fetch error, `payload_to_rows_with_costs` filters errored payloads
 out, and `apply_stale_fallback` drops a provider's errors once it has any live
 payload, so this needs a payload state that is expired without being an error.
 
-## Open questions
 
-Left for the implementation to settle, each before the code that depends on it:
+## Decisions
 
-- **A live source with no identity.** `TOKENGAUGE_CLAUDE_OAUTH_TOKEN` and a
-  Codex API key carry none. A Codex personal access token resolves through
-  `whoami` to `chatgpt_account_id`, the workspace, not the seat, so matching it
-  against seat identities would mark every seat in the workspace active.
-  Unmatched, the active plan would be counted twice. On Claude, the token's
-  source and `.claude.json` can also name different identities.
-- **Store entries that do not line up.** A live identity that matches no
-  sidecar (a credential not captured yet), a credential file with no sidecar,
-  two store files with the same `accountId`, and a sidecar whose credential
-  file is gone.
-- **Which window anchors session cost.** `cost::anchor_burn_rates` takes the
-  session window per payload and writes one figure per provider, so with a
-  payload per credential the last one wins. Session cost and burn rate should
-  follow the active credential. `docs/sync.md` still calls the window
-  account-scoped, and changes with this.
-- **Who may refresh the stored copy of the active credential.** The CLI, and
-  Codex's in-place refresh, rotate its refresh token under the live file's
-  lock, not the store's. The contract should forbid the switcher refreshing a
-  credential while it is the active one.
-- **A digest mismatch, rendered.** Whether the credential still shows (with no
-  identity, label or active mark) or is hidden; whether `label`, `email` and
-  `plan` are distrusted with the identity; whether trusting a digest-less
-  sidecar ever ends; and that the digest is computed over the same bytes that
-  are parsed, read once.
-- **The store's security.** Refuse a store or file that is not the user's own
-  and private, as `write_auth` keeps `auth.json` at 0600. No store token
-  reaches the snapshot, `--json`, `--doctor` or `stale_reason`, and `email`
-  stays out of the snapshot, as sync keeps identity detail on the machine.
-- **Cadence and freshness.** `cache_is_stale()` is the single fetch decision
-  and marks the whole snapshot stale when any window resets, so an inactive
-  credential's reset refetches every credential. A slower cadence for inactive
-  credentials needs a place in that decision, and a store change (a credential
-  added, the active one switched) has to make the snapshot stale, which
-  `covers()` cannot see.
-- **The config key's default.** Mirroring remuda's resolution would read
-  `$REMUDA_STORE` and `$XDG_DATA_HOME`, and the daemon and a frontend's
-  in-process fetch inherit different environments, so they could read
-  different stores. The default should not depend on the environment, and
-  Windows and macOS need one of their own.
-- **`--doctor`.** One validated check per stored credential, and a status for
-  a store that is missing, unreadable or empty, under the rule that the
-  Credentials check validates rather than stats.
-- **The panel spec's input.** `panel_spec` and `bar_tooltip` take one
-  `ProviderRow`, and `SECTION_IDS` is fixed, so a combined header needs a
-  grouped input and several `limits` groups need ids. The active and unweighted
-  markers should fit `badge` or `footnote`; a new field or `SectionKind` is a
-  six-frontend change.
-- **Codex weights.** No table exists yet, so a Codex header has no combined
-  figure until one does.
+The questions this record left open, settled before the code that depends on
+each.
+
+- **Who refreshes what.** TokenGauge never refreshes, moves or writes a stored
+  credential. remuda never refreshes the credential that is active: the CLI
+  owns it, and so does TokenGauge's Codex in-place refresh of the *live*
+  `auth.json`, under `auth.json.lock`. remuda's timer refreshes the inactive
+  ones every 30 minutes. A stored credential whose access token has expired is
+  therefore a timer that has not run, and TokenGauge says so rather than
+  fixing it.
+- **Which identity counts.** An identity is used only when it describes the
+  token actually sent. For Claude that is `oauthAccount.accountUuid` in
+  `.claude.json`, and only when the token came from `.credentials.json` or the
+  OS store: `TOKENGAUGE_CLAUDE_OAUTH_TOKEN` carries no identity, and
+  `.claude.json` describes the file's login, not the override's. For Codex it is
+  the seat claim remuda reads (`chatgpt_account_user_id` in the access token,
+  else `<user>__<workspace>` from the id token). A personal access token and an
+  API key have none; `whoami`'s workspace id is never used as one.
+- **Matching the live login** follows remuda's order: a stored credential whose
+  refresh token, then whose access token, equals the live one's; failing that,
+  the verified sidecar whose `accountId` is the live identity. A match makes the
+  live payload that credential's, and the stored copy is not fetched: the live
+  source wins.
+- **A live login that matches nothing** is drawn as its own group, marked
+  active, and every stored credential is fetched. It counts in the combined
+  figure only when it has an identity and no stored credential is unverified;
+  otherwise it may be one of the stored ones, would be counted twice, and is
+  left out and marked so.
+- **Store entries that do not line up.** A credential file with no readable
+  sidecar, or that does not parse, is skipped, as remuda skips it, and
+  `--doctor` names it. Two verified sidecars with the same `accountId` read as
+  one credential: the one the live login matched, else the first by name; the
+  rest are skipped and named by `--doctor`. A sidecar whose credential file is
+  gone is never listed, because listing is by credential file.
+- **A digest mismatch** is drawn as its group in an *unverified* state, with no
+  request made and nothing from its sidecar: no label, no identity, no active
+  mark by identity. If the live login's tokens are that file's tokens, the live
+  payload still takes its name, which is what remuda reports as an unconfirmed
+  active credential. The digest is computed over the bytes read once, and those
+  same bytes are parsed. A sidecar without `credsDigest` stays trusted: remuda
+  trusts it too and replaces it first on its next save of that credential.
+- **Session cost** follows the active credential. `cost::anchor_burn_rates`
+  skips a payload with `active: false`, so an inactive plan's window can no
+  longer be the one that measures the session. Threshold notifications follow
+  it too: they key on provider and window, and would fire for whichever
+  credential was read last.
+- **The store's security.** On Unix the store root and each provider directory
+  must belong to the current user and not be writable by group or others, and a
+  credential file must belong to the user with no group or other permission
+  bits. A directory that fails refuses that whole directory; a file that fails
+  is skipped. Both are named by `--doctor`. Windows has no such check: the
+  default store sits in the user's profile. No token reaches the snapshot,
+  `--json`, `--doctor` or `stale_reason`, and `email` is never read into
+  anything that is written.
+- **Cadence.** The live login is fetched every refresh, as before. An inactive
+  credential is fetched when its last payload is older than
+  `[credentials] inactive_refresh_secs` (default 1800, remuda's refresh period)
+  or a window it reported has reset since; otherwise its last payload is carried
+  into the new snapshot unchanged, with its own `usage.updatedAt`.
+  `cache_is_stale()` stays the single fetch decision and keeps its whole-snapshot
+  rollover rule: a rollover of an inactive window makes the snapshot stale, and
+  the fetch that follows asks that credential again and carries the others.
+- **A store change makes the snapshot stale.** `CacheMeta.credentials` records
+  the store's credential names per provider at the write, and
+  `cache_is_stale()` compares them with the store as it is now, so a credential
+  added, removed or renamed refetches. `<store>/.last-switch.json` is relied on:
+  a provider whose entry is later than the snapshot's write refetches, because
+  its active credential changed. A missing or unreadable file is no signal
+  rather than an error.
+- **The config key's default** does not read the environment:
+  `~/.local/share/remuda/credentials` on Linux and macOS (remuda's own fallback,
+  and not `$XDG_DATA_HOME` or `$REMUDA_STORE`, which the daemon and a frontend's
+  in-process fetch can see differently), and the local application data folder
+  (`%LOCALAPPDATA%\remuda\credentials`, resolved through the known folder, not
+  the variable) on Windows. A user who moved remuda's store sets the key. An
+  empty string turns the store off; a directory that does not exist is no store.
+- **`--doctor`** has a *Credential store* section: one line for the store (a
+  missing store passes, since remuda is optional; a refused or unreadable one
+  fails), and one validated line per stored credential, made offline with the
+  same parse, digest, expiry and scope checks the fetch makes, naming which one
+  is active. Skipped entries are failed lines saying why.
+- **The panel spec's input** is still one `ProviderRow`.
+  `payload_to_rows_with_costs` groups a provider's credential-tagged payloads
+  into one row: the top level is the active credential's, so the bar text, the
+  refresh hint and notifications follow the plan in use, and cost is attached
+  once; `credentials` holds a row per credential, active first, then store
+  order. With more than one, `panel_spec` emits the stale lines of every group
+  in `status`, a `plans` section (the combined header, `Meters`), then one
+  `limits` section per credential. The groups share the id and differ in a new
+  optional `group` field on `Section` (the store name) that no frontend needs to
+  read. `Section.title` becomes a string resolved per group: the name, the
+  label, the plan, and the markers, `active` and `not in total`. An expired or
+  unverified group is a `Rows` section with one line saying which and why. No
+  `SectionKind` is added, so the six frontends draw it as they are.
+- **The combined header** has one meter per window label that at least two
+  weighted credentials report, valued `"<used>% of <capacity>%"` in units of the
+  largest plan, filled to the pooled fraction, and tinted by it. Its reset is
+  the earliest among them: that is when capacity first comes back, and the
+  tooltip lists each credential's own figure and reset. Its badge says
+  `estimate`, because the weights are nominal.
+- **The bar icon's hover** is the active group's windows, then the combined
+  figures, then today's spend.
+- **Codex weights.** No table: Codex plans are not sold as multiples of one
+  another in a way `plan_type` names, so a Codex provider shows its groups and
+  no combined header until one exists.
+- `CACHE_SCHEMA_VERSION` is 2. It is still written and never checked on read.
+
+## The snapshot contract
+
+remuda reads the snapshot TokenGauge writes and relies on exactly this.
+
+Each entry of `payloads[]` gains:
+
+- `credential` (string): the store name, the `<name>` of
+  `<store>/<provider>/<name>.json`. Absent for a provider with no store, when
+  the store is off or empty, and for a live login that matches no stored
+  credential.
+- `active` (bool): present on every `claude` and `codex` payload, `true` on
+  the one fetched with the CLI's live login and `false` on one fetched with a
+  stored credential. Absent for other providers.
+- `credentialState` (string): absent on a payload whose usage was fetched.
+  `"expired"` when a stored credential's access token has expired and no request
+  was made; `"unverified"` when its sidecar's digest does not match its file and
+  no request was made. Either way `usage` carries no windows and `error` is
+  null, so it is a payload rather than an error. A value a reader does not know
+  is a state it cannot draw, not a failure.
+- `credentialLabel` (string): the sidecar's `label`, absent when it has none or
+  is not trusted.
+- `planWeight` (integer): the plan's multiplier relative to Pro, when one is
+  known.
+
+Each entry of the top-level `errors[]` gains `credential` (the store name, when
+the failed fetch is attributed to one) and `active` (`true` when it was the live
+login's fetch, absent otherwise). A payload served from the previous snapshot
+after its fetch failed keeps its `credential` and `active`, with `stale: true`
+and `staleReason`. A carried inactive payload keeps its own `usage.updatedAt`,
+which can be older than `meta.updatedAtMs`.
+
+No payload or error carries a token or an email. The fields remuda already
+reads (`meta.updatedAtMs`, `provider`, `stale`, `staleReason`, the windows,
+`errors[].provider` and `.message`, a bare-array legacy snapshot) are unchanged.
+
+Config: `[credentials] store` (default above) and
+`[credentials] inactive_refresh_secs` (default 1800). TokenGauge relies on
+`<store>/.last-switch.json` as `{"<provider>": <epoch ms of its last switch>}`.

@@ -183,7 +183,7 @@ pub struct SyncNote {
 pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
     let mut out = Vec::new();
 
-    if row.credentials.len() > 1 {
+    if !row.credentials.is_empty() {
         out.extend(credential_sections(&row.credentials));
     } else {
         // First, because it says whether to believe anything under it.
@@ -368,7 +368,9 @@ pub fn bar_tooltip(row: &ProviderRow) -> BarTooltip {
     // With several credentials, the first group is the active one: the plan
     // being spent from is what a glance is for, and the combined figures
     // follow it.
-    let first = sections.iter().find(|s| s.id == "limits");
+    let live =
+        row.credentials.is_empty() || row.credential.as_ref().and_then(|c| c.active) == Some(true);
+    let first = sections.iter().find(|s| s.id == "limits").filter(|_| live);
     if let Some(limits) = first {
         lines.extend(limits.rows.iter().map(|r| line(r, r.tone)));
     }

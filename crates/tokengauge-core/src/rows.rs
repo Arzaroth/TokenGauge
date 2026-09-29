@@ -109,17 +109,32 @@ pub fn payload_to_rows_with_costs(
     }
     groups
         .into_iter()
-        .map(|(_, mut rows)| {
-            if rows.len() == 1 {
+        .map(|(key, mut rows)| {
+            let active =
+                |r: &ProviderRow| r.credential.as_ref().and_then(|c| c.active) == Some(true);
+            let plain = |r: &ProviderRow| {
+                key.is_none()
+                    || (active(r) && r.credential.as_ref().is_some_and(|c| c.state.is_none()))
+            };
+            if rows.len() == 1 && plain(&rows[0]) {
                 return rows.remove(0);
             }
-            let active = rows
-                .iter()
-                .position(|r| r.credential.as_ref().and_then(|c| c.active) == Some(true))
-                .unwrap_or(0);
-            let top = rows.remove(active);
-            rows.insert(0, top);
-            let mut head = rows[0].clone();
+            // Active first, then store order: a payload restored after a failed
+            // fetch arrives last, and the groups must not reorder when one does.
+            rows.sort_by_key(|r| {
+                (
+                    !active(r),
+                    r.credential.as_ref().and_then(|c| c.name.clone()),
+                )
+            });
+            // With no active credential the top level is nobody's: another
+            // plan's figures in the bar would read as the plan in use.
+            let mut head = if active(&rows[0]) {
+                rows[0].clone()
+            } else {
+                vacant(&rows[0])
+            };
+            head.cost = rows[0].cost.clone();
             for row in &mut rows {
                 row.cost = None;
             }
@@ -127,6 +142,35 @@ pub fn payload_to_rows_with_costs(
             head
         })
         .collect()
+}
+
+/// A provider row with no figures of its own, for a provider whose credentials
+/// answered but whose live login did not.
+fn vacant(row: &ProviderRow) -> ProviderRow {
+    ProviderRow {
+        session_used: None,
+        session_window_minutes: None,
+        session_reset: "—".into(),
+        session_pace: None,
+        weekly_used: None,
+        weekly_window_minutes: None,
+        weekly_reset: "—".into(),
+        weekly_pace: None,
+        tertiary_used: None,
+        tertiary_reset: "—".into(),
+        credits: None,
+        credit_limit: None,
+        plan_label: None,
+        extra_windows: Vec::new(),
+        stale: false,
+        stale_reason: None,
+        credential: None,
+        credentials: Vec::new(),
+        session_resets_at: None,
+        weekly_resets_at: None,
+        tertiary_resets_at: None,
+        ..row.clone()
+    }
 }
 
 fn lookup_cost(provider: &str, costs: &HashMap<String, CostInfo>) -> Option<CostInfo> {
@@ -817,5 +861,40 @@ mod tests {
         // One credential draws as it always did.
         assert!(rows[2].credentials.is_empty());
         assert!(rows[1].credential.is_none());
+    }
+
+    /// The live login failed and nothing was restored for it: the stored
+    /// credentials still draw, but none of them stands in for the plan in use,
+    /// and a lone expired one still says it is expired.
+    #[test]
+    fn with_no_active_credential_the_bar_is_nobodys() {
+        let stored = |name: &str, used: u8| {
+            let mut p = paced(used, 1, 120, false);
+            p.credential.name = Some(name.into());
+            p.credential.active = Some(false);
+            p
+        };
+        let rows = rows_of(vec![stored("work", 20), stored("perso", 70)]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].weekly_used, None);
+        let names: Vec<_> = rows[0]
+            .credentials
+            .iter()
+            .map(|r| r.credential.as_ref().unwrap().name.clone().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            ["perso", "work"],
+            "store order, whatever order they arrived in"
+        );
+
+        let mut expired = stored("old", 0);
+        expired.credential.state = Some(CredentialState::Expired);
+        let rows = rows_of(vec![expired]);
+        assert_eq!(
+            rows[0].credentials.len(),
+            1,
+            "the state has a group to be drawn in"
+        );
     }
 }

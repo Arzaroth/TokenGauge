@@ -44,7 +44,7 @@ Panel {
   readonly property var sections: provider && Array.isArray(provider.panel) ? provider.panel : []
   readonly property var headline: {
     for (var i = 0; i < sections.length; i++)
-      if (sections[i].id === "limits" && sections[i].rows.length > 0) return sections[i].rows[0]
+      if (sections[i].id === "limits" && sections[i].kind === "meters" && sections[i].rows.length > 0) return sections[i].rows[0]
     return null
   }
   readonly property bool alarming: !!headline && (Number(headline.fraction) || 0) >= 0.9

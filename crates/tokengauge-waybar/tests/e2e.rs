@@ -275,8 +275,8 @@ fn several_credentials_are_one_provider_with_a_group_each() {
         groups,
         [
             ("work", "work · Acme · chatgpt · active", "meters"),
-            ("perso", "perso · plus", "meters"),
             ("old", "old", "rows"),
+            ("perso", "perso · plus", "meters"),
         ]
     );
     assert!(

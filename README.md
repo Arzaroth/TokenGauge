@@ -330,8 +330,9 @@ refreshes it. Adding a credential or switching with `remuda use` refreshes the
 panel straight away.
 
 `tokengauge --doctor` checks every stored credential without asking anyone.
-On Linux and macOS the store has to be yours and closed to other users, as
-remuda leaves it; a credential file anyone else can read is skipped.
+On Linux and macOS the store, its provider directories and its sidecars have
+to be yours and not writable by anyone else, as remuda leaves them; a
+credential file with any group or other permission bit is skipped.
 
 ## CSS tier classes (waybar theming)
 

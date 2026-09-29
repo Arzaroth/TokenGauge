@@ -207,6 +207,15 @@ pub struct CredentialInfo {
         skip_serializing_if = "Option::is_none"
     )]
     pub plan_weight: Option<u32>,
+    /// A short digest of the credential's account, so a carried payload is
+    /// never served under a name that now holds another account. TokenGauge's
+    /// own: no reader needs it.
+    #[serde(
+        rename = "accountDigest",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub account_digest: Option<String>,
 }
 
 /// A stored credential that was not asked about, and why.
@@ -590,6 +599,7 @@ mod tests {
             state: Some(CredentialState::Expired),
             label: Some("Acme".into()),
             plan_weight: Some(20),
+            account_digest: None,
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["credential"], "work");

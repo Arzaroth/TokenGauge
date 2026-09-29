@@ -268,7 +268,7 @@ fn store_moved(
 /// write, not against now alone: a provider that reports an instant already in
 /// the past reports the same one on the next fetch, and asking again on every
 /// render would never stop.
-fn rolled_over(
+pub(crate) fn rolled_over(
     payloads: &[ProviderPayload],
     written_at: DateTime<Utc>,
     now: DateTime<Utc>,

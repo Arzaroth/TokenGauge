@@ -80,6 +80,14 @@ pub struct StoredCredential {
 }
 
 impl StoredCredential {
+    /// A short digest of the sidecar's identity, for telling whether a name
+    /// still holds the account it did without writing the account down.
+    pub fn account_digest(&self) -> Option<String> {
+        self.account_id
+            .as_deref()
+            .map(|id| hex_sha256(id.as_bytes())[..16].to_string())
+    }
+
     /// Whether the sidecar was written for these tokens.
     pub fn verified(&self) -> bool {
         self.account_id.is_some()
@@ -381,7 +389,13 @@ pub(crate) fn fetch_provider(
         .store_root()
         .map(|store| read_provider(&store, provider))
         .unwrap_or_default();
-    let live = (reader.live)();
+    // No store, no reason to read the live login twice: on macOS each read can
+    // be a keychain prompt.
+    let live = if read.entries.is_empty() {
+        LiveLogin::default()
+    } else {
+        (reader.live)()
+    };
     let resolved = resolve(
         (live != LiveLogin::default()).then_some(&live),
         &read.entries,
@@ -389,26 +403,8 @@ pub(crate) fn fetch_provider(
     );
     let matched = resolved.live.map(|i| &read.entries[i]);
 
-    let (mut payloads, mut errors) = crate::fetch::settle(provider, live_fetch());
-    // A live login that matches nothing may still be one of the stored
-    // credentials read beside it. With no identity to rule that out, or an
-    // unverified entry it could be, it stays out of the combined figure.
-    let may_be_stored = matched.is_none()
-        && !read.entries.is_empty()
-        && (live.account.is_none() || read.entries.iter().any(|e| !e.verified()));
-    for payload in &mut payloads {
-        payload.credential.active = Some(true);
-        payload.credential.name = matched.map(|e| e.name.clone());
-        payload.credential.label = matched.and_then(|e| e.label.clone());
-        if may_be_stored {
-            payload.credential.plan_weight = None;
-        }
-    }
-    for error in &mut errors {
-        error.active = true;
-        error.credential = matched.map(|e| e.name.clone());
-    }
-
+    // The stored credentials are asked while the live login is, so a store of
+    // several costs one request's time rather than two.
     let max_age = i64::try_from(config.credentials.inactive_refresh_secs)
         .ok()
         .and_then(chrono::Duration::try_seconds)
@@ -424,7 +420,7 @@ pub(crate) fn fetch_provider(
             slots.push(Some(stored(payload, entry)));
             continue;
         }
-        if let Some(payload) = carried(provider, &entry.name, previous, now, max_age) {
+        if let Some(payload) = carried(provider, entry, previous, now, max_age) {
             slots.push(Some(stored(payload, entry)));
             continue;
         }
@@ -442,6 +438,28 @@ pub(crate) fn fetch_provider(
         ));
         slots.push(None);
     }
+
+    let (mut payloads, mut errors) = crate::fetch::settle(provider, live_fetch());
+    // A live login that matches nothing may still be one of the stored
+    // credentials read beside it. With no identity to rule that out, or an
+    // unverified entry it could be, it stays out of the combined figure.
+    let may_be_stored = matched.is_none()
+        && !read.entries.is_empty()
+        && (live.account.is_none() || read.entries.iter().any(|e| !e.verified()));
+    for payload in &mut payloads {
+        payload.credential.active = Some(true);
+        payload.credential.name = matched.map(|e| e.name.clone());
+        payload.credential.label = matched.and_then(|e| e.label.clone());
+        payload.credential.account_digest = matched.and_then(StoredCredential::account_digest);
+        if may_be_stored {
+            payload.credential.plan_weight = None;
+        }
+    }
+    for error in &mut errors {
+        error.active = true;
+        error.credential = matched.map(|e| e.name.clone());
+    }
+
     for (slot, i, handle) in asks {
         let entry = &read.entries[i];
         match handle
@@ -450,7 +468,13 @@ pub(crate) fn fetch_provider(
         {
             Ok(payload) => slots[slot] = Some(stored(payload, entry)),
             Err(e) => {
-                let mut error = ProviderFetchError::new(provider.to_string(), &format!("{e:#}"));
+                // Named in the message itself: every frontend already draws an
+                // error as provider and message, and "Claude: 401" beside a
+                // healthy panel reads as the live login failing.
+                let mut error = ProviderFetchError::new(
+                    provider.to_string(),
+                    &format!("{}: {e:#}", entry.name),
+                );
                 error.credential = Some(entry.name.clone());
                 errors.push(error);
             }
@@ -465,22 +489,28 @@ fn stored(mut payload: ProviderPayload, entry: &StoredCredential) -> ProviderPay
     payload.credential.name = Some(entry.name.clone());
     payload.credential.active = Some(false);
     payload.credential.label = entry.label.clone();
+    payload.credential.account_digest = entry.account_digest();
     payload
 }
 
 /// The last payload a stored credential produced, when it is still worth
 /// serving: asked within `max_age`, a live answer rather than a fallback, and
 /// with no window that has reset since it was asked.
+///
+/// And only while the name still holds the same account: a name re-captured
+/// for another account would otherwise carry the old one's figures.
 fn carried(
     provider: &str,
-    name: &str,
+    entry: &StoredCredential,
     previous: &[ProviderPayload],
     now: DateTime<Utc>,
     max_age: chrono::Duration,
 ) -> Option<ProviderPayload> {
     let payload = previous.iter().find(|p| {
         p.provider.eq_ignore_ascii_case(provider)
-            && p.credential.name.as_deref() == Some(name)
+            && p.credential.name.as_deref() == Some(entry.name.as_str())
+            && p.credential.account_digest.is_some()
+            && p.credential.account_digest == entry.account_digest()
             && !p.stale
             && !p.has_error()
             && p.credential.state.is_none()
@@ -492,20 +522,7 @@ fn carried(
     if now - asked >= max_age || asked > now {
         return None;
     }
-    let reset_since = [&usage.primary, &usage.secondary, &usage.tertiary]
-        .into_iter()
-        .flatten()
-        .chain(
-            usage
-                .extra_rate_windows
-                .iter()
-                .filter_map(|e| e.window.as_ref()),
-        )
-        .filter_map(|w| DateTime::parse_from_rfc3339(w.resets_at.as_deref()?).ok())
-        .any(|reset| {
-            let reset = reset.with_timezone(&Utc);
-            reset > asked && reset <= now
-        });
+    let reset_since = crate::snapshot::rolled_over(std::slice::from_ref(payload), asked, now);
     (!reset_since).then(|| payload.clone())
 }
 
@@ -1045,6 +1062,11 @@ pub(crate) mod tests {
         // A failure is an error attributed to its credential, not a payload.
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].credential.as_deref(), Some("broken"));
+        assert!(
+            errors[0].message.starts_with("broken: "),
+            "{}",
+            errors[0].message
+        );
         assert!(!errors[0].active);
         // Store order after the live login, whatever order the threads end in.
         let order: Vec<_> = payloads
@@ -1077,10 +1099,17 @@ pub(crate) mod tests {
         );
         recent.credential.name = Some("perso".into());
         recent.credential.active = Some(false);
+        recent.credential.account_digest = Some(hex_sha256(b"u-perso")[..16].to_string());
 
         let (payloads, _) =
             fetch_provider("claude", &FAKE, &config, &[recent.clone()], live_payload);
         assert_eq!(named(&payloads, "perso").source.as_deref(), Some("carried"));
+
+        // The same name, re-captured for another account, is asked afresh.
+        let mut other = recent.clone();
+        other.credential.account_digest = Some(hex_sha256(b"u-someone-else")[..16].to_string());
+        let (payloads, _) = fetch_provider("claude", &FAKE, &config, &[other], live_payload);
+        assert_eq!(named(&payloads, "perso").source.as_deref(), Some("fetched"));
 
         let mut rolled = recent.clone();
         rolled

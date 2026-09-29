@@ -253,9 +253,18 @@ each.
   `estimate`, because the weights are nominal.
 - **The bar icon's hover** is the active group's windows, then the combined
   figures, then today's spend.
+- **Team seats weigh 1 (standard) and 5 (premium)**, as a Pro and a Max 5x.
+  A standard seat's tier (`default_raven`) carries no `Nx`, so the subscription
+  type decides; a premium seat is recognised by `premium` in either field or by
+  an `Nx` tier. Third-party guides quote 1.25 and 6.25 for the two seats; the
+  nominal pairing is used because nothing first-party states either, and no
+  machine-readable table of subscription multipliers exists to follow the way
+  `pricing.rs` follows LiteLLM's.
 - **Codex weights.** No table: Codex plans are not sold as multiples of one
-  another in a way `plan_type` names, so a Codex provider shows its groups and
-  no combined header until one exists.
+  another in a way `plan_type` names, and OpenAI is moving the plans to
+  API-spend-equivalent allowances (the reopened Pro $200 nets out at half the
+  API spend of the old one, with no 5h window), so a fixed multiplier would be
+  wrong on arrival. A Codex provider shows its groups and no combined header.
 - `CACHE_SCHEMA_VERSION` is 2. It is still written and never checked on read.
 
 ## The snapshot contract

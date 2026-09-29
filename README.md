@@ -319,8 +319,9 @@ an **ALL PLANS** header above them adds the plans up by their multiplier, in
 units of the largest: a Max 20x and a Pro both spent read `105% of 105%`, a Max
 20x at 50% beside a Max 5x at 100% reads `75% of 125%`, and the bar fills to
 the pooled share. The multipliers are the nominal ones the plans are sold with,
-so the header says `estimate`. A plan with no known multiplier (Enterprise) is
-left out of it and marked `not in total`.
+so the header says `estimate`. A Team seat counts as a Pro (standard) or a Max
+5x (premium). A plan with no known multiplier (Enterprise) is left out of it and
+marked `not in total`.
 
 The CLI's own login is asked on every refresh. A credential it is not signed
 into is asked every `inactive_refresh_secs` (30 minutes, remuda's own refresh

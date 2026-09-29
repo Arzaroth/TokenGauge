@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A Claude Team seat now counts in the ALL PLANS header: a standard seat as a
+  Pro, a premium seat as a Max 5x. It used to be left out as a plan with no
+  known multiplier, so a work Team seat beside a personal Max drew no header.
+
 ## [0.37.0] - 2026-09-29
 
 ### Added

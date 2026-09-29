@@ -15,8 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The TUI's provider panel scrolls (`J` / `K`, PgDn / PgUp) and says how many
-  sections are above and below. A provider with several credentials draws more
+- The TUI's provider panel scrolls (`J` / `K` three lines, PgDn / PgUp a
+  page) and says how many lines are above and below. A provider with several credentials draws more
   than a terminal has lines for, and the sections at the bottom used to be cut
   off without a word. The key table in the README also listed `j` / `k` as
   scrolling; they switch providers.

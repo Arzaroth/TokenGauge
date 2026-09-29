@@ -477,8 +477,9 @@ fn stored_state(tokens: &Tokens, now: DateTime<Utc>) -> Result<Option<Credential
 }
 
 fn stored_oauth(text: &str) -> Result<Tokens> {
+    // Never serde's message: it quotes the value it rejected.
     serde_json::from_str::<AuthFile>(text)
-        .context("the stored auth.json was invalid")?
+        .map_err(|_| anyhow!("the stored auth.json was invalid"))?
         .tokens
         .ok_or_else(|| anyhow!("the stored credential holds no OAuth tokens"))
 }
@@ -495,7 +496,12 @@ pub(crate) fn fetch_stored(
 ) -> Result<ProviderPayload> {
     let tokens = stored_oauth(text)?;
     match stored_state(&tokens, now)? {
-        None => usage_for(oauth(tokens), timeout, now),
+        None => usage_for(
+            oauth(tokens),
+            timeout,
+            now,
+            "remuda refreshes stored credentials (`remuda refresh`)",
+        ),
         Some(state) => {
             let mut payload = ProviderPayload::live("codex", "store", UsageSnapshot::at(now));
             payload.credential.state = Some(state);
@@ -877,11 +883,21 @@ fn to_payload(
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let cred = ensure_access_token(timeout)?;
-    Ok(vec![usage_for(cred, timeout, now)?])
+    Ok(vec![usage_for(
+        cred,
+        timeout,
+        now,
+        "run `codex` to log in",
+    )?])
 }
 
 /// One usage request with one credential's token.
-fn usage_for(cred: Credential, timeout: Duration, now: DateTime<Utc>) -> Result<ProviderPayload> {
+fn usage_for(
+    cred: Credential,
+    timeout: Duration,
+    now: DateTime<Utc>,
+    unauthorized_hint: &str,
+) -> Result<ProviderPayload> {
     let tokens = &cred.tokens;
     let client = http_client(timeout)?;
     let mut req = client
@@ -894,7 +910,7 @@ fn usage_for(cred: Credential, timeout: Duration, now: DateTime<Utc>) -> Result<
     }
     let resp = req.send().context("Codex usage request failed")?;
 
-    check_status(resp.status(), "Codex", "run `codex` to log in")?;
+    check_status(resp.status(), "Codex", unauthorized_hint)?;
 
     let body: UsageResponse = resp.json().context("Codex usage JSON was invalid")?;
     to_payload(body, now, cred.source, cred.plan_hint)
@@ -1393,5 +1409,11 @@ mod tests {
             Some("r-1"),
             "the refresh token is what finds the live login"
         );
+    }
+
+    #[test]
+    fn a_malformed_stored_auth_never_quotes_itself() {
+        let err = check_stored(r#""sk-proj-secret""#, Utc::now()).unwrap_err();
+        assert!(!format!("{err:#}").contains("secret"), "{err:#}");
     }
 }

@@ -80,6 +80,9 @@ struct Oauth {
 /// and writes only a hollow `.credentials.json`, so a user there can point us
 /// at a token from `claude setup-token` instead.
 const ENV_TOKEN: &str = "TOKENGAUGE_CLAUDE_OAUTH_TOKEN";
+/// What a stored credential's 401 says. Logging the CLI in again changes the
+/// live login, not the stored one.
+const STORED_HINT: &str = "remuda refreshes stored credentials (`remuda refresh`)";
 const ENV_SCOPES: &str = "TOKENGAUGE_CLAUDE_OAUTH_SCOPES";
 
 /// The OS credential store Claude Code writes to on macOS (a keychain item) and
@@ -113,7 +116,9 @@ fn parse_credentials(data: &str) -> Result<Oauth> {
     {
         return Ok(oauth);
     }
-    serde_json::from_str::<Oauth>(data).context("credentials JSON was invalid")
+    // Never serde's message: it quotes the value it rejected, and a file that
+    // is a bare token string would put the token in the error.
+    serde_json::from_str::<Oauth>(data).map_err(|_| anyhow!("credentials JSON was invalid"))
 }
 
 /// Whether a parsed credential can actually be sent.
@@ -351,7 +356,7 @@ pub(crate) fn fetch_stored(
 ) -> Result<ProviderPayload> {
     let oauth = parse_credentials(text)?;
     match stored_state(&oauth, now)? {
-        None => usage_for(&oauth, timeout, now),
+        None => usage_for(&oauth, timeout, now, STORED_HINT),
         Some(state) => {
             let mut payload = ProviderPayload::live(
                 "claude",
@@ -701,11 +706,21 @@ fn to_payload(
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let (oauth, _source) = load_oauth(now)?;
-    Ok(vec![usage_for(&oauth, timeout, now)?])
+    Ok(vec![usage_for(
+        &oauth,
+        timeout,
+        now,
+        "run `claude` to log in",
+    )?])
 }
 
 /// One usage request with one credential's token.
-fn usage_for(oauth: &Oauth, timeout: Duration, now: DateTime<Utc>) -> Result<ProviderPayload> {
+fn usage_for(
+    oauth: &Oauth,
+    timeout: Duration,
+    now: DateTime<Utc>,
+    unauthorized_hint: &str,
+) -> Result<ProviderPayload> {
     let client = http_client(timeout)?;
     let resp = client
         .get(USAGE_URL)
@@ -717,7 +732,7 @@ fn usage_for(oauth: &Oauth, timeout: Duration, now: DateTime<Utc>) -> Result<Pro
         .send()
         .context("Claude usage request failed")?;
 
-    check_status(resp.status(), "Claude", "run `claude` to log in")?;
+    check_status(resp.status(), "Claude", unauthorized_hint)?;
 
     let body: UsageResponse = resp.json().context("Claude usage JSON was invalid")?;
     let plan = plan_label(
@@ -1110,5 +1125,13 @@ mod tests {
         std::fs::write(&path, r#"{"numStartups":3}"#).unwrap();
         assert_eq!(account_uuid(&path), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// serde quotes what it rejected, and a credential file holding a bare
+    /// token string would carry the token into errors[], --json and --doctor.
+    #[test]
+    fn a_malformed_credential_never_quotes_itself() {
+        let err = check_stored(r#""sk-ant-oat01-secret""#, Utc::now()).unwrap_err();
+        assert!(!format!("{err:#}").contains("secret"), "{err:#}");
     }
 }

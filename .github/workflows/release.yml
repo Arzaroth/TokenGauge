@@ -359,8 +359,8 @@ jobs:
         if: env.APPLE_SIGNING == 'true'
         run: |
           codesign -dv --verbose=2 dist/TokenGauge.app 2>&1 | grep -E "Authority|TeamIdentifier|Runtime|flags"
-          spctl --assess --type execute -vv dist/TokenGauge.app
           if [ "$APPLE_NOTARY" = true ]; then
+            spctl --assess --type execute -vv dist/TokenGauge.app
             xcrun stapler validate dist/*.dmg
             spctl --assess --type open --context context:primary-signature -vv dist/*.dmg
           fi

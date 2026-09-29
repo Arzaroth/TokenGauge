@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-09-29
+
 ### Added
 
 - **Several plans at one vendor.** TokenGauge reads the credential store
@@ -1111,7 +1113,8 @@ Major feature batch on top of upstream v0.4.2.
 
 Released by the upstream project, [oorestisime/TokenGauge](https://github.com/oorestisime/TokenGauge/releases). This fork's own history starts at 0.5.0.
 
-[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.36.0...HEAD
+[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.37.0...HEAD
+[0.37.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.35.1...v0.36.0
 [0.35.1]: https://github.com/Arzaroth/TokenGauge/compare/v0.35.0...v0.35.1
 [0.35.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.34.0...v0.35.0

@@ -766,8 +766,12 @@ fn to_payload(
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let cred = ensure_access_token(timeout)?;
-    let tokens = &cred.tokens;
+    Ok(vec![usage_for(cred, timeout, now)?])
+}
 
+/// One usage request with one credential's token.
+fn usage_for(cred: Credential, timeout: Duration, now: DateTime<Utc>) -> Result<ProviderPayload> {
+    let tokens = &cred.tokens;
     let client = http_client(timeout)?;
     let mut req = client
         .get(USAGE_URL)
@@ -782,7 +786,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     check_status(resp.status(), "Codex", "run `codex` to log in")?;
 
     let body: UsageResponse = resp.json().context("Codex usage JSON was invalid")?;
-    Ok(vec![to_payload(body, now, cred.source, cred.plan_hint)?])
+    to_payload(body, now, cred.source, cred.plan_hint)
 }
 
 #[cfg(test)]

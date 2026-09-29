@@ -553,7 +553,11 @@ fn to_payload(
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let (oauth, _source) = load_oauth(now)?;
+    Ok(vec![usage_for(&oauth, timeout, now)?])
+}
 
+/// One usage request with one credential's token.
+fn usage_for(oauth: &Oauth, timeout: Duration, now: DateTime<Utc>) -> Result<ProviderPayload> {
     let client = http_client(timeout)?;
     let resp = client
         .get(USAGE_URL)
@@ -572,7 +576,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         oauth.subscription_type.as_deref(),
         oauth.rate_limit_tier.as_deref(),
     );
-    Ok(vec![to_payload(body, plan, now)?])
+    to_payload(body, plan, now)
 }
 
 #[cfg(test)]

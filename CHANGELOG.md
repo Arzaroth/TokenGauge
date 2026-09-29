@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Several plans at one vendor.** TokenGauge reads the credential store
+  [remuda](https://github.com/Arzaroth/remuda) keeps and shows every stored
+  Claude and Codex login in its provider's panel, one group of limits each,
+  the active one first. Claude's plans are added up in an **ALL PLANS** header
+  weighted by each plan's multiplier (Pro 1, Max 5x 5, Max 20x 20), marked as
+  the estimate it is. The bar, the hover summary, session cost and threshold
+  notifications follow the plan the CLI is signed into. Configured with
+  `[credentials] store` (default `~/.local/share/remuda/credentials`) and
+  `inactive_refresh_secs` (default 1800). See ADR 0003.
+- `--doctor` has a Credential store section that checks every stored
+  credential offline and names any it skipped.
+
+### Changed
+
+- The snapshot is schema version 2: each Claude and Codex payload carries
+  `credential`, `active`, `credentialState`, `credentialLabel` and
+  `planWeight`, and an error carries `credential` and `active`. Nothing
+  existing moved, so an older reader keeps working.
+- A credential added to remuda's store, or a switch with `remuda use`, makes
+  the snapshot stale at once instead of at the next refresh.
+
 ## [0.36.0] - 2026-09-29
 
 ### Added

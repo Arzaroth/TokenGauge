@@ -270,7 +270,9 @@ Each entry of `payloads[]` gains:
 - `credentialLabel` (string): the sidecar's `label`, absent when it has none or
   is not trusted.
 - `planWeight` (integer): the plan's multiplier relative to Pro, when one is
-  known.
+  known. Also absent on a live login that matches no stored credential and
+  cannot be told apart from one, which is how it is left out of the combined
+  figure.
 
 Each entry of the top-level `errors[]` gains `credential` (the store name, when
 the failed fetch is attributed to one) and `active` (`true` when it was the live

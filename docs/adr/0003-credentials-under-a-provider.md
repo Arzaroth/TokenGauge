@@ -188,9 +188,11 @@ each.
   it too: they key on provider and window, and would fire for whichever
   credential was read last.
 - **The store's security.** On Unix the store root and each provider directory
-  must belong to the current user and not be writable by group or others, and a
-  credential file must belong to the user with no group or other permission
-  bits. A directory that fails refuses that whole directory; a file that fails
+  must belong to the current user and not be writable by group or others, a
+  sidecar must belong to the user and not be writable by others (it names the
+  account), and a credential file must belong to the user with no group or
+  other permission bits. "The current user" is the home directory's owner, and
+  with no home directory nothing passes. A directory that fails refuses that whole directory; a file that fails
   is skipped. Both are named by `--doctor`. Windows has no such check: the
   default store sits in the user's profile. No token reaches the snapshot,
   `--json`, `--doctor` or `stale_reason`, and `email` is never read into
@@ -198,8 +200,10 @@ each.
 - **Cadence.** The live login is fetched every refresh, as before. An inactive
   credential is fetched when its last payload is older than
   `[credentials] inactive_refresh_secs` (default 1800, remuda's refresh period)
-  or a window it reported has reset since; otherwise its last payload is carried
-  into the new snapshot unchanged, with its own `usage.updatedAt`.
+  or a window it reported has reset since, or its name now holds another
+  account; otherwise its last payload is carried into the new snapshot
+  unchanged, with its own `usage.updatedAt`. Stored credentials are asked
+  alongside the live login, not after it.
   `cache_is_stale()` stays the single fetch decision and keeps its whole-snapshot
   rollover rule: a rollover of an inactive window makes the snapshot stale, and
   the fetch that follows asks that credential again and carries the others.
@@ -209,14 +213,18 @@ each.
   added, removed or renamed refetches. `<store>/.last-switch.json` is relied on:
   a provider whose entry is later than the snapshot's write refetches, because
   its active credential changed. A missing or unreadable file is no signal
-  rather than an error.
-- **The config key's default** does not read the environment:
+  rather than an error, and neither is an entry stamped in the future (a clock
+  that stepped back), which would otherwise refetch on every render.
+- **The config key's default** does not read remuda's variables:
   `~/.local/share/remuda/credentials` on Linux and macOS (remuda's own fallback,
   and not `$XDG_DATA_HOME` or `$REMUDA_STORE`, which the daemon and a frontend's
   in-process fetch can see differently), and the local application data folder
   (`%LOCALAPPDATA%\remuda\credentials`, resolved through the known folder, not
   the variable) on Windows. A user who moved remuda's store sets the key. An
   empty string turns the store off; a directory that does not exist is no store.
+  A leading `~` is the home directory, as in `[sync.dir] path`. The home
+  directory itself still comes from `$HOME` on Unix, which the daemon and a
+  frontend share in practice.
 - **`--doctor`** has a *Credential store* section: one line for the store (a
   missing store passes, since remuda is optional; a refused or unreadable one
   fails), and one validated line per stored credential, made offline with the
@@ -227,7 +235,9 @@ each.
   into one row: the top level is the active credential's, so the bar text, the
   refresh hint and notifications follow the plan in use, and cost is attached
   once; `credentials` holds a row per credential, active first, then store
-  order. With more than one, `panel_spec` emits the stale lines of every group
+  order. With no active credential (the live login failed with nothing to
+  restore) the top level carries no figures, so no other plan reads as the one
+  in use. With any credential group, `panel_spec` emits the stale lines of every group
   in `status`, a `plans` section (the combined header, `Meters`), then one
   `limits` section per credential. The groups share the id and differ in a new
   optional `group` field on `Section` (the store name) that no frontend needs to
@@ -276,7 +286,13 @@ Each entry of `payloads[]` gains:
 
 Each entry of the top-level `errors[]` gains `credential` (the store name, when
 the failed fetch is attributed to one) and `active` (`true` when it was the live
-login's fetch, absent otherwise). A payload served from the previous snapshot
+login's fetch, absent otherwise). A stored credential's error message also
+starts with its name (`perso: ...`), because every frontend draws an error as
+provider and message.
+
+A payload may also carry `accountDigest`, a short hash of the credential's
+account that TokenGauge uses to never carry one account's figures under a name
+that now holds another. It is TokenGauge's own; remuda need not read it. A payload served from the previous snapshot
 after its fetch failed keeps its `credential` and `active`, with `stale: true`
 and `staleReason`. A carried inactive payload keeps its own `usage.updatedAt`,
 which can be older than `meta.updatedAtMs`.

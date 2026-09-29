@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[credentials] store` (default `~/.local/share/remuda/credentials`) and
   `inactive_refresh_secs` (default 1800). See ADR 0003.
 - `--doctor` has a Credential store section that checks every stored
-  credential offline and names any it skipped.
+  credential offline, names any it skipped, and fails a store other users
+  could write to.
 
 ### Changed
 

@@ -476,6 +476,7 @@ mod tests {
             credits: None,
             error: None,
             stale,
+            credential: Default::default(),
         }
     }
 
@@ -543,6 +544,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let bad = ProviderPayload {
             stale_reason: None,
@@ -558,6 +560,7 @@ mod tests {
                 kind: None,
             }),
             stale: false,
+            credential: Default::default(),
         };
         let rows = rows_of(vec![good, bad]);
         assert_eq!(rows.len(), 1);
@@ -579,6 +582,7 @@ mod tests {
             }),
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let rows = rows_of(vec![payload]);
         assert_eq!(rows[0].credits, Some(42.567));
@@ -597,6 +601,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let rows = rows_of(vec![payload1]);
         assert_eq!(rows[0].source, "2.1.12 (oauth)");
@@ -612,6 +617,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let rows = rows_of(vec![payload2]);
         assert_eq!(rows[0].source, "2.1.12");
@@ -627,6 +633,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let rows = rows_of(vec![payload3]);
         assert_eq!(rows[0].source, "oauth");
@@ -642,6 +649,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let rows = rows_of(vec![payload4]);
         assert_eq!(rows[0].source, "—");

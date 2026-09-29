@@ -283,6 +283,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         }
     }
 
@@ -329,6 +330,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         // Cache written while codex was still enabled; config since toggled it off.
         let mut payloads = vec![payload("codex"), payload("Claude")];
@@ -461,11 +463,14 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let error = ProviderFetchError {
             provider: "codex".to_string(),
             message: "timeout".to_string(),
             raw: "raw error".to_string(),
+            credential: None,
+            active: false,
         };
         let cached = CachedData::Full {
             sync: None,
@@ -496,6 +501,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let cached = CachedData::Legacy(vec![payload]);
 

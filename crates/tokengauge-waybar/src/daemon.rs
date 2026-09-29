@@ -853,6 +853,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         write_cache_full(
             &cache,
@@ -942,6 +943,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         write_cache_full(
             &cache,

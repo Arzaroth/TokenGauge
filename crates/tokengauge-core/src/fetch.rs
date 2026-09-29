@@ -42,6 +42,13 @@ pub struct ProviderFetchError {
     pub message: String,
     /// Full raw error message for debugging
     pub raw: String,
+    /// The stored credential whose fetch failed, when the failure is
+    /// attributed to one. See [`CredentialInfo::name`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+    /// True when the fetch that failed was the live login's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub active: bool,
 }
 
 impl ProviderFetchError {
@@ -51,6 +58,8 @@ impl ProviderFetchError {
             provider,
             message: clean_error_message(raw_message),
             raw: raw_message.to_string(),
+            credential: None,
+            active: false,
         }
     }
 }
@@ -212,6 +221,8 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
                     provider: "unknown".to_string(),
                     message: "thread panicked".to_string(),
                     raw: "thread panicked".to_string(),
+                    credential: None,
+                    active: false,
                 });
             }
         }
@@ -593,6 +604,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         }
     }
 
@@ -697,6 +709,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         fold_reported_costs(&mut report, &[quiet]);
         assert!(report.costs.is_empty());
@@ -714,6 +727,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let previous = vec![good_claude];
 
@@ -746,6 +760,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         };
         let previous = vec![cached];
 
@@ -761,6 +776,7 @@ mod tests {
             credits: None,
             error: None,
             stale: false,
+            credential: Default::default(),
         }];
         let mut errors = vec![
             ProviderFetchError::new("claude".into(), "429"),
@@ -791,6 +807,7 @@ mod tests {
                 credits: None,
                 error: None,
                 stale: false,
+                credential: Default::default(),
             },
             ProviderPayload {
                 stale_reason: None,
@@ -802,6 +819,7 @@ mod tests {
                 credits: None,
                 error: None,
                 stale: false,
+                credential: Default::default(),
             },
         ];
 

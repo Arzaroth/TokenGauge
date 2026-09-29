@@ -542,6 +542,7 @@ fn to_payload(
         credits: None,
         error: None,
         stale: false,
+        credential: Default::default(),
     })
 }
 

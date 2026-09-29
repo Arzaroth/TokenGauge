@@ -1,4 +1,4 @@
-use ratatui::Frame;
+use ratatui::backend::TestBackend;
 use ratatui::layout::{Alignment, Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -6,6 +6,7 @@ use ratatui::widgets::{
     Bar, BarChart, BarGroup, Block, BorderType, Borders, Clear, List, ListItem, ListState,
     Paragraph, Wrap,
 };
+use ratatui::{Frame, Terminal};
 use tokengauge_core::panel::{PanelRow, Section, SectionKind, Tone, panel_spec};
 use tokengauge_core::{ProviderRow, format_updated_relative, theme};
 
@@ -223,28 +224,90 @@ fn render_sidebar(frame: &mut Frame, area: Rect, state: &mut AppState) {
 
 fn render_detail(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let row = &state.rows[state.active_tab];
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .title(detail_title_line(row))
-        .border_style(Style::default().fg(dim()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
+    let title = detail_title_line(row);
     // The core resolves the whole panel: which sections exist, in what order,
     // and every string in them. This frontend picks a shape per kind and loops,
     // so a section added in panel.rs reaches the terminal with no edit here.
     let spec = panel_spec(row);
 
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(title)
+        .border_style(Style::default().fg(dim()));
+    let inner = block.inner(area);
+    let total: u16 = spec.iter().map(section_height).sum();
+    let window = scroll_window(total, inner.height, state.detail_offset);
+    state.detail_offset = window.offset;
+    state.detail_page = inner.height.max(1);
+    if let Some(hint) = window.hint() {
+        block = block.title_bottom(Line::from(Span::styled(hint, Style::default().fg(dim()))));
+    }
+    frame.render_widget(block, area);
+
+    if window.above == 0 && window.below == 0 {
+        render_sections(frame, inner, &spec);
+        return;
+    }
+    // The pane is a window on the whole panel: drawn off screen at full height
+    // and copied from the offset, so one section taller than the pane (an
+    // uncapped device list) scrolls line by line like the rest.
+    let mut canvas =
+        Terminal::new(TestBackend::new(inner.width, total)).expect("an in-memory terminal");
+    canvas
+        .draw(|f| render_sections(f, f.area(), &spec))
+        .expect("drawing to memory");
+    let drawn = canvas.backend().buffer();
+    let buf = frame.buffer_mut();
+    for y in 0..inner.height {
+        for x in 0..inner.width {
+            buf[(inner.x + x, inner.y + y)] = drawn[(x, y + window.offset)].clone();
+        }
+    }
+}
+
+fn render_sections(frame: &mut Frame, area: Rect, spec: &[Section]) {
     let mut constraints: Vec<Constraint> = spec
         .iter()
         .map(|section| Constraint::Length(section_height(section)))
         .collect();
     constraints.push(Constraint::Min(0));
-
-    let chunks = Layout::vertical(constraints).split(inner);
+    let chunks = Layout::vertical(constraints).split(area);
     for (i, section) in spec.iter().enumerate() {
         render_section(frame, chunks[i], section);
+    }
+}
+
+/// Which lines of a panel `total` lines tall a pane `height` lines tall shows.
+struct ScrollWindow {
+    offset: u16,
+    above: u16,
+    below: u16,
+}
+
+impl ScrollWindow {
+    /// What the pane's bottom border says when lines are off screen.
+    fn hint(&self) -> Option<String> {
+        if self.above == 0 && self.below == 0 {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if self.above > 0 {
+            parts.push(format!("↑ {}", self.above));
+        }
+        if self.below > 0 {
+            parts.push(format!("↓ {}", self.below));
+        }
+        Some(format!(" {} · J/K scroll ", parts.join(" · ")))
+    }
+}
+
+fn scroll_window(total: u16, height: u16, offset: u16) -> ScrollWindow {
+    let offset = offset.min(total.saturating_sub(height));
+    ScrollWindow {
+        offset,
+        above: offset,
+        below: total.saturating_sub(offset + height),
     }
 }
 
@@ -726,6 +789,9 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing:
         Span::styled("j/k", key),
         Span::styled(" select", dim_s),
         Span::styled("  ", sep),
+        Span::styled("J/K", key),
+        Span::styled(" scroll", dim_s),
+        Span::styled("  ", sep),
         Span::styled("r", key),
         Span::styled(" refresh", dim_s),
         Span::styled("  ", sep),
@@ -779,6 +845,7 @@ fn render_help_popup(frame: &mut Frame, area: Rect) {
         binding_line("k / ↑", "select previous provider", key, desc),
         binding_line("h / l", "select prev / next provider", key, desc),
         binding_line("g / G", "first / last provider", key, desc),
+        binding_line("J / K", "scroll the panel (PgDn / PgUp a page)", key, desc),
         binding_line("r", "refresh now", key, desc),
         binding_line("u", "open provider dashboard", key, desc),
         binding_line("s", "open provider status page", key, desc),
@@ -830,6 +897,37 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
+
+    /// Several credentials draw more than a terminal has lines for, and one
+    /// uncapped section can be taller than the pane on its own. The pane is a
+    /// window on the whole panel, clamped to its ends.
+    #[test]
+    fn a_panel_taller_than_the_pane_scrolls_by_line_and_says_what_is_hidden() {
+        let window = scroll_window(40, 10, 0);
+        assert_eq!((window.above, window.below), (0, 30));
+        let window = scroll_window(40, 10, 99);
+        assert_eq!((window.offset, window.below), (30, 0), "clamped to the end");
+        assert_eq!(scroll_window(8, 10, 5).hint(), None);
+        assert_eq!(
+            scroll_window(40, 10, 3).hint().as_deref(),
+            Some(" ↑ 3 · ↓ 27 · J/K scroll ")
+        );
+
+        let row = provider_with_sync_note();
+        let out = screen(|frame| {
+            let mut state = AppState::new(std::path::PathBuf::new());
+            state.rows = vec![row.clone()];
+            state.detail_offset = 2;
+            render_detail(frame, Rect::new(0, 0, 110, 10), &mut state);
+        });
+        assert!(out.contains("J/K scroll"), "{out}");
+        assert!(
+            !out.contains("LIMITS"),
+            "the lines above the offset are off screen:\n{out}"
+        );
+        assert!(out.contains("COST"), "{out}");
+    }
+
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

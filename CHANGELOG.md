@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A Claude Team seat now counts in the ALL PLANS header: a standard seat as a
+  Pro, a premium seat as a Max 5x. It used to be left out as a plan with no
+  known multiplier, so a work Team seat beside a personal Max drew no header.
+
+### Fixed
+
+- The TUI's provider panel scrolls (`J` / `K` three lines, PgDn / PgUp a
+  page) and says how many lines are above and below. A provider with several credentials draws more
+  than a terminal has lines for, and the sections at the bottom used to be cut
+  off without a word. The key table in the README also listed `j` / `k` as
+  scrolling; they switch providers.
+- A credential captured, or a switch made, while a fetch was running now shows
+  at once rather than at the next refresh.
+
 ## [0.37.0] - 2026-09-29
 
 ### Added

@@ -23,6 +23,11 @@ pub struct AppState {
     pub status_message: Option<String>,
     pub spinner_index: usize,
     pub active_tab: usize,
+    /// Lines scrolled off the top of the detail pane. It has no room to spare,
+    /// and a provider with several credentials draws more than fits.
+    pub detail_offset: u16,
+    /// The pane's height at the last draw: what a page is.
+    pub detail_page: u16,
     pub initial_provider: Option<String>,
     pub overlay: Overlay,
 }
@@ -45,7 +50,7 @@ pub enum Overlay {
 }
 
 impl AppState {
-    fn new(cache_file: PathBuf) -> Self {
+    pub(crate) fn new(cache_file: PathBuf) -> Self {
         Self {
             rows: Vec::new(),
             errors: Vec::new(),
@@ -55,6 +60,8 @@ impl AppState {
             status_message: None,
             spinner_index: 0,
             active_tab: 0,
+            detail_offset: 0,
+            detail_page: 1,
             initial_provider: None,
             overlay: Overlay::default(),
         }
@@ -268,8 +275,27 @@ impl App {
             self.state.status_message = Some("Refreshing…".into());
             self.pending_refresh = Some(spawn_refresh(self.config_override.clone(), true));
         }
+        let tab = self.state.active_tab;
         match key.code {
             KeyCode::Char('?') => self.state.overlay = Overlay::Help,
+            KeyCode::Char('J') => {
+                self.state.detail_offset = self.state.detail_offset.saturating_add(3)
+            }
+            KeyCode::Char('K') => {
+                self.state.detail_offset = self.state.detail_offset.saturating_sub(3)
+            }
+            KeyCode::PageDown => {
+                self.state.detail_offset = self
+                    .state
+                    .detail_offset
+                    .saturating_add(self.state.detail_page);
+            }
+            KeyCode::PageUp => {
+                self.state.detail_offset = self
+                    .state
+                    .detail_offset
+                    .saturating_sub(self.state.detail_page);
+            }
             KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => self.state.next_tab(),
             KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => self.state.prev_tab(),
             KeyCode::Char('l') | KeyCode::Right => self.state.next_tab(),
@@ -285,6 +311,9 @@ impl App {
             KeyCode::Char('S') => self.open_sync(),
             KeyCode::Char('H') => self.open_history(),
             _ => {}
+        }
+        if self.state.active_tab != tab {
+            self.state.detail_offset = 0;
         }
         Ok(())
     }

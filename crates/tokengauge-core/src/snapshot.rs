@@ -43,6 +43,31 @@ pub struct CacheMeta {
     /// [`store_moved`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub credentials: BTreeMap<String, Vec<String>>,
+    /// When `credentials` was read: the start of the fetch, not the write. A
+    /// switch between the two is after what the fetch saw, and must still
+    /// make the snapshot stale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_at_ms: Option<i64>,
+}
+
+/// The credential store as a fetch found it, taken before the fetch reads it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoreSeen {
+    pub names: BTreeMap<String, Vec<String>>,
+    pub at_ms: i64,
+}
+
+impl StoreSeen {
+    /// The store's names now.
+    pub fn now(config: &TokenGaugeConfig) -> Self {
+        // The instant first: a switch landing while the store is listed must
+        // read as after it, not before.
+        let at_ms = now_ms();
+        Self {
+            names: store_listing(config),
+            at_ms,
+        }
+    }
 }
 
 /// Cached data format - stores both payloads and errors.
@@ -57,7 +82,7 @@ pub enum CachedData {
         costs: HashMap<String, CostInfo>,
         /// Absent in snapshots written before 0.21.
         #[serde(default)]
-        meta: Option<CacheMeta>,
+        meta: Option<Box<CacheMeta>>,
         /// Absent unless fleet sync is on. Boxed: a status carries several
         /// vectors, and the legacy variant is a bare list.
         #[serde(default)]
@@ -91,7 +116,7 @@ impl CachedData {
 
     pub fn meta(&self) -> Option<&CacheMeta> {
         match self {
-            CachedData::Full { meta, .. } => meta.as_ref(),
+            CachedData::Full { meta, .. } => meta.as_deref(),
             CachedData::Legacy(_) => None,
         }
     }
@@ -158,13 +183,15 @@ pub fn write_cache_full(
     costs: &HashMap<String, CostInfo>,
     config: &TokenGaugeConfig,
     sync: Option<&sync::SyncStatus>,
+    store: Option<&StoreSeen>,
 ) -> Result<()> {
+    let store = store.cloned().unwrap_or_else(|| StoreSeen::now(config));
     let data = CachedData::Full {
         payloads: payloads.to_vec(),
         errors: errors.to_vec(),
         costs: costs.clone(),
         sync: sync.cloned().map(Box::new),
-        meta: Some(CacheMeta {
+        meta: Some(Box::new(CacheMeta {
             schema_version: CACHE_SCHEMA_VERSION,
             device: device_identity(path),
             updated_at_ms: now_ms(),
@@ -174,8 +201,9 @@ pub fn write_cache_full(
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
-            credentials: store_listing(config),
-        }),
+            credentials: store.names,
+            credentials_at_ms: Some(store.at_ms),
+        })),
     };
     let contents = serde_json::to_string(&data)?;
     write_atomic(path, contents.as_bytes())
@@ -244,6 +272,9 @@ fn store_moved(
     written_at: DateTime<Utc>,
 ) -> bool {
     let recorded = meta.map(|m| m.credentials.clone()).unwrap_or_default();
+    let seen_at = meta
+        .and_then(|m| m.credentials_at_ms)
+        .unwrap_or_else(|| written_at.timestamp_millis());
     if store_listing(config) != recorded {
         return true;
     }
@@ -257,7 +288,7 @@ fn store_moved(
         // A switch stamped in the future is a clock that stepped back, not a
         // switch still to come: honouring it would refetch on every render
         // until the clock caught up.
-        .any(|switched| switched > written_at.timestamp_millis() && switched <= crate::now_ms())
+        .any(|switched| switched > seen_at && switched <= crate::now_ms())
 }
 
 /// True when a window this snapshot reported has reset since it was written.
@@ -416,7 +447,8 @@ mod tests {
             credentials: CredentialsConfig::off(),
             ..TokenGaugeConfig::default()
         };
-        write_cache_full(path, &[], &[], &HashMap::new(), &config, None).expect("write cache");
+        write_cache_full(path, &[], &[], &HashMap::new(), &config, None, None)
+            .expect("write cache");
     }
 
     #[test]
@@ -602,7 +634,7 @@ mod tests {
         put(&store, "claude", "work", "{}", "u-1");
         let config = store_config(&cache, &store);
 
-        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None).unwrap();
+        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
         assert!(!cache_is_stale(&config), "a snapshot fresh from the fetch");
         let meta = read_cache_full(&cache).unwrap().meta().unwrap().clone();
         assert_eq!(meta.credentials["claude"], ["work"]);
@@ -614,7 +646,7 @@ mod tests {
             "a credential added since the write"
         );
 
-        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None).unwrap();
+        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
         assert!(!cache_is_stale(&config));
         // Switched before the write: the snapshot already describes it.
         std::fs::write(store.join(".last-switch.json"), r#"{"claude": 1}"#).unwrap();
@@ -628,7 +660,7 @@ mod tests {
         .unwrap();
         assert!(cache_is_stale(&config), "a switch after the write");
 
-        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None).unwrap();
+        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
         let ahead = crate::now_ms() + 3_600_000;
         std::fs::write(
             store.join(".last-switch.json"),
@@ -639,6 +671,55 @@ mod tests {
             !cache_is_stale(&config),
             "a clock that stepped back is not a switch"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&store);
+    }
+
+    /// A store change made while the fetch ran is after what the fetch read,
+    /// however late the write lands.
+    #[test]
+    fn a_store_change_made_mid_fetch_still_makes_the_snapshot_stale() {
+        use crate::credentials::tests::{put, temp_store};
+        let dir = cache_test_dir("mid-fetch");
+        let cache = dir.join("tokengauge-usage.json");
+        let store = temp_store("mid-fetch");
+        put(&store, "claude", "work", "{}", "u-1");
+        let config = store_config(&cache, &store);
+
+        let seen = StoreSeen::now(&config);
+        put(&store, "claude", "perso", "{}", "u-2");
+        write_cache_full(
+            &cache,
+            &[],
+            &[],
+            &HashMap::new(),
+            &config,
+            None,
+            Some(&seen),
+        )
+        .unwrap();
+        assert!(cache_is_stale(&config), "a credential captured mid-fetch");
+
+        let seen = StoreSeen::now(&config);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(
+            store.join(".last-switch.json"),
+            format!(r#"{{"claude": {}}}"#, crate::now_ms()),
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_cache_full(
+            &cache,
+            &[],
+            &[],
+            &HashMap::new(),
+            &config,
+            None,
+            Some(&seen),
+        )
+        .unwrap();
+        assert!(cache_is_stale(&config), "a switch made mid-fetch");
 
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&store);

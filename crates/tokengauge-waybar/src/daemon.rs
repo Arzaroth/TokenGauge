@@ -856,7 +856,16 @@ mod tests {
             stale: false,
             credential: Default::default(),
         };
-        write_cache_full(&cache, &[payload], &[], &HashMap::new(), &config, None).unwrap();
+        write_cache_full(
+            &cache,
+            &[payload],
+            &[],
+            &HashMap::new(),
+            &config,
+            None,
+            None,
+        )
+        .unwrap();
 
         let state = test_state("BASELINE_TEXT");
         let (sock, server) = spawn_one_shot_server(&cache, state, config);
@@ -938,7 +947,16 @@ mod tests {
             stale: false,
             credential: Default::default(),
         };
-        write_cache_full(&cache, &[payload], &[], &HashMap::new(), &config, None).unwrap();
+        write_cache_full(
+            &cache,
+            &[payload],
+            &[],
+            &HashMap::new(),
+            &config,
+            None,
+            None,
+        )
+        .unwrap();
 
         let state = test_state("BASELINE_TEXT");
         let (sock, server) = spawn_one_shot_server(&cache, state, config);
@@ -970,7 +988,7 @@ mod tests {
         let dir = unique_test_dir("fetch-wait-wake");
         let cache = dir.join("cache.json");
         let config = test_config(cache.clone());
-        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None).unwrap();
+        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
 
         let doomed = cache.clone();
         let killer = thread::spawn(move || {

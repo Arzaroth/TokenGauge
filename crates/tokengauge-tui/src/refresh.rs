@@ -44,6 +44,7 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
                 errors,
                 costs,
                 sync,
+                store,
             } = fetch_all_providers(&config);
             write_cache_full(
                 &config.cache_file,
@@ -52,6 +53,7 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
                 &costs,
                 &config,
                 Some(&sync),
+                Some(&store),
             )
             .ok();
             (payloads, errors, costs)

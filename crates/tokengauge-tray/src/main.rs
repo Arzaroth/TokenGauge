@@ -1384,6 +1384,7 @@ mod gui {
                         &result.costs,
                         &config,
                         Some(&result.sync),
+                        Some(&result.store),
                     );
                     let errors = result
                         .errors

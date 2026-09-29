@@ -293,6 +293,53 @@ fn several_credentials_are_one_provider_with_a_group_each() {
     assert_eq!(section(codex, "cost")["rows"][0]["value"], "$3.25");
 }
 
+/// Claude's plans add up by their multiplier: the binary draws the ALL PLANS
+/// header over the groups, in units of the largest plan. The frontends render
+/// it as the meters section it is; this pins the figures at the far end of the
+/// JSON.
+#[test]
+fn claude_credentials_draw_a_plan_weighted_header() {
+    let machine = Machine::with(&[("claude", true)], Some("claude"), "weekly");
+    machine.seed();
+    let mut snapshot: Value =
+        serde_json::from_str(&std::fs::read_to_string(machine.cache()).unwrap()).unwrap();
+    let payloads = snapshot["payloads"].as_array_mut().unwrap();
+    let mut work = payloads[0].clone();
+    payloads[0]["credential"] = "perso".into();
+    payloads[0]["active"] = true.into();
+    payloads[0]["planWeight"] = 20.into();
+    work["credential"] = "work".into();
+    work["active"] = false.into();
+    work["planWeight"] = 1.into();
+    work["usage"]["primary"]["usedPercent"] = 100.into();
+    work["usage"]["secondary"]["usedPercent"] = 40.into();
+    payloads.insert(1, work);
+    std::fs::write(machine.cache(), snapshot.to_string()).unwrap();
+
+    let claude = row(&machine.json(), "claude").clone();
+    let ids: Vec<&str> = claude["panel"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(ids, ["plans", "limits", "limits", "cost"]);
+    let plans = section(&claude, "plans");
+    assert_eq!(plans["title"], "ALL PLANS");
+    assert_eq!(labels(plans), ["Session", "Weekly (all)"]);
+    // (31 × 20 + 100 × 1) ÷ 20 and (68 × 20 + 40 × 1) ÷ 20, of (20 + 1) ÷ 20.
+    assert_eq!(plans["rows"][0]["value"], "36% of 105%");
+    assert_eq!(plans["rows"][1]["value"], "70% of 105%");
+    assert_eq!(plans["rows"][0]["badge"], "estimate");
+    let hover: Vec<&str> = claude["bar_tooltip"]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["label"].as_str().unwrap_or(""))
+        .collect();
+    assert!(hover.contains(&"Session · all plans"), "{hover:?}");
+}
+
 /// The bar icon's hover summary can never name a window the panel under it
 /// does not draw. `bar_tooltip` is built off `panel_spec` for that reason;
 /// this holds the two against each other at the far end of the JSON.

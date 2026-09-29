@@ -208,10 +208,11 @@ each.
   rollover rule: a rollover of an inactive window makes the snapshot stale, and
   the fetch that follows asks that credential again and carries the others.
 - **A store change makes the snapshot stale.** `CacheMeta.credentials` records
-  the store's credential names per provider at the write, and
+  the store's credential names per provider as the fetch found them, before it
+  read the store (`credentialsAtMs` says when), and
   `cache_is_stale()` compares them with the store as it is now, so a credential
   added, removed or renamed refetches. `<store>/.last-switch.json` is relied on:
-  a provider whose entry is later than the snapshot's write refetches, because
+  a provider whose entry is later than `credentialsAtMs` refetches, because
   its active credential changed. A missing or unreadable file is no signal
   rather than an error, and neither is an entry stamped in the future (a clock
   that stepped back), which would otherwise refetch on every render.
@@ -253,9 +254,18 @@ each.
   `estimate`, because the weights are nominal.
 - **The bar icon's hover** is the active group's windows, then the combined
   figures, then today's spend.
+- **Team seats weigh 1 (standard) and 5 (premium)**, as a Pro and a Max 5x.
+  A standard seat's tier (`default_raven`) carries no `Nx`, so the subscription
+  type decides; a premium seat is recognised by `premium` in either field or by
+  an `Nx` tier. Third-party guides quote 1.25 and 6.25 for the two seats; the
+  nominal pairing is used because nothing first-party states either, and no
+  machine-readable table of subscription multipliers exists to follow the way
+  `pricing.rs` follows LiteLLM's.
 - **Codex weights.** No table: Codex plans are not sold as multiples of one
-  another in a way `plan_type` names, so a Codex provider shows its groups and
-  no combined header until one exists.
+  another in a way `plan_type` names, and OpenAI is moving the plans to
+  API-spend-equivalent allowances (the reopened Pro $200 nets out at half the
+  API spend of the old one, with no 5h window), so a fixed multiplier would be
+  wrong on arrival. A Codex provider shows its groups and no combined header.
 - `CACHE_SCHEMA_VERSION` is 2. It is still written and never checked on read.
 
 ## The snapshot contract

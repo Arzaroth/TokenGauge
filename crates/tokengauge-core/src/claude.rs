@@ -512,7 +512,8 @@ fn plan_label(subscription_type: Option<&str>, tier: Option<&str>) -> Option<Str
 
 /// A plan's nominal multiplier against Pro: the `Nx` in a rate-limit tier
 /// (`default_claude_max_20x`, a Team seat's `default_claude_team_5x`), else 1
-/// for Pro, which its subscription type names.
+/// for Pro and a standard Team seat and 5 for a premium one, which the
+/// subscription type names.
 ///
 /// `None` for anything else - Enterprise, or a tier not seen before. Guessing
 /// 1x would understate a large plan without saying so.
@@ -526,11 +527,17 @@ fn plan_weight(subscription_type: Option<&str>, tier: Option<&str>) -> Option<u3
     });
     multiplier.or_else(|| {
         let sub = subscription_type?.to_lowercase();
-        (sub.contains("pro")
-            && !["max", "team", "enterprise"]
-                .iter()
-                .any(|k| sub.contains(k)))
-        .then_some(1)
+        let tier = tier.unwrap_or_default().to_lowercase();
+        if sub.contains("team") {
+            // A standard seat is sold as a Pro's allowance and a premium one as a
+            // Max 5x's. A standard seat's tier (`default_raven`) names neither.
+            return Some(if sub.contains("premium") || tier.contains("premium") {
+                5
+            } else {
+                1
+            });
+        }
+        (sub.contains("pro") && !["max", "enterprise"].iter().any(|k| sub.contains(k))).then_some(1)
     })
 }
 
@@ -1083,6 +1090,13 @@ mod tests {
             Some(5)
         );
         assert_eq!(plan_weight(Some("pro"), Some("default_claude_ai")), Some(1));
+        // A Team seat: standard is a Pro's allowance, premium a Max 5x's.
+        assert_eq!(plan_weight(Some("team"), Some("default_raven")), Some(1));
+        assert_eq!(
+            plan_weight(Some("team"), Some("default_raven_premium")),
+            Some(5)
+        );
+        assert_eq!(plan_weight(Some("team_premium"), None), Some(5));
         // Nothing known: out of the total rather than guessed at 1x.
         assert_eq!(
             plan_weight(Some("enterprise"), Some("default_claude_ai")),

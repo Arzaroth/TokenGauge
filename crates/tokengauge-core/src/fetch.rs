@@ -93,6 +93,10 @@ pub struct FetchResult {
     #[serde(default)]
     pub costs: HashMap<String, CostInfo>,
     pub sync: sync::SyncStatus,
+    /// The credential store as it was before the fetch read it. What the
+    /// snapshot records, so a change made mid-fetch still reads as a change.
+    #[serde(default)]
+    pub store: StoreSeen,
 }
 
 /// Run a subprocess with a hard timeout. On timeout, kills the child so it
@@ -150,6 +154,7 @@ pub(crate) fn run_with_timeout(mut command: Command, timeout: Duration) -> Resul
 pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
     let enabled = config.providers.enabled_providers();
     let timeout = Duration::from_secs(config.timeout_secs);
+    let store = StoreSeen::now(config);
 
     if enabled.is_empty() {
         return FetchResult {
@@ -157,6 +162,7 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
             errors: Vec::new(),
             costs: HashMap::new(),
             sync: sync::SyncStatus::default(),
+            store,
         };
     }
 
@@ -238,6 +244,7 @@ pub fn fetch_all_providers(config: &TokenGaugeConfig) -> FetchResult {
         errors,
         costs: report.costs,
         sync: report.sync,
+        store,
     }
 }
 

@@ -70,6 +70,19 @@ Item {
         check.equal("with its tier", row.bar.tone, "warn")
         check.ok("and the hover summary", row.bar_tooltip.lines.length === 3)
 
+        // Several credentials are still one provider: one row, a group per
+        // credential in its panel, told apart by `group`, the active one first.
+        var grouped = null
+        for (var r = 0; r < usage.rows.length; r++)
+            if (String(usage.rows[r].provider).toLowerCase() === "codex") grouped = usage.rows[r]
+        check.ok("the fixture carries a provider with several credentials", grouped !== null)
+        if (grouped) {
+            var groups = grouped.panel.filter(function (s) { return s.id === "limits" })
+            check.ok("one group per credential", groups.length > 1)
+            check.ok("each names its credential", groups.every(function (s) { return !!s.group }))
+            check.ok("the active one leads", groups[0].title.indexOf("active") !== -1)
+        }
+
         // The second screen. A machine with no store yet says so rather than
         // drawing an empty chart, which is the state every user starts in.
         check.equal("three ranges", row.history.series.length, 3)

@@ -315,10 +315,16 @@ pub(crate) fn live_login() -> LiveLogin {
     };
     LiveLogin {
         tokens: login_tokens(&oauth),
-        account: (source != ENV_TOKEN)
-            .then(|| account_uuid(&claude_json_path()))
-            .flatten(),
+        account: live_account(source, &claude_json_path()),
     }
+}
+
+/// `.claude.json` describes Claude Code's own login, so it names the account
+/// of a token read from Claude Code's own stores and of nothing else.
+fn live_account(source: &str, claude_json: &Path) -> Option<String> {
+    (source != ENV_TOKEN)
+        .then(|| account_uuid(claude_json))
+        .flatten()
 }
 
 pub(crate) fn stored_tokens(text: &str) -> LoginTokens {
@@ -1125,6 +1131,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(account_uuid(&path).as_deref(), Some("u-1"));
+        assert_eq!(
+            live_account(".credentials.json", &path).as_deref(),
+            Some("u-1")
+        );
+        assert_eq!(
+            live_account(ENV_TOKEN, &path),
+            None,
+            "the override is not the file's login"
+        );
         std::fs::write(&path, r#"{"numStartups":3}"#).unwrap();
         assert_eq!(account_uuid(&path), None);
         let _ = std::fs::remove_dir_all(&dir);

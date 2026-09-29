@@ -195,7 +195,14 @@ pub struct CredentialsConfig {
 impl Default for CredentialsConfig {
     fn default() -> Self {
         Self {
-            store: crate::credentials::default_store(),
+            // Off in this crate's own tests, which build configs by default
+            // all over: the default is the developer's store, and a test
+            // reading it would ask about their logins.
+            store: if cfg!(test) {
+                PathBuf::new()
+            } else {
+                crate::credentials::default_store()
+            },
             inactive_refresh_secs: crate::credentials::DEFAULT_INACTIVE_REFRESH_SECS,
             unknown: HashMap::new(),
         }

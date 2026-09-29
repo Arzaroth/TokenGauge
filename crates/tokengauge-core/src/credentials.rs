@@ -537,6 +537,14 @@ fn carried(
 /// each line runs the parse, digest, expiry and scope checks the fetch makes,
 /// offline, so a green line is a credential the next fetch will ask about.
 pub fn doctor_checks(config: &TokenGaugeConfig, now: DateTime<Utc>) -> Vec<DoctorCheck> {
+    checks_with(config, now, crate::providers::store_reader)
+}
+
+fn checks_with(
+    config: &TokenGaugeConfig,
+    now: DateTime<Utc>,
+    reader_for: impl Fn(&str) -> Option<&'static StoreReader>,
+) -> Vec<DoctorCheck> {
     let check = |label: String, ok: bool, detail: String| DoctorCheck { label, ok, detail };
     let Some(store) = config.credentials.store_root() else {
         return vec![check(
@@ -545,23 +553,26 @@ pub fn doctor_checks(config: &TokenGaugeConfig, now: DateTime<Utc>) -> Vec<Docto
             "off ([credentials] store is empty)".into(),
         )];
     };
-    if !store.is_dir() {
+    let label = format!("credential store: {}", store.display());
+    if !store.exists() {
         return vec![check(
-            format!("credential store: {}", store.display()),
+            label,
             true,
             "none there - remuda is not in use, or keeps its store elsewhere".into(),
         )];
     }
-    let mut out = vec![check(
-        format!("credential store: {}", store.display()),
-        true,
-        String::new(),
-    )];
+    if !store.is_dir() {
+        return vec![check(label, false, "not a directory".into())];
+    }
+    if let Err(why) = private(&store, Guard::Writes) {
+        return vec![check(label, false, format!("refused: {why}"))];
+    }
+    let mut out = vec![check(label, true, String::new())];
     for provider in crate::stored_providers() {
         if !config.providers.is_enabled(provider) {
             continue;
         }
-        let Some(reader) = crate::providers::store_reader(provider) else {
+        let Some(reader) = reader_for(provider) else {
             continue;
         };
         let read = read_provider(&store, provider);
@@ -875,6 +886,19 @@ pub(crate) mod tests {
         assert_eq!(found.duplicates[0].0, "a-copy");
     }
 
+    fn nobody() -> LiveLogin {
+        LiveLogin::default()
+    }
+
+    /// Claude's own parsing and checks, with a live login that is nobody's: a
+    /// test never reads the developer's login or keychain.
+    const FAKE_CLAUDE: StoreReader = StoreReader {
+        live: nobody,
+        tokens: crate::claude::stored_tokens,
+        fetch: crate::claude::fetch_stored,
+        check: crate::claude::check_stored,
+    };
+
     fn claude_creds(expires_ms: i64) -> String {
         format!(
             r#"{{"claudeAiOauth":{{"accessToken":"tg-test-{expires_ms}","refreshToken":"tg-test-r-{expires_ms}","expiresAt":{expires_ms},"scopes":["user:profile"]}}}}"#
@@ -918,7 +942,7 @@ pub(crate) mod tests {
         let mut config = TokenGaugeConfig::default();
         config.credentials.store = store.clone();
         config.providers.codex = Some(false);
-        let checks = doctor_checks(&config, now);
+        let checks = checks_with(&config, now, |_| Some(&FAKE_CLAUDE));
         let line = |name: &str| {
             checks
                 .iter()
@@ -933,6 +957,18 @@ pub(crate) mod tests {
             checks.iter().all(|c| !c.detail.contains("tg-test-")),
             "a token reached the report"
         );
+
+        #[cfg(unix)]
+        {
+            set_mode(&store, 0o777);
+            let refused = checks_with(&config, now, |_| Some(&FAKE_CLAUDE));
+            assert!(
+                !refused[0].ok && refused[0].detail.starts_with("refused"),
+                "{}",
+                refused[0].detail
+            );
+            set_mode(&store, 0o700);
+        }
 
         config.credentials.store = PathBuf::new();
         assert!(doctor_checks(&config, now)[0].detail.starts_with("off"));
@@ -1151,6 +1187,30 @@ pub(crate) mod tests {
         assert_eq!(live.credential.plan_weight, None);
         // Every stored credential is read, work included.
         assert_eq!(named(&payloads, "work").credential.active, Some(false));
+        let _ = std::fs::remove_dir_all(&store);
+    }
+
+    /// Identified, but an unverified entry could be it: still out of the total.
+    #[test]
+    fn an_unverified_entry_keeps_an_unmatched_live_login_out_of_the_total() {
+        fn stranger() -> LiveLogin {
+            live("a-new", "r-new", Some("u-new"))
+        }
+        let reader = StoreReader {
+            live: stranger,
+            ..FAKE
+        };
+        let (store, config) = store_with_every_kind("unverified-arm");
+        let (payloads, _) = fetch_provider("claude", &reader, &config, &[], live_payload);
+        assert_eq!(payloads[0].credential.plan_weight, None);
+
+        std::fs::remove_file(store.join("claude/moved.json")).unwrap();
+        let (payloads, _) = fetch_provider("claude", &reader, &config, &[], live_payload);
+        assert_eq!(
+            payloads[0].credential.plan_weight,
+            Some(20),
+            "an identity no entry holds is a plan of its own"
+        );
         let _ = std::fs::remove_dir_all(&store);
     }
 

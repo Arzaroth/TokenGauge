@@ -30,6 +30,7 @@ pub struct AppState {
     pub detail_page: u16,
     pub initial_provider: Option<String>,
     pub overlay: Overlay,
+    pub remuda_serving: bool,
 }
 
 /// What is drawn over the panel, and what owns the keyboard while it is.
@@ -64,6 +65,7 @@ impl AppState {
             detail_page: 1,
             initial_provider: None,
             overlay: Overlay::default(),
+            remuda_serving: false,
         }
     }
 
@@ -122,9 +124,13 @@ impl App {
             .as_ref()
             .map(|c| c.cache_file.clone())
             .unwrap_or_else(tokengauge_core::default_cache_file);
+        let remuda_serving = loaded_config
+            .as_ref()
+            .is_some_and(|c| tokengauge_core::remuda::status(c).serving);
         let config_primary = loaded_config.and_then(|c| c.waybar.primary);
 
         let mut state = AppState::new(cache_file.clone());
+        state.remuda_serving = remuda_serving;
         state.initial_provider = read_waybar_state(&waybar_state_path(&cache_file))
             .selected
             .or(config_primary);
@@ -210,6 +216,7 @@ impl App {
         let Ok(config) = load_config(self.config_override.clone()) else {
             return;
         };
+        self.state.remuda_serving = tokengauge_core::remuda::status(&config).serving;
         let Ok(cached) = read_cache_full(&config.cache_file) else {
             return;
         };
@@ -310,6 +317,9 @@ impl App {
             KeyCode::Char('s') => self.open_active_url(OpenWhich::Status),
             KeyCode::Char('S') => self.open_sync(),
             KeyCode::Char('H') => self.open_history(),
+            KeyCode::Char('m') if self.state.remuda_serving => {
+                tokengauge_core::launch::open_remuda();
+            }
             _ => {}
         }
         if self.state.active_tab != tab {

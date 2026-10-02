@@ -53,6 +53,7 @@ pub mod panel;
 pub mod payload;
 mod provider;
 pub mod providers;
+pub mod remuda;
 pub mod rows;
 pub mod snapshot;
 pub mod statefiles;

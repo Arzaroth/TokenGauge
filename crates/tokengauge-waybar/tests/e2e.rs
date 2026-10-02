@@ -96,6 +96,7 @@ impl Machine {
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("CLAUDE_CONFIG_DIR", self.root.join("claude"))
+            .env("XDG_RUNTIME_DIR", self.root.join("run"))
             // The keychain walk is compiled out on Linux and the file is not
             // there, but an inherited token would make "not signed in" a lie.
             .env_remove("TOKENGAUGE_CLAUDE_OAUTH_TOKEN")
@@ -530,6 +531,45 @@ fn the_panel_never_waits_on_github() {
         "a render took {:?} - something went to the network",
         started.elapsed()
     );
+}
+
+/// The binary checks the pid in `serve.json` against `/proc`, so this test
+/// process stands in for `remuda serve`: its own pid, its own start time, and a
+/// port it holds open.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_remuda_page_is_offered_only_while_it_is_served() {
+    let machine = Machine::with(&[("claude", true)], Some("claude"), "weekly");
+    machine.seed();
+    assert_eq!(
+        machine.json()["remuda"],
+        serde_json::json!({"serving": false, "version": null})
+    );
+
+    let stat = std::fs::read_to_string("/proc/self/stat").expect("this process's stat");
+    let started: u64 = stat
+        .rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().nth(19))
+        .and_then(|field| field.parse().ok())
+        .expect("a start time");
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("a port");
+    let port = listener.local_addr().expect("its address").port();
+    let dir = machine.root.join("run/remuda");
+    std::fs::create_dir_all(&dir).expect("remuda's runtime dir");
+    let status = serde_json::json!({
+        "pid": std::process::id(),
+        "started": started,
+        "port": port,
+        "version": "0.5.0",
+    });
+    std::fs::write(dir.join("serve.json"), status.to_string()).expect("serve.json");
+    assert_eq!(
+        machine.json()["remuda"],
+        serde_json::json!({"serving": true, "version": "0.5.0"})
+    );
+
+    drop(listener);
+    assert_eq!(machine.json()["remuda"]["serving"], false);
 }
 
 /// Replace the first `resetsAt` with an instant that has passed, leaving the

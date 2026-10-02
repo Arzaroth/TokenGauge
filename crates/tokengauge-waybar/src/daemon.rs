@@ -613,7 +613,12 @@ pub(crate) fn handle_client(
         }
         SocketCommand::Json => {
             let (rows, errors) = rows_from_cache(&config);
-            let snapshot = json_snapshot(&config, &rows, &errors);
+            let snapshot = json_snapshot(
+                &config,
+                &rows,
+                &errors,
+                &tokengauge_core::remuda::status(&config),
+            );
             let reply = SocketReply::Json { snapshot };
             writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
             stream.flush()?;

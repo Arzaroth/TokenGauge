@@ -50,7 +50,12 @@ pub(crate) fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
     let rows = payload_to_rows_with_costs(payloads, &costs);
     println!(
         "{}",
-        serde_json::to_string(&json_snapshot(config, &rows, &errors))?
+        serde_json::to_string(&json_snapshot(
+            config,
+            &rows,
+            &errors,
+            &tokengauge_core::remuda::status(config)
+        ))?
     );
     Ok(())
 }
@@ -62,6 +67,7 @@ pub(crate) fn json_snapshot(
     config: &TokenGaugeConfig,
     rows: &[ProviderRow],
     errors: &[ProviderFetchError],
+    remuda: &tokengauge_core::remuda::Status,
 ) -> serde_json::Value {
     let enabled: Vec<String> = config
         .providers
@@ -220,6 +226,9 @@ pub(crate) fn json_snapshot(
             "neutral": t.neutral,
         },
         "update": update_status,
+        // A parameter rather than looked up here, so a test of this function
+        // never reads the developer's own runtime directory.
+        "remuda": remuda,
         // Frontends watch this file and re-read the snapshot when it changes,
         // so a fetch by the daemon or by another frontend lands immediately
         // instead of on the next poll. It holds no provider data.
@@ -520,7 +529,11 @@ mod tests {
     fn the_json_snapshot_keeps_the_keys_every_frontend_reads() {
         let config = TokenGaugeConfig::default();
         let row = sample_row("claude");
-        let snapshot = json_snapshot(&config, std::slice::from_ref(&row), &[]);
+        let remuda = tokengauge_core::remuda::Status {
+            serving: true,
+            version: Some("0.5.0".into()),
+        };
+        let snapshot = json_snapshot(&config, std::slice::from_ref(&row), &[], &remuda);
 
         let top: Vec<&str> = snapshot
             .as_object()
@@ -538,10 +551,15 @@ mod tests {
             "window",
             "theme",
             "update",
+            "remuda",
             "revision_file",
         ] {
             assert!(top.contains(&key), "top-level `{key}` is gone: {top:?}");
         }
+        assert_eq!(
+            snapshot["remuda"],
+            serde_json::json!({"serving": true, "version": "0.5.0"})
+        );
 
         let theme: Vec<&str> = snapshot["theme"]
             .as_object()

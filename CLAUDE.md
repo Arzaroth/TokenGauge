@@ -263,6 +263,13 @@ Rules that are easy to regress:
   draws the result as it is.
 - **Session cost and threshold notifications skip `active: false`.** One
   figure per provider, and it follows the plan being spent from.
+- **remuda's page is opened by `remuda open` and nothing else** (ADR 0004).
+  `remuda::status` decides whether a page is up from `serve.json`, `/proc` and
+  a connect, and never reads `serve.url` beside it, which holds the page's
+  token. It is resolved per render into `--json`'s `remuda`, not stored, and
+  `json_snapshot` takes it as a parameter so no test reads the developer's
+  `$XDG_RUNTIME_DIR`; the e2e harness and `make-panel-fixture.sh` point that
+  variable at a temporary directory for the same reason.
 - **The combined header weighs by nominal plan multiplier** (`plan_weight` in
   `claude.rs`; Codex has no table and so no header). A plan with no known
   weight is out of the total and says so, rather than guessed at 1x.

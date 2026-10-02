@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A button that opens [remuda](https://github.com/Arzaroth/remuda)'s page,
+  shown in the GNOME, Plasma and Omarchy panels while `remuda serve` is running,
+  and `m` in the TUI. `tokengauge --open=remuda` does the same from a waybar
+  click. It runs `remuda open`, so the page's access token never passes through
+  TokenGauge. Needs a remuda newer than 0.4.2.
+
 ## [0.38.0] - 2026-09-29
 
 ### Changed

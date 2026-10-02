@@ -627,6 +627,15 @@ Panel {
                   onClicked: root.openScreen(root.historyOpen ? "panel" : "history")
                 }
                 PanelActionButton {
+                  iconText: "󰀉"
+                  tooltipText: "Open remuda"
+                  visible: usage.remudaServing
+                  foreground: root.dim
+                  hoverColor: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: usage.openRemuda()
+                }
+                PanelActionButton {
                   iconText: "󰒓"
                   tooltipText: "Settings  ,"
                   foreground: root.settingsOpen ? Color.accent : root.dim

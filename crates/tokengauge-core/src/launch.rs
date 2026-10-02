@@ -1,11 +1,12 @@
-//! Opening the TUI in a terminal, a URL in a browser, and a notification on
-//! the desktop, from a frontend that only knows how to run the binary.
+//! Opening the TUI in a terminal, a URL in a browser, remuda's page, and a
+//! notification on the desktop, from a frontend that only knows how to run the
+//! binary.
 //!
 //! Terminal discovery lives here rather than in the waybar crate so every
 //! frontend's "open" button is a spawn of a command it already knows how to
 //! run. No frontend needs to know what a terminal is.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::TokenGaugeConfig;
@@ -120,6 +121,49 @@ pub fn open_url(url: &str) -> bool {
     Command::new(opener)
         .arg(url)
         .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
+/// `remuda`, else `~/.local/bin/remuda`, where its installer puts it: a GUI
+/// started outside a login shell often has no `~/.local/bin` on its `PATH`.
+pub fn remuda_binary() -> Option<PathBuf> {
+    remuda_binary_in(which("remuda"), dirs::home_dir())
+}
+
+fn remuda_binary_in(on_path: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
+    on_path.or_else(|| {
+        let local = home?.join(".local/bin/remuda");
+        is_executable(&local).then_some(local)
+    })
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
+}
+
+/// `remuda open`, the only way to remuda's page: it reads the page's access
+/// token itself, so the token never reaches a command line or this process.
+pub fn remuda_open_command() -> Option<Command> {
+    let mut cmd = Command::new(remuda_binary()?);
+    cmd.arg("open");
+    Some(cmd)
+}
+
+pub fn open_remuda() -> bool {
+    let Some(mut cmd) = remuda_open_command() else {
+        return false;
+    };
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -304,5 +348,37 @@ mod tests {
         ));
         #[cfg(unix)]
         assert!(spawn_shell("exit 0"), "a real command still spawns");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remuda_is_found_on_the_path_else_where_its_installer_puts_it() {
+        let home = std::env::temp_dir().join(format!(
+            "tg-remuda-home-{}-{}",
+            std::process::id(),
+            crate::now_ms()
+        ));
+        let bin = home.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let local = bin.join("remuda");
+
+        let on_path = PathBuf::from("/usr/bin/remuda");
+        assert_eq!(
+            remuda_binary_in(Some(on_path.clone()), Some(home.clone())),
+            Some(on_path)
+        );
+        assert_eq!(remuda_binary_in(None, Some(home.clone())), None);
+
+        std::fs::write(&local, "#!/bin/sh\n").unwrap();
+        assert_eq!(
+            remuda_binary_in(None, Some(home.clone())),
+            None,
+            "a file nobody made executable is not remuda"
+        );
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&local, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(remuda_binary_in(None, Some(home.clone())), Some(local));
+        assert_eq!(remuda_binary_in(None, None), None);
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

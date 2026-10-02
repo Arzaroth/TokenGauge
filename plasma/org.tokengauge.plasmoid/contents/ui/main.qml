@@ -96,6 +96,8 @@ PlasmoidItem {
     function action(flag) { root.service.action(flag) }
     function applyUpdate() { root.service.applyUpdate() }
     function openSyncSetup() { root.service.openSyncSetup() }
+    function openRemuda() { root.service.openRemuda() }
+    readonly property alias remudaServing: root.service.remudaServing
 
     Component.onDestruction: root.service.shutdown()
 

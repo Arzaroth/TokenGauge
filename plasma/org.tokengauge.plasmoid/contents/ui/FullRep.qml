@@ -305,6 +305,13 @@ Item {
                 onClicked: full.openScreen(full.historyOpen ? "panel" : "history")
             }
             PlasmaComponents.ToolButton {
+                icon.name: "system-users"
+                display: QQC2.AbstractButton.IconOnly
+                text: i18n("Open remuda")
+                visible: root.remudaServing
+                onClicked: root.openRemuda()
+            }
+            PlasmaComponents.ToolButton {
                 icon.name: "configure"
                 display: QQC2.AbstractButton.IconOnly
                 text: i18n("Settings")

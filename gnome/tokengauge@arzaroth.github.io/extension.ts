@@ -611,6 +611,13 @@ class TokenGaugeIndicator extends PanelMenu.Button {
                 popupOf(this).close();
                 this._openSyncSetup();
             }));
+        if (this._snapshot.remuda?.serving) {
+            header.add_child(this._iconButton('system-users-symbolic', _('Open remuda'),
+                () => {
+                    popupOf(this).close();
+                    this._action('--open=remuda');
+                }));
+        }
         header.add_child(this._iconButton('emblem-system-symbolic', _('Settings'),
             () => {
                 popupOf(this).close();

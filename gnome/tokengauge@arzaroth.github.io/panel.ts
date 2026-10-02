@@ -119,6 +119,11 @@ export interface Row {
     bar_tooltip: BarTooltip;
 }
 
+export interface Remuda {
+    serving: boolean;
+    version: string | null;
+}
+
 export interface Snapshot {
     version: string;
     rows: Row[];
@@ -129,6 +134,8 @@ export interface Snapshot {
     window: string;
     theme: Partial<Theme>;
     update: UpdateStatus | null;
+    /// Absent from a binary older than the remuda button.
+    remuda?: Remuda;
     /// The few bytes the binary rewrites after every fetch. Watching it is what
     /// makes another frontend's fetch land here at once instead of on the next
     /// poll.

@@ -369,3 +369,26 @@ test('disabling puts back everything it took', () => {
     assert.equal(Harness.timeouts.size, 0, 'a timeout left armed fires into a destroyed indicator');
     assert.ok(Harness.monitors.every(m => m.cancelled), 'a file monitor outlived the extension');
 });
+
+test('the remuda button shows only while remuda serves, and opens it through the binary', () => {
+    const remudaButton = indicator => Harness.byStyle(content(indicator), 'tokengauge-icon-button')
+        .find(b => b.accessible_name === 'Open remuda');
+
+    const {indicator} = enabled();
+    answer();
+    open(indicator);
+    assert.equal(panel.remuda.serving, false, 'the recording machine serves no remuda');
+    assert.equal(remudaButton(indicator), undefined);
+
+    const serving = JSON.parse(panelJson);
+    serving.remuda = {serving: true, version: '0.5.0'};
+    indicator._reload();
+    answer(JSON.stringify(serving));
+    const button = remudaButton(indicator);
+    assert.ok(button, 'no remuda button while remuda serves');
+
+    button.click();
+    const asked = Harness.find('--open=remuda');
+    assert.ok(asked, 'the button ran no command');
+    assert.ok(!asked.argv[2].includes('serve.url'), asked.argv[2]);
+});

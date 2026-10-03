@@ -206,9 +206,6 @@ impl App {
     /// against the clock at render time, so they only move when a row is built
     /// again. Reading the snapshot costs a file read, so the cycle is short.
     fn maybe_repoll_cache(&mut self) {
-        if self.pending_refresh.is_some() {
-            return;
-        }
         if self.last_cache_poll.elapsed() < Duration::from_secs(15) {
             return;
         }
@@ -217,6 +214,9 @@ impl App {
             return;
         };
         self.state.remuda_serving = tokengauge_core::remuda::status(&config).serving;
+        if self.pending_refresh.is_some() {
+            return;
+        }
         let Ok(cached) = read_cache_full(&config.cache_file) else {
             return;
         };

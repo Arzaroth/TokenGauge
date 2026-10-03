@@ -135,14 +135,6 @@ mod tests {
         .unwrap();
     }
 
-    fn closed_port() -> u16 {
-        TcpListener::bind(("127.0.0.1", 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
-    }
-
     #[test]
     fn the_serve_keys_are_spelled_as_the_adr_says() {
         let json = r#"{"pid": 42, "started": 123456, "port": 7429, "version": "0.5.0"}"#;
@@ -206,7 +198,8 @@ mod tests {
         std::fs::write(dir.join(STATUS_FILE), "{not json").unwrap();
         assert_eq!(status_in(&dir), Status::default());
 
-        write(&dir, std::process::id(), me(), closed_port());
+        // Nothing can listen on port 0, so a connect to it is always refused.
+        write(&dir, std::process::id(), me(), 0);
         assert_eq!(status_in(&dir), Status::default());
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();

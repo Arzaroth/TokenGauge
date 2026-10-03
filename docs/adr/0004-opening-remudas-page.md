@@ -33,8 +33,9 @@ this.
   TCP connect to `127.0.0.1:<port>` succeeds within 300 ms.
 - **`remuda open`**, with no arguments, is the only way to the page. It reads
   the token itself and opens the browser through a private redirect file, so
-  the token is on no command line. It exits non-zero with a message when
-  nothing serves.
+  the token is on no command line, and prints the URL without its token. When
+  nothing serves it starts `remuda-serve.service` if that unit is installed
+  and waits up to 10s for it, and otherwise exits non-zero with a message.
 
 `remuda::tests::the_serve_keys_are_spelled_as_the_adr_says` pins the key names
 and `remuda::tests::a_start_time_is_the_twenty_second_stat_field` the parsing.
@@ -55,7 +56,8 @@ Renaming a key is a change to this ADR and to remuda.
   is `remuda` on `PATH`, else `~/.local/bin/remuda`, where remuda's installer
   puts it, because a GUI often starts without `~/.local/bin` on its `PATH`
   (`launch::remuda_binary`).
-- The TUI binds `m`; GNOME, Plasma and the Omarchy widget draw a header button.
+- The TUI and the Omarchy widget bind `m`; GNOME, Plasma and the Omarchy
+  widget draw a header button.
   Waybar has no button to draw, and `--open=remuda` is there to bind to a click
   in its config. The tray builds only for Windows and macOS, where remuda does
   not run, so it has nothing to show. `status` returns not serving off Linux
@@ -74,13 +76,20 @@ Renaming a key is a change to this ADR and to remuda.
 - **Show the button whenever remuda is installed**, and let `remuda open` start
   `remuda-serve.service`. A button that fails for anyone who has not installed
   that unit reads as broken. It can come later, when the unit is the common
-  case.
+  case. Until then the unit is started only for a page that stopped between a
+  render and the click, which `--open=remuda` waits through like any other
+  `remuda open`.
 
 ## Consequences
 
 - remuda releases after 0.4.2 write the files. Against an older remuda the
   button never appears, which is the honest state: there is no page to open.
 - A test of `--json` must not read the developer's runtime directory.
-  `json_snapshot` takes the status as a parameter, and the e2e harness and
+  `json_snapshot` takes the status as a parameter, the daemon reads it through
+  a probe on its state that its tests stub, and the e2e harness and
   `scripts/make-panel-fixture.sh` point `XDG_RUNTIME_DIR` at their own
-  temporary directory.
+  temporary directory. The e2e test of `--open=remuda` empties `PATH` and puts
+  a script where remuda's installer would, so no real remuda runs.
+- `panel::tests::every_frontend_with_a_header_offers_remuda_while_it_serves`
+  holds the TUI, GNOME, Plasma and the Omarchy widget to the button and keeps
+  `serve.url` out of their sources.

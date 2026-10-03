@@ -333,10 +333,10 @@ panel straight away.
 
 While `remuda serve` is running (by hand, or as remuda's
 `remuda-serve.service`), the GNOME, Plasma and Omarchy panels show a button
-that opens its page, and the TUI opens it with `m`. Waybar has no button; bind
-`tokengauge --open=remuda` to a click in its config instead. TokenGauge opens
-the page by running `remuda open`, so the page's access token never passes
-through it. This needs a remuda newer than 0.4.2 and Linux, where remuda runs.
+that opens its page, and the TUI and the Omarchy panel open it with `m`. Waybar
+has no button; bind `tokengauge --open=remuda` to a click in its config
+instead. TokenGauge opens the page by running `remuda open`, so the page's
+access token never passes through it. This needs a remuda newer than 0.4.2 and Linux, where remuda runs.
 
 `tokengauge --doctor` checks every stored credential without asking anyone.
 On Linux and macOS the store, its provider directories and its sidecars have

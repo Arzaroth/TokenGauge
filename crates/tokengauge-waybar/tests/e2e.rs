@@ -83,8 +83,12 @@ impl Machine {
 
     /// Run the shipped binary the way a frontend runs it.
     fn run(&self, args: &[&str]) -> (i32, String, String) {
+        self.run_in(Command::new(env!("CARGO_BIN_EXE_tokengauge")), args)
+    }
+
+    fn run_in(&self, mut command: Command, args: &[&str]) -> (i32, String, String) {
         let config = self.root.join("config.toml");
-        let out = Command::new(env!("CARGO_BIN_EXE_tokengauge"))
+        let out = command
             .arg("--config")
             .arg(&config)
             .args(args)
@@ -570,6 +574,55 @@ fn a_remuda_page_is_offered_only_while_it_is_served() {
     write(u32::MAX);
     assert_eq!(machine.json()["remuda"]["serving"], false);
     drop(listener);
+}
+
+/// `--open=remuda` is what every desktop button runs, chained `&& --json`, so
+/// it has to wait for `remuda open` and fail with it. A script stands in for
+/// remuda where its installer puts it, and PATH holds nothing, so no real
+/// remuda is ever started.
+#[cfg(unix)]
+#[test]
+fn opening_remuda_runs_remuda_open_and_fails_with_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let machine = Machine::with(&[("claude", true)], Some("claude"), "weekly");
+    let open = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_tokengauge"));
+        command.env("PATH", machine.root.join("empty"));
+        machine.run_in(command, &["--open=remuda"])
+    };
+
+    let (code, _, stderr) = open();
+    assert_ne!(code, 0);
+    assert!(stderr.contains("remuda is not installed"), "{stderr}");
+
+    let bin = machine.root.join(".local/bin");
+    std::fs::create_dir_all(&bin).expect("~/.local/bin");
+    let remuda = bin.join("remuda");
+    let install = |exit: i32| {
+        std::fs::write(
+            &remuda,
+            format!(
+                "#!/bin/sh\necho \"$@\" > \"$HOME/remuda-args\"\necho 'remuda is not serving' >&2\nexit {exit}\n"
+            ),
+        )
+        .expect("the stand-in");
+        std::fs::set_permissions(&remuda, std::fs::Permissions::from_mode(0o755))
+            .expect("executable");
+    };
+
+    install(0);
+    let (code, stdout, stderr) = open();
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(stdout, "");
+    let args = std::fs::read_to_string(machine.root.join("remuda-args")).expect("it ran");
+    assert_eq!(args.trim(), "open");
+
+    install(1);
+    let (code, _, stderr) = open();
+    assert_ne!(code, 0);
+    assert!(stderr.contains("remuda is not serving"), "{stderr}");
+    assert!(stderr.contains("`remuda open` failed"), "{stderr}");
 }
 
 /// Replace the first `resetsAt` with an instant that has passed, leaving the

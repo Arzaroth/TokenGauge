@@ -2023,6 +2023,62 @@ mod tests {
         }
     }
 
+    /// remuda's button, on every surface that can draw one (ADR 0004).
+    ///
+    /// Each must read `serving` off the status core resolves, and open the page
+    /// only through what the binary runs, never through remuda or its files.
+    /// Waybar is absent because it has no button to draw (`--open=remuda` is
+    /// for a click binding in its config), and the tray because it builds only
+    /// where remuda does not run.
+    #[test]
+    fn every_frontend_with_a_header_offers_remuda_while_it_serves() {
+        let frontends = [
+            (
+                "tui",
+                "crates/tokengauge-tui/src",
+                "rs",
+                "state.remuda_serving",
+                "launch::open_remuda",
+            ),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+                "root.remudaServing",
+                "--open=remuda",
+            ),
+            (
+                "gnome",
+                "gnome/tokengauge@arzaroth.github.io",
+                "ts",
+                "remuda?.serving",
+                "--open=remuda",
+            ),
+            (
+                "quickshell",
+                "omarchy/arzaroth.tokengauge",
+                "qml",
+                "usage.remudaServing",
+                "--open=remuda",
+            ),
+        ];
+
+        for (id, dir, extension, shown, opened) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            for needle in [shown, opened] {
+                assert!(
+                    sources.iter().any(|src| src.contains(needle)),
+                    "{id} ({dir}) never mentions `{needle}` - its remuda button \
+                     is missing or no longer follows the binary"
+                );
+            }
+            assert!(
+                !sources.iter().any(|src| src.contains("serve.url")),
+                "{id} ({dir}) names serve.url, which carries remuda's token"
+            );
+        }
+    }
+
     /// Every frontend says when it last refreshed.
     ///
     /// Five of the six put the sentence behind their refresh control: hovering

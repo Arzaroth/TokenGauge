@@ -144,6 +144,12 @@ Item {
     action("--refresh")
   }
 
+  readonly property bool remudaServing: !!(snapshot && snapshot.remuda && snapshot.remuda.serving)
+
+  function openRemuda() {
+    action("--open=remuda")
+  }
+
   // Both of these rewrite ~/.config/tokengauge/config.toml and reload the
   // daemon. `--set-provider` fetches a newly enabled provider before it
   // returns, so the --json chained behind it already carries the new row and

@@ -485,6 +485,7 @@ Panel {
         else if (root.settingsOpen && /^[1-9]$/.test(t)) root.toggleProviderAt(Number(t) - 1)
         else if (t === "u" || t === "U") root.openProviderUrl("dashboard_url")
         else if (t === "s" || t === "S") root.openProviderUrl("status_url")
+        else if ((t === "m" || t === "M") && usage.remudaServing && !usage.loading) usage.openRemuda()
       }
 
       Flickable {
@@ -625,6 +626,16 @@ Panel {
                   hoverColor: root.foreground
                   fontFamily: root.fontFamily
                   onClicked: root.openScreen(root.historyOpen ? "panel" : "history")
+                }
+                PanelActionButton {
+                  iconText: "󰀉"
+                  tooltipText: "Open remuda  m"
+                  visible: usage.remudaServing
+                  enabled: !usage.loading
+                  foreground: root.dim
+                  hoverColor: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: usage.openRemuda()
                 }
                 PanelActionButton {
                   iconText: "󰒓"

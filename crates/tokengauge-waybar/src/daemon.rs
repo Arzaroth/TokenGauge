@@ -254,6 +254,7 @@ pub(crate) fn current_snapshot(
 pub(crate) struct DaemonState {
     output: WaybarOutput,
     subscribers: Vec<UnixStream>,
+    remuda: fn(&TokenGaugeConfig) -> tokengauge_core::remuda::Status,
 }
 
 impl DaemonState {
@@ -304,6 +305,7 @@ pub(crate) fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Resu
             class: "tokengauge tokengauge-refreshing".into(),
         },
         subscribers: Vec::new(),
+        remuda: tokengauge_core::remuda::status,
     }));
 
     let shared_config = Arc::new(Mutex::new(config));
@@ -613,7 +615,8 @@ pub(crate) fn handle_client(
         }
         SocketCommand::Json => {
             let (rows, errors) = rows_from_cache(&config);
-            let snapshot = json_snapshot(&config, &rows, &errors);
+            let remuda = state.lock().expect("daemon state mutex poisoned").remuda;
+            let snapshot = json_snapshot(&config, &rows, &errors, &remuda(&config));
             let reply = SocketReply::Json { snapshot };
             writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
             stream.flush()?;
@@ -785,6 +788,7 @@ mod tests {
                 class: "tokengauge-test".into(),
             },
             subscribers: Vec::new(),
+            remuda: |_| tokengauge_core::remuda::Status::default(),
         }))
     }
 

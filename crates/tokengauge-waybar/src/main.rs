@@ -48,7 +48,8 @@ pub struct Args {
     /// Not for direct use.
     #[arg(long, hide = true)]
     internal_refresh_worker: bool,
-    /// Open the selected provider's dashboard or status page in the browser.
+    /// Open the selected provider's dashboard or status page in the browser,
+    /// or the page `remuda serve` is serving.
     #[arg(long, value_enum)]
     open: Option<OpenTarget>,
     /// Print a diagnostic checklist (deps, config, cache, providers, waybar wiring).
@@ -158,6 +159,7 @@ pub(crate) enum ExportFormat {
 enum OpenTarget {
     Dashboard,
     Status,
+    Remuda,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -362,6 +364,7 @@ fn main() -> Result<()> {
         // a browser it spawns can't reach the running instance and silently
         // opens nothing. handle_open reads the cache directly - no daemon
         // needed to resolve the selected provider's URL.
+        Action::Open(OpenTarget::Remuda) => open_remuda(),
         Action::Open(target) => {
             handle_open(&config, target);
             Ok(())
@@ -616,10 +619,27 @@ fn open_url_for_provider(provider: &str, target: OpenTarget) {
     let url = match target {
         OpenTarget::Dashboard => urls.dashboard,
         OpenTarget::Status => urls.status,
+        OpenTarget::Remuda => None,
     };
     if let Some(url) = url {
         tokengauge_core::launch::open_url(url);
     }
+}
+
+/// Waited on rather than spawned, so a frontend chaining `&& --json` behind it
+/// sees remuda's own "not serving" on stderr and a failed exit status.
+fn open_remuda() -> Result<()> {
+    let Some(mut command) = tokengauge_core::launch::remuda_open_command() else {
+        anyhow::bail!("remuda is not installed (looked on PATH and in ~/.local/bin)");
+    };
+    let status = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("`remuda open` failed ({status})");
+    }
+    Ok(())
 }
 
 fn handle_click(config: &TokenGaugeConfig) {

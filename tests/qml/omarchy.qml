@@ -108,6 +108,21 @@ Item {
             pinned.answer(panelJson, "", 0)
         }
 
+        // remuda's button follows the snapshot, and opening it is the binary's.
+        check.equal("the recording serves no remuda", usage.remudaServing, false)
+        Registry.clear()
+        usage.openRemuda()
+        var remuda = Registry.find("--open=remuda")
+        check.ok("opening remuda ran the binary", remuda !== null)
+        if (remuda) {
+            var serving = JSON.parse(panelJson)
+            serving.remuda = { serving: true, version: "0.5.0" }
+            check.ok("and read the snapshot behind it",
+                     remuda.command[2].indexOf("--json") > remuda.command[2].indexOf("--open=remuda"))
+            remuda.answer(JSON.stringify(serving), "", 0)
+            check.equal("a serving remuda shows the button", usage.remudaServing, true)
+        }
+
         // A run already in flight is refused rather than queued, so a button
         // that arms a spinner is told the request never started.
         Registry.clear()

@@ -67,6 +67,7 @@ XDG_CONFIG_HOME="$WORK" \
 XDG_DATA_HOME="$WORK/data" \
 XDG_CACHE_HOME="$WORK/cache" \
 CLAUDE_CONFIG_DIR="$WORK/claude" \
+XDG_RUNTIME_DIR="$WORK/run" \
   "$ROOT/target/release/tokengauge" --config "$WORK/config.toml" --json > "$WORK/panel.json"
 
 python3 - "$WORK/panel.json" "$OUT" <<'PY'

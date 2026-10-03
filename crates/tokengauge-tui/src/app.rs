@@ -30,6 +30,7 @@ pub struct AppState {
     pub detail_page: u16,
     pub initial_provider: Option<String>,
     pub overlay: Overlay,
+    pub remuda_serving: bool,
 }
 
 /// What is drawn over the panel, and what owns the keyboard while it is.
@@ -64,6 +65,7 @@ impl AppState {
             detail_page: 1,
             initial_provider: None,
             overlay: Overlay::default(),
+            remuda_serving: false,
         }
     }
 
@@ -122,9 +124,13 @@ impl App {
             .as_ref()
             .map(|c| c.cache_file.clone())
             .unwrap_or_else(tokengauge_core::default_cache_file);
+        let remuda_serving = loaded_config
+            .as_ref()
+            .is_some_and(|c| tokengauge_core::remuda::status(c).serving);
         let config_primary = loaded_config.and_then(|c| c.waybar.primary);
 
         let mut state = AppState::new(cache_file.clone());
+        state.remuda_serving = remuda_serving;
         state.initial_provider = read_waybar_state(&waybar_state_path(&cache_file))
             .selected
             .or(config_primary);
@@ -200,9 +206,6 @@ impl App {
     /// against the clock at render time, so they only move when a row is built
     /// again. Reading the snapshot costs a file read, so the cycle is short.
     fn maybe_repoll_cache(&mut self) {
-        if self.pending_refresh.is_some() {
-            return;
-        }
         if self.last_cache_poll.elapsed() < Duration::from_secs(15) {
             return;
         }
@@ -210,6 +213,10 @@ impl App {
         let Ok(config) = load_config(self.config_override.clone()) else {
             return;
         };
+        self.state.remuda_serving = tokengauge_core::remuda::status(&config).serving;
+        if self.pending_refresh.is_some() {
+            return;
+        }
         let Ok(cached) = read_cache_full(&config.cache_file) else {
             return;
         };
@@ -310,6 +317,7 @@ impl App {
             KeyCode::Char('s') => self.open_active_url(OpenWhich::Status),
             KeyCode::Char('S') => self.open_sync(),
             KeyCode::Char('H') => self.open_history(),
+            KeyCode::Char('m') if self.state.remuda_serving => self.open_remuda(),
             _ => {}
         }
         if self.state.active_tab != tab {
@@ -351,6 +359,22 @@ impl App {
         self.state.clamp_active_tab();
         self.state.last_refresh = Instant::now();
         self.state.status_message = None;
+    }
+
+    /// Asks again before opening: the flag is up to 15s old, and `remuda open`
+    /// on a page that stopped fails into /dev/null.
+    fn open_remuda(&mut self) {
+        let serving = load_config(self.config_override.clone())
+            .map(|config| tokengauge_core::remuda::status(&config).serving)
+            .unwrap_or(false);
+        self.state.remuda_serving = serving;
+        self.state.status_message = if !serving {
+            Some("remuda is no longer serving".into())
+        } else if !tokengauge_core::launch::open_remuda() {
+            Some("remuda is not installed (looked on PATH and in ~/.local/bin)".into())
+        } else {
+            None
+        };
     }
 
     fn open_active_url(&self, which: OpenWhich) {

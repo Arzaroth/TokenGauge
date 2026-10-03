@@ -66,6 +66,21 @@ Item {
         }
         check.equal("the theme came along", service.snapshot.theme.red, "#f38ba8")
 
+        // remuda's button follows the snapshot, and opening it is the binary's.
+        check.equal("the recording serves no remuda", service.remudaServing, false)
+        var serving = JSON.parse(panelJson)
+        serving.remuda = { serving: true, version: "0.5.0" }
+        Registry.clear()
+        service.openRemuda()
+        var remuda = Registry.find("--open=remuda")
+        check.ok("opening remuda ran the binary", remuda !== null)
+        if (remuda) {
+            check.ok("and read the snapshot behind it",
+                     remuda.commandLine.indexOf("--json") > remuda.commandLine.indexOf("--open=remuda"))
+            remuda.answer(JSON.stringify(serving), "", 0)
+            check.equal("a serving remuda shows the button", service.remudaServing, true)
+        }
+
         // An action runs the flag and the read in one source, so the applet
         // never renders against pre-action state.
         Registry.clear()

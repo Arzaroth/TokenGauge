@@ -100,6 +100,12 @@ Item {
         exec.connectSource(cmd(service.binary + " " + flag + " && " + service.binary + " --json"))
     }
 
+    readonly property bool remudaServing: !!(snapshot.remuda && snapshot.remuda.serving)
+
+    function openRemuda() {
+        action("--open=remuda")
+    }
+
     // Long-poll for the next change instead of only re-reading on a timer, so a
     // fetch by the daemon or another frontend shows up here at once. QML in a
     // plasmoid has no file watcher, so the wait happens in the binary: it parks

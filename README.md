@@ -93,6 +93,7 @@ terminal TUI. The waybar panel itself is the tooltip - hover the module.
 | `s` | Open active provider's status page |
 | `S` | Fleet sync setup |
 | `H` | Spend history (`h` / `l` / Tab cycle the range, `q` / `Esc` back) |
+| `m` | Open remuda's page, while `remuda serve` runs |
 | `q` / `Esc` | Quit |
 
 ## Configuration
@@ -329,6 +330,13 @@ period) or as soon as one of its windows resets. A stored credential whose
 token has expired shows as expired rather than as an error: remuda's timer
 refreshes it. Adding a credential or switching with `remuda use` refreshes the
 panel straight away.
+
+While `remuda serve` is running (by hand, or as remuda's
+`remuda-serve.service`), the GNOME, Plasma and Omarchy panels show a button
+that opens its page, and the TUI and the Omarchy panel open it with `m`. Waybar
+has no button; bind `tokengauge --open=remuda` to a click in its config
+instead. TokenGauge opens the page by running `remuda open`, so the page's
+access token never passes through it. This needs a remuda newer than 0.4.2 and Linux, where remuda runs.
 
 `tokengauge --doctor` checks every stored credential without asking anyone.
 On Linux and macOS the store, its provider directories and its sidecars have

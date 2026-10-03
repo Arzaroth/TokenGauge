@@ -784,7 +784,7 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing:
         .add_modifier(Modifier::BOLD);
     let dim_s = Style::default().fg(Color::Gray);
     let sep = Style::default().fg(Color::DarkGray);
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::raw(" "),
         Span::styled("j/k", key),
         Span::styled(" select", dim_s),
@@ -804,6 +804,15 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing:
         Span::styled("S", key),
         Span::styled(" sync", dim_s),
         Span::styled("  ", sep),
+    ];
+    if state.remuda_serving {
+        spans.extend([
+            Span::styled("m", key),
+            Span::styled(" remuda", dim_s),
+            Span::styled("  ", sep),
+        ]);
+    }
+    spans.extend([
         Span::styled("?", key),
         Span::styled(" help", dim_s),
         Span::styled("  ", sep),
@@ -817,7 +826,7 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing:
                 .add_modifier(Modifier::BOLD),
         ),
     ]);
-    frame.render_widget(Paragraph::new(line), area);
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_help_popup(frame: &mut Frame, area: Rect) {
@@ -851,6 +860,7 @@ fn render_help_popup(frame: &mut Frame, area: Rect) {
         binding_line("s", "open provider status page", key, desc),
         binding_line("S", "fleet sync setup", key, desc),
         binding_line("H", "spend history", key, desc),
+        binding_line("m", "open remuda (while it serves)", key, desc),
         binding_line("?", "toggle this help", key, desc),
         binding_line("q / esc", "quit", key, desc),
         Line::from(""),
@@ -897,6 +907,28 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_footer_offers_remuda_only_while_it_serves() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let footer = |serving: bool| {
+            let mut state = super::AppState::new(std::path::PathBuf::new());
+            state.remuda_serving = serving;
+            let mut terminal = Terminal::new(TestBackend::new(160, 1)).expect("terminal");
+            terminal
+                .draw(|frame| super::render_footer(frame, frame.area(), &state, false))
+                .expect("draw");
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        assert!(footer(true).contains("m remuda"), "{}", footer(true));
+        assert!(!footer(false).contains("remuda"), "{}", footer(false));
+    }
 
     /// Several credentials draw more than a terminal has lines for, and one
     /// uncapped section can be taller than the pane on its own. The pane is a

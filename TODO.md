@@ -245,6 +245,9 @@ one product rather than five.
   against the rule in `CLAUDE.md` about 0.22.x updaters before flipping it.
 - **`--client-tail` is hidden and experimental** ("most waybar versions don't
   pick up streaming exec output"). Either make it work or retire it.
+- **The Omarchy widget drops an action's stderr** into `console.warn` and
+  banners "exited 1", where GNOME and Plasma show the message. A failed
+  `--open=remuda` says why on those two and not here.
 
 ## Deferred from the history work
 

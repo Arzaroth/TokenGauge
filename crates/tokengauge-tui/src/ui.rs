@@ -404,27 +404,11 @@ fn section_header(title: &str) -> Paragraph<'static> {
     )))
 }
 
-/// How many cells each segment of a split bar gets, and how many of those are
-/// filled: its share of `width` once the separators between them are taken
-/// out, two at least so a small plan stays readable.
-fn split_bar_cells(segments: &[Segment], width: usize) -> Vec<(usize, usize)> {
-    let content = width.saturating_sub(segments.len().saturating_sub(1));
-    segments
-        .iter()
-        .map(|seg| {
-            let cells = ((seg.width * content as f64).floor() as usize).max(2);
-            let filled =
-                ((seg.fraction.clamp(0.0, 1.0) * cells as f64).round() as usize).min(cells);
-            (cells, filled)
-        })
-        .collect()
-}
-
 fn split_bar_spans(segments: &[Segment], width: usize) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     for (i, (seg, (cells, filled))) in segments
         .iter()
-        .zip(split_bar_cells(segments, width))
+        .zip(tokengauge_core::segment_cells(segments, width))
         .enumerate()
     {
         if i > 0 {
@@ -1146,20 +1130,6 @@ mod tests {
             assert!(out.contains(label), "missing `{label}`:\n{out}");
         }
         assert!(!out.contains("Month "), "the old TUI-only heading survived");
-    }
-
-    #[test]
-    fn a_split_bar_shares_its_width_and_keeps_a_small_plan_readable() {
-        let seg = |width, fraction| Segment {
-            width,
-            fraction,
-            tone: Tone::Good,
-        };
-        let segments = [seg(0.75, 0.5), seg(0.25, 1.0)];
-        let cells = split_bar_cells(&segments, 41);
-        assert_eq!(cells, [(30, 15), (10, 10)]);
-        let tiny = [seg(0.98, 0.0), seg(0.02, 1.0)];
-        assert_eq!(split_bar_cells(&tiny, 21)[1], (2, 2));
     }
 
     /// Every kind the spec can hand over has a shape here. A new kind added to

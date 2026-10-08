@@ -133,6 +133,44 @@ pub struct Segment {
     pub tone: Tone,
 }
 
+/// A split bar in a character grid: how many cells each segment gets and how
+/// many of those are filled, when the bar is `width` cells including one
+/// separator between each pair. The cells add up to exactly that, so a split
+/// bar lines up with the plain bars beside it, and each segment gets one cell
+/// at least. Waybar and the TUI draw in cells; the pixel frontends use
+/// [`Segment::width`] directly.
+pub fn segment_cells(segments: &[Segment], width: usize) -> Vec<(usize, usize)> {
+    let n = segments.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let content = width.saturating_sub(n.saturating_sub(1)).max(n);
+    let ideal: Vec<f64> = segments.iter().map(|s| s.width * content as f64).collect();
+    let mut cells: Vec<usize> = ideal.iter().map(|i| (*i as usize).max(1)).collect();
+    while cells.iter().sum::<usize>() > content {
+        let Some(widest) = (0..n).filter(|i| cells[*i] > 1).max_by_key(|i| cells[*i]) else {
+            break;
+        };
+        cells[widest] -= 1;
+    }
+    while cells.iter().sum::<usize>() < content {
+        let behind = (0..n)
+            .max_by(|a, b| {
+                (ideal[*a] - cells[*a] as f64).total_cmp(&(ideal[*b] - cells[*b] as f64))
+            })
+            .expect("at least one segment");
+        cells[behind] += 1;
+    }
+    segments
+        .iter()
+        .zip(cells)
+        .map(|(s, cells)| {
+            let filled = (s.fraction.clamp(0.0, 1.0) * cells as f64).round() as usize;
+            (cells, filled.min(cells))
+        })
+        .collect()
+}
+
 /// How a frontend draws a section's rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1720,6 +1758,28 @@ mod tests {
         let total: f64 = segments.iter().map(|s| s.width).sum();
         assert!((total - 1.0).abs() < 1e-9);
         assert!(segments.iter().all(|s| s.width >= MIN_SEGMENT_WIDTH - 1e-9));
+    }
+
+    #[test]
+    fn segment_cells_fill_the_bar_exactly_with_one_cell_at_least_each() {
+        let seg = |width, fraction| Segment {
+            width,
+            fraction,
+            tone: Tone::Good,
+        };
+        let total = |cells: &[(usize, usize)]| cells.iter().map(|c| c.0).sum::<usize>();
+        let cells = segment_cells(&[seg(0.8, 0.5), seg(0.1, 1.0), seg(0.1, 0.0)], 10);
+        assert_eq!(total(&cells) + 2, 10, "{cells:?}");
+        assert_eq!(cells, [(6, 3), (1, 1), (1, 0)]);
+        let thirds = vec![seg(1.0 / 3.0, 0.0); 3];
+        assert_eq!(total(&segment_cells(&thirds, 40)) + 2, 40);
+        assert_eq!(
+            segment_cells(&[seg(0.75, 0.5), seg(0.25, 1.0)], 41),
+            [(30, 15), (10, 10)]
+        );
+        let many = vec![seg(1.0 / 12.0, 1.0); 12];
+        assert!(segment_cells(&many, 10).iter().all(|c| c.0 == 1));
+        assert!(segment_cells(&[], 10).is_empty());
     }
 
     #[test]

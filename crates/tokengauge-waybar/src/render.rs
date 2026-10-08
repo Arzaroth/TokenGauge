@@ -306,16 +306,14 @@ pub(crate) fn fraction_bar(fraction: f64) -> String {
     tooltip_bar((fraction.clamp(0.0, 1.0) * 100.0).round() as u8)
 }
 
-/// A split bar: each segment its share of ten cells (two at least, so a small
-/// plan stays readable), filled in its own tier and divided by a dim rule.
+/// A split bar ten cells wide like the plain ones, separators included, each
+/// segment filled in its own tier and divided by a dim rule.
 pub(crate) fn segmented_bar(segments: &[Segment]) -> String {
     let dim = theme_palette().0;
     segments
         .iter()
-        .map(|seg| {
-            let cells = ((seg.width * 10.0).round() as usize).max(2);
-            let filled =
-                ((seg.fraction.clamp(0.0, 1.0) * cells as f64).round() as usize).min(cells);
+        .zip(tokengauge_core::segment_cells(segments, 10))
+        .map(|(seg, (cells, filled))| {
             format!(
                 "<span foreground=\"{}\">{}</span><span foreground=\"{dim}\">{}</span>",
                 tone_color(seg.tone),
@@ -618,7 +616,7 @@ pub(crate) mod tests {
             .split('<')
             .filter_map(|part| part.split_once('>').map(|(_, text)| text))
             .collect();
-        assert_eq!(plain, "━━━━────┊━━");
+        assert_eq!(plain, "━━━━───┊━━");
         assert!(bar.contains(tone_color(Tone::Critical)));
     }
 

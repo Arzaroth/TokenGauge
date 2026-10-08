@@ -33,6 +33,7 @@ use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
+use crate::credentials::{LiveLogin, key_login, stored_key};
 use crate::provider::check_status;
 use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
@@ -208,6 +209,37 @@ fn to_payload(body: UsageResponse, now: DateTime<Utc>) -> Result<ProviderPayload
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let key = api_key()?;
+    Ok(vec![usage_for(
+        &key,
+        timeout,
+        now,
+        "check OPENCODE_API_KEY",
+    )?])
+}
+
+pub(crate) fn live_login() -> LiveLogin {
+    key_login(api_key().ok())
+}
+
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    usage_for(
+        &stored_key(text)?,
+        timeout,
+        now,
+        "opencode refused the stored key (`remuda login -p opencode` replaces it)",
+    )
+}
+
+fn usage_for(
+    key: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+    unauthorized_hint: &str,
+) -> Result<ProviderPayload> {
     let url = endpoint_for(env_clean(ENDPOINT_ENV).as_deref())?;
     let client = http_client(timeout)?;
 
@@ -218,7 +250,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         .send()
         .context("opencode usage request failed")?;
 
-    check_status(resp.status(), "opencode", "check OPENCODE_API_KEY")?;
+    check_status(resp.status(), "opencode", unauthorized_hint)?;
 
     let text = resp.text().context("opencode usage read failed")?;
     if text.trim().is_empty() {
@@ -227,7 +259,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let body: UsageResponse =
         serde_json::from_str(&text).context("opencode usage JSON was invalid")?;
 
-    Ok(vec![to_payload(body, now)?])
+    to_payload(body, now)
 }
 
 #[cfg(test)]

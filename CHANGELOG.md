@@ -19,9 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   panel taller than a 1080p screen, and GNOME moves a tall menu rather than
   shrinking it, so the bottom was off screen. The popup now stops at most of
   the screen's height and scrolls, back to the top each time it opens.
-- **Every button in the GNOME popup header says what it does on hover.** Only
-  Refresh did. The icon theme decides the glyphs, and GNOME 50 draws "Open
-  dashboard" as a leaf.
+- **Every icon button in the GNOME and Plasma panel headers says what it does
+  on hover.** Only Refresh did. The icon theme decides the glyphs, and GNOME 50
+  draws "Open dashboard" as a leaf.
 - **Opening the TUI works on stock GNOME and KDE.** Fleet sync setup, and
   anything else that opens the TUI, looked only for ghostty, alacritty, kitty,
   wezterm, foot and xterm, so on GNOME it failed with an error that seemed to

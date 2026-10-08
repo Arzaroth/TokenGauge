@@ -406,6 +406,7 @@ never quietly disagree about it:
 | `crates/tokengauge-waybar/tests/e2e.rs` | the shipped binary | config, cache, staleness, `panel_spec`, the JSON |
 | `tests/qml/run.sh` | `Usage.qml`, `Service.qml` | bindings, the snapshot read back, the next command |
 | `tests/gnome/run.sh` | the compiled `extension.js` | all of that, plus the widget tree it draws |
+| `tests/gnome/shell/run.sh` | the compiled extension, in a real GNOME Shell | what the shell does with that tree: GJS errors, sizing, scrolling |
 
 None of them touches a network, a credential or a daemon. The binary's tests
 seed a fresh snapshot, so `cache_is_stale()` says serve and the run never
@@ -438,14 +439,18 @@ which the e2e tests already assert, and the tray is Rust that only builds on
 Windows and macOS.
 
 The stubs see the tree the extension builds, not what the shell does with it.
-`tests/gnome/shell/run.sh` is the fourth harness and the only one that runs a
-real GNOME Shell - headless, in a container, against the compiled extension -
-and screenshots the popup. It is local and opt-in (it pulls a Fedora image), so
-it is not in CI. Run it, with `--live` for a panel that has token breakdowns and
-several credentials, after a change to how the GNOME popup draws or sizes. The
-fixture carries no `bars` section, so between them the stubs and that fixture
-missed a crash that cut the GNOME panel off at COST for five releases. The St
-stub now throws on an `undefined` initializer property, as GJS does.
+`tests/gnome/shell/run.sh` runs a real GNOME Shell, headless in a container,
+against the compiled extension. It screenshots the popup and fails when the
+extension throws, the popup runs off the monitor, or its content is squeezed
+instead of scrolled. It is local and opt-in, since it pulls a Fedora image, so
+it is not in CI. Run it after a change to how the GNOME popup draws or sizes:
+with `--live` for a panel that has token breakdowns and several credentials,
+and with `--gnome 45` as well as the default 50, because the two shells'
+scroll views differ (45's is an St.Bin, and its box lays rows out at their
+minimum height). The fixture carries no `bars` section, so the stubs and that
+fixture together missed a crash that cut the GNOME panel off at COST from
+0.30.0 to 0.39.0. The St stub now throws on an `undefined` initializer
+property, as GJS does.
 
 ## The binary is `tokengauge`, the crate is not
 
@@ -581,7 +586,9 @@ still catch schema mistakes.
   `cargo test --workspace`. For QML run `qmllint`, for the GNOME extension
   `pnpm typecheck` and then `scripts/build.sh`, and then the two frontend
   harnesses: `tests/qml/run.sh` and `tests/gnome/run.sh`. CI's `frontends` job
-  runs all of them, so they are enforced rather than remembered.
+  runs all of them, so they are enforced rather than remembered. A change to
+  the GNOME popup's layout also gets `tests/gnome/shell/run.sh --live`, at
+  `--gnome 45` and 50, which nothing enforces.
 - `scripts/coverage.sh` runs `cargo llvm-cov` over the workspace and then ranks
   the files by uncovered lines; `--html` opens the browsable report. It is a
   local tool, not a CI gate - nothing fails on a number. The gaps it keeps

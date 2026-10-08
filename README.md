@@ -396,7 +396,8 @@ Left-click goes through `tokengauge --click`, which launches
 `omarchy-launch-or-focus-tui` when present, otherwise picks the first of
 `$TERMINAL`, `ghostty`, `alacritty`, `kitty`, `wezterm`, `foot`, `ptyxis`,
 `kgx`, `gnome-terminal`, `konsole`, `xterm` on `$PATH`. Override with
-`[waybar].tui_command`, which every frontend reads, not only Waybar.
+`[waybar].tui_command`, which the GNOME, Plasma and Omarchy panels read too,
+not only Waybar.
 
 `tokengauge --doctor` reports the resolved click target and warns
 when its leading binary isn't on `$PATH`.

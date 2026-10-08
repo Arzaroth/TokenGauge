@@ -261,7 +261,12 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Included", "Cursor models", "Other models"),
         natively_read: false,
         fetch: cursor::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: cursor::live_login,
+            tokens: cursor::stored_tokens,
+            fetch: cursor::fetch_stored,
+            check: cursor::check_stored,
+        }),
         auth: cursor_auth,
         enabled_in: |c| c.cursor,
     },

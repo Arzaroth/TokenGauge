@@ -49,6 +49,16 @@ alive are all the switcher's job.
   other tokens; when the digest does not match, TokenGauge must not trust the
   sidecar's identity for that credential (remuda re-identifies it on its next
   run). A sidecar without the key predates it and is trusted.
+- **The other providers** follow the same layout, each file in its CLI's own
+  shape: Grok's `auth.json` (keyed by OIDC scope; `accountId` is the access
+  token's `sub`), Kimi's `credentials/kimi-code.json` (`accountId` is the
+  `user_id` kimi.com's `/me` answers, since the file names nobody), and
+  cursor-agent's `auth.json` (`accountId` is the user id after the `|` in the
+  access token's `sub`). GLM and opencode Go hold an API key as
+  `{"key": "..."}`, with no account behind it: `accountId` is `key-` and the
+  first 16 hex digits of the key's SHA-256, so two copies of one key are one
+  credential and the live key is matched without the key ever being written
+  into a sidecar.
 - The **active credential** is found by identity, not by token: TokenGauge
   reads the live source's tokens as it does today, derives the live identity
   the way remuda does, and matches it against the sidecars. Tokens rotate, and
@@ -182,6 +192,13 @@ each.
   active credential. The digest is computed over the bytes read once, and those
   same bytes are parsed. A sidecar without `credsDigest` stays trusted: remuda
   trusts it too and replaces it first on its next save of that credential.
+- **Who refreshes the other providers.** The same split: remuda refreshes the
+  inactive Grok, Kimi and Cursor logins, the CLI its own. TokenGauge sends a
+  stored Kimi token with this machine's `device_id`, as the CLI would; it never
+  mints one. An API key never expires, so a stored key is always asked about,
+  and a refused one is an error, not the `expired` state. A Kimi login carries
+  no identity TokenGauge can read offline, so a live one is matched by its
+  tokens alone.
 - **Session cost** follows the active credential. `cost::anchor_burn_rates`
   skips a payload with `active: false`, so an inactive plan's window can no
   longer be the one that measures the session. Threshold notifications follow

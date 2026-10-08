@@ -56,7 +56,7 @@ pub fn tui_command_with(config: &TokenGaugeConfig, args: &[&str]) -> String {
         return terminal_app_command(&format!("{}{extra}", shell_quote(&tui_path())));
     }
     match terminal() {
-        Some(term) => format!("{term} {} tokengauge-tui{extra}", run_flag(&term)),
+        Some(term) => terminal_command(&term, &extra),
         None => String::new(),
     }
 }
@@ -116,6 +116,10 @@ const TERMINALS: &[(&str, &str)] = &[
     ("konsole", "-e"),
     ("xterm", "-e"),
 ];
+
+fn terminal_command(term: &str, extra: &str) -> String {
+    format!("{term} {} tokengauge-tui{extra}", run_flag(term))
+}
 
 /// `-e` for a terminal this does not know, which is the convention
 /// `$TERMINAL` is held to.
@@ -328,6 +332,11 @@ mod tests {
         assert_eq!(run_flag("/usr/bin/gnome-terminal"), "--");
         assert_eq!(run_flag("konsole"), "-e");
         assert_eq!(run_flag("my-own-term"), "-e", "$TERMINAL is held to -e");
+        assert_eq!(
+            terminal_command("ptyxis", " --sync"),
+            "ptyxis --new-window -- tokengauge-tui --sync"
+        );
+        assert_eq!(terminal_command("xterm", ""), "xterm -e tokengauge-tui");
     }
 
     /// `which` is the doctor's PATH walk as well as this module's, so it has to

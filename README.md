@@ -394,8 +394,9 @@ starts daemons from an existing unit) so theme / refresh_secs / providers / clic
 Left-click goes through `tokengauge --click`, which launches
 `tokengauge-tui` in a terminal. It auto-detects
 `omarchy-launch-or-focus-tui` when present, otherwise picks the first of
-`$TERMINAL`, `ghostty`, `alacritty`, `kitty`, `wezterm`, `foot`, `xterm`
-on `$PATH`. Override with `[waybar].tui_command`.
+`$TERMINAL`, `ghostty`, `alacritty`, `kitty`, `wezterm`, `foot`, `ptyxis`,
+`kgx`, `gnome-terminal`, `konsole`, `xterm` on `$PATH`. Override with
+`[waybar].tui_command`, which every frontend reads, not only Waybar.
 
 `tokengauge --doctor` reports the resolved click target and warns
 when its leading binary isn't on `$PATH`.
@@ -562,10 +563,11 @@ add this to `~/.config/waybar/config.jsonc`:
 
 `tokengauge --click` resolves the launcher itself: it prefers
 `omarchy-launch-or-focus-tui` when present, otherwise auto-picks a terminal
-from `$TERMINAL` / ghostty / alacritty / kitty / wezterm / foot / xterm. To
+from `$TERMINAL` / ghostty / alacritty / kitty / wezterm / foot / ptyxis /
+kgx / gnome-terminal / konsole / xterm. To
 override, set `[waybar].tui_command` in `config.toml`.
 
-Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot tokengauge-tui`.
+Other terminals: `alacritty -e tokengauge-tui`, `kitty -e tokengauge-tui`, `foot tokengauge-tui`, `ptyxis --new-window -- tokengauge-tui`.
 
 ## Manual Installation
 

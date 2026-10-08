@@ -437,6 +437,16 @@ Waybar and the tray are absent: waybar's surface is the binary's own output,
 which the e2e tests already assert, and the tray is Rust that only builds on
 Windows and macOS.
 
+The stubs see the tree the extension builds, not what the shell does with it.
+`tests/gnome/shell/run.sh` is the fourth harness and the only one that runs a
+real GNOME Shell - headless, in a container, against the compiled extension -
+and screenshots the popup. It is local and opt-in (it pulls a Fedora image), so
+it is not in CI. Run it, with `--live` for a panel that has token breakdowns and
+several credentials, after a change to how the GNOME popup draws or sizes. The
+fixture carries no `bars` section, so between them the stubs and that fixture
+missed a crash that cut the GNOME panel off at COST for five releases. The St
+stub now throws on an `undefined` initializer property, as GJS does.
+
 ## The binary is `tokengauge`, the crate is not
 
 `crates/tokengauge-waybar` still builds the shared backend every frontend shells

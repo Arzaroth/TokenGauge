@@ -246,13 +246,38 @@ impl CredentialsConfig {
 pub struct PanelConfig {
     /// Draw the active credential's limits and none of the others'. The
     /// `plans` header still adds them all up, and says how many there are.
+    #[serde(deserialize_with = "or_default")]
     pub active_credential_only: bool,
+    #[serde(deserialize_with = "or_default")]
     pub plans_total: PlansTotal,
     /// One bar segment per credential under each `plans` meter, in place of
     /// a single pooled bar.
+    #[serde(deserialize_with = "or_true")]
     pub split_bars: bool,
     #[serde(flatten)]
     pub unknown: HashMap<String, toml::Value>,
+}
+
+/// A `[panel]` value that does not parse reads as the default rather than
+/// failing the whole config: these are hand-edited, and a config that does not
+/// load takes every frontend down, `--set-panel` that would repair it included.
+fn or_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    Ok(toml::Value::deserialize(deserializer)?
+        .try_into()
+        .unwrap_or_default())
+}
+
+fn or_true<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(toml::Value::deserialize(deserializer)?
+        .as_bool()
+        .unwrap_or(true))
 }
 
 impl Default for PanelConfig {
@@ -622,6 +647,22 @@ mod tests {
         assert!(config.unknown_config_keys().is_empty());
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_panel_value_that_does_not_parse_reads_as_the_default() {
+        let config: TokenGaugeConfig = toml::from_str(
+            "[panel]\nactive_credential_only = \"yes\"\nplans_total = \"Absolute\"\nsplit_bars = \"no\"\n",
+        )
+        .unwrap();
+        assert!(!config.panel.active_credential_only);
+        assert_eq!(config.panel.plans_total, PlansTotal::Weighted);
+        assert!(config.panel.split_bars);
+
+        let config: TokenGaugeConfig =
+            toml::from_str("[panel]\nplans_total = \"absolute\"\nsplit_bars = false\n").unwrap();
+        assert_eq!(config.panel.plans_total, PlansTotal::Absolute);
+        assert!(!config.panel.split_bars);
     }
 
     #[test]

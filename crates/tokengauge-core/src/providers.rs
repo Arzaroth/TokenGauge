@@ -139,7 +139,12 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Weekly", "Rate Limit", "Tertiary"),
         natively_read: true,
         fetch: kimi::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: kimi::live_login,
+            tokens: kimi::stored_tokens,
+            fetch: kimi::fetch_stored,
+            check: kimi::check_stored,
+        }),
         auth: kimi_auth,
         enabled_in: |c| c.kimi,
     },

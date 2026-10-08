@@ -130,6 +130,55 @@ export function barFill(
     return area;
 }
 
+/// Where each segment of a split bar lands across `width`: its stretch, and how
+/// much of that stretch is filled. Gaps come out of the segments, not the ends.
+export function segmentSpans(
+    segments: Panel.Segment[], width: number, gap: number,
+): {x: number; w: number; filled: number}[] {
+    const usable = Math.max(0, width - gap * Math.max(0, segments.length - 1));
+    const spans = [];
+    let x = 0;
+    for (const seg of segments) {
+        const w = usable * Math.max(0, Math.min(1, Number(seg.width) || 0));
+        const filled = w * Math.max(0, Math.min(1, Number(seg.fraction) || 0));
+        spans.push({x, w, filled});
+        x += w + gap;
+    }
+    return spans;
+}
+
+// A split bar: one stretch per credential, each its own track, filled in its
+// own tier. Drawn whole, because the stretches are shares of the width the
+// popup gives the row and only the repaint knows that width.
+export function splitBar(
+    segments: Panel.Segment[], colorOf: (tone: Panel.Tone) => string,
+    trackRgba: [number, number, number, number],
+): St.DrawingArea {
+    const area = new St.DrawingArea({
+        style_class: 'tokengauge-meter-split',
+        x_expand: true,
+    });
+    area.connect('repaint', () => {
+        const [width, height] = area.get_surface_size();
+        if (width <= 0 || height <= 0)
+            return;
+        const cr = area.get_context();
+        const spans = segmentSpans(segments, width, 3);
+        spans.forEach((span, i) => {
+            cr.setSourceRGBA(...trackRgba);
+            cr.rectangle(span.x, 0, span.w, height);
+            cr.fill();
+            if (span.filled > 0) {
+                cr.setSourceRGBA(...hexToRgb(colorOf(segments[i].tone)), 1);
+                cr.rectangle(span.x, 0, span.filled, height);
+                cr.fill();
+            }
+        });
+        cr.$dispose();
+    });
+    return area;
+}
+
 // Cairo wants components and the snapshot's theme carries hex strings.
 export function hexToRgb(hex: string): [number, number, number] {
     const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || ''));

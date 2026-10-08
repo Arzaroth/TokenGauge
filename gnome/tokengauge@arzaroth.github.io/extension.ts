@@ -12,7 +12,7 @@ import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/ex
 import * as Panel from './panel.js';
 import {isCancelled, shellQuote} from './util.js';
 import {
-    attachTooltip, barFill, box, historyChart, label, scrollLimit, scrollView, spacer, verticalAdjustment,
+    attachTooltip, barFill, box, historyChart, label, scrollLimit, scrollView, spacer, splitBar, verticalAdjustment,
 } from './widgets.js';
 
 // How often the open menu re-reads the snapshot. See `_setLive`.
@@ -743,14 +743,19 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             `color: ${this._toneColor(row.tone)};`));
         meter.add_child(top);
 
-        const track = new St.Widget({
-            style_class: 'tokengauge-meter-track',
-            layout_manager: new Clutter.BinLayout(),
-            x_expand: true,
-        });
-        track.add_child(barFill(row.fraction, 4, 'tokengauge-meter-fill',
-            `color: ${this._toneColor(row.tone)};`));
-        meter.add_child(track);
+        const segments = row.segments || [];
+        if (segments.length > 0) {
+            meter.add_child(splitBar(segments, tone => this._toneColor(tone), [1, 1, 1, 0.12]));
+        } else {
+            const track = new St.Widget({
+                style_class: 'tokengauge-meter-track',
+                layout_manager: new Clutter.BinLayout(),
+                x_expand: true,
+            });
+            track.add_child(barFill(row.fraction, 4, 'tokengauge-meter-fill',
+                `color: ${this._toneColor(row.tone)};`));
+            meter.add_child(track);
+        }
 
         if (row.footnote || row.badge) {
             const trailing = box(false, {x_expand: true});

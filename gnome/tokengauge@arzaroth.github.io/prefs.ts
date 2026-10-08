@@ -4,7 +4,7 @@ import Gtk from 'gi://Gtk';
 
 import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-import type * as Panel from './panel.js';
+import * as Panel from './panel.js';
 import {isCancelled, shellQuote} from './util.js';
 
 type RunCallback = (successful: boolean, stdout: string, stderr: string) => void;
@@ -98,6 +98,11 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
         // separately: `--update` replaces binaries, and until the extension is
         // reinstalled it keeps driving whatever JavaScript this box already had.
         // Showing only one of them is what made that skew invisible.
+        const credentials = new Adw.PreferencesGroup({
+            title: _('Several credentials'),
+            description: _('How a provider with several stored logins is drawn'),
+        });
+
         const about = new Adw.PreferencesGroup({title: _('About')});
         const extensionVersion = this.metadata['version-name'] || null;
         const version = new Adw.ActionRow({
@@ -143,6 +148,7 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
                 return;
             }
             group.remove(status);
+            this._fillPanelOptions(credentials, snapshot, bin, cancellable);
 
             const enabled = snapshot.enabled || [];
             for (const name of names) {
@@ -179,6 +185,81 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
             }
         });
 
+        page.add(credentials);
         page.add(about);
+    }
+
+    // `[panel]` lives in the shared config like the providers do, so its state
+    // comes from the snapshot and a change goes through `--set-panel`. A row
+    // stays insensitive until its write lands and snaps back if it fails, for
+    // the same reason the provider switches do.
+    _fillPanelOptions(
+        group: Adw.PreferencesGroup,
+        snapshot: Panel.Snapshot,
+        bin: () => string,
+        cancellable: Gio.Cancellable,
+    ): void {
+        const options = {...Panel.DEFAULT_PANEL_OPTIONS, ...(snapshot.panel_options || {})};
+        const write = (
+            row: Adw.ActionRow,
+            key: string,
+            value: string,
+            revert: () => void,
+        ) => {
+            row.sensitive = false;
+            run(`${bin()} --set-panel ${shellQuote(`${key}=${value}`)}`, cancellable, (ok, _out, err) => {
+                row.sensitive = true;
+                if (ok) {
+                    row.subtitle = '';
+                    return;
+                }
+                row.subtitle = (err || '').trim().split('\n')[0] || _('could not update the config');
+                revert();
+            });
+        };
+
+        const toggle = (title: string, key: 'active_credential_only' | 'split_bars') => {
+            const row = new Adw.SwitchRow({title, active: options[key]});
+            let confirmed = row.active;
+            let reverting = false;
+            row.connect('notify::active', () => {
+                if (reverting)
+                    return;
+                const previous = confirmed;
+                confirmed = row.active;
+                write(row, key, confirmed ? 'true' : 'false', () => {
+                    reverting = true;
+                    row.active = previous;
+                    confirmed = previous;
+                    reverting = false;
+                });
+            });
+            group.add(row);
+        };
+        toggle(_('Active credential only'), 'active_credential_only');
+
+        const totals: Panel.PlansTotal[] = ['weighted', 'absolute'];
+        const total = new Adw.ComboRow({
+            title: _('ALL PLANS: weighted / absolute'),
+            model: Gtk.StringList.new([_('Weighted'), _('Absolute')]),
+            selected: Math.max(0, totals.indexOf(options.plans_total)),
+        });
+        let confirmedTotal = total.selected;
+        let revertingTotal = false;
+        total.connect('notify::selected', () => {
+            if (revertingTotal)
+                return;
+            const previous = confirmedTotal;
+            confirmedTotal = total.selected;
+            write(total, 'plans_total', totals[total.selected] ?? 'weighted', () => {
+                revertingTotal = true;
+                total.selected = previous;
+                confirmedTotal = previous;
+                revertingTotal = false;
+            });
+        });
+        group.add(total);
+
+        toggle(_('Split ALL PLANS bars'), 'split_bars');
     }
 }

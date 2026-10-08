@@ -1,0 +1,6 @@
+{
+  "uuid": "probe@tokengauge.test",
+  "name": "TokenGauge probe",
+  "description": "Opens the TokenGauge popup, records its geometry and screenshots it. Test harness only.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"]
+}

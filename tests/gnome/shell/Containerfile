@@ -1,0 +1,5 @@
+FROM registry.fedoraproject.org/fedora:44
+RUN dnf -y install \
+        gnome-shell dbus-daemon dbus-tools glib2 adwaita-icon-theme \
+        mesa-dri-drivers python3-dbusmock \
+    && dnf clean all

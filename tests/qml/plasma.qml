@@ -93,6 +93,25 @@ Item {
             pinned.answer(panelJson, "", 0)
         }
 
+        // A recording with no `panel_options` reads as the defaults, which is
+        // what the binary drew it with.
+        check.equal("split bars default on", service.panelOptions.split_bars, true)
+        check.equal("weighted by default", service.panelOptions.plans_total, "weighted")
+        Registry.clear()
+        service.setPanel("split_bars", "false")
+        var option = Registry.find("--set-panel")
+        check.ok("a panel option ran a command", option !== null)
+        if (option) {
+            check.ok("the option is quoted", option.commandLine.indexOf("split_bars=false") !== -1)
+            check.ok("and the read is chained behind it",
+                     option.commandLine.indexOf("--json") > option.commandLine.indexOf("--set-panel"))
+            var flipped = JSON.parse(panelJson)
+            flipped.panel_options = { active_credential_only: true, plans_total: "absolute", split_bars: false }
+            option.answer(JSON.stringify(flipped), "", 0)
+            check.equal("the switch reads the new state", service.panelOptions.split_bars, false)
+            check.equal("and the total its mode", service.panelOptions.plans_total, "absolute")
+        }
+
         // Only the update's own completion clears the flag. A refresh landing
         // mid-update used to put the button back to "Update" while the download
         // was still running.

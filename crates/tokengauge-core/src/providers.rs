@@ -157,7 +157,12 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Weekly", "On-demand", "Tertiary"),
         natively_read: true,
         fetch: grok::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: grok::live_login,
+            tokens: grok::stored_tokens,
+            fetch: grok::fetch_stored,
+            check: grok::check_stored,
+        }),
         auth: grok_auth,
         enabled_in: |c| c.grok,
     },

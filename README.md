@@ -324,6 +324,24 @@ so the header says `estimate`. A Team seat counts as a Pro (standard) or a Max
 5x (premium). A plan with no known multiplier (Enterprise) is left out of it and
 marked `not in total`.
 
+Three `[panel]` options change how this is drawn, from `config.toml`, from
+`tokengauge --set-panel KEY=VALUE`, or from the settings pane of the Plasma,
+GNOME, Omarchy and tray panels:
+
+```toml
+[panel]
+# Draw only the active credential's limits. ALL PLANS still adds them all up,
+# and its title says how many: "ALL PLANS · 5 credentials".
+active_credential_only = false
+# "weighted" by multiplier as above, or "absolute": every credential counts
+# 100%, so five plans read "409% of 500%". Absolute needs no multiplier, so
+# Codex and an Enterprise plan get a header there too.
+plans_total = "weighted"
+# One bar segment per credential under each ALL PLANS meter, filled to its own
+# usage and as wide as its share of the total, instead of one pooled bar.
+split_bars = true
+```
+
 The CLI's own login is asked on every refresh. A credential it is not signed
 into is asked every `inactive_refresh_secs` (30 minutes, remuda's own refresh
 period) or as soon as one of its windows resets. A stored credential whose

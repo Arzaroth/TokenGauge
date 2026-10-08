@@ -276,8 +276,20 @@ Rules that are easy to regress:
   `panel::tests::every_frontend_with_a_header_offers_remuda_while_it_serves`
   is the list.
 - **The combined header weighs by nominal plan multiplier** (`plan_weight` in
-  `claude.rs`; Codex has no table and so no header). A plan with no known
-  weight is out of the total and says so, rather than guessed at 1x.
+  `claude.rs`; Codex has no table and so no header) unless `[panel]
+  plans_total = "absolute"`, where every asked credential counts 100% and
+  needs no weight. Weighted, a plan with no known weight is out of the total
+  and says so, rather than guessed at 1x.
+- **The `[panel]` options are content, so `panel_spec` reads them**, never a
+  frontend: `panel_spec(row, &config.panel)`, and `bar_tooltip` the same.
+  `active_credential_only` drops the other groups but never the header's
+  members, so the header's title carries the count it covers.
+  `split_bars` rides on `PanelRow.segments`, a field no compiler makes a
+  frontend read - `panel::tests::every_panel_frontend_draws_split_bars` is the
+  backstop. The settings panes flip them through `--set-panel` (the tray
+  through `config_set_panel`) and read them back from `--json`'s
+  `panel_options`; `panel::tests::every_settings_pane_offers_the_panel_options`
+  is the list. Waybar and the TUI have no pane, so theirs is `config.toml`.
 
 ## Costs are read, not shelled out for
 

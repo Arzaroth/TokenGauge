@@ -50,6 +50,11 @@ several weighted credentials report, in units of the largest plan. An
 estimate, and labelled as one.
 _Avoid_: total, aggregate, sum
 
+**Split bar**:
+A combined-header meter drawn as one segment per credential, each as wide as
+its share of the total and filled to its own usage. `PanelRow.segments`.
+_Avoid_: stacked bar, multi-bar
+
 **Snapshot**:
 The single state file every frontend renders from, holding provider payloads,
 errors and costs as of the last fetch.

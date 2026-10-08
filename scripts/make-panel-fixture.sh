@@ -39,10 +39,6 @@ ccusage_enabled = false
 [credentials]
 store = ""
 
-# The seeded Codex credentials carry no plan weight, so only the absolute
-# total gives them an ALL PLANS header - and a split bar for the harnesses.
-[panel]
-plans_total = "absolute"
 
 [providers]
 claude = true

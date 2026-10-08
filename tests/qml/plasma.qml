@@ -93,8 +93,7 @@ Item {
             pinned.answer(panelJson, "", 0)
         }
 
-        // A recording with no `panel_options` reads as the defaults, which is
-        // what the binary drew it with.
+        // The recording carries the binary's defaults.
         check.equal("split bars default on", service.panelOptions.split_bars, true)
         check.equal("weighted by default", service.panelOptions.plans_total, "weighted")
         Registry.clear()

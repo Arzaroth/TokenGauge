@@ -2398,74 +2398,114 @@ mod tests {
     }
 
     /// A split bar is a `segments` list on a meter row, which no frontend's
-    /// compiler knows about: one that never reads it draws the pooled bar and
-    /// looks finished.
+    /// compiler knows about: one that never draws it shows the pooled bar and
+    /// looks finished. The needle is the call that draws a meter's segments,
+    /// not the word, which a type declaration alone would carry.
     #[test]
     fn every_panel_frontend_draws_split_bars() {
         let frontends = [
-            ("waybar", "crates/tokengauge-waybar/src", "rs"),
-            ("tray", "crates/tokengauge-tray/src", "rs"),
-            ("tui", "crates/tokengauge-tui/src", "rs"),
             (
-                "plasma",
-                "plasma/org.tokengauge.plasmoid/contents/ui",
-                "qml",
+                "waybar",
+                "crates/tokengauge-waybar/src",
+                "rs",
+                "segmented_bar(&row.segments)",
             ),
-            ("gnome", "gnome/tokengauge@arzaroth.github.io", "ts"),
-            ("quickshell", "omarchy/arzaroth.tokengauge", "qml"),
-        ];
-        for (id, dir, extension) in frontends {
-            let sources = frontend_sources(id, dir, extension);
-            assert!(
-                sources.iter().any(|src| src.contains("segments")),
-                "{id} ({dir}) never reads a meter's `segments`"
-            );
-        }
-    }
-
-    /// The `[panel]` options are flipped from every settings pane, through the
-    /// one writer the binary has. Waybar and the TUI have no pane to put them
-    /// in, so theirs is config.toml.
-    #[test]
-    fn every_settings_pane_offers_the_panel_options() {
-        let frontends = [
             (
                 "tray",
                 "crates/tokengauge-tray/src",
                 "rs",
-                "config_set_panel",
+                "split_bar(ui, &row.segments",
+            ),
+            (
+                "tui",
+                "crates/tokengauge-tui/src",
+                "rs",
+                "split_bar_spans(&row.segments",
             ),
             (
                 "plasma",
                 "plasma/org.tokengauge.plasmoid/contents/ui",
                 "qml",
-                "--set-panel",
+                "model: segmented.segments",
             ),
             (
                 "gnome",
                 "gnome/tokengauge@arzaroth.github.io",
                 "ts",
-                "--set-panel",
+                "add_child(splitBar(",
             ),
             (
                 "quickshell",
                 "omarchy/arzaroth.tokengauge",
                 "qml",
-                "--set-panel",
+                "model: meterRow.segments",
             ),
         ];
-        for (id, dir, extension, writer) in frontends {
+        for (id, dir, extension, needle) in frontends {
             let sources = frontend_sources(id, dir, extension);
-            for needle in [
-                writer,
-                "active_credential_only",
-                "plans_total",
-                "split_bars",
-            ] {
+            assert!(
+                sources.iter().any(|src| src.contains(needle)),
+                "{id} ({dir}) never draws a meter's `segments` (`{needle}`)"
+            );
+        }
+    }
+
+    /// The `[panel]` options are flipped from every settings pane. Each
+    /// needle is the pane's own call with that key, not the key alone, which
+    /// the data layer and the type declarations carry whether or not a pane
+    /// draws a control for it. Waybar and the TUI have no pane, so theirs is
+    /// config.toml.
+    #[test]
+    fn every_settings_pane_offers_the_panel_options() {
+        let frontends: [(&str, &str, &str, [&str; 3]); 4] = [
+            (
+                "tray",
+                "crates/tokengauge-tray/src",
+                "rs",
+                [
+                    "\"active_credential_only\",\n                        bool_str(",
+                    "Some((\"split_bars\"",
+                    "Some((\"plans_total\"",
+                ],
+            ),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+                [
+                    "root.setPanel(\"active_credential_only\"",
+                    "root.setPanel(\"split_bars\"",
+                    "root.setPanel(\"plans_total\"",
+                ],
+            ),
+            (
+                "gnome",
+                "gnome/tokengauge@arzaroth.github.io",
+                "ts",
+                [
+                    "toggle(_('Active credential only'), 'active_credential_only')",
+                    "toggle(_('Split ALL PLANS bars'), 'split_bars')",
+                    "write(total, 'plans_total'",
+                ],
+            ),
+            (
+                "quickshell",
+                "omarchy/arzaroth.tokengauge",
+                "qml",
+                [
+                    "{ key: \"active_credential_only\"",
+                    "{ key: \"split_bars\"",
+                    "usage.setPanel(\"plans_total\"",
+                ],
+            ),
+        ];
+        for (id, dir, extension, needles) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            for needle in needles {
                 assert!(
                     sources.iter().any(|src| src.contains(needle)),
-                    "{id} ({dir}) never mentions `{needle}` - a panel option is \
-                     missing from its settings pane"
+                    "{id} ({dir}) never draws a control for `{needle}` - a panel \
+                     option is missing from its settings pane"
                 );
             }
         }

@@ -8,7 +8,7 @@
 
 use serde::Serialize;
 use tokengauge_core::{
-    PanelConfig, PanelRow, ProviderFetchError, ProviderRow, Section, SectionKind, Theme,
+    PanelConfig, PanelRow, ProviderFetchError, ProviderRow, Section, SectionKind, Segment, Theme,
     TokenGaugeConfig, Tone, WaybarWindow, provider_icon, read_waybar_state, theme,
     waybar_state_path,
 };
@@ -306,6 +306,27 @@ pub(crate) fn fraction_bar(fraction: f64) -> String {
     tooltip_bar((fraction.clamp(0.0, 1.0) * 100.0).round() as u8)
 }
 
+/// A split bar: each segment its share of ten cells (two at least, so a small
+/// plan stays readable), filled in its own tier and divided by a dim rule.
+pub(crate) fn segmented_bar(segments: &[Segment]) -> String {
+    let dim = theme_palette().0;
+    segments
+        .iter()
+        .map(|seg| {
+            let cells = ((seg.width * 10.0).round() as usize).max(2);
+            let filled =
+                ((seg.fraction.clamp(0.0, 1.0) * cells as f64).round() as usize).min(cells);
+            format!(
+                "<span foreground=\"{}\">{}</span><span foreground=\"{dim}\">{}</span>",
+                tone_color(seg.tone),
+                "━".repeat(filled),
+                "─".repeat(cells - filled)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(&format!("<span foreground=\"{dim}\">┊</span>"))
+}
+
 /// Render one core panel section as tooltip lines: a blank spacer, a dim
 /// heading, then one line per row shaped by the section kind.
 pub(crate) fn format_panel_section(section: &Section) -> Vec<String> {
@@ -331,7 +352,11 @@ pub(crate) fn format_panel_section(section: &Section) -> Vec<String> {
         match section.kind {
             SectionKind::Meters => {
                 let color = tone_color(row.tone);
-                let bar = fraction_bar(row.fraction.unwrap_or(0.0));
+                let bar = if row.segments.is_empty() {
+                    fraction_bar(row.fraction.unwrap_or(0.0))
+                } else {
+                    segmented_bar(&row.segments)
+                };
                 let trailing = pango_escape(&row.footnote);
                 let badge = format_badge(row);
                 format!(
@@ -572,6 +597,29 @@ pub(crate) mod tests {
     fn tooltip_bar_clamps_over_100() {
         assert_eq!(tooltip_bar(200).chars().count(), 10);
         assert_eq!(tooltip_bar(200), "━━━━━━━━━━");
+    }
+
+    #[test]
+    fn a_split_bar_gives_each_segment_its_share_and_its_own_tier() {
+        let segments = [
+            Segment {
+                width: 0.8,
+                fraction: 0.5,
+                tone: Tone::Warn,
+            },
+            Segment {
+                width: 0.2,
+                fraction: 1.0,
+                tone: Tone::Critical,
+            },
+        ];
+        let bar = segmented_bar(&segments);
+        let plain: String = bar
+            .split('<')
+            .filter_map(|part| part.split_once('>').map(|(_, text)| text))
+            .collect();
+        assert_eq!(plain, "━━━━────┊━━");
+        assert!(bar.contains(tone_color(Tone::Critical)));
     }
 
     // color_hex_for_percent + format_tokens + provider_icon tested in core

@@ -18,6 +18,7 @@ use crate::provider::check_status;
 use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
 const BILLING_ENDPOINT: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
+const SETTINGS_ENDPOINT: &str = "https://cli-chat-proxy.grok.com/v1/settings";
 
 // ---------------------------------------------------------------------------
 // Credentials (read-only)
@@ -431,6 +432,54 @@ fn to_payload(
     )
 }
 
+/// What a `subscription_tier_display` is sold as. A tier not listed reads as
+/// sent.
+fn tier_label(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let key: String = raw
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let name = match key.as_str() {
+        "" => return None,
+        "supergrok" => "SuperGrok",
+        "supergrokplus" | "plus" => "SuperGrok Plus",
+        "supergrokheavy" | "heavy" => "SuperGrok Heavy",
+        _ => return Some(raw.to_string()),
+    };
+    Some(name.to_string())
+}
+
+#[derive(serde::Deserialize)]
+struct Settings {
+    #[serde(default)]
+    subscription_tier_display: Option<String>,
+}
+
+/// The plan as the CLI's settings name it. The billing response carries no
+/// tier, and `auth_mode` says only how the user signed in, so without this
+/// every paid plan reads as SuperGrok. Best effort: a failure keeps the
+/// `auth_mode` label rather than failing the fetch.
+fn subscription_tier(client: &reqwest::blocking::Client, token: &str) -> Option<String> {
+    let resp = client
+        .get(SETTINGS_ENDPOINT)
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-xai-token-auth", "xai-grok-cli")
+        .header("accept", "application/json")
+        .header("user-agent", "TokenGauge")
+        .send()
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let settings: Settings = resp.json().ok()?;
+    settings
+        .subscription_tier_display
+        .as_deref()
+        .and_then(tier_label)
+}
+
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let creds = read_credentials(&auth_path(), now)?;
@@ -461,7 +510,8 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
 
     let bytes = resp.bytes().context("Grok billing read failed")?;
     let billing = parse_grpc_web_response(&bytes, header_status, now)?;
-    Ok(vec![to_payload(billing, creds.login_method, now)])
+    let plan = subscription_tier(&client, &creds.access_token).or(creds.login_method);
+    Ok(vec![to_payload(billing, plan, now)])
 }
 
 #[cfg(test)]
@@ -562,6 +612,20 @@ mod tests {
             named(r#"{"s": {"key": "t", "auth_mode": ""}}"#).as_deref(),
             Some("Grok")
         );
+    }
+
+    /// Heavy reads as Heavy, however the settings spell it.
+    #[test]
+    fn a_tier_reads_as_it_is_sold() {
+        let sold = |raw: &str| tier_label(raw);
+        assert_eq!(sold("SuperGrok").as_deref(), Some("SuperGrok"));
+        assert_eq!(sold("supergrok").as_deref(), Some("SuperGrok"));
+        assert_eq!(sold("SuperGrok Heavy").as_deref(), Some("SuperGrok Heavy"));
+        assert_eq!(sold("SUPERGROK_HEAVY").as_deref(), Some("SuperGrok Heavy"));
+        assert_eq!(sold("heavy").as_deref(), Some("SuperGrok Heavy"));
+        assert_eq!(sold("SuperGrok Plus").as_deref(), Some("SuperGrok Plus"));
+        assert_eq!(sold(" Enterprise ").as_deref(), Some("Enterprise"));
+        assert_eq!(sold("  "), None);
     }
 
     #[test]

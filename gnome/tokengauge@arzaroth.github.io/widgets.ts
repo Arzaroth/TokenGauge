@@ -45,12 +45,13 @@ export function barFill(
     const clamped = Math.max(0, Math.min(1, Number(fraction) || 0));
     const area = new St.DrawingArea({
         style_class: styleClass,
-        style,
         x_expand: true,
         y_expand: true,
         x_align: Clutter.ActorAlign.FILL,
         y_align: Clutter.ActorAlign.FILL,
     });
+    if (style)
+        area.style = style;
     area.connect('repaint', () => {
         const [width, height] = area.get_surface_size();
         const w = Math.round(width * clamped);

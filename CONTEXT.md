@@ -52,7 +52,7 @@ _Avoid_: total, aggregate, sum
 
 **Split bar**:
 A combined-header meter drawn as one segment per credential, each as wide as
-its share of the total and filled to its own usage. `PanelRow.segments`.
+its share of the total (never under a tenth) and filled to its own usage. `PanelRow.segments`.
 _Avoid_: stacked bar, multi-bar
 
 **Snapshot**:

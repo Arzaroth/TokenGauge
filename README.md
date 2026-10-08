@@ -338,7 +338,8 @@ active_credential_only = false
 # Codex and an Enterprise plan get a header there too.
 plans_total = "weighted"
 # One bar segment per credential under each ALL PLANS meter, filled to its own
-# usage and as wide as its share of the total, instead of one pooled bar.
+# usage and as wide as its share of the total (a tenth of the bar at least, so
+# a small plan beside a big one stays readable), instead of one pooled bar.
 split_bars = true
 ```
 

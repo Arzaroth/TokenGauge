@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     instead of weighing it by its plan, which also gives Codex and plans with
     no known multiplier a header.
   - `split_bars` (on by default) draws each ALL PLANS meter as one segment per
-    credential, filled to its own usage, in place of one pooled bar.
+    credential, filled to its own usage and as wide as its share (a tenth of
+    the bar at least), in place of one pooled bar.
 
 ## [0.39.1] - 2026-10-08
 

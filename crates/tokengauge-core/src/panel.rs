@@ -814,10 +814,12 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
             r.fraction = Some((pooled / 100.0).clamp(0.0, 1.0));
             r.tone = Tone::for_percent(crate::pct_u8(pooled));
             if options.split_bars {
+                let weights: Vec<f64> = shares.iter().map(|s| f64::from(s.weight)).collect();
                 r.segments = shares
                     .iter()
-                    .map(|s| Segment {
-                        width: f64::from(s.weight) / total,
+                    .zip(segment_widths(&weights))
+                    .map(|(s, width)| Segment {
+                        width,
                         fraction: (f64::from(s.window.used) / 100.0).clamp(0.0, 1.0),
                         tone: Tone::for_percent(s.window.used),
                     })
@@ -869,6 +871,54 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
             r
         })
         .collect()
+}
+
+/// A split bar's narrowest segment, as a share of the bar.
+const MIN_SEGMENT_WIDTH: f64 = 0.1;
+
+/// Each weight's share of a split bar, none under [`MIN_SEGMENT_WIDTH`]. A
+/// Max 20x beside two Pro seats would otherwise draw them as slivers next to
+/// one bar that reads as pooled. Segments held at the minimum are taken out
+/// and the rest is shared again by weight, until none falls under it.
+fn segment_widths(weights: &[f64]) -> Vec<f64> {
+    let n = weights.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    if MIN_SEGMENT_WIDTH * n as f64 >= 1.0 {
+        return vec![1.0 / n as f64; n];
+    }
+    let mut pinned = vec![false; n];
+    loop {
+        let free = 1.0 - MIN_SEGMENT_WIDTH * pinned.iter().filter(|p| **p).count() as f64;
+        let weight: f64 = weights
+            .iter()
+            .zip(&pinned)
+            .filter(|(_, p)| !**p)
+            .map(|(w, _)| w)
+            .sum();
+        let widths: Vec<f64> = weights
+            .iter()
+            .zip(&pinned)
+            .map(|(w, p)| {
+                if *p {
+                    MIN_SEGMENT_WIDTH
+                } else {
+                    w / weight * free
+                }
+            })
+            .collect();
+        let mut moved = false;
+        for (i, width) in widths.iter().enumerate() {
+            if !pinned[i] && *width < MIN_SEGMENT_WIDTH {
+                pinned[i] = true;
+                moved = true;
+            }
+        }
+        if !moved {
+            return widths;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1639,6 +1689,27 @@ mod tests {
         };
         let spec = super::panel_spec(&five_plans(), &options);
         assert!(section(&spec, "plans", None).rows[0].segments.is_empty());
+    }
+
+    #[test]
+    fn a_split_bar_keeps_a_small_plan_wide_enough_to_read() {
+        let close = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9);
+        let widths = segment_widths(&[20.0, 1.0, 1.0]);
+        assert!(close(&widths, &[0.8, 0.1, 0.1]), "{widths:?}");
+        let widths = segment_widths(&[20.0, 5.0, 1.0]);
+        assert!(close(&widths, &[0.72, 0.18, 0.1]), "{widths:?}");
+        assert!(close(&segment_widths(&[1.0; 12]), &[1.0 / 12.0; 12]));
+        assert!(segment_widths(&[]).is_empty());
+
+        let spec = panel_spec(&grouped(vec![
+            credential("work", true, Some(20), 30, 10),
+            credential("a", false, Some(1), 40, 40),
+            credential("b", false, Some(1), 40, 40),
+        ]));
+        let segments = &section(&spec, "plans", None).rows[0].segments;
+        let total: f64 = segments.iter().map(|s| s.width).sum();
+        assert!((total - 1.0).abs() < 1e-9);
+        assert!(segments.iter().all(|s| s.width >= MIN_SEGMENT_WIDTH - 1e-9));
     }
 
     #[test]

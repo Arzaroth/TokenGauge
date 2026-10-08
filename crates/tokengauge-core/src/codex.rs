@@ -422,6 +422,20 @@ fn seat_of(access_token: &str, id_token: Option<&str>) -> Option<String> {
         })
 }
 
+/// The plan a token was issued for, from the same claims, so a stored
+/// credential that is not asked still says what it is.
+fn plan_of(tokens: &Tokens) -> Option<String> {
+    let plan = |token: &str| {
+        jwt_claims(token)?
+            .get(AUTH_CLAIMS)?
+            .get("chatgpt_plan_type")?
+            .as_str()
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    plan(&tokens.access_token).or_else(|| plan(tokens.id_token.as_deref()?))
+}
+
 fn oauth_tokens(tokens: &Tokens) -> LoginTokens {
     let present = |t: &str| (!t.is_empty()).then(|| t.to_string());
     LoginTokens {
@@ -503,8 +517,17 @@ pub(crate) fn fetch_stored(
             "remuda refreshes stored credentials (`remuda refresh`)",
         ),
         Some(state) => {
-            let mut payload = ProviderPayload::live("codex", "store", UsageSnapshot::at(now));
+            let plan = plan_of(&tokens);
+            let mut payload = ProviderPayload::live(
+                "codex",
+                "store",
+                UsageSnapshot {
+                    login_method: plan.as_deref().map(plan_label),
+                    ..UsageSnapshot::at(now)
+                },
+            );
             payload.credential.state = Some(state);
+            payload.credential.plan_weight = plan_weight(plan.as_deref());
             Ok(payload)
         }
     }
@@ -861,7 +884,7 @@ fn to_payload(
         return Err(anyhow!("Codex returned no usage windows"));
     }
 
-    let plan = resp.plan_type.or(plan_hint);
+    let plan = trimmed(resp.plan_type).or(plan_hint);
     let weight = plan_weight(plan.as_deref());
     let mut payload = ProviderPayload::live(
         "codex",

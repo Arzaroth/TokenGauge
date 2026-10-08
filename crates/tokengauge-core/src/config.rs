@@ -56,7 +56,8 @@ pub struct WaybarConfig {
     /// resolves to the TUI.
     pub click_action: ClickAction,
     /// Shell command used when `click_action = "tui"`. Empty = auto-detect
-    /// (omarchy-launch-or-focus-tui if available, else $TERMINAL -e tokengauge-tui).
+    /// (omarchy-launch-or-focus-tui if available, else the first terminal found:
+    /// $TERMINAL, then the list in `launch::TERMINALS`).
     pub tui_command: String,
     /// Keys serde would otherwise drop in silence. The popover options lived
     /// here until 0.20.0 removed it, so a config carrying them still loads and
@@ -346,7 +347,8 @@ placement = "right"
 # Left-click action: "tui" opens the terminal TUI.
 click_action = "tui"
 # Optional explicit launcher for click_action = "tui". Empty = auto-detect
-# (omarchy-launch-or-focus-tui if present, else $TERMINAL -e tokengauge-tui).
+# (omarchy-launch-or-focus-tui if present, else $TERMINAL, ghostty, alacritty,
+# kitty, wezterm, foot, ptyxis, kgx, gnome-terminal, konsole or xterm).
 # tui_command = "ghostty -e tokengauge-tui"
 
 [credentials]

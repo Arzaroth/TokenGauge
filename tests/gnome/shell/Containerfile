@@ -1,0 +1,11 @@
+ARG FEDORA=44
+FROM registry.fedoraproject.org/fedora:${FEDORA}
+# A release past its end of life leaves the mirrors for the archive.
+RUN dnf -y makecache >/dev/null 2>&1 || sed -i \
+        -e 's|^metalink=|#metalink=|' \
+        -e 's|^#baseurl=http://download.example/pub/fedora/linux|baseurl=https://archives.fedoraproject.org/pub/archive/fedora/linux|' \
+        /etc/yum.repos.d/*.repo
+RUN dnf -y install \
+        gnome-shell dbus-daemon dbus-tools glib2 adwaita-icon-theme \
+        mesa-dri-drivers python3-dbusmock \
+    && dnf clean all

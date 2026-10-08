@@ -12,6 +12,7 @@ import {test} from 'node:test';
 
 import Gio from 'gi://Gio';
 import Clutter from 'gi://Clutter';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Harness from './stubs/harness.js';
 import {registered} from './stubs/GObject.js';
 
@@ -128,6 +129,66 @@ test('the panel it draws is the panel the core resolved', () => {
     const costLabels = Harness.byStyle(box, 'tokengauge-cost-label').map(l => l.text);
     for (const row of cost.rows)
         assert.ok(costLabels.includes(row.label), `${row.label} is not drawn`);
+});
+
+test('the token breakdowns draw every row, and what follows them still draws', () => {
+    const withBars = JSON.parse(panelJson);
+    const days = {
+        id: 'tokens_by_day',
+        title: 'TOKENS BY DAY',
+        kind: 'bars',
+        rows: [
+            {label: 'Mon', value: '1.2B', suffix: '$422', fraction: 1},
+            {label: 'Today', value: '223.2M', suffix: '$87.02', fraction: 0.18, emphasized: true},
+        ],
+    };
+    withBars.rows[0].panel.push(days);
+
+    const {indicator} = enabled();
+    answer(JSON.stringify(withBars));
+    const box = open(indicator);
+
+    const titles = Harness.byStyle(box, 'tokengauge-section-title').map(l => l.text);
+    assert.deepEqual(titles.slice(-2), ['TOKENS BY DAY', 'Pin to bar']);
+    assert.equal(Harness.byStyle(box, 'tokengauge-bar-row').length, days.rows.length);
+    assert.equal(Harness.byStyle(box, 'tokengauge-bar-fill').length, days.rows.length);
+});
+
+test('the panel scrolls inside a share of the screen, from the top on every open', () => {
+    const {indicator} = enabled();
+    answer();
+    const box = open(indicator);
+
+    let scroll = box.parent;
+    while (scroll && scroll.style_class !== 'tokengauge-scroll')
+        scroll = scroll.parent;
+    assert.ok(scroll, 'the panel is not inside a scroll view');
+    // 85% of the stub's 1048px work area: a three-credential panel is taller
+    // than a 1080p screen, and the shell moves a tall menu rather than shrink it.
+    assert.match(scroll.style, /max-height: 891px/);
+
+    scroll.vadjustment.value = 400;
+    indicator.menu.close();
+    indicator.menu.open();
+    assert.equal(scroll.vadjustment.value, 0);
+});
+
+test('every header button says what it does on hover', () => {
+    const {indicator} = enabled();
+    answer();
+    const box = open(indicator);
+
+    const buttons = Harness.byStyle(box, 'tokengauge-icon-button');
+    assert.ok(buttons.length >= 5, 'the header lost its buttons');
+    for (const button of buttons) {
+        button.setHover(true);
+        const tip = Main.layoutManager.uiGroup.children.at(-1);
+        assert.ok(
+            tip?.text?.startsWith(button.accessible_name),
+            `${button.accessible_name} says nothing on hover`,
+        );
+        button.setHover(false);
+    }
 });
 
 test('a provider with several credentials draws a group each, as the core titled them', () => {

@@ -267,3 +267,11 @@ one product rather than five.
   because none of those render a chart. **GNOME and the Windows tray remain
   unseen**, and the tray cannot be compiled on a Linux machine at all - so its
   chart has never been drawn by anything.
+- **No guard keeps header icon buttons labelled on hover.** GNOME and Plasma
+  both shipped icon-only buttons nobody hovering could identify; a
+  `panel::tests` source grep, like the remuda and refresh-hint ones, would
+  stop the next one.
+- **A long device name runs into its figure in the GNOME bar rows.**
+  "axxone-mba4" + "2.3B" reads "axxone-mba42.3B" in tokens by device;
+  `tests/gnome/shell/run.sh --live` shows it, and it can now show the GNOME
+  history screen above as well.

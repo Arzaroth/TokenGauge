@@ -288,8 +288,8 @@ Item {
                 display: QQC2.AbstractButton.IconOnly
                 text: i18n("Refresh")
                 onClicked: root.action("--refresh")
-                // The button's own tooltip is its label; hovering it is where
-                // the age of what it would replace belongs.
+                // An IconOnly ToolButton shows no tooltip of its own, so each
+                // header button sets one; this one adds the refresh age.
                 QQC2.ToolTip.text: full.row && full.row.refresh_hint
                     ? i18n("Refresh") + "\n" + full.row.refresh_hint
                     : i18n("Refresh")
@@ -303,6 +303,9 @@ Item {
                 checkable: true
                 checked: full.historyOpen
                 onClicked: full.openScreen(full.historyOpen ? "panel" : "history")
+                QQC2.ToolTip.text: text
+                QQC2.ToolTip.visible: hovered
+                QQC2.ToolTip.delay: 300
             }
             PlasmaComponents.ToolButton {
                 icon.name: "system-users"
@@ -310,6 +313,9 @@ Item {
                 text: i18n("Open remuda")
                 visible: root.remudaServing
                 onClicked: root.openRemuda()
+                QQC2.ToolTip.text: text
+                QQC2.ToolTip.visible: hovered
+                QQC2.ToolTip.delay: 300
             }
             PlasmaComponents.ToolButton {
                 icon.name: "configure"
@@ -318,6 +324,9 @@ Item {
                 checkable: true
                 checked: full.settingsOpen
                 onClicked: full.openScreen(full.settingsOpen ? "panel" : "settings")
+                QQC2.ToolTip.text: text
+                QQC2.ToolTip.visible: hovered
+                QQC2.ToolTip.delay: 300
             }
         }
 

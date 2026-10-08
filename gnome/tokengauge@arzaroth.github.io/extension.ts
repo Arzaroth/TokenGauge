@@ -11,7 +11,9 @@ import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/ex
 
 import * as Panel from './panel.js';
 import {isCancelled, shellQuote} from './util.js';
-import {attachTooltip, barFill, box, historyChart, label, spacer} from './widgets.js';
+import {
+    attachTooltip, barFill, box, historyChart, label, scrollLimit, scrollView, spacer, verticalAdjustment,
+} from './widgets.js';
 
 // How often the open menu re-reads the snapshot. See `_setLive`.
 const LIVE_INTERVAL_SECS = 30;
@@ -63,6 +65,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
     declare _panelGlyph: St.Label;
     declare _panelPercent: St.Label;
     declare _content: St.BoxLayout;
+    declare _scroll: St.ScrollView;
 
     constructor(extension: Extension) {
         super(0.5, 'TokenGauge');
@@ -100,10 +103,19 @@ class TokenGaugeIndicator extends PanelMenu.Button {
 
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
         this._content = box(true, {style_class: 'tokengauge-menu', x_expand: true});
-        item.add_child(this._content);
+        this._scroll = scrollView(this._content, {
+            style_class: 'tokengauge-scroll',
+            x_expand: true,
+            clip_to_allocation: true,
+        });
+        item.add_child(this._scroll);
         popupOf(this).addMenuItem(item);
 
         popupOf(this).connect('open-state-changed', (_popup: unknown, open: boolean) => {
+            if (open) {
+                this._updateScrollHeight();
+                verticalAdjustment(this._scroll).value = 0;
+            }
             if (open && this._menuDirty) {
                 this._menuDirty = false;
                 this._renderMenu();
@@ -472,6 +484,15 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         this._panelPercent.style = `color: ${this._toneColor(bar.tone)};`;
     }
 
+    _updateScrollHeight(): void {
+        const monitor = Main.layoutManager.findMonitorForActor(this) ?? Main.layoutManager.primaryMonitor;
+        if (!monitor)
+            return;
+        const workArea = Main.layoutManager.getWorkAreaForMonitor(monitor.index);
+        const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
+        this._scroll.style = `max-height: ${scrollLimit(workArea.height, scale)}px;`;
+    }
+
     _renderMenu(): void {
         this._content.destroy_all_children();
         this._content.add_child(this._header());
@@ -581,10 +602,10 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         });
         button.accessible_name = tooltip;
         button.connect('clicked', onClick);
-        // The accessible name is what a screen reader says; `hint` is what a
-        // pointer gets, for the buttons whose worth depends on something the
-        // icon cannot show.
-        return hint ? attachTooltip(button, `${tooltip}\n${hint}`) : button;
+        // An icon theme draws these however it likes - Adwaita's browser is a
+        // leaf - so a pointer is told what each one does, not just a screen
+        // reader. `hint` adds what the icon cannot show at all.
+        return attachTooltip(button, hint ? `${tooltip}\n${hint}` : tooltip);
     }
 
     _header(): St.BoxLayout {

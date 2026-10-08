@@ -6,6 +6,7 @@
 // placement - and a function no test can import is a function no test checks.
 
 import Clutter from 'gi://Clutter';
+import GObject from 'gi://GObject';
 import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -15,13 +16,67 @@ import type * as Panel from './panel.js';
 // St.BoxLayout.vertical was replaced by the Clutter orientation property in
 // GNOME 48; both spellings have to work across the supported shell versions,
 // and only the newer one is in the typings this builds against.
-export function box(vertical: boolean, props: Partial<St.BoxLayout.ConstructorProps> = {}): St.BoxLayout {
-    const b = new St.BoxLayout(props);
+export function box(
+    vertical: boolean,
+    props: Partial<St.BoxLayout.ConstructorProps> = {},
+    Kind: new (props: Partial<St.BoxLayout.ConstructorProps>) => St.BoxLayout = St.BoxLayout,
+): St.BoxLayout {
+    const b = new Kind(props);
     if ('orientation' in b)
         b.orientation = vertical ? Clutter.Orientation.VERTICAL : Clutter.Orientation.HORIZONTAL;
     else
         (b as unknown as {vertical: boolean}).vertical = vertical;
     return b;
+}
+
+type Loose = Record<string, any>;
+
+// GNOME 45's St.BoxLayout is itself the viewport a scroll view moves, and it
+// lays its children out at their minimum height whenever that fits. A wrapping
+// label's minimum is one short line, so the panel's rows were drawn on top of
+// each other instead of scrolled. A box that asks for its natural height as
+// its minimum, inside a plain one the scroll view moves, gets the full height.
+class NaturalHeight extends St.BoxLayout {
+    static {GObject.registerClass(this);}
+
+    override vfunc_get_preferred_height(forWidth: number): [number, number] {
+        const [, natural] = super.vfunc_get_preferred_height(forWidth);
+        return [natural, natural];
+    }
+}
+
+// St.ScrollView took its content through add_actor until GNOME 46 turned it
+// into a property, and only gained an adjustment of its own in that release.
+// A GNOME 45 ScrollView is an St.Bin and so has a `child` too, but setting it
+// skips the hook that wires the scrollbars: the popup drew empty there.
+export function scrollView(child: Clutter.Actor, props: Partial<St.ScrollView.ConstructorProps> = {}): St.ScrollView {
+    const view = new St.ScrollView({
+        hscrollbar_policy: St.PolicyType.NEVER,
+        vscrollbar_policy: St.PolicyType.AUTOMATIC,
+        ...props,
+    });
+    const natural = box(true, {x_expand: true}, NaturalHeight);
+    natural.add_child(child);
+    const viewport = box(true, {x_expand: true});
+    viewport.add_child(natural);
+    const loose = view as unknown as Loose;
+    if (typeof loose.add_actor === 'function')
+        loose.add_actor(viewport);
+    else
+        loose.child = viewport;
+    return view;
+}
+
+export function verticalAdjustment(view: St.ScrollView): St.Adjustment {
+    const loose = view as unknown as Loose;
+    return 'vadjustment' in loose ? loose.vadjustment : loose.vscroll.adjustment;
+}
+
+// The shell keeps a tall menu on screen by moving it, never by shrinking it,
+// and nothing hands a menu a height budget. This is the budget: a share of the
+// work area the popup opens on, in the CSS pixels `max-height` is read in.
+export function scrollLimit(workAreaHeight: number, scaleFactor: number): number {
+    return Math.max(200, Math.round(workAreaHeight * 0.85 / Math.max(1, scaleFactor)));
 }
 
 export function label(text: string, styleClass: string, style?: string): St.Label {
@@ -45,12 +100,13 @@ export function barFill(
     const clamped = Math.max(0, Math.min(1, Number(fraction) || 0));
     const area = new St.DrawingArea({
         style_class: styleClass,
-        style,
         x_expand: true,
         y_expand: true,
         x_align: Clutter.ActorAlign.FILL,
         y_align: Clutter.ActorAlign.FILL,
     });
+    if (style)
+        area.style = style;
     area.connect('repaint', () => {
         const [width, height] = area.get_surface_size();
         const w = Math.round(width * clamped);

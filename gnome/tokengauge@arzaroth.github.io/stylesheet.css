@@ -150,3 +150,7 @@
     font-size: 0.9em;
     color: rgba(255, 255, 255, 0.92);
 }
+
+.tokengauge-scroll {
+    -st-vfade-offset: 24px;
+}

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The GNOME panel draws the token breakdowns again.** Tokens by day, by
+  model and by device have been missing from the GNOME popup since 0.30.0,
+  along with the pin row and the "Updated" line under them. Drawing the first
+  token bar threw an error that stopped the rest of the popup from being
+  drawn. The history screen was unaffected, which is why its charts still
+  showed data.
+- **The GNOME popup scrolls.** A provider with several credentials makes a
+  panel taller than a 1080p screen, and GNOME moves a tall menu rather than
+  shrinking it, so the bottom was off screen. The popup now stops at most of
+  the screen's height and scrolls, back to the top each time it opens.
+- **Every icon button in the GNOME and Plasma panel headers says what it does
+  on hover.** Only Refresh did. The icon theme decides the glyphs, and GNOME 50
+  draws "Open dashboard" as a leaf.
+- **Opening the TUI works on stock GNOME and KDE.** Fleet sync setup, and
+  anything else that opens the TUI, looked only for ghostty, alacritty, kitty,
+  wezterm, foot and xterm, so on GNOME it failed with an error that seemed to
+  be about Waybar. It now also tries Ptyxis, GNOME Console, GNOME Terminal and
+  Konsole.
+
 ## [0.39.0] - 2026-10-03
 
 ### Added

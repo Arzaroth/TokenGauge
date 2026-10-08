@@ -2463,7 +2463,7 @@ mod tests {
                 "crates/tokengauge-tray/src",
                 "rs",
                 [
-                    "\"active_credential_only\",\n                        bool_str(",
+                    "\"active_credential_only\",",
                     "Some((\"split_bars\"",
                     "Some((\"plans_total\"",
                 ],

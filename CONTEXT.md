@@ -40,8 +40,11 @@ _Avoid_: spare, secondary, other account
 
 **Plan weight**:
 A plan's nominal multiplier against the provider's base paid plan (Claude Pro
-1, Max 5x 5, Max 20x 20; ChatGPT Plus 1, Pro 100 5, Pro 200 10, Pro 500 25). What the combined header weighs a credential by. Unknown
-for a plan sold as no multiple, which stays out of the total.
+1, Max 5x 5, Max 20x 20; ChatGPT Plus 1, Pro 100 5, Pro 200 10, Pro 500 25;
+Cursor Pro 1, Pro+ 3, Ultra 20), or its allowance in the provider's own unit
+(GLM weekly credits by thousand: Lite 10, Pro 60, Max 140). What the combined
+header weighs a credential by. Unknown for a plan sold as no multiple, which
+stays out of the total.
 _Avoid_: quota, share, capacity
 
 **Combined header**:

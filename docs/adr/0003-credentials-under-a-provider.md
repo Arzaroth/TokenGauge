@@ -272,6 +272,13 @@ each.
   API-spend-equivalent allowances still stands: the weights are the ones the
   plans are sold under, an estimate like Claude's, and a plan that reports no
   5h window simply has no share in that meter.
+- **The other providers.** GLM and Cursor carry tables ahead of a store reader:
+  GLM in weekly credits by thousand (`level` `lite`, `pro`, `max` at 10, 60,
+  140), Cursor against Pro (`pro_plus` 3, `ultra` 20). A team seat on either is
+  sold as a Standard or Premium seat the wire does not name, so it has no
+  weight. Grok and opencode Go publish no multiplier between tiers (Go Plus is
+  2x to 8x Go depending on the model), and Kimi's current plans report no tier
+  to the CLI's token at all, so none of the three has a table.
 - `CACHE_SCHEMA_VERSION` is 2. It is still written and never checked on read.
 
 ## The snapshot contract

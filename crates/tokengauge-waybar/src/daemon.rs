@@ -405,6 +405,11 @@ pub(crate) fn run_daemon(config: TokenGaugeConfig, config_path: PathBuf) -> Resu
                             s.broadcast();
                             drop(s);
                             signal_waybar();
+                            // The setter that signalled us bumped the revision
+                            // before this config was in place, so a frontend
+                            // re-reading on that bump may have been answered
+                            // with the old one.
+                            tokengauge_core::bump_revision(&new_cfg.cache_file);
                         }
                         Err(e) => {
                             dlog("reload", &format!("failed: {e}; keeping previous config"));

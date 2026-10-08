@@ -91,6 +91,11 @@ pub struct Args {
     /// the daemon. e.g. `--set-primary claude` or `--set-primary highest`.
     #[arg(long, value_name = "NAME")]
     set_primary: Option<String>,
+    /// Set one `[panel]` option, then reload the daemon:
+    /// `active_credential_only=true|false`, `plans_total=weighted|absolute`,
+    /// `split_bars=true|false`.
+    #[arg(long, value_name = "KEY=VALUE")]
+    set_panel: Option<String>,
     /// Download the latest matching release from GitHub and replace the
     /// installed binaries. Used by the GUI "Update" button too.
     #[arg(long)]
@@ -189,6 +194,7 @@ enum Action {
     Json,
     SetProvider(String),
     SetPrimary(String),
+    SetPanel(String),
     CheckUpdate,
     InstallFrontend(String),
     Export(ExportFormat),
@@ -246,6 +252,9 @@ impl Action {
         }
         if let Some(name) = &args.set_primary {
             add!("--set-primary", Action::SetPrimary(name.clone()));
+        }
+        if let Some(spec) = &args.set_panel {
+            add!("--set-panel", Action::SetPanel(spec.clone()));
         }
         if args.check_update {
             add!("--check-update", Action::CheckUpdate);
@@ -333,6 +342,7 @@ fn main() -> Result<()> {
         Action::Json => emit_json(&config),
         Action::SetProvider(spec) => handle_set_provider(&config_path, &spec),
         Action::SetPrimary(name) => handle_set_primary(&config, &config_path, &name),
+        Action::SetPanel(spec) => handle_set_panel(&config, &config_path, &spec),
         Action::CheckUpdate => handle_check_update(&config),
         Action::InstallFrontend(spec) => handle_install_frontend(&spec),
         Action::Export(format) => export::run(&config, format, args.since.as_deref()),
@@ -449,6 +459,18 @@ fn handle_set_primary(config: &TokenGaugeConfig, config_path: &Path, name: &str)
     };
     config_set_primary(config_path, primary.as_deref())?;
     // Nothing refetches for a pin, but every frontend renders it.
+    tokengauge_core::bump_revision(&config.cache_file);
+    signal_daemon_reload();
+    Ok(())
+}
+
+/// `--set-panel KEY=VALUE`: change how the panel is drawn. Nothing refetches;
+/// every frontend re-renders off the revision bump.
+fn handle_set_panel(config: &TokenGaugeConfig, config_path: &Path, spec: &str) -> Result<()> {
+    let (key, value) = spec
+        .split_once('=')
+        .ok_or_else(|| anyhow::anyhow!("expected KEY=VALUE, got '{spec}'"))?;
+    tokengauge_core::config_set_panel(config_path, key.trim(), value.trim())?;
     tokengauge_core::bump_revision(&config.cache_file);
     signal_daemon_reload();
     Ok(())

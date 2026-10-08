@@ -402,6 +402,32 @@ fn the_bar_follows_the_window_and_the_pin() {
     assert_eq!(row(&daily.json(), "claude")["bar"]["percent"], 31);
 }
 
+/// A panel option is config work too, and lands in the options the settings
+/// panes read back; a value the key does not take is refused before any write.
+#[test]
+fn a_panel_option_is_written_and_read_back_without_asking_a_provider() {
+    let machine = Machine::with(&[("claude", true)], None, "weekly");
+    machine.seed();
+    let before = machine.json();
+    assert_eq!(
+        before["panel_options"],
+        serde_json::json!({
+            "active_credential_only": false,
+            "plans_total": "weighted",
+            "split_bars": true,
+        })
+    );
+
+    let (code, _, stderr) = machine.run(&["--set-panel", "plans_total=absolute"]);
+    assert_eq!(code, 0, "--set-panel failed: {stderr}");
+    let (code, _, _) = machine.run(&["--set-panel", "plans_total=sideways"]);
+    assert_ne!(code, 0, "an unknown value was accepted");
+
+    let after = machine.json();
+    assert_eq!(after["panel_options"]["plans_total"], "absolute");
+    assert_eq!(after["errors"].as_array().expect("errors").len(), 0);
+}
+
 /// Repinning is config work, not a fetch, and every frontend has to hear about
 /// it: it moves the revision file the watchers are parked on.
 #[test]

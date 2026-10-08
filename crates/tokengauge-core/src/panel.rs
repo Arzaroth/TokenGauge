@@ -638,20 +638,32 @@ fn counted(row: &ProviderRow, total: PlansTotal) -> Option<u32> {
 ///
 /// With `active_credential_only`, the groups shrink to the active one while
 /// the header still adds every credential up, so the header has to say how
-/// many it covers - or the active group does, when there is no header.
+/// many it covers - or the active group does, when there is no header. Only a
+/// healthy group is ever dropped: one that is stale, was not asked or is out
+/// of the total has something to say that its numbers alone do not, and the
+/// status section keeps every group's reason.
 fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Section> {
     let mut out = Vec::new();
 
-    let active = groups
+    let plans = plan_rows(groups, options);
+    let has_total = !plans.is_empty();
+    let has_active = groups
         .iter()
-        .find(|g| g.credential.as_ref().and_then(|c| c.active) == Some(true));
-    let shown: Vec<&ProviderRow> = match active {
-        Some(active) if options.active_credential_only => vec![active],
-        _ => groups.iter().collect(),
+        .any(|g| g.credential.as_ref().and_then(|c| c.active) == Some(true));
+    let droppable = |g: &ProviderRow| {
+        let credential = g.credential.clone().unwrap_or_default();
+        credential.active != Some(true)
+            && credential.state.is_none()
+            && !g.stale
+            && (!has_total || counted(g, options.plans_total).is_some())
     };
+    let shown: Vec<&ProviderRow> = groups
+        .iter()
+        .filter(|g| !(options.active_credential_only && has_active && droppable(g)))
+        .collect();
     let hidden = groups.len() - shown.len();
 
-    let status: Vec<PanelRow> = shown
+    let status: Vec<PanelRow> = groups
         .iter()
         .flat_map(|g| status_rows(g, Some(&credential_name(g))))
         .collect();
@@ -665,8 +677,6 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
         });
     }
 
-    let plans = plan_rows(groups, options);
-    let has_total = !plans.is_empty();
     if has_total {
         out.push(Section {
             id: "plans",
@@ -681,7 +691,7 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
         });
     }
 
-    for g in shown {
+    for g in &shown {
         let credential = g.credential.clone().unwrap_or_default();
         let name = credential_name(g);
         let mut title = vec![name.clone()];
@@ -693,8 +703,8 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
         if has_total && credential.state.is_none() && counted(g, options.plans_total).is_none() {
             title.push("not in total".to_string());
         }
-        if hidden > 0 && !has_total {
-            title.push(format!("1 of {}", groups.len()));
+        if hidden > 0 && !has_total && credential.active == Some(true) {
+            title.push(format!("{} of {} shown", shown.len(), groups.len()));
         }
         let (kind, rows) = match credential.state {
             Some(state) => (SectionKind::Rows, vec![state_row(state)]),
@@ -1729,11 +1739,57 @@ mod tests {
         let spec = super::panel_spec(&groups, &options);
         let ids: Vec<(&str, Option<&str>)> =
             spec.iter().map(|s| (s.id, s.group.as_deref())).collect();
-        assert_eq!(&ids[..2], [("plans", None), ("limits", Some("work"))]);
-        assert_eq!(spec.iter().filter(|s| s.id == "limits").count(), 1);
+        // The stale one keeps its group and its reason: hiding it would leave
+        // its old figures in the total with nothing saying why.
+        assert_eq!(
+            ids[..4],
+            [
+                ("status", None),
+                ("plans", None),
+                ("limits", Some("work")),
+                ("limits", Some("perso")),
+            ]
+        );
+        assert_eq!(spec.iter().filter(|s| s.id == "limits").count(), 2);
+        assert_eq!(
+            section(&spec, "status", None).rows[0].label,
+            "Stale · perso"
+        );
         let plans = section(&spec, "plans", None);
         assert_eq!(plans.title, "ALL PLANS · 3 credentials");
         assert_eq!(plans.rows[0].segments.len(), 3);
+
+        let tip = super::bar_tooltip(&groups, &options);
+        assert_eq!(tip.title, "Claude · work");
+        let labels: Vec<&str> = tip.lines.iter().map(|l| l.label.as_str()).collect();
+        assert!(labels.contains(&"Session · all plans"), "{labels:?}");
+    }
+
+    #[test]
+    fn active_only_keeps_a_credential_that_was_not_asked_or_is_out_of_the_total() {
+        let mut expired = credential("old", false, Some(5), 0, 0);
+        expired.credential.as_mut().unwrap().state = Some(crate::CredentialState::Expired);
+        let groups = grouped(vec![
+            credential("work", true, Some(20), 30, 10),
+            credential("perso", false, Some(1), 40, 40),
+            credential("corp", false, None, 50, 50),
+            expired,
+        ]);
+        let options = PanelConfig {
+            active_credential_only: true,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&groups, &options);
+        let groups: Vec<&str> = spec
+            .iter()
+            .filter(|s| s.id == "limits")
+            .filter_map(|s| s.group.as_deref())
+            .collect();
+        assert_eq!(groups, ["work", "corp", "old"]);
+        assert_eq!(
+            section(&spec, "limits", Some("corp")).title,
+            "corp · corp plan · not in total"
+        );
     }
 
     #[test]
@@ -1749,7 +1805,7 @@ mod tests {
         let spec = super::panel_spec(&groups, &options);
         let limits: Vec<&Section> = spec.iter().filter(|s| s.id == "limits").collect();
         assert_eq!(limits.len(), 1);
-        assert_eq!(limits[0].title, "work · work plan · active · 1 of 2");
+        assert_eq!(limits[0].title, "work · work plan · active · 1 of 2 shown");
     }
 
     /// With no credential marked active there is no one to keep, so all draw.

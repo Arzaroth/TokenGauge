@@ -243,7 +243,12 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("5-hour", "Weekly", "Monthly"),
         natively_read: false,
         fetch: opencode::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: opencode::live_login,
+            tokens: crate::credentials::stored_key_tokens,
+            fetch: opencode::fetch_stored,
+            check: crate::credentials::check_stored_key,
+        }),
         auth: opencode_auth,
         enabled_in: |c| c.opencode,
     },

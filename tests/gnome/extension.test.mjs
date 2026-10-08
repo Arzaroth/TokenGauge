@@ -159,8 +159,10 @@ test('the panel scrolls inside a share of the screen, from the top on every open
     answer();
     const box = open(indicator);
 
-    const scroll = box.parent;
-    assert.equal(scroll.style_class, 'tokengauge-scroll', 'the panel is not inside a scroll view');
+    let scroll = box.parent;
+    while (scroll && scroll.style_class !== 'tokengauge-scroll')
+        scroll = scroll.parent;
+    assert.ok(scroll, 'the panel is not inside a scroll view');
     // 85% of the stub's 1048px work area: a three-credential panel is taller
     // than a 1080p screen, and the shell moves a tall menu rather than shrink it.
     assert.match(scroll.style, /max-height: 891px/);

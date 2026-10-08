@@ -12,11 +12,12 @@ import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as Harness from './stubs/harness.js';
 
 const W = '../../build/frontends/gnome/tokengauge@arzaroth.github.io/widgets.js';
 const U = '../../build/frontends/gnome/tokengauge@arzaroth.github.io/util.js';
 
-const {box, label, spacer, barFill, hexToRgb, historyChart, attachTooltip} = await import(W);
+const {box, label, spacer, barFill, hexToRgb, historyChart, attachTooltip, scrollView} = await import(W);
 const {shellQuote, isCancelled} = await import(U);
 
 /// What a drawing area painted. A repaint that bailed before asking for a
@@ -261,4 +262,25 @@ test('markup is only parsed as markup when it was asked for', () => {
     attachTooltip(rich, '<b>bold</b>', true);
     rich.setHover(true);
     assert.equal(Main.layoutManager.uiGroup.children.at(-1).clutter_text.markup, '<b>bold</b>');
+});
+
+test('a scroll view takes its content the way the running shell wires it', () => {
+    const content = new St.BoxLayout();
+    const view = scrollView(content);
+    assert.ok(Harness.flatten(view.child).includes(content), 'GNOME 46 and later take it through `child`');
+
+    // A GNOME 45 ScrollView is an St.Bin, so it has a `child` as well; only
+    // add_actor connects the content to the scrollbars.
+    let added = null;
+    St.ScrollView.prototype.add_actor = function (actor) {
+        added = actor;
+        this.add_child(actor);
+    };
+    try {
+        const old = scrollView(new St.BoxLayout());
+        assert.ok('child' in old, 'the stub stopped modelling a Bin-shaped 45 view');
+        assert.ok(added && added === old.children[0], 'GNOME 45 content set through `child` is never drawn');
+    } finally {
+        delete St.ScrollView.prototype.add_actor;
+    }
 });

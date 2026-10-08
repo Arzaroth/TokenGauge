@@ -2210,6 +2210,80 @@ mod tests {
         }
     }
 
+    /// A split bar is a `segments` list on a meter row, which no frontend's
+    /// compiler knows about: one that never reads it draws the pooled bar and
+    /// looks finished.
+    #[test]
+    fn every_panel_frontend_draws_split_bars() {
+        let frontends = [
+            ("waybar", "crates/tokengauge-waybar/src", "rs"),
+            ("tray", "crates/tokengauge-tray/src", "rs"),
+            ("tui", "crates/tokengauge-tui/src", "rs"),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+            ),
+            ("gnome", "gnome/tokengauge@arzaroth.github.io", "ts"),
+            ("quickshell", "omarchy/arzaroth.tokengauge", "qml"),
+        ];
+        for (id, dir, extension) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            assert!(
+                sources.iter().any(|src| src.contains("segments")),
+                "{id} ({dir}) never reads a meter's `segments`"
+            );
+        }
+    }
+
+    /// The `[panel]` options are flipped from every settings pane, through the
+    /// one writer the binary has. Waybar and the TUI have no pane to put them
+    /// in, so theirs is config.toml.
+    #[test]
+    fn every_settings_pane_offers_the_panel_options() {
+        let frontends = [
+            (
+                "tray",
+                "crates/tokengauge-tray/src",
+                "rs",
+                "config_set_panel",
+            ),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+                "--set-panel",
+            ),
+            (
+                "gnome",
+                "gnome/tokengauge@arzaroth.github.io",
+                "ts",
+                "--set-panel",
+            ),
+            (
+                "quickshell",
+                "omarchy/arzaroth.tokengauge",
+                "qml",
+                "--set-panel",
+            ),
+        ];
+        for (id, dir, extension, writer) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            for needle in [
+                writer,
+                "active_credential_only",
+                "plans_total",
+                "split_bars",
+            ] {
+                assert!(
+                    sources.iter().any(|src| src.contains(needle)),
+                    "{id} ({dir}) never mentions `{needle}` - a panel option is \
+                     missing from its settings pane"
+                );
+            }
+        }
+    }
+
     /// remuda's button, on every surface that can draw one (ADR 0004).
     ///
     /// Each must read `serving` off the status core resolves, and open the page

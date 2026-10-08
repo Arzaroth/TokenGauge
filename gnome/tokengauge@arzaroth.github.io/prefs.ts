@@ -101,6 +101,7 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
         const credentials = new Adw.PreferencesGroup({
             title: _('Several credentials'),
             description: _('How a provider with several stored logins is drawn'),
+            visible: false,
         });
 
         const about = new Adw.PreferencesGroup({title: _('About')});
@@ -199,6 +200,7 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
         bin: () => string,
         cancellable: Gio.Cancellable,
     ): void {
+        group.visible = true;
         const options = {...Panel.DEFAULT_PANEL_OPTIONS, ...(snapshot.panel_options || {})};
         const write = (
             row: Adw.ActionRow,

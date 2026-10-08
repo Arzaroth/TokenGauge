@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.1] - 2026-10-08
+
 ### Fixed
 
 - **The GNOME panel draws the token breakdowns again.** Tokens by day, by

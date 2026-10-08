@@ -121,8 +121,8 @@ in units of the largest plan: each credential contributes
   a tier string not seen before) has no known weight. It stays out of the
   combined figure and is marked unweighted. Guessing 1x would understate a
   large plan without saying so.
-- Weights are per provider. Codex plans need their own table, and credentials
-  of two providers never share a header.
+- Weights are per provider. Codex plans have their own table, against Plus,
+  and credentials of two providers never share a header.
 - The header's reset is the earliest among the credentials. Whether the reset
   that frees the most weighted capacity is the more useful instant is left to
   the panel work.
@@ -261,11 +261,14 @@ each.
   nominal pairing is used because nothing first-party states either, and no
   machine-readable table of subscription multipliers exists to follow the way
   `pricing.rs` follows LiteLLM's.
-- **Codex weights.** No table: Codex plans are not sold as multiples of one
-  another in a way `plan_type` names, and OpenAI is moving the plans to
-  API-spend-equivalent allowances (the reopened Pro $200 nets out at half the
-  API spend of the old one, with no 5h window), so a fixed multiplier would be
-  wrong on arrival. A Codex provider shows its groups and no combined header.
+- **Codex weights.** First shipped without a table, on the grounds that Codex
+  plans were not sold as multiples of one another. OpenAI has since split Pro
+  into Pro 100, 200 and 500, sold as 5x, 10x and 25x Plus, and `plan_type`
+  names each (`prolite`, `pro`, `promax`), so Codex has a table against Plus:
+  those three, a Business seat (`team`) at 1x and a Business Premium seat
+  (`self_serve_business_prolite`) at 5x. The wire's `business` is what Codex
+  itself labels Enterprise and has no weight, nor does a usage-based Business
+  seat, free, Go or EDU.
 - `CACHE_SCHEMA_VERSION` is 2. It is still written and never checked on read.
 
 ## The snapshot contract
@@ -289,10 +292,10 @@ Each entry of `payloads[]` gains:
   is a state it cannot draw, not a failure.
 - `credentialLabel` (string): the sidecar's `label`, absent when it has none or
   is not trusted.
-- `planWeight` (integer): the plan's multiplier relative to Pro, when one is
-  known. Also absent on a live login that matches no stored credential and
-  cannot be told apart from one, which is how it is left out of the combined
-  figure.
+- `planWeight` (integer): the plan's multiplier relative to Claude Pro or
+  ChatGPT Plus, when one is known. Also absent on a live login that matches no
+  stored credential and cannot be told apart from one, which is how it is left
+  out of the combined figure.
 
 Each entry of the top-level `errors[]` gains `credential` (the store name, when
 the failed fetch is attributed to one) and `active` (`true` when it was the live

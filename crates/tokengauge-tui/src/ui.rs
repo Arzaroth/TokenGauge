@@ -7,7 +7,7 @@ use ratatui::widgets::{
     Paragraph, Wrap,
 };
 use ratatui::{Frame, Terminal};
-use tokengauge_core::panel::{PanelRow, Section, SectionKind, Tone, panel_spec};
+use tokengauge_core::panel::{PanelRow, Section, SectionKind, Segment, Tone, panel_spec};
 use tokengauge_core::{ProviderRow, format_updated_relative, theme};
 
 use crate::app::{AppState, Overlay};
@@ -404,6 +404,44 @@ fn section_header(title: &str) -> Paragraph<'static> {
     )))
 }
 
+/// How many cells each segment of a split bar gets, and how many of those are
+/// filled: its share of `width` once the separators between them are taken
+/// out, two at least so a small plan stays readable.
+fn split_bar_cells(segments: &[Segment], width: usize) -> Vec<(usize, usize)> {
+    let content = width.saturating_sub(segments.len().saturating_sub(1));
+    segments
+        .iter()
+        .map(|seg| {
+            let cells = ((seg.width * content as f64).floor() as usize).max(2);
+            let filled =
+                ((seg.fraction.clamp(0.0, 1.0) * cells as f64).round() as usize).min(cells);
+            (cells, filled)
+        })
+        .collect()
+}
+
+fn split_bar_spans(segments: &[Segment], width: usize) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (i, (seg, (cells, filled))) in segments
+        .iter()
+        .zip(split_bar_cells(segments, width))
+        .enumerate()
+    {
+        if i > 0 {
+            spans.push(Span::styled("│", Style::default().fg(dim())));
+        }
+        spans.push(Span::styled(
+            "█".repeat(filled),
+            Style::default().fg(tone_color(seg.tone)),
+        ));
+        spans.push(Span::styled(
+            "░".repeat(cells - filled),
+            Style::default().fg(dim()),
+        ));
+    }
+    spans
+}
+
 /// A heading riding a top border, for the kinds that do.
 fn section_block(title: &str) -> Block<'static> {
     Block::default()
@@ -487,19 +525,22 @@ fn render_meters(frame: &mut Frame, area: Rect, section: &Section) {
 
         let color = tone_color(row.tone);
         let bar_w = bar_slot.width.saturating_sub(value_w as u16 + 2) as usize;
-        let filled = (row.fraction.unwrap_or(0.0).clamp(0.0, 1.0) * bar_w as f64).round() as usize;
-        let filled = filled.min(bar_w);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
+        let mut spans = if row.segments.is_empty() {
+            let filled =
+                (row.fraction.unwrap_or(0.0).clamp(0.0, 1.0) * bar_w as f64).round() as usize;
+            let filled = filled.min(bar_w);
+            vec![
                 Span::styled("█".repeat(filled), Style::default().fg(color)),
                 Span::styled("░".repeat(bar_w - filled), Style::default().fg(dim())),
-                Span::styled(
-                    format!(" {:>value_w$}", row.value),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-            ])),
-            bar_slot,
-        );
+            ]
+        } else {
+            split_bar_spans(&row.segments, bar_w)
+        };
+        spans.push(Span::styled(
+            format!(" {:>value_w$}", row.value),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+        frame.render_widget(Paragraph::new(Line::from(spans)), bar_slot);
 
         let Some(trail_area) = trail_slot else {
             continue;
@@ -1105,6 +1146,20 @@ mod tests {
             assert!(out.contains(label), "missing `{label}`:\n{out}");
         }
         assert!(!out.contains("Month "), "the old TUI-only heading survived");
+    }
+
+    #[test]
+    fn a_split_bar_shares_its_width_and_keeps_a_small_plan_readable() {
+        let seg = |width, fraction| Segment {
+            width,
+            fraction,
+            tone: Tone::Good,
+        };
+        let segments = [seg(0.75, 0.5), seg(0.25, 1.0)];
+        let cells = split_bar_cells(&segments, 41);
+        assert_eq!(cells, [(30, 15), (10, 10)]);
+        let tiny = [seg(0.98, 0.0), seg(0.02, 1.0)];
+        assert_eq!(split_bar_cells(&tiny, 21)[1], (2, 2));
     }
 
     /// Every kind the spec can hand over has a shape here. A new kind added to

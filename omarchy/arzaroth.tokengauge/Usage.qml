@@ -33,6 +33,16 @@ Item {
   // needs the full list to draw a switch for each.
   readonly property var allProviders: snapshot && Array.isArray(snapshot.providers) ? snapshot.providers : []
   readonly property string primary: snapshot ? String(snapshot.primary || "") : ""
+  // An older binary carries no `panel_options`; its panel is drawn with the
+  // defaults, so that is what the switches show.
+  readonly property var panelOptions: {
+    var o = snapshot && snapshot.panel_options ? snapshot.panel_options : {}
+    return {
+      active_credential_only: o.active_credential_only === true,
+      plans_total: o.plans_total === "absolute" ? "absolute" : "weighted",
+      split_bars: o.split_bars !== false
+    }
+  }
   readonly property string version: snapshot ? String(snapshot.version || "") : ""
 
   readonly property var updateStatus: snapshot ? snapshot.update : null
@@ -160,6 +170,10 @@ Item {
 
   function setPrimary(name) {
     action("--set-primary " + shellQuote(name))
+  }
+
+  function setPanel(key, value) {
+    action("--set-panel " + shellQuote(key + "=" + value))
   }
 
   // `--sync-setup` returns as soon as it has spawned a terminal, so the

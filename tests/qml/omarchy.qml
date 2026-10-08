@@ -108,6 +108,21 @@ Item {
             pinned.answer(panelJson, "", 0)
         }
 
+        check.equal("split bars default on", usage.panelOptions.split_bars, true)
+        Registry.clear()
+        usage.setPanel("plans_total", "absolute")
+        var option = Registry.find("--set-panel")
+        check.ok("a panel option ran a command", option !== null)
+        if (option) {
+            var line = option.command[2]
+            check.ok("the option is quoted", line.indexOf("'plans_total=absolute'") !== -1)
+            check.ok("and the read is chained behind it", line.indexOf("--json") > line.indexOf("--set-panel"))
+            var flipped = JSON.parse(panelJson)
+            flipped.panel_options = { active_credential_only: false, plans_total: "absolute", split_bars: true }
+            option.answer(JSON.stringify(flipped), "", 0)
+            check.equal("the switch reads the new state", usage.panelOptions.plans_total, "absolute")
+        }
+
         // remuda's button follows the snapshot, and opening it is the binary's.
         check.equal("the recording serves no remuda", usage.remudaServing, false)
         Registry.clear()

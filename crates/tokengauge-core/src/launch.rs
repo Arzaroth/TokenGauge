@@ -56,7 +56,7 @@ pub fn tui_command_with(config: &TokenGaugeConfig, args: &[&str]) -> String {
         return terminal_app_command(&format!("{}{extra}", shell_quote(&tui_path())));
     }
     match terminal() {
-        Some(term) => format!("{term} -e tokengauge-tui{extra}"),
+        Some(term) => format!("{term} {} tokengauge-tui{extra}", run_flag(&term)),
         None => String::new(),
     }
 }
@@ -99,15 +99,42 @@ fn is_focus_wrapper(command: &str) -> bool {
     command.split_whitespace().next() == Some(FOCUS_WRAPPER)
 }
 
+/// The terminals tried when `$TERMINAL` is unset or missing, and what each
+/// wants in front of the command it runs. GNOME's take `--`: stock GNOME ships
+/// none of the others, so the GNOME panel's fleet sync button found nothing.
+/// Ptyxis is told `--new-window` because without it the command lands as a
+/// tab in whichever window is already open.
+const TERMINALS: &[(&str, &str)] = &[
+    ("ghostty", "-e"),
+    ("alacritty", "-e"),
+    ("kitty", "-e"),
+    ("wezterm", "-e"),
+    ("foot", "-e"),
+    ("ptyxis", "--new-window --"),
+    ("kgx", "--"),
+    ("gnome-terminal", "--"),
+    ("konsole", "-e"),
+    ("xterm", "-e"),
+];
+
+/// `-e` for a terminal this does not know, which is the convention
+/// `$TERMINAL` is held to.
+fn run_flag(term: &str) -> &'static str {
+    let name = Path::new(term)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(term);
+    TERMINALS
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map_or("-e", |(_, flag)| flag)
+}
+
 fn terminal() -> Option<String> {
     std::env::var("TERMINAL")
         .ok()
         .into_iter()
-        .chain(
-            ["ghostty", "alacritty", "kitty", "wezterm", "foot", "xterm"]
-                .iter()
-                .map(|s| s.to_string()),
-        )
+        .chain(TERMINALS.iter().map(|(name, _)| name.to_string()))
         .find(|term| which(term).is_some())
 }
 
@@ -287,10 +314,20 @@ mod tests {
         // Terminal.app on macOS receives the command quoted as one word.
         assert!(
             sync.is_empty()
-                || sync.ends_with("-e tokengauge-tui --sync")
+                || sync.ends_with(" tokengauge-tui --sync")
                 || (cfg!(target_os = "macos") && sync.ends_with(" --sync'")),
             "{sync}"
         );
+    }
+
+    #[test]
+    fn each_terminal_is_handed_the_command_the_way_it_takes_one() {
+        assert_eq!(run_flag("ghostty"), "-e");
+        assert_eq!(run_flag("ptyxis"), "--new-window --");
+        assert_eq!(run_flag("kgx"), "--");
+        assert_eq!(run_flag("/usr/bin/gnome-terminal"), "--");
+        assert_eq!(run_flag("konsole"), "-e");
+        assert_eq!(run_flag("my-own-term"), "-e", "$TERMINAL is held to -e");
     }
 
     /// `which` is the doctor's PATH walk as well as this module's, so it has to

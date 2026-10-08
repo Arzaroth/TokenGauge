@@ -109,7 +109,7 @@ fn setup(config: &TokenGaugeConfig, config_path: &Path) -> Result<()> {
     let command = tokengauge_core::launch::tui_sync_command(config);
     if !tokengauge_core::launch::spawn_shell_with_config(&command, config_path) {
         anyhow::bail!(
-            "no terminal found to open the TUI in; set [waybar] tui_command, or run `tokengauge-tui --sync` yourself"
+            "no terminal found to open the TUI in; name one with `tui_command` in config.toml (it sits under [waybar], but every frontend reads it), or run `tokengauge-tui --sync` yourself"
         );
     }
     Ok(())

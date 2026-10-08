@@ -65,9 +65,10 @@ pub(crate) fn agent_auth_path() -> PathBuf {
         .join("auth.json")
 }
 
+/// cursor-agent writes camelCase: `{"accessToken", "refreshToken", "apiKey"}`.
 #[derive(Debug, Deserialize)]
 struct AgentAuth {
-    #[serde(default, alias = "access_token")]
+    #[serde(default, rename = "accessToken", alias = "access_token")]
     access_token: Option<String>,
 }
 
@@ -420,6 +421,17 @@ mod tests {
             );
         }
         assert_eq!(usage.login_method.as_deref(), Some("Cursor Pro"));
+    }
+
+    /// cursor-agent's own spelling, which the reader once missed.
+    #[test]
+    fn the_agent_file_is_read_as_cursor_agent_writes_it() {
+        let auth: AgentAuth =
+            serde_json::from_str(r#"{"accessToken": "t", "refreshToken": "r", "apiKey": null}"#)
+                .unwrap();
+        assert_eq!(auth.access_token.as_deref(), Some("t"));
+        let legacy: AgentAuth = serde_json::from_str(r#"{"access_token": "t"}"#).unwrap();
+        assert_eq!(legacy.access_token.as_deref(), Some("t"));
     }
 
     /// The combined header weighs an Ultra and a Pro as 20 to 1.

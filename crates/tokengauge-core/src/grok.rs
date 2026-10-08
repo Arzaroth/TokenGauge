@@ -457,6 +457,17 @@ struct Settings {
     subscription_tier_display: Option<String>,
 }
 
+/// A plan's weight by its price per $10, since xAI publishes no multiplier
+/// between tiers: SuperGrok $30, Plus $100, Heavy $300.
+fn tier_weight(label: &str) -> Option<u32> {
+    match label {
+        "SuperGrok" => Some(3),
+        "SuperGrok Plus" => Some(10),
+        "SuperGrok Heavy" => Some(30),
+        _ => None,
+    }
+}
+
 /// The plan as the CLI's settings name it. The billing response carries no
 /// tier, and `auth_mode` says only how the user signed in, so without this
 /// every paid plan reads as SuperGrok. Best effort: a failure keeps the
@@ -510,8 +521,11 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
 
     let bytes = resp.bytes().context("Grok billing read failed")?;
     let billing = parse_grpc_web_response(&bytes, header_status, now)?;
-    let plan = subscription_tier(&client, &creds.access_token).or(creds.login_method);
-    Ok(vec![to_payload(billing, plan, now)])
+    let tier = subscription_tier(&client, &creds.access_token);
+    let weight = tier.as_deref().and_then(tier_weight);
+    let mut payload = to_payload(billing, tier.or(creds.login_method), now);
+    payload.credential.plan_weight = weight;
+    Ok(vec![payload])
 }
 
 #[cfg(test)]
@@ -626,6 +640,16 @@ mod tests {
         assert_eq!(sold("SuperGrok Plus").as_deref(), Some("SuperGrok Plus"));
         assert_eq!(sold(" Enterprise ").as_deref(), Some("Enterprise"));
         assert_eq!(sold("  "), None);
+    }
+
+    /// With no published multiplier, Heavy weighs ten SuperGroks, as it costs.
+    #[test]
+    fn a_tier_weighs_its_price() {
+        let weight = |raw: &str| tier_label(raw).as_deref().and_then(tier_weight);
+        assert_eq!(weight("SuperGrok"), Some(3));
+        assert_eq!(weight("SuperGrok Plus"), Some(10));
+        assert_eq!(weight("SUPERGROK_HEAVY"), Some(30));
+        assert_eq!(weight("Enterprise"), None);
     }
 
     #[test]

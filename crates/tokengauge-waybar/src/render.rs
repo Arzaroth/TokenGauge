@@ -8,8 +8,9 @@
 
 use serde::Serialize;
 use tokengauge_core::{
-    PanelRow, ProviderFetchError, ProviderRow, Section, SectionKind, Theme, TokenGaugeConfig, Tone,
-    WaybarWindow, provider_icon, read_waybar_state, theme, waybar_state_path,
+    PanelConfig, PanelRow, ProviderFetchError, ProviderRow, Section, SectionKind, Theme,
+    TokenGaugeConfig, Tone, WaybarWindow, provider_icon, read_waybar_state, theme,
+    waybar_state_path,
 };
 
 pub(crate) fn theme_palette() -> (
@@ -220,7 +221,13 @@ pub(crate) fn render_output(
         Some(idx) => vec![&rows[idx]],
         None => rows.iter().collect(),
     };
-    let tooltip = format_tooltip_with_errors(&tooltip_rows, errors, refreshing, LEFT_CLICK_LABEL);
+    let tooltip = format_tooltip_with_errors(
+        &tooltip_rows,
+        errors,
+        refreshing,
+        LEFT_CLICK_LABEL,
+        &config.panel,
+    );
     let class = compute_class(rows, errors, refreshing, config.waybar.window.clone());
     WaybarOutput {
         text,
@@ -382,7 +389,7 @@ pub(crate) fn format_header(row: &ProviderRow) -> String {
     format!("<b>{icon}  {name}</b>{badge}")
 }
 
-pub(crate) fn format_provider_card(row: &ProviderRow) -> String {
+pub(crate) fn format_provider_card(row: &ProviderRow, options: &PanelConfig) -> String {
     let (dim, _separator, _green, _yellow, _red, _neutral) = theme_palette();
 
     // Waybar has no refresh button - its tooltip is the hover surface - so the
@@ -399,7 +406,7 @@ pub(crate) fn format_provider_card(row: &ProviderRow) -> String {
     // The tooltip is waybar's panel, so it draws the same sections in the same
     // order as every other panel. The header and the input hints below are the
     // only waybar-specific chrome left here.
-    let sections: Vec<String> = tokengauge_core::panel_spec(row)
+    let sections: Vec<String> = tokengauge_core::panel_spec(row, options)
         .iter()
         .flat_map(format_panel_section)
         .collect();
@@ -425,10 +432,11 @@ pub(crate) fn format_tooltip_with_errors(
     errors: &[ProviderFetchError],
     refreshing: bool,
     left_verb: &str,
+    options: &PanelConfig,
 ) -> String {
     let cards: Vec<String> = rows
         .iter()
-        .map(|row| format_provider_card(row))
+        .map(|row| format_provider_card(row, options))
         .chain(errors.iter().map(format_error_card))
         .collect();
     let cards_refs: Vec<&str> = cards.iter().map(String::as_str).collect();
@@ -480,7 +488,7 @@ pub(crate) const LEFT_CLICK_LABEL: &str = "open TUI";
 
 #[cfg(test)]
 pub(crate) fn format_tooltip_cards(rows: &[&ProviderRow], refreshing: bool) -> String {
-    format_tooltip_with_errors(rows, &[], refreshing, "open")
+    format_tooltip_with_errors(rows, &[], refreshing, "open", &PanelConfig::default())
 }
 
 #[cfg(test)]
@@ -710,7 +718,7 @@ pub(crate) mod tests {
     /// away or renaming it means editing all five and this list.
     #[test]
     fn format_provider_card_full_data() {
-        let card = format_provider_card(&sample_row("Claude"));
+        let card = format_provider_card(&sample_row("Claude"), &PanelConfig::default());
         assert!(card.starts_with("<tt><b>"));
         assert!(card.contains("Claude</b>"));
         assert!(card.ends_with("</tt>"));
@@ -732,7 +740,7 @@ pub(crate) mod tests {
         let mut row = sample_row("Codex");
         row.session_used = None;
         row.session_reset = "—".to_string();
-        let card = format_provider_card(&row);
+        let card = format_provider_card(&row, &PanelConfig::default());
         assert!(card.contains("Codex</b>"));
         assert!(!card.contains("Session"));
         assert!(card.contains("━─────────"));
@@ -744,7 +752,7 @@ pub(crate) mod tests {
         let mut row = sample_row("Codex");
         row.weekly_reset = "—".to_string();
         row.weekly_used = Some(0);
-        let card = format_provider_card(&row);
+        let card = format_provider_card(&row, &PanelConfig::default());
         assert!(card.contains("not started"));
         assert!(!card.contains("Resets —"));
     }
@@ -752,7 +760,7 @@ pub(crate) mod tests {
     #[test]
     fn format_provider_card_escapes_provider_name() {
         let row = sample_row("ev<il>");
-        let card = format_provider_card(&row);
+        let card = format_provider_card(&row, &PanelConfig::default());
         assert!(card.contains("ev&lt;il&gt;</b>"));
         assert!(!card.contains("ev<il></b>"));
     }
@@ -761,27 +769,27 @@ pub(crate) mod tests {
     fn format_provider_card_escapes_reset_string() {
         let mut row = sample_row("Claude");
         row.session_reset = "a & b".to_string();
-        let card = format_provider_card(&row);
+        let card = format_provider_card(&row, &PanelConfig::default());
         assert!(card.contains("Resets a &amp; b"));
     }
 
     #[test]
     fn format_provider_card_includes_icon() {
-        let card = format_provider_card(&sample_row("Claude"));
+        let card = format_provider_card(&sample_row("Claude"), &PanelConfig::default());
         assert!(card.contains("\u{f0721}"));
         assert!(card.contains("face=\"JetBrainsMono Nerd Font\""));
         assert!(card.contains("foreground=\"#DE7356\""));
-        let codex_card = format_provider_card(&sample_row("Codex"));
+        let codex_card = format_provider_card(&sample_row("Codex"), &PanelConfig::default());
         assert!(codex_card.contains("\u{f0b2b}"));
         let mut other = sample_row("Mystery");
         other.provider = "Mystery".to_string();
-        let card = format_provider_card(&other);
+        let card = format_provider_card(&other, &PanelConfig::default());
         assert!(card.contains("\u{f06a9}"));
     }
 
     #[test]
     fn format_provider_card_omits_credits_when_dash() {
-        let card = format_provider_card(&sample_row("Claude"));
+        let card = format_provider_card(&sample_row("Claude"), &PanelConfig::default());
         assert!(!card.contains("Credits"));
     }
 
@@ -789,7 +797,7 @@ pub(crate) mod tests {
     fn format_provider_card_includes_credits_when_present() {
         let mut row = sample_row("Kimi");
         row.credits = Some(42.57);
-        let card = format_provider_card(&row);
+        let card = format_provider_card(&row, &PanelConfig::default());
         assert!(card.contains("Credits"));
         assert!(card.contains("$42.57"));
     }

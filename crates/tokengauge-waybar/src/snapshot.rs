@@ -124,7 +124,8 @@ pub(crate) fn json_snapshot(
                 // under it is the only chrome around it.
                 map.insert(
                     "bar_tooltip".into(),
-                    serde_json::to_value(tokengauge_core::bar_tooltip(r)).unwrap_or_default(),
+                    serde_json::to_value(tokengauge_core::bar_tooltip(r, &config.panel))
+                        .unwrap_or_default(),
                 );
                 map.insert("color".into(), icon.color_hex.into());
                 let pace_badge = |pace: Option<UsagePace>| {
@@ -138,7 +139,8 @@ pub(crate) fn json_snapshot(
                 // own section order, labels and number formatting.
                 map.insert(
                     "panel".into(),
-                    serde_json::to_value(tokengauge_core::panel_spec(r)).unwrap_or_default(),
+                    serde_json::to_value(tokengauge_core::panel_spec(r, &config.panel))
+                        .unwrap_or_default(),
                 );
                 // The second screen: every range resolved, so switching one is
                 // a click in an open pane rather than another `--json`.

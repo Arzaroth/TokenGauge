@@ -733,6 +733,7 @@ mod tests {
             theme: Default::default(),
             update: Default::default(),
             credentials: tokengauge_core::CredentialsConfig::off(),
+            panel: Default::default(),
             unknown: Default::default(),
         }
     }

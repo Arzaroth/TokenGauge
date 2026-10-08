@@ -31,6 +31,8 @@ pub struct AppState {
     pub initial_provider: Option<String>,
     pub overlay: Overlay,
     pub remuda_serving: bool,
+    /// The `[panel]` options the spec is drawn with, re-read with the rows.
+    pub panel: tokengauge_core::PanelConfig,
 }
 
 /// What is drawn over the panel, and what owns the keyboard while it is.
@@ -66,6 +68,7 @@ impl AppState {
             initial_provider: None,
             overlay: Overlay::default(),
             remuda_serving: false,
+            panel: tokengauge_core::PanelConfig::default(),
         }
     }
 
@@ -127,10 +130,15 @@ impl App {
         let remuda_serving = loaded_config
             .as_ref()
             .is_some_and(|c| tokengauge_core::remuda::status(c).serving);
+        let panel = loaded_config
+            .as_ref()
+            .map(|c| c.panel.clone())
+            .unwrap_or_default();
         let config_primary = loaded_config.and_then(|c| c.waybar.primary);
 
         let mut state = AppState::new(cache_file.clone());
         state.remuda_serving = remuda_serving;
+        state.panel = panel;
         state.initial_provider = read_waybar_state(&waybar_state_path(&cache_file))
             .selected
             .or(config_primary);
@@ -214,6 +222,7 @@ impl App {
             return;
         };
         self.state.remuda_serving = tokengauge_core::remuda::status(&config).serving;
+        self.state.panel = config.panel.clone();
         if self.pending_refresh.is_some() {
             return;
         }
@@ -331,6 +340,7 @@ impl App {
             Ok(refresh) => {
                 self.state.rows = refresh.rows;
                 self.state.errors = refresh.errors;
+                self.state.panel = refresh.panel;
                 self.state.last_error = None;
             }
             Err(error) => {

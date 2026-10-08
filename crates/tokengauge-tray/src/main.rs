@@ -62,8 +62,8 @@ mod gui {
 
     use eframe::egui::{self, Color32, ProgressBar, RichText, ViewportCommand};
     use tokengauge_core::{
-        HistoryPanel, PROVIDERS, ProviderRow, Section, SectionKind, TokenGaugeConfig, Tone,
-        cache_is_stale, config_set_oauth_provider, config_set_primary, default_config_path,
+        HistoryPanel, PROVIDERS, PanelConfig, ProviderRow, Section, SectionKind, TokenGaugeConfig,
+        Tone, cache_is_stale, config_set_oauth_provider, config_set_primary, default_config_path,
         fetch_all_providers, load_config, panel_spec, payload_to_rows_with_costs, read_cache_full,
         retain_enabled, write_cache_full, write_default_config,
     };
@@ -163,7 +163,7 @@ mod gui {
         }
     }
 
-    fn to_row(r: &ProviderRow, history: &HistoryInputs) -> Row {
+    fn to_row(r: &ProviderRow, history: &HistoryInputs, options: &PanelConfig) -> Row {
         Row {
             provider: r.provider.clone(),
             plan: r.plan_label.clone(),
@@ -173,9 +173,9 @@ mod gui {
                 r.updated_iso.as_deref(),
                 tokengauge_core::now_ms(),
             ),
-            bar_tooltip: tokengauge_core::bar_tooltip(r),
+            bar_tooltip: tokengauge_core::bar_tooltip(r, options),
             session_used: r.session_used,
-            panel: panel_spec(r),
+            panel: panel_spec(r, options),
             history: history.panel(&r.provider),
         }
     }
@@ -1339,7 +1339,7 @@ mod gui {
         let history = HistoryInputs::load(&config);
         let rows = payload_to_rows_with_costs(payloads, &costs)
             .iter()
-            .map(|r| to_row(r, &history))
+            .map(|r| to_row(r, &history, &config.panel))
             .collect();
         let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
         s.rows = rows;
@@ -1394,7 +1394,7 @@ mod gui {
                     let history = HistoryInputs::load(&config);
                     let rows = payload_to_rows_with_costs(result.payloads, &result.costs)
                         .iter()
-                        .map(|r| to_row(r, &history))
+                        .map(|r| to_row(r, &history, &config.panel))
                         .collect();
                     let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
                     s.rows = rows;

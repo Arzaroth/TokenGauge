@@ -228,7 +228,7 @@ fn render_detail(frame: &mut Frame, area: Rect, state: &mut AppState) {
     // The core resolves the whole panel: which sections exist, in what order,
     // and every string in them. This frontend picks a shape per kind and loops,
     // so a section added in panel.rs reaches the terminal with no edit here.
-    let spec = panel_spec(row);
+    let spec = panel_spec(row, &state.panel);
 
     let mut block = Block::default()
         .borders(Borders::ALL)
@@ -1036,7 +1036,7 @@ mod tests {
     }
 
     fn section(row: &ProviderRow, id: &str) -> Section {
-        panel_spec(row)
+        panel_spec(row, &Default::default())
             .into_iter()
             .find(|s| s.id == id)
             .unwrap_or_else(|| panic!("no `{id}` section"))
@@ -1112,7 +1112,7 @@ mod tests {
     #[test]
     fn every_section_kind_has_a_height_and_a_renderer() {
         let row = provider_with_sync_note();
-        for section in panel_spec(&row) {
+        for section in panel_spec(&row, &Default::default()) {
             assert!(
                 section_height(&section) > 0,
                 "{} reserves no lines",

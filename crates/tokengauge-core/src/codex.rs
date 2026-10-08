@@ -1084,17 +1084,7 @@ mod tests {
     }
 
     fn jwt_with(claims: &str) -> String {
-        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-        let mut payload = String::new();
-        for chunk in claims.as_bytes().chunks(3) {
-            let mut buf = [0u8; 3];
-            buf[..chunk.len()].copy_from_slice(chunk);
-            let n = u32::from_be_bytes([0, buf[0], buf[1], buf[2]]);
-            for i in 0..chunk.len() + 1 {
-                payload.push(ALPHABET[((n >> (18 - 6 * i)) & 0x3f) as usize] as char);
-            }
-        }
-        format!("header.{payload}.signature")
+        crate::provider::fake_jwt(claims)
     }
 
     #[test]

@@ -406,12 +406,13 @@ fn section_header(title: &str) -> Paragraph<'static> {
 
 fn split_bar_spans(segments: &[Segment], width: usize) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
+    let separated = tokengauge_core::segment_separators(segments.len(), width);
     for (i, (seg, (cells, filled))) in segments
         .iter()
         .zip(tokengauge_core::segment_cells(segments, width))
         .enumerate()
     {
-        if i > 0 {
+        if i > 0 && separated {
             spans.push(Span::styled("│", Style::default().fg(dim())));
         }
         spans.push(Span::styled(

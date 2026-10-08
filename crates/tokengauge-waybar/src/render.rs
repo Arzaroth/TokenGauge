@@ -322,7 +322,13 @@ pub(crate) fn segmented_bar(segments: &[Segment]) -> String {
             )
         })
         .collect::<Vec<_>>()
-        .join(&format!("<span foreground=\"{dim}\">┊</span>"))
+        .join(
+            &if tokengauge_core::segment_separators(segments.len(), 10) {
+                format!("<span foreground=\"{dim}\">┊</span>")
+            } else {
+                String::new()
+            },
+        )
 }
 
 /// Render one core panel section as tooltip lines: a blank spacer, a dim

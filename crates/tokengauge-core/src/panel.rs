@@ -133,22 +133,37 @@ pub struct Segment {
     pub tone: Tone,
 }
 
+/// Whether a split bar of `count` segments has room for a separator between
+/// each pair and a cell for each segment in `width` cells.
+pub fn segment_separators(count: usize, width: usize) -> bool {
+    count > 0 && width >= 2 * count - 1
+}
+
 /// A split bar in a character grid: how many cells each segment gets and how
-/// many of those are filled, when the bar is `width` cells including one
-/// separator between each pair. The cells add up to exactly that, so a split
-/// bar lines up with the plain bars beside it, and each segment gets one cell
-/// at least. Waybar and the TUI draw in cells; the pixel frontends use
-/// [`Segment::width`] directly.
+/// many of those are filled, when the bar is `width` cells including the
+/// separators [`segment_separators`] says fit. The cells add up to exactly
+/// that, so a split bar lines up with the plain bars beside it and never runs
+/// past its slot; each segment gets one cell at least while there are cells
+/// enough to go round. Waybar and the TUI draw in cells; the pixel frontends
+/// use [`Segment::width`] directly.
 pub fn segment_cells(segments: &[Segment], width: usize) -> Vec<(usize, usize)> {
     let n = segments.len();
     if n == 0 {
         return Vec::new();
     }
-    let content = width.saturating_sub(n.saturating_sub(1)).max(n);
+    let content = if segment_separators(n, width) {
+        width - (n - 1)
+    } else {
+        width
+    };
+    let least = usize::from(content >= n);
     let ideal: Vec<f64> = segments.iter().map(|s| s.width * content as f64).collect();
-    let mut cells: Vec<usize> = ideal.iter().map(|i| (*i as usize).max(1)).collect();
+    let mut cells: Vec<usize> = ideal.iter().map(|i| (*i as usize).max(least)).collect();
     while cells.iter().sum::<usize>() > content {
-        let Some(widest) = (0..n).filter(|i| cells[*i] > 1).max_by_key(|i| cells[*i]) else {
+        let Some(widest) = (0..n)
+            .filter(|i| cells[*i] > least)
+            .max_by_key(|i| cells[*i])
+        else {
             break;
         };
         cells[widest] -= 1;
@@ -1777,8 +1792,15 @@ mod tests {
             segment_cells(&[seg(0.75, 0.5), seg(0.25, 1.0)], 41),
             [(30, 15), (10, 10)]
         );
+        // Too many to separate, and then too many for a cell each: the bar
+        // still never runs past its slot.
+        let six = vec![seg(1.0 / 6.0, 1.0); 6];
+        assert!(!segment_separators(6, 10));
+        assert_eq!(total(&segment_cells(&six, 10)), 10);
+        assert!(segment_cells(&six, 10).iter().all(|c| c.0 >= 1));
         let many = vec![seg(1.0 / 12.0, 1.0); 12];
-        assert!(segment_cells(&many, 10).iter().all(|c| c.0 == 1));
+        assert_eq!(total(&segment_cells(&many, 10)), 10);
+        assert!(segment_separators(3, 10));
         assert!(segment_cells(&[], 10).is_empty());
     }
 

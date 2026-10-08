@@ -89,7 +89,7 @@ pub use history::{
 pub use pace::{PaceStage, UsagePace};
 pub use panel::{
     BarTooltip, BarTooltipLine, PanelRow, Section, SectionKind, Segment, Tone, bar_tooltip,
-    panel_spec, refresh_hint, segment_cells,
+    panel_spec, refresh_hint, segment_cells, segment_separators,
 };
 pub use sync::config::{
     SyncConfig, SyncDirConfig, SyncProvidersConfig, SyncS3Config, SyncTransportKind,

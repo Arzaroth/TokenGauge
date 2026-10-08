@@ -1541,6 +1541,8 @@ mod gui {
                             if let Ok(config) = load_config(Some(cfg_path.clone())) {
                                 tokengauge_core::bump_revision(&config.cache_file);
                             }
+                            // Only a Unix machine runs the daemon this reloads.
+                            #[cfg(unix)]
                             tokengauge_core::signal_daemon_reload();
                         }),
                     Action::Refresh => Ok(()),

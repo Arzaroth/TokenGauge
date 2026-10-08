@@ -406,9 +406,22 @@ fn the_bar_follows_the_window_and_the_pin() {
 /// panes read back; a value the key does not take is refused before any write.
 #[test]
 fn a_panel_option_is_written_and_read_back_without_asking_a_provider() {
-    let machine = Machine::with(&[("claude", true)], None, "weekly");
+    let machine = Machine::with(&[("claude", true), ("codex", true)], None, "weekly");
     machine.seed();
     let before = machine.json();
+    let revision = PathBuf::from(before["revision_file"].as_str().expect("a revision file"));
+    let written = std::fs::read_to_string(&revision).unwrap_or_default();
+    let codex_plans = |snapshot: &serde_json::Value| {
+        snapshot["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .find(|r| r["provider"] == "Codex")
+            .and_then(|r| r["panel"].as_array())
+            .and_then(|p| p.iter().find(|s| s["id"] == "plans").cloned())
+    };
+    // The seeded Codex logins carry no plan weight, so weighted draws no header.
+    assert_eq!(codex_plans(&before), None);
     assert_eq!(
         before["panel_options"],
         serde_json::json!({
@@ -426,6 +439,24 @@ fn a_panel_option_is_written_and_read_back_without_asking_a_provider() {
     let after = machine.json();
     assert_eq!(after["panel_options"]["plans_total"], "absolute");
     assert_eq!(after["errors"].as_array().expect("errors").len(), 0);
+    assert_ne!(
+        std::fs::read_to_string(&revision).unwrap_or_default(),
+        written,
+        "a frontend watching the revision file would never have re-read"
+    );
+
+    // Absolute needs no weight, so the panel itself changed, split by default.
+    let plans = codex_plans(&after).expect("an ALL PLANS header once absolute");
+    let segments = plans["rows"][0]["segments"].as_array().expect("segments");
+    assert!(segments.len() >= 2, "{plans}");
+    for segment in segments {
+        for key in ["width", "fraction", "tone"] {
+            assert!(
+                segment.get(key).is_some(),
+                "segment lacks `{key}`: {segment}"
+            );
+        }
+    }
 }
 
 /// Repinning is config work, not a fetch, and every frontend has to hear about

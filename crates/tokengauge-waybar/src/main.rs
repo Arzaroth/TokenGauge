@@ -460,7 +460,7 @@ fn handle_set_primary(config: &TokenGaugeConfig, config_path: &Path, name: &str)
     config_set_primary(config_path, primary.as_deref())?;
     // Nothing refetches for a pin, but every frontend renders it.
     tokengauge_core::bump_revision(&config.cache_file);
-    signal_daemon_reload();
+    reload_daemon_and_wait(config);
     Ok(())
 }
 
@@ -472,8 +472,27 @@ fn handle_set_panel(config: &TokenGaugeConfig, config_path: &Path, spec: &str) -
         .ok_or_else(|| anyhow::anyhow!("expected KEY=VALUE, got '{spec}'"))?;
     tokengauge_core::config_set_panel(config_path, key.trim(), value.trim())?;
     tokengauge_core::bump_revision(&config.cache_file);
-    signal_daemon_reload();
+    reload_daemon_and_wait(config);
     Ok(())
+}
+
+/// Frontends run `--set-* && --json` in one subprocess, and while a daemon is
+/// up it is the daemon that answers the `--json` - with the config it held
+/// before the SIGHUP, unless its reload has landed. It moves the revision once
+/// it has, so wait for that, briefly: a reload that refetches takes longer,
+/// and its own write moves the revision the watchers are parked on anyway.
+fn reload_daemon_and_wait(config: &TokenGaugeConfig) {
+    let before = tokengauge_core::read_revision(&config.cache_file);
+    signal_daemon_reload();
+    if daemon::connect_socket(config).is_err() {
+        return;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline
+        && tokengauge_core::read_revision(&config.cache_file) == before
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 /// selvedge takes the cached-status path as an argument, and TokenGauge's is

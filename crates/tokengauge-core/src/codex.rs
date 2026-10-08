@@ -861,19 +861,40 @@ fn to_payload(
         return Err(anyhow!("Codex returned no usage windows"));
     }
 
+    let plan = resp.plan_type.or(plan_hint);
+    let weight = plan_weight(plan.as_deref());
     let mut payload = ProviderPayload::live(
         "codex",
         source,
         UsageSnapshot {
             primary,
             secondary,
-            login_method: resp.plan_type.or(plan_hint),
+            login_method: plan,
             extra_rate_windows,
             ..UsageSnapshot::at(now)
         },
     );
     payload.credits = credits;
+    payload.credential.plan_weight = weight;
     Ok(payload)
+}
+
+/// A plan's nominal multiplier against Plus, by the `plan_type` the wire
+/// sends: Pro 100, 200 and 500 (`prolite`, `pro`, `promax`) are 5x, 10x and
+/// 25x, a Business seat (`team`) is a Plus's allowance and a Business Premium
+/// seat (`self_serve_business_prolite`) a Pro 100's.
+///
+/// `None` for anything else - free, Go, a usage-based Business seat,
+/// Enterprise (which the wire calls `business`), EDU, a plan not seen before.
+/// Guessing 1x would understate a large plan without saying so.
+fn plan_weight(plan_type: Option<&str>) -> Option<u32> {
+    match plan_type?.to_ascii_lowercase().as_str() {
+        "plus" | "team" => Some(1),
+        "prolite" | "self_serve_business_prolite" => Some(5),
+        "pro" => Some(10),
+        "promax" => Some(25),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1100,6 +1121,45 @@ mod tests {
         assert_eq!(window.used_percent, Some(6));
         assert_eq!(window.window_minutes, Some(43200));
         assert_eq!(usage.login_method.as_deref(), Some("free"));
+    }
+
+    /// The combined header weighs a Pro 200 and a Plus as 10 to 1, and names
+    /// the tiers by the wire's `plan_type`, not by the price on the page.
+    #[test]
+    fn a_plan_weighs_its_nominal_multiplier() {
+        assert_eq!(plan_weight(Some("plus")), Some(1));
+        assert_eq!(plan_weight(Some("prolite")), Some(5));
+        assert_eq!(plan_weight(Some("pro")), Some(10));
+        assert_eq!(plan_weight(Some("promax")), Some(25));
+        assert_eq!(plan_weight(Some("team")), Some(1));
+        assert_eq!(plan_weight(Some("self_serve_business_prolite")), Some(5));
+        // Nothing known: out of the total rather than guessed at 1x.
+        for unweighted in ["free", "go", "business", "enterprise", "edu", "pro_ultra"] {
+            assert_eq!(plan_weight(Some(unweighted)), None, "{unweighted}");
+        }
+        assert_eq!(plan_weight(None), None);
+    }
+
+    #[test]
+    fn the_plan_weight_rides_on_the_payload() {
+        let body = |plan: &str| -> UsageResponse {
+            serde_json::from_str(&format!(
+                r#"{{"plan_type":{plan},"rate_limit":{{
+                    "primary_window":{{"used_percent":12,"reset_at":1786646643,"limit_window_seconds":18000}}}}}}"#
+            ))
+            .unwrap()
+        };
+        let weight = |plan: &str, hint: Option<&str>| {
+            to_payload(body(plan), Utc::now(), "oauth", hint.map(String::from))
+                .unwrap()
+                .credential
+                .plan_weight
+        };
+        assert_eq!(weight(r#""promax""#, None), Some(25));
+        // A PAT's whoami plan stands in when the usage response names none.
+        assert_eq!(weight("null", Some("prolite")), Some(5));
+        assert_eq!(weight(r#""pro""#, Some("plus")), Some(10));
+        assert_eq!(weight(r#""free""#, None), None);
     }
 
     #[test]

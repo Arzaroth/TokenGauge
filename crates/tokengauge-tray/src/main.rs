@@ -62,10 +62,11 @@ mod gui {
 
     use eframe::egui::{self, Color32, ProgressBar, RichText, ViewportCommand};
     use tokengauge_core::{
-        HistoryPanel, PROVIDERS, PanelConfig, ProviderRow, Section, SectionKind, TokenGaugeConfig,
-        Tone, cache_is_stale, config_set_oauth_provider, config_set_primary, default_config_path,
-        fetch_all_providers, load_config, panel_spec, payload_to_rows_with_costs, read_cache_full,
-        retain_enabled, write_cache_full, write_default_config,
+        HistoryPanel, PROVIDERS, PanelConfig, PlansTotal, ProviderRow, Section, SectionKind,
+        TokenGaugeConfig, Tone, cache_is_stale, config_set_oauth_provider, config_set_panel,
+        config_set_primary, default_config_path, fetch_all_providers, load_config, panel_spec,
+        payload_to_rows_with_costs, read_cache_full, retain_enabled, write_cache_full,
+        write_default_config,
     };
     use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem};
     use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -190,6 +191,8 @@ mod gui {
         /// here; the bar-pin chips list only these.
         enabled: Vec<String>,
         primary: String,
+        /// The `[panel]` options, for the settings pane's switches to read.
+        panel: PanelConfig,
     }
 
     /// What the tray thread and the UI thread have to agree on to make the
@@ -215,6 +218,7 @@ mod gui {
         Refresh,
         SetProvider(String, bool),
         SetPrimary(String),
+        SetPanel(&'static str, &'static str),
     }
 
     pub struct TrayApp {
@@ -787,6 +791,59 @@ mod gui {
                         }
                     }
                 });
+
+                ui.add_space(12.0);
+                ui.label(
+                    RichText::new("SEVERAL CREDENTIALS")
+                        .small()
+                        .strong()
+                        .color(SUB),
+                );
+                ui.add_space(4.0);
+                let mut panel = snap.panel.clone();
+                let mut changed: Option<(&'static str, &'static str)> = None;
+                if ui
+                    .checkbox(&mut panel.active_credential_only, "Active credential only")
+                    .changed()
+                {
+                    changed = Some((
+                        "active_credential_only",
+                        bool_str(panel.active_credential_only),
+                    ));
+                }
+                if ui
+                    .checkbox(&mut panel.split_bars, "Split ALL PLANS bars")
+                    .changed()
+                {
+                    changed = Some(("split_bars", bool_str(panel.split_bars)));
+                }
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("ALL PLANS").color(SUB));
+                    for (mode, label) in [
+                        (PlansTotal::Weighted, "weighted"),
+                        (PlansTotal::Absolute, "absolute"),
+                    ] {
+                        let active = panel.plans_total == mode;
+                        let chip =
+                            egui::Button::new(RichText::new(label).strong().color(if active {
+                                DARK
+                            } else {
+                                SUB
+                            }))
+                            .fill(if active { BLUE } else { CARD })
+                            .corner_radius(6);
+                        if ui.add(chip).clicked() && !active {
+                            panel.plans_total = mode;
+                            changed = Some(("plans_total", label));
+                        }
+                    }
+                });
+                if let Some((key, value)) = changed {
+                    // Same reason as the provider switches: the fetch thread
+                    // only rewrites the snapshot once it has gone round.
+                    self.shared.lock().unwrap_or_else(|e| e.into_inner()).panel = panel;
+                    let _ = self.action_tx.send(Action::SetPanel(key, value));
+                }
             });
             ui.add_space(8.0);
         }
@@ -849,6 +906,10 @@ mod gui {
         }
     }
 
+    fn bool_str(b: bool) -> &'static str {
+        if b { "true" } else { "false" }
+    }
+
     fn tone_color(tone: Tone) -> Color32 {
         match tone {
             Tone::Good => GREEN,
@@ -886,13 +947,18 @@ mod gui {
             // left the limits section ending halfway across a panel whose
             // other sections ran to the edge.
             let width = ui.available_width();
-            ui.add(
-                ProgressBar::new((row.fraction.unwrap_or(0.0) as f32).clamp(0.0, 1.0))
-                    .desired_width(width)
-                    .corner_radius(6)
-                    .fill(fill)
-                    .text(RichText::new(&row.value).small().strong().color(DARK)),
-            );
+            if row.segments.is_empty() {
+                ui.add(
+                    ProgressBar::new((row.fraction.unwrap_or(0.0) as f32).clamp(0.0, 1.0))
+                        .desired_width(width)
+                        .corner_radius(6)
+                        .fill(fill)
+                        .text(RichText::new(&row.value).small().strong().color(DARK)),
+                );
+            } else {
+                split_bar(ui, &row.segments, width);
+                ui.label(RichText::new(&row.value).small().strong().color(fill));
+            }
         });
         if !row.footnote.is_empty() || !row.badge.is_empty() {
             ui.horizontal(|ui| {
@@ -908,6 +974,29 @@ mod gui {
                     );
                 }
             });
+        }
+    }
+
+    /// One stretch per credential, as wide as its share and filled in its own
+    /// tier, so the value sits beside the bar rather than on it.
+    fn split_bar(ui: &mut egui::Ui, segments: &[tokengauge_core::Segment], width: f32) {
+        const GAP: f32 = 3.0;
+        let width = (width - 90.0).max(40.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 10.0), egui::Sense::hover());
+        let painter = ui.painter_at(rect);
+        let usable = rect.width() - GAP * (segments.len().saturating_sub(1)) as f32;
+        let mut x = rect.left();
+        for seg in segments {
+            let w = (seg.width as f32 * usable).max(2.0);
+            let track =
+                egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(w, rect.height()));
+            painter.rect_filled(track, 3.0, BG);
+            let filled = egui::Rect::from_min_size(
+                track.min,
+                egui::vec2(w * (seg.fraction as f32).clamp(0.0, 1.0), rect.height()),
+            );
+            painter.rect_filled(filled, 3.0, tone_color(seg.tone));
+            x += w + GAP;
         }
     }
 
@@ -1350,6 +1439,7 @@ mod gui {
             .map(str::to_string)
             .collect();
         s.primary = config.waybar.primary.clone().unwrap_or_default();
+        s.panel = config.panel.clone();
         s.errors = errors
             .iter()
             .map(|e| format!("{}: {}", e.provider, e.message))
@@ -1406,6 +1496,7 @@ mod gui {
                         .map(str::to_string)
                         .collect();
                     s.primary = config.waybar.primary.clone().unwrap_or_default();
+                    s.panel = config.panel.clone();
                 }
                 // Surface a bad config instead of silently showing stale data -
                 // there's no console to see the failure otherwise.
@@ -1443,6 +1534,15 @@ mod gui {
                     Action::SetPrimary(name) => {
                         config_set_primary(&cfg_path, (name != "highest").then_some(name.as_str()))
                     }
+                    // Nothing refetches for a panel option, so the other
+                    // frontends hear about it only through the revision.
+                    Action::SetPanel(key, value) => config_set_panel(&cfg_path, key, value)
+                        .inspect(|()| {
+                            if let Ok(config) = load_config(Some(cfg_path.clone())) {
+                                tokengauge_core::bump_revision(&config.cache_file);
+                            }
+                            tokengauge_core::signal_daemon_reload();
+                        }),
                     Action::Refresh => Ok(()),
                 };
                 if let Err(e) = result {

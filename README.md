@@ -330,8 +330,9 @@ GNOME, Omarchy and tray panels:
 
 ```toml
 [panel]
-# Draw only the active credential's limits. ALL PLANS still adds them all up,
-# and its title says how many: "ALL PLANS · 5 credentials".
+# Draw only the active credential's limits, plus any credential that is stale,
+# expired or left out of the total. ALL PLANS still adds them all up, and its
+# title says how many: "ALL PLANS · 5 credentials".
 active_credential_only = false
 # "weighted" by multiplier as above, or "absolute": every credential counts
 # 100%, so five plans read "409% of 500%". Absolute needs no multiplier, so

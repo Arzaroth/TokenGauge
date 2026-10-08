@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Three `[panel]` options for a provider with several credentials, settable
   from `config.toml`, `tokengauge --set-panel KEY=VALUE`, or the settings pane
   of the Plasma, GNOME, Omarchy and tray panels:
-  - `active_credential_only` draws only the active credential's limits; ALL
+  - `active_credential_only` draws only the active credential's limits (and
+    any credential that is stale, expired or left out of the total); ALL
     PLANS still adds every credential up and says how many it covers.
   - `plans_total = "absolute"` counts every credential as 100% in ALL PLANS
     instead of weighing it by its plan, which also gives Codex and plans with

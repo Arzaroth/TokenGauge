@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Several plans per provider now covers every provider remuda keeps: Grok,
+  Kimi, Cursor, GLM and opencode Go as well as Claude and Codex. Each stored
+  login gets its own limits in the panel, and the combined header adds them up
+  by plan weight. This needs a remuda that stores them.
+- opencode Go's key is read from opencode's own `auth.json`, where `/connect`
+  files it, so `OPENCODE_API_KEY` no longer has to be exported as well. The
+  variable still wins.
 - GLM and Cursor plans carry a weight, ready for the combined header once those
   providers can hold several credentials. GLM weighs by weekly credits (Lite,
   Pro and Max as 1, 6 and 14), Cursor against Pro (Pro+ 3x, Ultra 20x). A
@@ -29,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   label falls back to the sign-in kind as before.
 - A Kimi plan is named by the membership the usage response reports: `Kimi Pro`
   rather than `Kimi Code`.
+
+### Fixed
+
+- A cursor-agent login is read from its `auth.json`: the file is written
+  in camelCase (`accessToken`), and the reader only knew `access_token`, so a
+  signed-in agent read as signed out unless `CURSOR_ACCESS_TOKEN` was set.
 
 ## [0.41.0] - 2026-10-09
 

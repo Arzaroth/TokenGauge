@@ -151,7 +151,7 @@ Item {
             }
         }
         Rectangle {
-            visible: !segmented.visible
+            visible: segmented.segments.length === 0
             Layout.fillWidth: true
             height: Kirigami.Units.gridUnit * 0.5
             radius: height / 2

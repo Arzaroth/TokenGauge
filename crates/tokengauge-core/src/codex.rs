@@ -869,7 +869,7 @@ fn to_payload(
         UsageSnapshot {
             primary,
             secondary,
-            login_method: plan,
+            login_method: plan.as_deref().map(plan_label),
             extra_rate_windows,
             ..UsageSnapshot::at(now)
         },
@@ -877,6 +877,33 @@ fn to_payload(
     payload.credits = credits;
     payload.credential.plan_weight = weight;
     Ok(payload)
+}
+
+/// What a `plan_type` is sold as, by the names Codex itself shows: the wire
+/// keeps the identifiers it had before Pro was split in three, so `pro` is a
+/// Pro 200 and `business` an Enterprise workspace. A plan not listed reads as
+/// the wire sent it.
+fn plan_label(plan_type: &str) -> String {
+    let name = match plan_type.to_ascii_lowercase().as_str() {
+        "free" => "Free",
+        "go" => "Go",
+        "plus" => "Plus",
+        "prolite" => "Pro 100",
+        "pro" => "Pro 200",
+        "promax" => "Pro 500",
+        "team" | "self_serve_business_usage_based" => "Business",
+        "self_serve_business_prolite" => "Business Premium",
+        "business"
+        | "ent26"
+        | "enterprise"
+        | "enterprise_cbp_automation"
+        | "enterprise_cbp_usage_based" => "Enterprise",
+        "edu" | "education" => "Edu",
+        "edu_plus" => "Edu Plus",
+        "edu_pro" => "Edu Pro",
+        _ => return plan_type.to_string(),
+    };
+    format!("ChatGPT {name}")
 }
 
 /// A plan's nominal multiplier against Plus, by the `plan_type` the wire
@@ -1120,7 +1147,7 @@ mod tests {
         let window = monthly.window.as_ref().unwrap();
         assert_eq!(window.used_percent, Some(6));
         assert_eq!(window.window_minutes, Some(43200));
-        assert_eq!(usage.login_method.as_deref(), Some("free"));
+        assert_eq!(usage.login_method.as_deref(), Some("ChatGPT Free"));
     }
 
     /// The combined header weighs a Pro 200 and a Plus as 10 to 1, and names
@@ -1138,6 +1165,21 @@ mod tests {
             assert_eq!(plan_weight(Some(unweighted)), None, "{unweighted}");
         }
         assert_eq!(plan_weight(None), None);
+    }
+
+    #[test]
+    fn a_plan_reads_as_it_is_sold() {
+        assert_eq!(plan_label("plus"), "ChatGPT Plus");
+        assert_eq!(plan_label("prolite"), "ChatGPT Pro 100");
+        assert_eq!(plan_label("pro"), "ChatGPT Pro 200");
+        assert_eq!(plan_label("promax"), "ChatGPT Pro 500");
+        assert_eq!(plan_label("team"), "ChatGPT Business");
+        assert_eq!(
+            plan_label("self_serve_business_prolite"),
+            "ChatGPT Business Premium"
+        );
+        assert_eq!(plan_label("business"), "ChatGPT Enterprise");
+        assert_eq!(plan_label("pro_ultra"), "pro_ultra");
     }
 
     #[test]

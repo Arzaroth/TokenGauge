@@ -21,11 +21,12 @@
 //! aggregation itself rather than making a reader do it per model.
 //!
 //! The credential is `OPENCODE_API_KEY`, minted at opencode.ai/auth and pasted
-//! into the TUI with `/connect`. It is **not** read from a file: opencode keeps
-//! its own credentials somewhere this has never seen, and a parser written
-//! against a guessed shape is how the Claude reader broke twice. When the file
-//! is known, it belongs here as a second source and the env var stays first.
+//! into the TUI with `/connect`, which files it in opencode's own
+//! `$XDG_DATA_HOME/opencode/auth.json` as `"opencode-go": {"type": "api",
+//! "key": ...}` beside every other provider's login. The variable wins, as it
+//! does for opencode; the file is the second source.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
@@ -51,11 +52,32 @@ fn env_clean(name: &str) -> Option<String> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
+pub(crate) fn auth_path() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_default()
+        .join("opencode")
+        .join("auth.json")
+}
+
+/// The Go key in opencode's `auth.json`, which holds every provider's login.
+fn file_key(text: &str) -> Option<String> {
+    let auth: serde_json::Value = serde_json::from_str(text).ok()?;
+    auth.get("opencode-go")?
+        .get("key")?
+        .as_str()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(str::to_string)
+}
+
 pub(crate) fn api_key() -> Result<String> {
     API_KEY_ENVS
         .iter()
         .find_map(|name| env_clean(name))
-        .ok_or_else(|| anyhow!("opencode key missing - set OPENCODE_API_KEY"))
+        .or_else(|| file_key(&std::fs::read_to_string(auth_path()).ok()?))
+        .ok_or_else(|| {
+            anyhow!("opencode key missing - `/connect` it in opencode, or set OPENCODE_API_KEY")
+        })
 }
 
 /// The usage endpoint, from an override a self-hosted gateway may set.
@@ -216,6 +238,23 @@ mod tests {
         DateTime::parse_from_rfc3339("2026-09-16T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc)
+    }
+
+    /// `/connect` files the key beside every other provider's login.
+    #[test]
+    fn the_go_key_is_read_from_its_entry_in_opencodes_file() {
+        let text = r#"{"openrouter": {"type": "api", "key": "or"},
+                       "opencode-go": {"type": "api", "key": " go-1 "}}"#;
+        assert_eq!(file_key(text).as_deref(), Some("go-1"));
+        assert_eq!(
+            file_key(r#"{"openrouter": {"type": "api", "key": "or"}}"#),
+            None
+        );
+        assert_eq!(
+            file_key(r#"{"opencode-go": {"type": "api", "key": ""}}"#),
+            None
+        );
+        assert_eq!(file_key("not json"), None);
     }
 
     fn parse(raw: &str) -> Result<ProviderPayload> {

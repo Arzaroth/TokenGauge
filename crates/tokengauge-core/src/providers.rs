@@ -591,10 +591,15 @@ fn opencode_auth() -> AuthStatus {
             detail: format!("{var} set"),
             hint: "",
         },
+        None if opencode::api_key().is_ok() => AuthStatus {
+            ok: true,
+            detail: format!("key in {}", opencode::auth_path().display()),
+            hint: "",
+        },
         None => AuthStatus {
             ok: false,
-            detail: "OPENCODE_API_KEY unset".to_string(),
-            hint: "subscribe to opencode Go and set OPENCODE_API_KEY from opencode.ai/auth",
+            detail: "no opencode Go key".to_string(),
+            hint: "subscribe to opencode Go and `/connect` it in opencode, or set OPENCODE_API_KEY from opencode.ai/auth",
         },
     }
 }

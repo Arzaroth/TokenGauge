@@ -153,6 +153,23 @@ test('the token breakdowns draw every row, and what follows them still draws', (
     assert.equal(Harness.byStyle(box, 'tokengauge-bar-fill').length, days.rows.length);
 });
 
+test('the panel scrolls inside a share of the screen, from the top on every open', () => {
+    const {indicator} = enabled();
+    answer();
+    const box = open(indicator);
+
+    const scroll = box.parent;
+    assert.equal(scroll.style_class, 'tokengauge-scroll', 'the panel is not inside a scroll view');
+    // 85% of the stub's 1048px work area: a three-credential panel is taller
+    // than a 1080p screen, and the shell moves a tall menu rather than shrink it.
+    assert.match(scroll.style, /max-height: 891px/);
+
+    scroll.vadjustment.value = 400;
+    indicator.menu.close();
+    indicator.menu.open();
+    assert.equal(scroll.vadjustment.value, 0);
+});
+
 test('a provider with several credentials draws a group each, as the core titled them', () => {
     const {indicator} = enabled();
     answer();

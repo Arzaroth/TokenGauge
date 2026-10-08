@@ -24,6 +24,36 @@ export function box(vertical: boolean, props: Partial<St.BoxLayout.ConstructorPr
     return b;
 }
 
+type Loose = Record<string, any>;
+
+// St.ScrollView took its content through add_actor until GNOME 46 turned it
+// into a property, and only gained an adjustment of its own in that release.
+export function scrollView(child: Clutter.Actor, props: Partial<St.ScrollView.ConstructorProps> = {}): St.ScrollView {
+    const view = new St.ScrollView({
+        hscrollbar_policy: St.PolicyType.NEVER,
+        vscrollbar_policy: St.PolicyType.AUTOMATIC,
+        ...props,
+    });
+    const loose = view as unknown as Loose;
+    if ('child' in loose)
+        loose.child = child;
+    else
+        loose.add_actor(child);
+    return view;
+}
+
+export function verticalAdjustment(view: St.ScrollView): St.Adjustment {
+    const loose = view as unknown as Loose;
+    return 'vadjustment' in loose ? loose.vadjustment : loose.vscroll.adjustment;
+}
+
+// The shell keeps a tall menu on screen by moving it, never by shrinking it,
+// and nothing hands a menu a height budget. This is the budget: a share of the
+// work area the popup opens on, in the CSS pixels `max-height` is read in.
+export function scrollLimit(workAreaHeight: number, scaleFactor: number): number {
+    return Math.max(200, Math.round(workAreaHeight * 0.85 / Math.max(1, scaleFactor)));
+}
+
 export function label(text: string, styleClass: string, style?: string): St.Label {
     const l = new St.Label({text, style_class: styleClass});
     if (style)

@@ -213,4 +213,35 @@ class CairoContext {
     }
 }
 
-export default {Widget, BoxLayout, Label, Icon, Button, DrawingArea};
+export const PolicyType = {NEVER: 0, AUTOMATIC: 1};
+
+export class Adjustment {
+    constructor() {
+        this.value = 0;
+    }
+}
+
+/// The GNOME 46+ spelling: content through `child`, its own `vadjustment`.
+export class ScrollView extends Widget {
+    constructor(props = {}) {
+        super(props);
+        this.vadjustment = new Adjustment();
+    }
+
+    get child() {
+        return this.children[0] ?? null;
+    }
+
+    set child(actor) {
+        this.destroy_all_children();
+        this.add_child(actor);
+    }
+}
+
+export const ThemeContext = {
+    get_for_stage() {
+        return {scale_factor: 1};
+    },
+};
+
+export default {Widget, BoxLayout, Label, Icon, Button, DrawingArea, ScrollView, Adjustment, PolicyType, ThemeContext};

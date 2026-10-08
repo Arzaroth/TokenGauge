@@ -122,6 +122,37 @@ fn request_base(override_base: Option<&str>) -> Result<&str> {
     Ok(base)
 }
 
+/// What a `membershipType` is sold as. A type not listed reads as sent.
+fn plan_label(membership: &str) -> String {
+    let name = match membership.to_ascii_lowercase().as_str() {
+        "free" => "Free",
+        "hobby" => "Hobby",
+        "free_trial" => "Pro Trial",
+        "pro" | "pro_student" => "Pro",
+        "pro_plus" => "Pro+",
+        "ultra" => "Ultra",
+        "team" => "Teams",
+        "enterprise" => "Enterprise",
+        _ => return membership.to_string(),
+    };
+    format!("Cursor {name}")
+}
+
+/// A plan's nominal multiplier against Pro: Pro+ is sold as 3x its Agent
+/// limits and Ultra as 20x.
+///
+/// `None` for a Teams seat: Standard is a Pro's allowance and Premium five
+/// times that, but the seat type is not in `membershipType`, and guessing 1x
+/// would understate a Premium seat without saying so.
+fn plan_weight(membership: &str) -> Option<u32> {
+    match membership.to_ascii_lowercase().as_str() {
+        "pro" | "pro_student" => Some(1),
+        "pro_plus" => Some(3),
+        "ultra" => Some(20),
+        _ => None,
+    }
+}
+
 fn summary_url(override_base: Option<&str>) -> Result<String> {
     Ok(format!(
         "{}/api/usage-summary",
@@ -229,12 +260,18 @@ fn to_payload(body: UsageSummary, now: DateTime<Utc>) -> Result<ProviderPayload>
         return Err(anyhow!("Cursor reported no usable usage figure"));
     }
 
-    let plan_label = match (&body.membership_type, body.is_unlimited) {
-        (Some(m), true) if !m.trim().is_empty() => Some(format!("{} · unlimited", m.trim())),
-        (Some(m), false) if !m.trim().is_empty() => Some(m.trim().to_string()),
-        (_, true) => Some("unlimited".to_string()),
-        _ => None,
+    let membership = body
+        .membership_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty());
+    let plan_label = match (membership.map(plan_label), body.is_unlimited) {
+        (Some(m), true) => Some(format!("{m} · unlimited")),
+        (Some(m), false) => Some(m),
+        (None, true) => Some("unlimited".to_string()),
+        (None, false) => None,
     };
+    let weight = membership.and_then(plan_weight);
 
     let mut payload = ProviderPayload::live(
         "cursor",
@@ -247,6 +284,7 @@ fn to_payload(body: UsageSummary, now: DateTime<Utc>) -> Result<ProviderPayload>
             ..UsageSnapshot::at(now)
         },
     );
+    payload.credential.plan_weight = weight;
 
     // On-demand spend past the included allowance: a cap, with money on both
     // sides of it. Only when the user has actually turned it on - a disabled
@@ -380,7 +418,32 @@ mod tests {
                 "every pool resets with the one billing cycle"
             );
         }
-        assert_eq!(usage.login_method.as_deref(), Some("pro"));
+        assert_eq!(usage.login_method.as_deref(), Some("Cursor Pro"));
+    }
+
+    /// The combined header weighs an Ultra and a Pro as 20 to 1.
+    #[test]
+    fn a_plan_weighs_its_nominal_multiplier() {
+        let plan = |membership: &str| {
+            let raw = FULL.replace(
+                r#""membershipType": "pro""#,
+                &format!(r#""membershipType": "{membership}""#),
+            );
+            let payload = parse(&raw).expect("payload");
+            (
+                payload.usage.unwrap().login_method,
+                payload.credential.plan_weight,
+            )
+        };
+        let sold = |label: &str, weight| (Some(label.to_string()), weight);
+        assert_eq!(plan("pro"), sold("Cursor Pro", Some(1)));
+        assert_eq!(plan("pro_student"), sold("Cursor Pro", Some(1)));
+        assert_eq!(plan("pro_plus"), sold("Cursor Pro+", Some(3)));
+        assert_eq!(plan("Ultra"), sold("Cursor Ultra", Some(20)));
+        assert_eq!(plan("team"), sold("Cursor Teams", None));
+        assert_eq!(plan("free_trial"), sold("Cursor Pro Trial", None));
+        assert_eq!(plan("hobby"), sold("Cursor Hobby", None));
+        assert_eq!(plan("express"), sold("express", None));
     }
 
     /// On-demand is a cap with money on both sides, which is a `CreditLimit`
@@ -422,7 +485,7 @@ mod tests {
         assert!(usage.primary.is_none());
         assert_eq!(
             usage.login_method.as_deref(),
-            Some("enterprise · unlimited")
+            Some("Cursor Enterprise · unlimited")
         );
     }
 

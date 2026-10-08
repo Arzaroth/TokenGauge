@@ -281,6 +281,50 @@ pub(crate) struct LiveLogin {
     pub account: Option<String>,
 }
 
+/// An API key's account, as remuda files it: it has none behind it to
+/// confirm, so it is named by a digest of itself.
+pub(crate) fn key_account(key: &str) -> String {
+    format!("key-{}", &hex_sha256(key.trim().as_bytes())[..16])
+}
+
+/// A live login that is an API key.
+pub(crate) fn key_login(key: Option<String>) -> LiveLogin {
+    let key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+    LiveLogin {
+        account: key.as_deref().map(key_account),
+        tokens: LoginTokens {
+            access: key,
+            refresh: None,
+        },
+    }
+}
+
+/// A stored API key: `{"key": "..."}`.
+pub(crate) fn stored_key(text: &str) -> Result<String> {
+    // Never serde's message: it quotes the value it rejected.
+    let value: serde_json::Value = serde_json::from_str(text)
+        .map_err(|_| anyhow::anyhow!("the stored key file was invalid"))?;
+    value
+        .get("key")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("the stored credential holds no key"))
+}
+
+pub(crate) fn stored_key_tokens(text: &str) -> LoginTokens {
+    LoginTokens {
+        access: stored_key(text).ok(),
+        refresh: None,
+    }
+}
+
+/// A key never expires, so a readable one is always worth asking about.
+pub(crate) fn check_stored_key(text: &str, _now: DateTime<Utc>) -> Result<Option<CredentialState>> {
+    stored_key(text).map(|_| None)
+}
+
 /// How one provider's credentials are read, for the providers a switcher
 /// stores. Function pointers rather than a trait, like the rest of the
 /// provider table.
@@ -644,6 +688,21 @@ fn checks_with(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// remuda files a key under the first 16 hex digits of its SHA-256.
+    #[test]
+    fn a_key_is_filed_as_remuda_files_it() {
+        let login = key_login(Some(" sk-aaaa1234\n".into()));
+        assert_eq!(login.tokens.access.as_deref(), Some("sk-aaaa1234"));
+        let account = login.account.unwrap();
+        assert_eq!(account, key_account("sk-aaaa1234"));
+        assert_eq!(account.len(), "key-".len() + 16);
+        assert!(!account.contains("aaaa"));
+        assert_eq!(key_login(Some("  ".into())), LiveLogin::default());
+        assert_eq!(stored_key(r#"{"key": " k "}"#).unwrap(), "k");
+        assert!(stored_key(r#"{"key": ""}"#).is_err());
+        assert!(check_stored_key("[]", Utc::now()).is_err());
+    }
 
     pub(crate) fn temp_store(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

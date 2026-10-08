@@ -186,7 +186,12 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Weekly", "30-day", "5-hour"),
         natively_read: false,
         fetch: glm::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: glm::live_login,
+            tokens: crate::credentials::stored_key_tokens,
+            fetch: glm::fetch_stored,
+            check: crate::credentials::check_stored_key,
+        }),
         auth: glm_auth,
         enabled_in: |c| c.glm,
     },

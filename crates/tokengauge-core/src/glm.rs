@@ -77,7 +77,45 @@ struct QuotaData {
     )]
     plan_name: Option<String>,
     #[serde(default)]
+    level: Option<Value>,
+    #[serde(default)]
     limits: Option<Vec<Limit>>,
+}
+
+/// An individual Coding Plan's tier and its weekly credits in thousands, the
+/// unit z.ai sells every plan in: Lite 10,000, Pro 60,000, Max 140,000. A
+/// team seat is sold in the same unit (66,000 and 155,000) but its `level`
+/// has not been seen, so it reads as sent and has no weight.
+fn tier(raw: &str) -> Option<(&'static str, u32)> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "lite" => Some(("Lite", 10)),
+        "pro" => Some(("Pro", 60)),
+        "max" => Some(("Max", 140)),
+        _ => None,
+    }
+}
+
+/// The plan's label and weight: `level` names the tier, and `planName` is
+/// read the same way when it carries one, else shown as it is.
+fn plan(data: &QuotaData) -> (Option<String>, Option<u32>) {
+    let level = match &data.level {
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    };
+    let name = data
+        .plan_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty());
+    match level
+        .as_deref()
+        .and_then(tier)
+        .or_else(|| name.and_then(tier))
+    {
+        Some((tier, weight)) => (Some(format!("GLM Coding {tier}")), Some(weight)),
+        None => (name.map(str::to_string).or(level), None),
+    }
 }
 
 /// Numeric fields arrive as JSON numbers or strings depending on API version.
@@ -213,7 +251,7 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         return Err(anyhow!("z.ai error: {message}"));
     }
 
-    let plan = resp.data.as_ref().and_then(|d| d.plan_name.clone());
+    let (plan, weight) = resp.data.as_ref().map(plan).unwrap_or_default();
     let limits = resp
         .data
         .and_then(|d| d.limits)
@@ -253,7 +291,7 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
         return Err(anyhow!("z.ai returned no usage - check region/token"));
     }
 
-    Ok(ProviderPayload::live(
+    let mut payload = ProviderPayload::live(
         "glm",
         "z.ai",
         UsageSnapshot {
@@ -263,7 +301,9 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
             login_method: plan,
             ..UsageSnapshot::at(now)
         },
-    ))
+    );
+    payload.credential.plan_weight = weight;
+    Ok(payload)
 }
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
@@ -335,6 +375,49 @@ mod tests {
         assert_eq!(tertiary.used_percent, Some(30));
         assert_eq!(tertiary.window_minutes, Some(300));
         assert_eq!(usage.login_method.as_deref(), Some("GLM Coding Plan"));
+    }
+
+    /// Plans weigh by their weekly credits, so a Max and a Lite are 14 to 1.
+    #[test]
+    fn a_plan_weighs_its_weekly_credits() {
+        let plan_of = |data: &str| {
+            let body = resp(&format!(
+                r#"{{"code":0,"data":{{{data},"limits":[
+                    {{"type":"TOKENS_LIMIT","percentage":30,"unit":6,"number":1}}]}}}}"#
+            ));
+            let payload = to_payload(body, Utc::now()).unwrap();
+            (
+                payload.usage.unwrap().login_method,
+                payload.credential.plan_weight,
+            )
+        };
+        let sold = |label: &str, weight| (Some(label.to_string()), weight);
+        assert_eq!(
+            plan_of(r#""level":"lite""#),
+            sold("GLM Coding Lite", Some(10))
+        );
+        assert_eq!(
+            plan_of(r#""level":"Pro""#),
+            sold("GLM Coding Pro", Some(60))
+        );
+        assert_eq!(
+            plan_of(r#""level":"max","planName":"GLM Coding Plan""#),
+            sold("GLM Coding Max", Some(140))
+        );
+        assert_eq!(
+            plan_of(r#""planName":"Pro""#),
+            sold("GLM Coding Pro", Some(60))
+        );
+        assert_eq!(
+            plan_of(r#""planName":"GLM Coding Plan""#),
+            sold("GLM Coding Plan", None)
+        );
+        assert_eq!(
+            plan_of(r#""level":"team_premium""#),
+            sold("team_premium", None)
+        );
+        assert_eq!(plan_of(r#""level":3"#), sold("3", None));
+        assert_eq!(plan_of(r#""level":"""#), (None, None));
     }
 
     /// z.ai's recurring wire bug: the five-hour quota carries a reset twice its

@@ -12,6 +12,7 @@ import {test} from 'node:test';
 
 import Gio from 'gi://Gio';
 import Clutter from 'gi://Clutter';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Harness from './stubs/harness.js';
 import {registered} from './stubs/GObject.js';
 
@@ -168,6 +169,24 @@ test('the panel scrolls inside a share of the screen, from the top on every open
     indicator.menu.close();
     indicator.menu.open();
     assert.equal(scroll.vadjustment.value, 0);
+});
+
+test('every header button says what it does on hover', () => {
+    const {indicator} = enabled();
+    answer();
+    const box = open(indicator);
+
+    const buttons = Harness.byStyle(box, 'tokengauge-icon-button');
+    assert.ok(buttons.length >= 5, 'the header lost its buttons');
+    for (const button of buttons) {
+        button.setHover(true);
+        const tip = Main.layoutManager.uiGroup.children.at(-1);
+        assert.ok(
+            tip?.text?.startsWith(button.accessible_name),
+            `${button.accessible_name} says nothing on hover`,
+        );
+        button.setHover(false);
+    }
 });
 
 test('a provider with several credentials draws a group each, as the core titled them', () => {

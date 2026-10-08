@@ -602,10 +602,10 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         });
         button.accessible_name = tooltip;
         button.connect('clicked', onClick);
-        // The accessible name is what a screen reader says; `hint` is what a
-        // pointer gets, for the buttons whose worth depends on something the
-        // icon cannot show.
-        return hint ? attachTooltip(button, `${tooltip}\n${hint}`) : button;
+        // An icon theme draws these however it likes - Adwaita's browser is a
+        // leaf - so a pointer is told what each one does, not just a screen
+        // reader. `hint` adds what the icon cannot show at all.
+        return attachTooltip(button, hint ? `${tooltip}\n${hint}` : tooltip);
     }
 
     _header(): St.BoxLayout {

@@ -130,6 +130,29 @@ test('the panel it draws is the panel the core resolved', () => {
         assert.ok(costLabels.includes(row.label), `${row.label} is not drawn`);
 });
 
+test('the token breakdowns draw every row, and what follows them still draws', () => {
+    const withBars = JSON.parse(panelJson);
+    const days = {
+        id: 'tokens_by_day',
+        title: 'TOKENS BY DAY',
+        kind: 'bars',
+        rows: [
+            {label: 'Mon', value: '1.2B', suffix: '$422', fraction: 1},
+            {label: 'Today', value: '223.2M', suffix: '$87.02', fraction: 0.18, emphasized: true},
+        ],
+    };
+    withBars.rows[0].panel.push(days);
+
+    const {indicator} = enabled();
+    answer(JSON.stringify(withBars));
+    const box = open(indicator);
+
+    const titles = Harness.byStyle(box, 'tokengauge-section-title').map(l => l.text);
+    assert.deepEqual(titles.slice(-2), ['TOKENS BY DAY', 'Pin to bar']);
+    assert.equal(Harness.byStyle(box, 'tokengauge-bar-row').length, days.rows.length);
+    assert.equal(Harness.byStyle(box, 'tokengauge-bar-fill').length, days.rows.length);
+});
+
 test('a provider with several credentials draws a group each, as the core titled them', () => {
     const {indicator} = enabled();
     answer();

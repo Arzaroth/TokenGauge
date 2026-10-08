@@ -23,6 +23,12 @@ class Actor {
         this.y_expand = false;
         this._handlers = new Map();
         this._destroyed = false;
+        // GJS throws on an initializer property set to `undefined`, and the
+        // throw drops every section after the one it was drawing.
+        for (const [key, value] of Object.entries(props)) {
+            if (value === undefined)
+                throw new Error(`Invalid value 'undefined' for property ${key} in object initializer.`);
+        }
         Object.assign(this, props);
     }
 

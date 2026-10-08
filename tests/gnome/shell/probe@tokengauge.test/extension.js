@@ -70,6 +70,11 @@ export default class Probe extends Extension {
                 record(`popup: y=${indicator.menu.actor.y} height=${indicator.menu.actor.height}`);
                 record(`content: natural=${natural} shown=${indicator._content.height}`);
                 record(`sections: ${indicator._content.get_children().length}`);
+                const popup = indicator.menu.actor;
+                if (popup.y + popup.height > monitor.y + monitor.height)
+                    record('error: the popup runs off the bottom of the monitor');
+                if (indicator._content.height + 1 < natural)
+                    record('error: the content is squeezed below its natural height instead of scrolled');
                 screenshot('top', () => {
                     const scroll = indicator._scroll;
                     if (!scroll) {
@@ -79,6 +84,8 @@ export default class Probe extends Extension {
                     }
                     const adjustment = scroll.vadjustment ?? scroll.vscroll.adjustment;
                     record(`scroll: upper=${adjustment.upper} page=${adjustment.page_size}`);
+                    if (adjustment.upper + 1 < natural)
+                        record('error: the scroll view cannot reach the bottom of the content');
                     adjustment.value = adjustment.upper - adjustment.page_size;
                     later(500, () => screenshot('bottom', finish));
                 });

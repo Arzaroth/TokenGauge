@@ -9,11 +9,13 @@
 # with GNOME Shell in it - and it is not part of CI.
 #
 #   tests/gnome/shell/run.sh [--live | --json FILE] [--provider NAME]
-#                            [--monitor WxH] [--out DIR]
+#                            [--gnome VERSION] [--monitor WxH] [--out DIR]
 #
 # The panel defaults to tests/qml/fixtures/panel.json. --live serves what the
 # installed `tokengauge --json` prints instead, which is the one with token
-# breakdowns and several credentials in it. It stays on this machine.
+# breakdowns and several credentials in it. --gnome picks the shell (45-50,
+# default 50) through the Fedora release that shipped it. Screenshots and logs
+# land in --out, created private to you, or in a fresh temporary directory.
 set -euo pipefail
 
 here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -22,6 +24,7 @@ root="$(cd "$here/../../.." && pwd)"
 json="$root/tests/qml/fixtures/panel.json"
 live=0
 provider=""
+gnome=50
 monitor="1920x1080"
 out=""
 while (($#)); do
@@ -29,13 +32,21 @@ while (($#)); do
     --live) live=1 ;;
     --json) json="$2"; shift ;;
     --provider) provider="$2"; shift ;;
+    --gnome) gnome="$2"; shift ;;
     --monitor) monitor="$2"; shift ;;
     --out) out="$2"; shift ;;
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
 done
+
+if ! [[ $gnome =~ ^[0-9]+$ ]] || ((gnome < 45)); then
+  echo "gnome-shell: --gnome takes 45 or later" >&2
+  exit 2
+fi
+# Fedora 39 shipped GNOME 45, and every release since has moved both by one.
+fedora=$((gnome - 6))
 
 ext="$root/build/frontends/gnome"
 if [[ ! -f $ext/tokengauge@arzaroth.github.io/extension.js ]]; then
@@ -49,22 +60,31 @@ if [[ -z $engine ]]; then
   exit 1
 fi
 
-out="${out:-$(mktemp -d "${TMPDIR:-/tmp}/tokengauge-gnome-shell.XXXXXX")}"
-mkdir -p "$out"
-rm -f "$out"/{done,probe.txt,shell.log,top.png,bottom.png}
+# The container writes into a directory made for this run alone, because the
+# mount relabels everything under it for SELinux; pointing that at a directory
+# the caller named would relabel whatever it holds.
+work="$(mktemp -d "${TMPDIR:-/tmp}/tokengauge-gnome-shell.XXXXXX")"
+if [[ -n $out ]]; then
+  (umask 077 && mkdir -p "$out")
+  trap 'rm -rf "$work"' EXIT
+else
+  out="$work"
+fi
 
 if ((live)); then
-  tokengauge --json >"$out/panel.json"
+  tokengauge --json >"$work/panel.json"
 else
-  cp "$json" "$out/panel.json"
+  cp "$json" "$work/panel.json"
 fi
 # The extension runs whatever binary its settings name; this one answers every
 # command line with the recorded panel.
-printf '#!/bin/sh\ncat /data/panel.json\n' >"$out/tokengauge"
-chmod +x "$out/tokengauge"
+printf '#!/bin/sh\ncat /data/panel.json\n' >"$work/tokengauge"
+chmod +x "$work/tokengauge"
 
-image=tokengauge-gnome-shell
-if ! "$engine" build -t "$image" -f "$here/Containerfile" "$here" >"$out/image.log" 2>&1; then
+image="tokengauge-gnome-shell:$gnome"
+if ! "$engine" build -t "$image" --build-arg "FEDORA=$fedora" \
+    -f "$here/Containerfile" "$here" >"$work/image.log" 2>&1; then
+  cp "$work/image.log" "$out/" 2>/dev/null || true
   echo "gnome-shell: the image did not build; see $out/image.log" >&2
   exit 1
 fi
@@ -74,11 +94,17 @@ fi
   -v "$ext:/ext:ro,z" \
   -v "$here/probe@tokengauge.test:/probe@tokengauge.test:ro,z" \
   -v "$here/boot.sh:/boot.sh:ro,z" \
-  -v "$out/panel.json:/data/panel.json:ro,z" \
-  -v "$out/tokengauge:/usr/local/bin/tokengauge:ro,z" \
-  -v "$out/tokengauge:/usr/local/bin/tokengauge-waybar:ro,z" \
-  -v "$out:/out:z" \
+  -v "$work/panel.json:/data/panel.json:ro,z" \
+  -v "$work/tokengauge:/usr/local/bin/tokengauge:ro,z" \
+  -v "$work/tokengauge:/usr/local/bin/tokengauge-waybar:ro,z" \
+  -v "$work:/out:z" \
   "$image" /boot.sh >/dev/null 2>&1 || true
+
+if [[ $out != "$work" ]]; then
+  for f in version.txt probe.txt shell.log mock.log top.png bottom.png done; do
+    if [[ -f $work/$f ]]; then cp "$work/$f" "$out/"; else rm -f "$out/$f"; fi
+  done
+fi
 
 echo "$(cat "$out/version.txt" 2>/dev/null || echo 'GNOME Shell ?') at $monitor -> $out"
 cat "$out/probe.txt" 2>/dev/null || true
@@ -91,9 +117,12 @@ fi
 if grep -q '^error:' "$out/probe.txt" 2>/dev/null; then
   status=1
 fi
-if grep -A4 -E 'JS ERROR|Exception in callback' "$out/shell.log" | grep -q 'tokengauge@arzaroth.github.io'; then
+# Read the log whole rather than through a pipe into `grep -q`: under pipefail
+# the first grep dying of SIGPIPE would read as no match.
+thrown="$(grep -A12 -E 'JS ERROR|Exception in callback' "$out/shell.log" 2>/dev/null || true)"
+if [[ $thrown == *tokengauge@arzaroth.github.io* ]]; then
   echo "gnome-shell: the extension threw:" >&2
-  grep -B1 -A6 -E 'JS ERROR|Exception in callback' "$out/shell.log" >&2
+  echo "$thrown" >&2
   status=1
 fi
 exit "$status"

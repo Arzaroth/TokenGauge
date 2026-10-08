@@ -64,10 +64,11 @@ fi
 # mount relabels everything under it for SELinux; pointing that at a directory
 # the caller named would relabel whatever it holds.
 work="$(mktemp -d "${TMPDIR:-/tmp}/tokengauge-gnome-shell.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
 if [[ -n $out ]]; then
   (umask 077 && mkdir -p "$out")
-  trap 'rm -rf "$work"' EXIT
 else
+  trap - EXIT
   out="$work"
 fi
 

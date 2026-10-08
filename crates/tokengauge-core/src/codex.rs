@@ -1173,8 +1173,7 @@ mod tests {
         assert_eq!(usage.login_method.as_deref(), Some("ChatGPT Free"));
     }
 
-    /// The combined header weighs a Pro 200 and a Plus as 10 to 1, and names
-    /// the tiers by the wire's `plan_type`, not by the price on the page.
+    /// The combined header weighs a Pro 200 and a Plus as 10 to 1.
     #[test]
     fn a_plan_weighs_its_nominal_multiplier() {
         assert_eq!(plan_weight(Some("plus")), Some(1));
@@ -1183,8 +1182,16 @@ mod tests {
         assert_eq!(plan_weight(Some("promax")), Some(25));
         assert_eq!(plan_weight(Some("team")), Some(1));
         assert_eq!(plan_weight(Some("self_serve_business_prolite")), Some(5));
-        // Nothing known: out of the total rather than guessed at 1x.
-        for unweighted in ["free", "go", "business", "enterprise", "edu", "pro_ultra"] {
+        assert_eq!(plan_weight(Some("Pro")), Some(10));
+        for unweighted in [
+            "free",
+            "go",
+            "business",
+            "enterprise",
+            "edu",
+            "self_serve_business_usage_based",
+            "pro_ultra",
+        ] {
             assert_eq!(plan_weight(Some(unweighted)), None, "{unweighted}");
         }
         assert_eq!(plan_weight(None), None);
@@ -1201,8 +1208,26 @@ mod tests {
             plan_label("self_serve_business_prolite"),
             "ChatGPT Business Premium"
         );
-        assert_eq!(plan_label("business"), "ChatGPT Enterprise");
-        assert_eq!(plan_label("pro_ultra"), "pro_ultra");
+        assert_eq!(
+            plan_label("self_serve_business_usage_based"),
+            "ChatGPT Business"
+        );
+        for enterprise in [
+            "business",
+            "ent26",
+            "enterprise",
+            "enterprise_cbp_automation",
+            "enterprise_cbp_usage_based",
+        ] {
+            assert_eq!(plan_label(enterprise), "ChatGPT Enterprise", "{enterprise}");
+        }
+        assert_eq!(plan_label("free"), "ChatGPT Free");
+        assert_eq!(plan_label("go"), "ChatGPT Go");
+        assert_eq!(plan_label("education"), "ChatGPT Edu");
+        assert_eq!(plan_label("edu_plus"), "ChatGPT Edu Plus");
+        assert_eq!(plan_label("edu_pro"), "ChatGPT Edu Pro");
+        assert_eq!(plan_label("PROLITE"), "ChatGPT Pro 100");
+        assert_eq!(plan_label("Pro_Ultra"), "Pro_Ultra");
     }
 
     #[test]
@@ -1214,17 +1239,29 @@ mod tests {
             ))
             .unwrap()
         };
-        let weight = |plan: &str, hint: Option<&str>| {
-            to_payload(body(plan), Utc::now(), "oauth", hint.map(String::from))
-                .unwrap()
-                .credential
-                .plan_weight
+        let plan = |plan: &str, hint: Option<&str>| {
+            let payload =
+                to_payload(body(plan), Utc::now(), "oauth", hint.map(String::from)).unwrap();
+            (
+                payload.usage.unwrap().login_method,
+                payload.credential.plan_weight,
+            )
         };
-        assert_eq!(weight(r#""promax""#, None), Some(25));
-        // A PAT's whoami plan stands in when the usage response names none.
-        assert_eq!(weight("null", Some("prolite")), Some(5));
-        assert_eq!(weight(r#""pro""#, Some("plus")), Some(10));
-        assert_eq!(weight(r#""free""#, None), None);
+        let sold = |label: &str, weight| (Some(label.to_string()), weight);
+        assert_eq!(plan(r#""promax""#, None), sold("ChatGPT Pro 500", Some(25)));
+        assert_eq!(
+            plan("null", Some("prolite")),
+            sold("ChatGPT Pro 100", Some(5))
+        );
+        assert_eq!(
+            plan(r#""""#, Some("prolite")),
+            sold("ChatGPT Pro 100", Some(5))
+        );
+        assert_eq!(
+            plan(r#""pro""#, Some("plus")),
+            sold("ChatGPT Pro 200", Some(10))
+        );
+        assert_eq!(plan(r#""free""#, None), sold("ChatGPT Free", None));
     }
 
     #[test]
@@ -1523,6 +1560,18 @@ mod tests {
         let payload = fetch_stored(&past, Duration::from_secs(1), now).unwrap();
         assert_eq!(payload.credential.state, Some(CredentialState::Expired));
         assert!(payload.usage.unwrap().primary.is_none());
+
+        let with_plan = format!(
+            r#"{{"tokens":{{"access_token":"{}","id_token":"{}"}}}}"#,
+            jwt(now.timestamp() - 60),
+            jwt_with(r#"{"https://api.openai.com/auth":{"chatgpt_plan_type":"prolite"}}"#),
+        );
+        let payload = fetch_stored(&with_plan, Duration::from_secs(1), now).unwrap();
+        assert_eq!(payload.credential.plan_weight, Some(5));
+        assert_eq!(
+            payload.usage.unwrap().login_method.as_deref(),
+            Some("ChatGPT Pro 100")
+        );
 
         assert_eq!(
             check_stored(&stored(now.timestamp() + 3600), now).unwrap(),

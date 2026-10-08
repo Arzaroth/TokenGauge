@@ -18,11 +18,12 @@
       "credential": "work",
       "active": true,
       "credentialLabel": "Acme",
+      "planWeight": 10,
       "usage": {
         "primary": {"usedPercent": 12, "resetsAt": "{{SESSION_RESET}}", "windowMinutes": 300},
         "secondary": {"usedPercent": 44, "resetsAt": "{{WEEKLY_RESET}}", "windowMinutes": 10080},
         "updatedAt": "{{UPDATED_AT}}",
-        "loginMethod": "chatgpt"
+        "loginMethod": "ChatGPT Pro 200"
       }
     },
     {
@@ -31,11 +32,12 @@
       "stale": false,
       "credential": "perso",
       "active": false,
+      "planWeight": 1,
       "usage": {
         "primary": {"usedPercent": 83, "resetsAt": "{{SESSION_RESET}}", "windowMinutes": 300},
         "secondary": {"usedPercent": 20, "resetsAt": "{{WEEKLY_RESET}}", "windowMinutes": 10080},
         "updatedAt": "{{UPDATED_AT}}",
-        "loginMethod": "plus"
+        "loginMethod": "ChatGPT Plus"
       }
     },
     {

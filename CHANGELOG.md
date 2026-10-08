@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     credential, filled to its own usage and as wide as its share (a tenth of
     the bar at least), in place of one pooled bar.
 
+### Changed
+
+- A Codex plan reads as it is sold: `ChatGPT Pro 200` rather than `pro`,
+  `ChatGPT Pro 100` rather than `prolite`, `ChatGPT Enterprise` rather than
+  `business`.
+
 ## [0.39.1] - 2026-10-08
 
 ### Fixed

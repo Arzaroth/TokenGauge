@@ -114,7 +114,7 @@ in units of the largest plan: each credential contributes
 (60% in the second case), so an idle Pro cannot make busy plans look free.
 
 - The multipliers are the nominal ones the plans are sold with, relative to
-  Pro. The real limits are not published and need not scale exactly in every
+  Claude Pro or ChatGPT Plus. The real limits are not published and need not scale exactly in every
   window, so the combined figure is an estimate, and the panel does not
   present it as more.
 - A credential that is neither Pro nor a tier carrying an `Nx` (Enterprise, or
@@ -268,7 +268,10 @@ each.
   those three, a Business seat (`team`) at 1x and a Business Premium seat
   (`self_serve_business_prolite`) at 5x. The wire's `business` is what Codex
   itself labels Enterprise and has no weight, nor does a usage-based Business
-  seat, free, Go or EDU.
+  seat, free, Go or EDU. The objection that OpenAI is moving plans to
+  API-spend-equivalent allowances still stands: the weights are the ones the
+  plans are sold under, an estimate like Claude's, and a plan that reports no
+  5h window simply has no share in that meter.
 - `CACHE_SCHEMA_VERSION` is 2. It is still written and never checked on read.
 
 ## The snapshot contract

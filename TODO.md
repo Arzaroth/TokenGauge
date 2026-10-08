@@ -284,3 +284,9 @@ one product rather than five.
 - **The tray's split bar floors each segment to 2px and gives its value a
   fixed 90px.** Harmless while segments are a tenth of the bar at least, but a
   long value can still run past the flyout's edge.
+- **The combined header pools windows by label, not by length.** Codex labels
+  its primary slot "Session" whatever fills it, including a synthesized credit
+  pool (`individual_limit` / `spend_control`) with no window length, so a seat
+  reporting only that pool beside a Plus would share one "Session" meter with a
+  5h window. Unseen on a real account; `plan_rows` in `panel.rs` could key on
+  `window_minutes` as well.

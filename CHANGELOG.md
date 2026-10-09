@@ -12,15 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Several plans per provider now covers every provider remuda keeps: Grok,
   Kimi, Cursor, GLM and opencode Go as well as Claude and Codex. Each stored
   login gets its own limits in the panel, and the combined header adds them up
-  by plan weight. This needs a remuda that stores them.
+  by plan weight. This needs remuda 0.9.0 or newer, which stores them.
 - opencode Go's key is read from opencode's own `auth.json`, where `/connect`
   files it, so `OPENCODE_API_KEY` no longer has to be exported as well. The
   variable still wins.
-- GLM and Cursor plans carry a weight, ready for the combined header once those
-  providers can hold several credentials. GLM weighs by weekly credits (Lite,
-  Pro and Max as 1, 6 and 14), Cursor against Pro (Pro+ 3x, Ultra 20x). A
-  Cursor Teams seat and a GLM team seat stay out of the total: neither API says
-  whether the seat is Standard or Premium.
+- GLM and Cursor plans carry a weight in the combined header. GLM weighs by
+  weekly credits (Lite, Pro and Max as 1, 6 and 14), Cursor against Pro (Pro+
+  3x, Ultra 20x). A Cursor Teams seat and a GLM team seat stay out of the
+  total: neither API says whether the seat is Standard or Premium.
 - Kimi and Grok plans carry a weight as well. Kimi weighs its membership against
   Plus (Pro 2x, Max 5x, Ultra 10x). xAI publishes no multiplier between
   SuperGrok tiers, so Grok weighs them by price: SuperGrok 3, Plus 10, Heavy 30.

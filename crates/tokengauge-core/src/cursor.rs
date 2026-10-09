@@ -128,7 +128,8 @@ fn plan_label(membership: &str) -> String {
         "free" => "Free",
         "hobby" => "Hobby",
         "free_trial" => "Pro Trial",
-        "pro" | "pro_student" => "Pro",
+        "pro" => "Pro",
+        "pro_student" => "Pro Student",
         "pro_plus" => "Pro+",
         "ultra" => "Ultra",
         "team" => "Teams",
@@ -437,7 +438,7 @@ mod tests {
         };
         let sold = |label: &str, weight| (Some(label.to_string()), weight);
         assert_eq!(plan("pro"), sold("Cursor Pro", Some(1)));
-        assert_eq!(plan("pro_student"), sold("Cursor Pro", Some(1)));
+        assert_eq!(plan("pro_student"), sold("Cursor Pro Student", Some(1)));
         assert_eq!(plan("pro_plus"), sold("Cursor Pro+", Some(3)));
         assert_eq!(plan("Ultra"), sold("Cursor Ultra", Some(20)));
         assert_eq!(plan("team"), sold("Cursor Teams", None));

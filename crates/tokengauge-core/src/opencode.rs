@@ -53,9 +53,13 @@ fn env_clean(name: &str) -> Option<String> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
+/// opencode keeps XDG paths on every platform, macOS included, so this is
+/// not `dirs::data_dir()`, which would be `~/Library/Application Support`.
 pub(crate) fn auth_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_default()
+    std::env::var_os("XDG_DATA_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/share"))
         .join("opencode")
         .join("auth.json")
 }

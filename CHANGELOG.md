@@ -13,6 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against Plus: Pro 100, 200 and 500 count as 5x, 10x and 25x, a Business seat
   as 1x and a Business Premium seat as 5x. Free, Go, Enterprise and EDU have no
   known weight and stay out of the total, as an unknown Claude plan does.
+
+### Changed
+
+- A Codex plan reads as it is sold: `ChatGPT Pro 200` rather than `pro`,
+  `ChatGPT Pro 100` rather than `prolite`, `ChatGPT Enterprise` rather than
+  `business`.
+
+## [0.40.0] - 2026-10-09
+
+### Added
+
 - Three `[panel]` options for a provider with several credentials, settable
   from `config.toml`, `tokengauge --set-panel KEY=VALUE`, or the settings pane
   of the Plasma, GNOME, Omarchy and tray panels:
@@ -20,17 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     any credential that is stale, expired or left out of the total); ALL
     PLANS still adds every credential up and says how many it covers.
   - `plans_total = "absolute"` counts every credential as 100% in ALL PLANS
-    instead of weighing it by its plan, which also gives plans with no known
-    multiplier a header.
+    instead of weighing it by its plan, which also gives Codex and plans with
+    no known multiplier a header.
   - `split_bars` (on by default) draws each ALL PLANS meter as one segment per
     credential, filled to its own usage and as wide as its share (a tenth of
     the bar at least), in place of one pooled bar.
-
-### Changed
-
-- A Codex plan reads as it is sold: `ChatGPT Pro 200` rather than `pro`,
-  `ChatGPT Pro 100` rather than `prolite`, `ChatGPT Enterprise` rather than
-  `business`.
 
 ## [0.39.1] - 2026-10-08
 
@@ -1189,7 +1194,10 @@ Major feature batch on top of upstream v0.4.2.
 
 Released by the upstream project, [oorestisime/TokenGauge](https://github.com/oorestisime/TokenGauge/releases). This fork's own history starts at 0.5.0.
 
-[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.38.0...HEAD
+[Unreleased]: https://github.com/Arzaroth/TokenGauge/compare/v0.40.0...HEAD
+[0.40.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.39.1...v0.40.0
+[0.39.1]: https://github.com/Arzaroth/TokenGauge/compare/v0.39.0...v0.39.1
+[0.39.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/Arzaroth/TokenGauge/compare/v0.35.1...v0.36.0

@@ -32,10 +32,11 @@ use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
+use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::{check_status, jwt_claims};
 use crate::{
-    CreditLimit, CreditLimitKind, Credits, ProviderPayload, UsageSnapshot, UsageWindow,
-    http_client, pct_u8,
+    CredentialState, CreditLimit, CreditLimitKind, Credits, ProviderPayload, UsageSnapshot,
+    UsageWindow, http_client, pct_u8,
 };
 
 const DEFAULT_BASE_URL: &str = "https://cursor.com";
@@ -65,10 +66,13 @@ pub(crate) fn agent_auth_path() -> PathBuf {
         .join("auth.json")
 }
 
+/// cursor-agent writes camelCase: `{"accessToken", "refreshToken", "apiKey"}`.
 #[derive(Debug, Deserialize)]
 struct AgentAuth {
-    #[serde(default, alias = "access_token")]
+    #[serde(default, rename = "accessToken", alias = "access_token")]
     access_token: Option<String>,
+    #[serde(default, rename = "refreshToken", alias = "refresh_token")]
+    refresh_token: Option<String>,
 }
 
 /// The session token: the environment first, then the file the CLI wrote.
@@ -94,22 +98,27 @@ pub(crate) fn access_token() -> Result<String> {
         .ok_or_else(|| anyhow!("Cursor auth file holds no token - run `cursor-agent` to log in"))
 }
 
-/// The cookie value the dashboard sends: the user id off the token's `sub`
-/// claim, then a pre-encoded `::`, then the token itself.
-fn session_cookie(token: &str) -> Result<String> {
+/// The user id in the token's `sub` claim, which reads `issuer|userId`.
+/// remuda files a Cursor login under the same.
+fn user_id(token: &str) -> Result<String> {
     let claims = jwt_claims(token)
         .ok_or_else(|| anyhow!("Cursor token is not a readable JWT - log in again"))?;
     let sub = claims
         .get("sub")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("Cursor token carries no `sub` claim - log in again"))?;
-    let user_id = sub
-        .split('|')
+    sub.split('|')
         .nth(1)
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow!("Cursor token `sub` is not `issuer|userId` - log in again"))?;
-    Ok(format!("{user_id}%3A%3A{token}"))
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("Cursor token `sub` is not `issuer|userId` - log in again"))
+}
+
+/// The cookie value the dashboard sends: the user id off the token's `sub`
+/// claim, then a pre-encoded `::`, then the token itself.
+fn session_cookie(token: &str) -> Result<String> {
+    Ok(format!("{}%3A%3A{token}", user_id(token)?))
 }
 
 fn request_base(override_base: Option<&str>) -> Result<&str> {
@@ -318,7 +327,21 @@ fn to_payload(body: UsageSummary, now: DateTime<Utc>) -> Result<ProviderPayload>
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let token = access_token()?;
-    let cookie = session_cookie(&token)?;
+    Ok(vec![usage_for(
+        &token,
+        timeout,
+        now,
+        "sign in with `cursor-agent`, or set CURSOR_ACCESS_TOKEN",
+    )?])
+}
+
+fn usage_for(
+    token: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+    unauthorized_hint: &str,
+) -> Result<ProviderPayload> {
+    let cookie = session_cookie(token)?;
     let base = env_clean(BASE_URL_ENV);
     let origin = request_base(base.as_deref())?;
     let url = summary_url(Some(origin))?;
@@ -334,11 +357,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         .send()
         .context("Cursor usage request failed")?;
 
-    check_status(
-        resp.status(),
-        "Cursor",
-        "sign in with `cursor-agent`, or set CURSOR_ACCESS_TOKEN",
-    )?;
+    check_status(resp.status(), "Cursor", unauthorized_hint)?;
 
     let text = resp.text().context("Cursor usage read failed")?;
     if text.trim().is_empty() {
@@ -347,7 +366,91 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let body: UsageSummary =
         serde_json::from_str(&text).context("Cursor usage JSON was invalid")?;
 
-    Ok(vec![to_payload(body, now)?])
+    to_payload(body, now)
+}
+
+// ---------------------------------------------------------------------------
+// Stored credentials (remuda)
+// ---------------------------------------------------------------------------
+
+fn clean(token: Option<String>) -> Option<String> {
+    token
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
+fn agent_tokens(auth: AgentAuth) -> LoginTokens {
+    LoginTokens {
+        access: clean(auth.access_token),
+        refresh: clean(auth.refresh_token),
+    }
+}
+
+pub(crate) fn live_login() -> LiveLogin {
+    let tokens = match TOKEN_ENVS.iter().find_map(|name| env_clean(name)) {
+        Some(token) => LoginTokens {
+            access: Some(token),
+            refresh: None,
+        },
+        None => std::fs::read_to_string(agent_auth_path())
+            .ok()
+            .and_then(|raw| serde_json::from_str::<AgentAuth>(&raw).ok())
+            .map(agent_tokens)
+            .unwrap_or_default(),
+    };
+    LiveLogin {
+        account: tokens.access.as_deref().and_then(|t| user_id(t).ok()),
+        tokens,
+    }
+}
+
+fn stored_token(text: &str) -> Result<String> {
+    // Never serde's message: it quotes the value it rejected.
+    let auth: AgentAuth =
+        serde_json::from_str(text).map_err(|_| anyhow!("the stored auth.json was invalid"))?;
+    clean(auth.access_token).ok_or_else(|| anyhow!("the stored credential holds no token"))
+}
+
+pub(crate) fn stored_tokens(text: &str) -> LoginTokens {
+    serde_json::from_str::<AgentAuth>(text)
+        .map(agent_tokens)
+        .unwrap_or_default()
+}
+
+/// Expiry is the token's own `exp`. The stored copy is never refreshed here:
+/// it is remuda's.
+fn stored_state(token: &str, now: DateTime<Utc>) -> Option<CredentialState> {
+    jwt_claims(token)
+        .and_then(|c| c.get("exp")?.as_i64())
+        .and_then(|exp| DateTime::from_timestamp(exp, 0))
+        .is_some_and(|exp| exp <= now)
+        .then_some(CredentialState::Expired)
+}
+
+pub(crate) fn check_stored(text: &str, now: DateTime<Utc>) -> Result<Option<CredentialState>> {
+    Ok(stored_state(&stored_token(text)?, now))
+}
+
+/// Ask about a stored credential, or say why it was not asked.
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    let token = stored_token(text)?;
+    match stored_state(&token, now) {
+        None => usage_for(
+            &token,
+            timeout,
+            now,
+            "remuda refreshes stored credentials (`remuda refresh`)",
+        ),
+        Some(state) => {
+            let mut payload = ProviderPayload::live("cursor", "store", UsageSnapshot::at(now));
+            payload.credential.state = Some(state);
+            Ok(payload)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -420,6 +523,46 @@ mod tests {
             );
         }
         assert_eq!(usage.login_method.as_deref(), Some("Cursor Pro"));
+    }
+
+    /// cursor-agent's own spelling, which the reader once missed.
+    #[test]
+    fn the_agent_file_is_read_as_cursor_agent_writes_it() {
+        let auth: AgentAuth =
+            serde_json::from_str(r#"{"accessToken": "t", "refreshToken": "r", "apiKey": null}"#)
+                .unwrap();
+        assert_eq!(auth.access_token.as_deref(), Some("t"));
+        let legacy: AgentAuth = serde_json::from_str(r#"{"access_token": "t"}"#).unwrap();
+        assert_eq!(legacy.access_token.as_deref(), Some("t"));
+    }
+
+    /// remuda files a Cursor login under the user id in its token, so a stored
+    /// one is matched by that and by its tokens, and an expired one is shown
+    /// as expired rather than asked about.
+    #[test]
+    fn a_stored_login_is_its_tokens_and_its_user() {
+        use crate::provider::fake_jwt;
+        let now = Utc::now();
+        let alive = fake_jwt(r#"{"sub":"auth0|user_1","exp":4102444800}"#);
+        let text = format!(r#"{{"accessToken": "{alive}", "refreshToken": "r1", "apiKey": null}}"#);
+        assert_eq!(
+            stored_tokens(&text),
+            LoginTokens {
+                access: Some(alive.clone()),
+                refresh: Some("r1".into())
+            }
+        );
+        assert_eq!(user_id(&alive).unwrap(), "user_1");
+        assert_eq!(check_stored(&text, now).unwrap(), None);
+        let dead = fake_jwt(r#"{"sub":"auth0|user_1","exp":1}"#);
+        let text = format!(r#"{{"accessToken": "{dead}"}}"#);
+        assert_eq!(
+            check_stored(&text, now).unwrap(),
+            Some(CredentialState::Expired)
+        );
+        let payload = fetch_stored(&text, Duration::from_secs(1), now).unwrap();
+        assert_eq!(payload.credential.state, Some(CredentialState::Expired));
+        assert!(check_stored(r#"{"accessToken": null, "apiKey": "k"}"#, now).is_err());
     }
 
     /// The combined header weighs an Ultra and a Pro as 20 to 1.

@@ -18,8 +18,12 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::check_status;
-use crate::{ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
+use crate::{
+    CredentialState, ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client,
+    pct_u8,
+};
 
 const DEFAULT_BASE_URL: &str = "https://api.kimi.com";
 const API_KEY_ENV: &str = "KIMI_CODE_API_KEY";
@@ -45,6 +49,8 @@ struct Auth {
 struct CredentialFile {
     #[serde(default, alias = "accessToken")]
     access_token: String,
+    #[serde(default, alias = "refreshToken")]
+    refresh_token: Option<String>,
     #[serde(default, alias = "expiresAt", alias = "expires_at")]
     expires_at: Option<Value>,
 }
@@ -397,7 +403,10 @@ fn usage_endpoint_for(override_base: Option<&str>) -> Result<String> {
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let auth = resolve_auth(unix_now_secs())?;
+    Ok(vec![usage_for(auth, timeout, now)?])
+}
 
+fn usage_for(auth: Auth, timeout: Duration, now: DateTime<Utc>) -> Result<ProviderPayload> {
     let client = http_client(timeout)?;
     let mut request = client
         .get(usage_endpoint()?)
@@ -412,10 +421,10 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     if status == reqwest::StatusCode::UNAUTHORIZED {
         // The API key keeps precedence over the CLI file, so point the user at
         // whichever source actually supplied the rejected token.
-        let hint = if auth.source == "code-api" {
-            "check KIMI_CODE_API_KEY"
-        } else {
-            "run `kimi` to log in"
+        let hint = match auth.source {
+            "code-api" => "check KIMI_CODE_API_KEY",
+            "store" => "remuda refreshes stored credentials (`remuda refresh`)",
+            _ => "run `kimi` to log in",
         };
         return Err(anyhow!("Kimi unauthorized - {hint}"));
     }
@@ -434,10 +443,122 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     // supplied the token, and a 429 can mean either a rate limit or a spent
     // quota. What is left is the shared ladder, which now owns 403 for every
     // provider - this is where that wording came from.
-    check_status(status, "Kimi", "run `kimi` to log in")?;
+    check_status(
+        status,
+        "Kimi",
+        if auth.source == "store" {
+            "remuda refreshes stored credentials (`remuda refresh`)"
+        } else {
+            "run `kimi` to log in"
+        },
+    )?;
 
     let body: UsageResponse = resp.json().context("Kimi usage JSON was invalid")?;
-    Ok(vec![to_payload(body, auth.source, auth.login_method, now)?])
+    to_payload(body, auth.source, auth.login_method, now)
+}
+
+// ---------------------------------------------------------------------------
+// Stored credentials (remuda)
+// ---------------------------------------------------------------------------
+
+fn file_tokens(file: CredentialFile) -> LoginTokens {
+    LoginTokens {
+        access: cleaned(Some(file.access_token)),
+        refresh: cleaned(file.refresh_token),
+    }
+}
+
+/// The token the CLI file holds, or the API key that wins over it. Kimi's
+/// file names nobody, so the live login is matched by its tokens alone.
+pub(crate) fn live_login() -> LiveLogin {
+    if let Some(key) = cleaned(std::env::var(API_KEY_ENV).ok()) {
+        return LiveLogin {
+            tokens: LoginTokens {
+                access: Some(key),
+                refresh: None,
+            },
+            account: None,
+        };
+    }
+    LiveLogin {
+        tokens: read_credential(&credentials_path())
+            .map(file_tokens)
+            .unwrap_or_default(),
+        account: None,
+    }
+}
+
+fn stored_file(text: &str) -> Result<CredentialFile> {
+    // Never serde's message: it quotes the value it rejected.
+    let file: CredentialFile =
+        serde_json::from_str(text).map_err(|_| anyhow!("the stored kimi-code.json was invalid"))?;
+    if file.access_token.trim().is_empty() {
+        return Err(anyhow!("the stored credential holds no token"));
+    }
+    Ok(file)
+}
+
+pub(crate) fn stored_tokens(text: &str) -> LoginTokens {
+    serde_json::from_str::<CredentialFile>(text)
+        .map(file_tokens)
+        .unwrap_or_default()
+}
+
+/// `expires_at` first, then the token's own `exp`, as remuda reads it. A
+/// token that says neither is asked about, and the answer decides.
+fn stored_state(file: &CredentialFile, now: DateTime<Utc>) -> Option<CredentialState> {
+    let now_unix = now.timestamp() as f64;
+    let expiry = file
+        .expires_at
+        .clone()
+        .filter(|v| value_as_f64(v).is_some_and(f64::is_finite))
+        .or_else(|| {
+            crate::provider::jwt_claims(&file.access_token)?
+                .get("exp")
+                .cloned()
+        });
+    match expiry {
+        Some(at) => (!is_fresh(Some(&at), now_unix)).then_some(CredentialState::Expired),
+        None => None,
+    }
+}
+
+pub(crate) fn check_stored(text: &str, now: DateTime<Utc>) -> Result<Option<CredentialState>> {
+    Ok(stored_state(&stored_file(text)?, now))
+}
+
+/// Ask about a stored credential, or say why it was not asked. It is sent
+/// with this machine's CLI device id, as the CLI would send it.
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    let file = stored_file(text)?;
+    match stored_state(&file, now) {
+        None => usage_for(
+            Auth {
+                token: file.access_token.trim().to_string(),
+                source: "store",
+                login_method: "Kimi Code",
+                identity_headers: identity_headers(&code_home()),
+            },
+            timeout,
+            now,
+        ),
+        Some(state) => {
+            let mut payload = ProviderPayload::live(
+                "kimi",
+                "store",
+                UsageSnapshot {
+                    login_method: Some("Kimi Code".to_string()),
+                    ..UsageSnapshot::at(now)
+                },
+            );
+            payload.credential.state = Some(state);
+            Ok(payload)
+        }
+    }
 }
 
 fn unix_now_secs() -> f64 {
@@ -511,6 +632,46 @@ mod tests {
 
     fn resp(json: &str) -> UsageResponse {
         serde_json::from_str(json).expect("fixture parses")
+    }
+
+    /// A stored login is matched by its tokens, and one whose token has run
+    /// out is shown as expired rather than asked about.
+    #[test]
+    fn a_stored_login_is_its_tokens_and_its_expiry() {
+        let now = Utc::now();
+        let alive = format!(
+            r#"{{"access_token": "a1", "refresh_token": "r1", "expires_at": {}}}"#,
+            now.timestamp() + 3600
+        );
+        assert_eq!(
+            stored_tokens(&alive),
+            LoginTokens {
+                access: Some("a1".into()),
+                refresh: Some("r1".into())
+            }
+        );
+        assert_eq!(check_stored(&alive, now).unwrap(), None);
+        let dead = r#"{"access_token": "a1", "refresh_token": "r1", "expires_at": 1.5}"#;
+        assert_eq!(
+            check_stored(dead, now).unwrap(),
+            Some(CredentialState::Expired)
+        );
+        let by_claim = format!(
+            r#"{{"access_token": "{}"}}"#,
+            crate::provider::fake_jwt(r#"{"exp":1}"#)
+        );
+        assert_eq!(
+            check_stored(&by_claim, now).unwrap(),
+            Some(CredentialState::Expired)
+        );
+        assert_eq!(
+            check_stored(r#"{"access_token": "opaque"}"#, now).unwrap(),
+            None
+        );
+        let payload = fetch_stored(dead, Duration::from_secs(1), now).unwrap();
+        assert_eq!(payload.credential.state, Some(CredentialState::Expired));
+        assert!(check_stored(r#"{"access_token": ""}"#, now).is_err());
+        assert!(check_stored("[]", now).is_err());
     }
 
     /// The combined header weighs an Ultra and a Plus as 10 to 1.

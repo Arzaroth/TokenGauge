@@ -14,6 +14,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::credentials::{LiveLogin, key_login, stored_key};
 use crate::provider::{check_status, epoch_to_rfc3339, json_num};
 use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
@@ -309,6 +310,37 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let key = api_key()?;
+    Ok(vec![usage_for(
+        &key,
+        timeout,
+        now,
+        "check Z_AI_API_KEY (legacy ZAI_API_TOKEN)",
+    )?])
+}
+
+pub(crate) fn live_login() -> LiveLogin {
+    key_login(api_key().ok())
+}
+
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    usage_for(
+        &stored_key(text)?,
+        timeout,
+        now,
+        "z.ai refused the stored key (`remuda login -p glm` replaces it)",
+    )
+}
+
+fn usage_for(
+    key: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+    unauthorized_hint: &str,
+) -> Result<ProviderPayload> {
     let url = quota_url();
     if !url.starts_with("https://") {
         return Err(anyhow!("z.ai quota URL must use HTTPS"));
@@ -322,11 +354,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         .send()
         .context("z.ai usage request failed")?;
 
-    check_status(
-        resp.status(),
-        "z.ai",
-        "check Z_AI_API_KEY (legacy ZAI_API_TOKEN)",
-    )?;
+    check_status(resp.status(), "z.ai", unauthorized_hint)?;
 
     // A wrong region often answers 200 with an empty body.
     let text = resp.text().context("z.ai usage read failed")?;
@@ -334,7 +362,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         return Err(anyhow!("z.ai empty response - check region/token"));
     }
     let body: QuotaResponse = serde_json::from_str(&text).context("z.ai usage JSON was invalid")?;
-    Ok(vec![to_payload(body, now)?])
+    to_payload(body, now)
 }
 
 #[cfg(test)]

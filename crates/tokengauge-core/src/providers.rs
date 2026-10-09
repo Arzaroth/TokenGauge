@@ -139,7 +139,12 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Weekly", "Rate Limit", "Tertiary"),
         natively_read: true,
         fetch: kimi::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: kimi::live_login,
+            tokens: kimi::stored_tokens,
+            fetch: kimi::fetch_stored,
+            check: kimi::check_stored,
+        }),
         auth: kimi_auth,
         enabled_in: |c| c.kimi,
     },
@@ -157,7 +162,12 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Weekly", "On-demand", "Tertiary"),
         natively_read: true,
         fetch: grok::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: grok::live_login,
+            tokens: grok::stored_tokens,
+            fetch: grok::fetch_stored,
+            check: grok::check_stored,
+        }),
         auth: grok_auth,
         enabled_in: |c| c.grok,
     },
@@ -176,7 +186,12 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Weekly", "30-day", "5-hour"),
         natively_read: false,
         fetch: glm::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: glm::live_login,
+            tokens: crate::credentials::stored_key_tokens,
+            fetch: glm::fetch_stored,
+            check: crate::credentials::check_stored_key,
+        }),
         auth: glm_auth,
         enabled_in: |c| c.glm,
     },
@@ -212,8 +227,8 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         // one.
         label: "opencode Go",
         // The key is minted on the web and pasted into the TUI with
-        // `/connect`; opencode's own store has never been read here, so there
-        // is no CLI credential to name.
+        // `/connect`, which files it in opencode's auth.json beside every
+        // other provider's login: a key, not a CLI login to name.
         cli: None,
         glyph: "\u{f121}",
         color_hex: "#5B9DD9",
@@ -228,7 +243,12 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("5-hour", "Weekly", "Monthly"),
         natively_read: false,
         fetch: opencode::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: opencode::live_login,
+            tokens: crate::credentials::stored_key_tokens,
+            fetch: opencode::fetch_stored,
+            check: crate::credentials::check_stored_key,
+        }),
         auth: opencode_auth,
         enabled_in: |c| c.opencode,
     },
@@ -251,7 +271,12 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Included", "Cursor models", "Other models"),
         natively_read: false,
         fetch: cursor::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: cursor::live_login,
+            tokens: cursor::stored_tokens,
+            fetch: cursor::fetch_stored,
+            check: cursor::check_stored,
+        }),
         auth: cursor_auth,
         enabled_in: |c| c.cursor,
     },
@@ -571,10 +596,17 @@ fn opencode_auth() -> AuthStatus {
             detail: format!("{var} set"),
             hint: "",
         },
-        None => AuthStatus {
-            ok: false,
-            detail: "OPENCODE_API_KEY unset".to_string(),
-            hint: "subscribe to opencode Go and set OPENCODE_API_KEY from opencode.ai/auth",
+        None => match opencode::api_key() {
+            Ok(_) => AuthStatus {
+                ok: true,
+                detail: format!("key in {}", opencode::auth_path().display()),
+                hint: "",
+            },
+            Err(e) => AuthStatus {
+                ok: false,
+                detail: e.to_string(),
+                hint: "subscribe to opencode Go and `/connect` it in opencode, or set OPENCODE_API_KEY from opencode.ai/auth",
+            },
         },
     }
 }

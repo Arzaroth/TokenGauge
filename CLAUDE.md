@@ -228,10 +228,11 @@ test reads a real keychain.
 ## A provider holds several credentials, and TokenGauge only reads them
 
 ADR 0003 is the design and, in its last section, the contract with
-[remuda](https://github.com/Arzaroth/remuda), which keeps every captured Claude
-and Codex login under `[credentials] store` and reads TokenGauge's snapshot
-back. `credentials.rs` reads the store; `providers.rs` gives Claude and Codex a
-`StoreReader`; `fetch_all_providers` asks the live login as before and every
+[remuda](https://github.com/Arzaroth/remuda), which keeps every captured login
+under `[credentials] store` and reads TokenGauge's snapshot back.
+`credentials.rs` reads the store; `providers.rs` gives every provider remuda
+stores a `StoreReader` (all of them but OpenRouter); `fetch_all_providers`
+asks the live login as before and every
 other stored credential beside it, tagging each payload with `credential`,
 `active`, `credentialState`, `credentialLabel` and `planWeight`.
 `payload::tests::the_credential_keys_remuda_reads_are_spelled_as_the_adr_says`
@@ -283,8 +284,11 @@ Rules that are easy to regress:
   price, since xAI publishes no multiplier) unless `[panel] plans_total =
   "absolute"`, where every asked credential counts 100% and needs no weight.
   Weighted, a plan with no known weight is out of the total and says so,
-  rather than guessed at 1x. Only Claude and Codex have a `StoreReader`, so
-  the other tables wait on one.
+  rather than guessed at 1x.
+- **An API key is filed under a digest of itself.** GLM and opencode Go have no
+  account behind a key, so remuda names one `key-` and the first 16 hex digits
+  of its SHA-256, and `credentials::key_account` must say the same, or the
+  live key never matches its stored copy.
 - **The `[panel]` options are content, so `panel_spec` reads them**, never a
   frontend: `panel_spec(row, &config.panel)`, and `bar_tooltip` the same.
   `active_credential_only` drops only a *healthy* inactive group - one that

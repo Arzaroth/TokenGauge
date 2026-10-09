@@ -14,8 +14,9 @@ use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
 
-use crate::provider::check_status;
-use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
+use crate::credentials::{LiveLogin, LoginTokens};
+use crate::provider::{check_status, jwt_claims};
+use crate::{CredentialState, ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
 const BILLING_ENDPOINT: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
 const SETTINGS_ENDPOINT: &str = "https://cli-chat-proxy.grok.com/v1/settings";
@@ -33,6 +34,12 @@ struct Credentials {
 }
 
 pub(crate) fn auth_path() -> PathBuf {
+    if let Ok(file) = std::env::var("GROK_AUTH_PATH") {
+        let file = file.trim();
+        if !file.is_empty() {
+            return PathBuf::from(file);
+        }
+    }
     if let Ok(home) = std::env::var("GROK_HOME") {
         let home = home.trim();
         if !home.is_empty() {
@@ -66,6 +73,50 @@ fn is_expired(entry: &Value, now: DateTime<Utc>) -> bool {
         .is_some_and(|expires| expires.with_timezone(&Utc) <= now)
 }
 
+fn has_key(entry: &Value) -> bool {
+    entry
+        .get("key")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty())
+}
+
+/// The entry a login is filed under, expired or not: the OIDC one, else the
+/// first carrying a `key`. What a fetch sends skips expired entries
+/// ([`parse_credentials`]); which login a file holds does not.
+fn preferred(map: &serde_json::Map<String, Value>) -> Option<&Value> {
+    map.iter()
+        .find(|(scope, entry)| scope.starts_with("https://auth.x.ai::") && has_key(entry))
+        .or_else(|| map.iter().find(|(_, entry)| has_key(entry)))
+        .map(|(_, entry)| entry)
+}
+
+fn text_of(entry: &Value, key: &str) -> Option<String> {
+    entry
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Who an entry's tokens belong to: the access token's own `sub`, else the
+/// `user_id` written beside it. remuda files a Grok login under the same.
+fn account_of(entry: &Value) -> Option<String> {
+    text_of(entry, "key")
+        .as_deref()
+        .and_then(jwt_claims)
+        .and_then(|c| c.get("sub")?.as_str().map(str::to_string))
+        .filter(|s| !s.is_empty())
+        .or_else(|| text_of(entry, "user_id"))
+}
+
+fn tokens_of(entry: &Value) -> LoginTokens {
+    LoginTokens {
+        access: text_of(entry, "key"),
+        refresh: text_of(entry, "refresh_token"),
+    }
+}
+
 /// `auth.json` is an object keyed by OIDC scope URL. Prefer the SuperGrok/OIDC
 /// entry (`https://auth.x.ai::`), else the first entry carrying a `key`.
 /// Expired entries are skipped so a stale preferred token never wins.
@@ -74,9 +125,24 @@ fn parse_credentials(text: &str, now: DateTime<Utc>) -> Result<Credentials> {
     let map = root
         .as_object()
         .ok_or_else(|| anyhow!("Grok auth.json was invalid"))?;
+    let entry = sent_entry(map, now)?;
+    let access_token = entry
+        .get("key")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("Grok not logged in - run `grok login`"))?
+        .to_string();
 
-    // Skip expired entries during selection, so an expired preferred (OIDC)
-    // token never masks a later still-valid keyed fallback.
+    Ok(Credentials {
+        access_token,
+        login_method: login_method(entry),
+    })
+}
+
+/// The entry whose token a fetch sends. Expired entries are skipped, so an
+/// expired preferred (OIDC) token never masks a later still-valid keyed
+/// fallback.
+fn sent_entry(map: &serde_json::Map<String, Value>, now: DateTime<Utc>) -> Result<&Value> {
     let mut selected: Option<&Value> = None;
     let mut saw_expired = false;
     for (scope, entry) in map {
@@ -100,22 +166,11 @@ fn parse_credentials(text: &str, now: DateTime<Utc>) -> Result<Credentials> {
         }
     }
 
-    let entry = match selected {
-        Some(entry) => entry,
-        None if saw_expired => return Err(anyhow!("Grok token expired - run `grok login`")),
-        None => return Err(anyhow!("Grok not logged in - run `grok login`")),
-    };
-    let access_token = entry
-        .get("key")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow!("Grok not logged in - run `grok login`"))?
-        .to_string();
-
-    Ok(Credentials {
-        access_token,
-        login_method: login_method(entry),
-    })
+    match selected {
+        Some(entry) => Ok(entry),
+        None if saw_expired => Err(anyhow!("Grok token expired - run `grok login`")),
+        None => Err(anyhow!("Grok not logged in - run `grok login`")),
+    }
 }
 
 fn login_method(entry: &Value) -> Option<String> {
@@ -497,7 +552,15 @@ fn subscription_tier(client: &reqwest::blocking::Client, token: &str) -> Option<
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let creds = read_credentials(&auth_path(), now)?;
+    Ok(vec![usage_for(creds, timeout, now, "run `grok login`")?])
+}
 
+fn usage_for(
+    creds: Credentials,
+    timeout: Duration,
+    now: DateTime<Utc>,
+    unauthorized_hint: &str,
+) -> Result<ProviderPayload> {
     let client = http_client(timeout)?;
     let resp = client
         .post(BILLING_ENDPOINT)
@@ -513,7 +576,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         .send()
         .context("Grok billing request failed")?;
 
-    check_status(resp.status(), "Grok", "run `grok login`")?;
+    check_status(resp.status(), "Grok", unauthorized_hint)?;
 
     // gRPC carries its own status (HTTP header for unary, else the trailer frame).
     let header_status = resp
@@ -528,7 +591,111 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let weight = tier.as_deref().and_then(tier_weight);
     let mut payload = to_payload(billing, tier.or(creds.login_method), now);
     payload.credential.plan_weight = weight;
-    Ok(vec![payload])
+    Ok(payload)
+}
+
+// ---------------------------------------------------------------------------
+// Stored credentials (remuda)
+// ---------------------------------------------------------------------------
+
+/// The login whose token the fetch sends, so its usage is filed under the
+/// credential it belongs to; with every entry expired, the one remuda files.
+pub(crate) fn live_login() -> LiveLogin {
+    match std::fs::read_to_string(auth_path()) {
+        Ok(text) => live_from(&text, Utc::now()),
+        Err(_) => LiveLogin::default(),
+    }
+}
+
+fn live_from(text: &str, now: DateTime<Utc>) -> LiveLogin {
+    let Ok(root) = serde_json::from_str::<Value>(text) else {
+        return LiveLogin::default();
+    };
+    let Some(map) = root.as_object() else {
+        return LiveLogin::default();
+    };
+    match sent_entry(map, now).ok().or_else(|| preferred(map)) {
+        Some(entry) => LiveLogin {
+            tokens: tokens_of(entry),
+            account: account_of(entry),
+        },
+        None => LiveLogin::default(),
+    }
+}
+
+/// A stored `auth.json`'s login, read the way the live file is.
+fn stored_entry(text: &str) -> Result<Value> {
+    // Never serde's message: it quotes the value it rejected.
+    let root: Value =
+        serde_json::from_str(text).map_err(|_| anyhow!("the stored auth.json was invalid"))?;
+    let map = root
+        .as_object()
+        .ok_or_else(|| anyhow!("the stored auth.json was invalid"))?;
+    preferred(map)
+        .cloned()
+        .ok_or_else(|| anyhow!("the stored credential holds no token"))
+}
+
+pub(crate) fn stored_tokens(text: &str) -> LoginTokens {
+    stored_entry(text)
+        .map(|e| tokens_of(&e))
+        .unwrap_or_default()
+}
+
+/// Why a stored credential is not worth a request, if it is not. Expiry is
+/// the entry's `expires_at`, else the token's `exp`. The stored copy is never
+/// refreshed here: its refresh token rotates on use, and it is remuda's.
+fn stored_state(entry: &Value, now: DateTime<Utc>) -> Option<CredentialState> {
+    let by_claim = || {
+        text_of(entry, "key")
+            .as_deref()
+            .and_then(jwt_claims)
+            .and_then(|c| c.get("exp")?.as_i64())
+            .and_then(|exp| DateTime::from_timestamp(exp, 0))
+            .is_some_and(|exp| exp <= now)
+    };
+    (is_expired(entry, now) || by_claim()).then_some(CredentialState::Expired)
+}
+
+pub(crate) fn check_stored(text: &str, now: DateTime<Utc>) -> Result<Option<CredentialState>> {
+    Ok(stored_state(&stored_entry(text)?, now))
+}
+
+/// Ask about a stored credential, or say why it was not asked.
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    let entry = stored_entry(text)?;
+    let login_method = login_method(&entry);
+    match stored_state(&entry, now) {
+        None => {
+            let creds = Credentials {
+                access_token: text_of(&entry, "key")
+                    .ok_or_else(|| anyhow!("the stored credential holds no token"))?,
+                login_method,
+            };
+            usage_for(
+                creds,
+                timeout,
+                now,
+                "remuda refreshes stored credentials (`remuda refresh`)",
+            )
+        }
+        Some(state) => {
+            let mut payload = ProviderPayload::live(
+                "grok",
+                "store",
+                UsageSnapshot {
+                    login_method,
+                    ..UsageSnapshot::at(now)
+                },
+            );
+            payload.credential.state = Some(state);
+            Ok(payload)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -655,6 +822,87 @@ mod tests {
         assert_eq!(weight("SuperGrok Plus"), Some(10));
         assert_eq!(weight("SUPERGROK_HEAVY"), Some(30));
         assert_eq!(weight("Enterprise"), None);
+    }
+
+    use crate::provider::fake_jwt as jwt;
+
+    /// remuda files a Grok login under the token's `sub`, so the live login is
+    /// matched to its stored copy by that, and by its tokens.
+    #[test]
+    fn a_login_is_its_tokens_and_the_tokens_sub() {
+        let key = jwt(r#"{"sub":"u-1","exp":4102444800}"#);
+        let text = format!(
+            r#"{{"https://accounts.x.ai/sign-in": {{"key": "other"}},
+                "https://auth.x.ai::c": {{"key": "{key}", "refresh_token": "r1",
+                                         "user_id": "ignored", "auth_mode": "oidc"}}}}"#
+        );
+        let entry = stored_entry(&text).unwrap();
+        assert_eq!(account_of(&entry).as_deref(), Some("u-1"));
+        assert_eq!(
+            stored_tokens(&text),
+            LoginTokens {
+                access: Some(key),
+                refresh: Some("r1".into())
+            }
+        );
+        let opaque = stored_entry(r#"{"s": {"key": "opaque", "user_id": "u-2"}}"#).unwrap();
+        assert_eq!(account_of(&opaque).as_deref(), Some("u-2"));
+        assert!(stored_entry(r#"{"s": {"key": ""}}"#).is_err());
+        assert!(stored_entry("[]").is_err());
+    }
+
+    /// The live login is the entry whose token is sent: with the OIDC token
+    /// expired and a keyed fallback still good, it is the fallback.
+    #[test]
+    fn the_live_login_is_the_entry_the_fetch_sends() {
+        let now = Utc::now();
+        let dead = jwt(r#"{"sub":"u-1","exp":1}"#);
+        let text = format!(
+            r#"{{"https://auth.x.ai::c": {{"key": "{dead}", "refresh_token": "r1",
+                                         "expires_at": "2020-01-01T00:00:00Z"}},
+                "https://accounts.x.ai/sign-in": {{"key": "fallback"}}}}"#
+        );
+        let live = live_from(&text, now);
+        assert_eq!(live.tokens.access.as_deref(), Some("fallback"));
+        assert_eq!(live.account, None);
+        let only_dead = format!(
+            r#"{{"https://auth.x.ai::c": {{"key": "{dead}", "expires_at": "2020-01-01T00:00:00Z"}}}}"#
+        );
+        assert_eq!(live_from(&only_dead, now).account.as_deref(), Some("u-1"));
+    }
+
+    /// A stored login past its expiry is shown as expired, not asked about:
+    /// its refresh token is remuda's to spend.
+    #[test]
+    fn an_expired_stored_login_is_not_asked_about() {
+        let now = Utc::now();
+        let alive = jwt(r#"{"sub":"u","exp":4102444800}"#);
+        let dead = jwt(r#"{"sub":"u","exp":1}"#);
+        let state = |entry: &str| {
+            check_stored(&format!(r#"{{"https://auth.x.ai::c": {entry}}}"#), now).unwrap()
+        };
+        assert_eq!(state(&format!(r#"{{"key": "{alive}"}}"#)), None);
+        assert_eq!(
+            state(&format!(r#"{{"key": "{dead}"}}"#)),
+            Some(CredentialState::Expired)
+        );
+        assert_eq!(
+            state(&format!(
+                r#"{{"key": "{alive}", "expires_at": "2020-01-01T00:00:00Z"}}"#
+            )),
+            Some(CredentialState::Expired)
+        );
+        let payload = fetch_stored(
+            &format!(r#"{{"https://auth.x.ai::c": {{"key": "{dead}", "auth_mode": "oidc"}}}}"#),
+            Duration::from_secs(1),
+            now,
+        )
+        .unwrap();
+        assert_eq!(payload.credential.state, Some(CredentialState::Expired));
+        assert_eq!(
+            payload.usage.unwrap().login_method.as_deref(),
+            Some("SuperGrok")
+        );
     }
 
     #[test]

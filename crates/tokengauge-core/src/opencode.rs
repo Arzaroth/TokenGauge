@@ -21,17 +21,19 @@
 //! aggregation itself rather than making a reader do it per model.
 //!
 //! The credential is `OPENCODE_API_KEY`, minted at opencode.ai/auth and pasted
-//! into the TUI with `/connect`. It is **not** read from a file: opencode keeps
-//! its own credentials somewhere this has never seen, and a parser written
-//! against a guessed shape is how the Claude reader broke twice. When the file
-//! is known, it belongs here as a second source and the env var stays first.
+//! into the TUI with `/connect`, which files it in opencode's own
+//! `$XDG_DATA_HOME/opencode/auth.json` as `"opencode-go": {"type": "api",
+//! "key": ...}` beside every other provider's login. The variable wins, as it
+//! does for opencode; the file is the second source.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
+use crate::credentials::{LiveLogin, key_login, stored_key};
 use crate::provider::check_status;
 use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
@@ -51,11 +53,51 @@ fn env_clean(name: &str) -> Option<String> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
+/// opencode keeps XDG paths on every platform, macOS included, so this is
+/// not `dirs::data_dir()`, which would be `~/Library/Application Support`.
+pub(crate) fn auth_path() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/share"))
+        .join("opencode")
+        .join("auth.json")
+}
+
+/// The Go key in opencode's `auth.json`, which holds every provider's login.
+/// A file that is not JSON is an error of its own, never quoted: it holds
+/// every provider's login.
+fn file_key(text: &str) -> Result<Option<String>> {
+    let auth: serde_json::Value = serde_json::from_str(text)
+        .map_err(|_| anyhow!("opencode's auth.json is not valid JSON"))?;
+    Ok(auth
+        .get("opencode-go")
+        .and_then(|e| e.get("key"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(str::to_string))
+}
+
+/// No file is no key; a file that cannot be read says why.
+fn stored_file_key() -> Result<Option<String>> {
+    match std::fs::read_to_string(auth_path()) {
+        Ok(text) => file_key(&text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(anyhow!(
+            "opencode's auth.json could not be read: {}",
+            e.kind()
+        )),
+    }
+}
+
 pub(crate) fn api_key() -> Result<String> {
-    API_KEY_ENVS
-        .iter()
-        .find_map(|name| env_clean(name))
-        .ok_or_else(|| anyhow!("opencode key missing - set OPENCODE_API_KEY"))
+    if let Some(key) = API_KEY_ENVS.iter().find_map(|name| env_clean(name)) {
+        return Ok(key);
+    }
+    stored_file_key()?.ok_or_else(|| {
+        anyhow!("opencode key missing - `/connect` it in opencode, or set OPENCODE_API_KEY")
+    })
 }
 
 /// The usage endpoint, from an override a self-hosted gateway may set.
@@ -134,11 +176,13 @@ impl Window {
     }
 }
 
-fn to_payload(body: UsageResponse, now: DateTime<Utc>) -> Result<ProviderPayload> {
+fn to_payload(
+    body: UsageResponse,
+    now: DateTime<Utc>,
+    unauthorized_hint: &str,
+) -> Result<ProviderPayload> {
     if body.error.is_some() {
-        return Err(anyhow!(
-            "opencode returned an error - check OPENCODE_API_KEY"
-        ));
+        return Err(anyhow!("opencode returned an error - {unauthorized_hint}"));
     }
     let windows = body
         .usage
@@ -186,6 +230,37 @@ fn to_payload(body: UsageResponse, now: DateTime<Utc>) -> Result<ProviderPayload
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let key = api_key()?;
+    Ok(vec![usage_for(
+        &key,
+        timeout,
+        now,
+        "check OPENCODE_API_KEY, or `/connect` opencode Go again",
+    )?])
+}
+
+pub(crate) fn live_login() -> LiveLogin {
+    key_login(api_key().ok())
+}
+
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    usage_for(
+        &stored_key(text)?,
+        timeout,
+        now,
+        "opencode refused the stored key (`remuda login -p opencode` replaces it)",
+    )
+}
+
+fn usage_for(
+    key: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+    unauthorized_hint: &str,
+) -> Result<ProviderPayload> {
     let url = endpoint_for(env_clean(ENDPOINT_ENV).as_deref())?;
     let client = http_client(timeout)?;
 
@@ -196,7 +271,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         .send()
         .context("opencode usage request failed")?;
 
-    check_status(resp.status(), "opencode", "check OPENCODE_API_KEY")?;
+    check_status(resp.status(), "opencode", unauthorized_hint)?;
 
     let text = resp.text().context("opencode usage read failed")?;
     if text.trim().is_empty() {
@@ -205,7 +280,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let body: UsageResponse =
         serde_json::from_str(&text).context("opencode usage JSON was invalid")?;
 
-    Ok(vec![to_payload(body, now)?])
+    to_payload(body, now, unauthorized_hint)
 }
 
 #[cfg(test)]
@@ -218,8 +293,31 @@ mod tests {
             .with_timezone(&Utc)
     }
 
+    /// `/connect` files the key beside every other provider's login.
+    #[test]
+    fn the_go_key_is_read_from_its_entry_in_opencodes_file() {
+        let text = r#"{"openrouter": {"type": "api", "key": "or"},
+                       "opencode-go": {"type": "api", "key": " go-1 "}}"#;
+        assert_eq!(file_key(text).unwrap().as_deref(), Some("go-1"));
+        assert_eq!(
+            file_key(r#"{"openrouter": {"type": "api", "key": "or"}}"#).unwrap(),
+            None
+        );
+        assert_eq!(
+            file_key(r#"{"opencode-go": {"type": "api", "key": ""}}"#).unwrap(),
+            None
+        );
+        let err = file_key(r#"{"opencode-go": {"key": "go-secret""#).unwrap_err();
+        assert!(err.to_string().contains("not valid JSON"), "{err}");
+        assert!(!err.to_string().contains("go-secret"), "{err}");
+    }
+
     fn parse(raw: &str) -> Result<ProviderPayload> {
-        to_payload(serde_json::from_str(raw).expect("fixture parses"), at())
+        to_payload(
+            serde_json::from_str(raw).expect("fixture parses"),
+            at(),
+            "check OPENCODE_API_KEY",
+        )
     }
 
     const FULL: &str = r#"{"usage":{

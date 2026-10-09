@@ -276,10 +276,12 @@ Rules that are easy to regress:
   `panel::tests::every_frontend_with_a_header_offers_remuda_while_it_serves`
   is the list.
 - **The combined header weighs by nominal plan multiplier** (`plan_weight` in
-  `claude.rs`; Codex has no table and so no header) unless `[panel]
-  plans_total = "absolute"`, where every asked credential counts 100% and
-  needs no weight. Weighted, a plan with no known weight is out of the total
-  and says so, rather than guessed at 1x.
+  `claude.rs` against Pro, `codex.rs` against Plus, keyed on the wire's
+  `plan_type`: `prolite`, `pro` and `promax` are Pro 100, 200 and 500, and
+  `business` is Enterprise, not a Business seat) unless `[panel] plans_total
+  = "absolute"`, where every asked credential counts 100% and needs no
+  weight. Weighted, a plan with no known weight is out of the total and says
+  so, rather than guessed at 1x.
 - **The `[panel]` options are content, so `panel_spec` reads them**, never a
   frontend: `panel_spec(row, &config.panel)`, and `bar_tooltip` the same.
   `active_credential_only` drops only a *healthy* inactive group - one that

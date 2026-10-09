@@ -1712,7 +1712,8 @@ mod tests {
         assert!(spec.iter().all(|s| !s.title.contains("not in total")));
     }
 
-    /// Codex has no weight table, so only the absolute total gives it a header.
+    /// Plans with no known weight (Enterprise, ChatGPT Free) draw a header
+    /// only under the absolute total.
     #[test]
     fn absolute_draws_a_header_for_plans_with_no_known_weight() {
         let groups = grouped(vec![

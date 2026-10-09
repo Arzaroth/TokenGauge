@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Codex credentials get the combined plan header Claude ones have. Plans weigh
+  against Plus: Pro 100, 200 and 500 count as 5x, 10x and 25x, a standard
+  Business seat as 1x and a Business Premium seat as 5x. Free, Go, Enterprise,
+  EDU and a usage-based Business seat have no known weight and stay out of the
+  total, as an unknown Claude plan does.
+
+### Changed
+
+- A Codex plan reads as it is sold: `ChatGPT Pro 200` rather than `pro`,
+  `ChatGPT Pro 100` rather than `prolite`, `ChatGPT Enterprise` rather than
+  `business`.
+
 ## [0.40.0] - 2026-10-09
 
 ### Added

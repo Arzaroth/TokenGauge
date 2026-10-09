@@ -249,8 +249,8 @@ fn the_panel_a_frontend_draws_comes_out_of_the_binary() {
 }
 
 /// A provider with several credentials is still one provider: one row, one
-/// tab, and a group per credential in its panel, the active one first. Codex
-/// has no plan weights, so there is no combined header to draw.
+/// tab, and a group per credential in its panel, the active one first, under
+/// the combined header its weighted plans add up to.
 #[test]
 fn several_credentials_are_one_provider_with_a_group_each() {
     let machine = Machine::with(
@@ -279,18 +279,16 @@ fn several_credentials_are_one_provider_with_a_group_each() {
     assert_eq!(
         groups,
         [
-            ("work", "work · Acme · chatgpt · active", "meters"),
+            ("work", "work · Acme · ChatGPT Pro 200 · active", "meters"),
             ("old", "old", "rows"),
-            ("perso", "perso · plus", "meters"),
+            ("perso", "perso · ChatGPT Plus", "meters"),
         ]
     );
-    assert!(
-        codex["panel"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|s| s["id"] != "plans")
-    );
+    let plans = section(codex, "plans");
+    assert_eq!(plans["title"], "ALL PLANS");
+    // (12 × 10 + 83 × 1) ÷ 10 and (44 × 10 + 20 × 1) ÷ 10, of (10 + 1) ÷ 10.
+    assert_eq!(plans["rows"][0]["value"], "20% of 110%");
+    assert_eq!(plans["rows"][1]["value"], "46% of 110%");
     // The bar follows the plan in use, not the busiest one beside it.
     assert_eq!(codex["bar"]["percent"], 44);
     assert_eq!(codex["bar_tooltip"]["title"], "Codex · work");
@@ -420,8 +418,9 @@ fn a_panel_option_is_written_and_read_back_without_asking_a_provider() {
             .and_then(|r| r["panel"].as_array())
             .and_then(|p| p.iter().find(|s| s["id"] == "plans").cloned())
     };
-    // The seeded Codex logins carry no plan weight, so weighted draws no header.
-    assert_eq!(codex_plans(&before), None);
+    // The seeded Codex logins are a Pro 200 and a Plus, weighed 10 to 1.
+    let weighted = codex_plans(&before).expect("a weighted ALL PLANS header");
+    assert_eq!(weighted["rows"][0]["value"], "20% of 110%");
     assert_eq!(
         before["panel_options"],
         serde_json::json!({
@@ -445,8 +444,13 @@ fn a_panel_option_is_written_and_read_back_without_asking_a_provider() {
         "a frontend watching the revision file would never have re-read"
     );
 
-    // Absolute needs no weight, so the panel itself changed, split by default.
+    // Absolute counts each login once, so the panel itself changed, split by
+    // default.
     let plans = codex_plans(&after).expect("an ALL PLANS header once absolute");
+    assert_ne!(
+        plans["rows"][0]["value"], weighted["rows"][0]["value"],
+        "{plans}"
+    );
     let segments = plans["rows"][0]["segments"].as_array().expect("segments");
     assert!(segments.len() >= 2, "{plans}");
     for segment in segments {

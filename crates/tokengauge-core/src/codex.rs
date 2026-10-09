@@ -317,11 +317,12 @@ fn pat_or_api_key(auth: AuthFile, resolve: impl FnOnce(&str) -> Whoami) -> Resul
         .ok_or_else(|| anyhow!("Codex not logged in - run `codex`"))
 }
 
+/// The token's own plan claim stands in when the usage answer names none.
 fn oauth(tokens: Tokens) -> Credential {
     Credential {
+        plan_hint: plan_of(&tokens),
         tokens,
         source: "oauth",
-        plan_hint: None,
     }
 }
 
@@ -422,6 +423,20 @@ fn seat_of(access_token: &str, id_token: Option<&str>) -> Option<String> {
         })
 }
 
+/// The plan a token was issued for, from the same claims, so a stored
+/// credential that is not asked still says what it is.
+fn plan_of(tokens: &Tokens) -> Option<String> {
+    let plan = |token: &str| {
+        jwt_claims(token)?
+            .get(AUTH_CLAIMS)?
+            .get("chatgpt_plan_type")?
+            .as_str()
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    plan(&tokens.access_token).or_else(|| plan(tokens.id_token.as_deref()?))
+}
+
 fn oauth_tokens(tokens: &Tokens) -> LoginTokens {
     let present = |t: &str| (!t.is_empty()).then(|| t.to_string());
     LoginTokens {
@@ -503,8 +518,17 @@ pub(crate) fn fetch_stored(
             "remuda refreshes stored credentials (`remuda refresh`)",
         ),
         Some(state) => {
-            let mut payload = ProviderPayload::live("codex", "store", UsageSnapshot::at(now));
+            let plan = plan_of(&tokens);
+            let mut payload = ProviderPayload::live(
+                "codex",
+                "store",
+                UsageSnapshot {
+                    login_method: plan.as_deref().map(plan_label),
+                    ..UsageSnapshot::at(now)
+                },
+            );
             payload.credential.state = Some(state);
+            payload.credential.plan_weight = plan_weight(plan.as_deref());
             Ok(payload)
         }
     }
@@ -861,19 +885,67 @@ fn to_payload(
         return Err(anyhow!("Codex returned no usage windows"));
     }
 
+    let plan = trimmed(resp.plan_type).or(plan_hint);
+    let weight = plan_weight(plan.as_deref());
     let mut payload = ProviderPayload::live(
         "codex",
         source,
         UsageSnapshot {
             primary,
             secondary,
-            login_method: resp.plan_type.or(plan_hint),
+            login_method: plan.as_deref().map(plan_label),
             extra_rate_windows,
             ..UsageSnapshot::at(now)
         },
     );
     payload.credits = credits;
+    payload.credential.plan_weight = weight;
     Ok(payload)
+}
+
+/// What a `plan_type` is sold as, by the names Codex itself shows: the wire
+/// keeps the identifiers it had before Pro was split in three, so `pro` is a
+/// Pro 200 and `business` an Enterprise workspace. A plan not listed reads as
+/// the wire sent it.
+fn plan_label(plan_type: &str) -> String {
+    let name = match plan_type.to_ascii_lowercase().as_str() {
+        "free" => "Free",
+        "go" => "Go",
+        "plus" => "Plus",
+        "prolite" => "Pro 100",
+        "pro" => "Pro 200",
+        "promax" => "Pro 500",
+        "team" | "self_serve_business_usage_based" => "Business",
+        "self_serve_business_prolite" => "Business Premium",
+        "business"
+        | "ent26"
+        | "enterprise"
+        | "enterprise_cbp_automation"
+        | "enterprise_cbp_usage_based" => "Enterprise",
+        "edu" | "education" => "Edu",
+        "edu_plus" => "Edu Plus",
+        "edu_pro" => "Edu Pro",
+        _ => return plan_type.to_string(),
+    };
+    format!("ChatGPT {name}")
+}
+
+/// A plan's nominal multiplier against Plus, by the `plan_type` the wire
+/// sends: Pro 100, 200 and 500 (`prolite`, `pro`, `promax`) are 5x, 10x and
+/// 25x, a Business seat (`team`) is a Plus's allowance and a Business Premium
+/// seat (`self_serve_business_prolite`) a Pro 100's.
+///
+/// `None` for anything else - free, Go, a usage-based Business seat,
+/// Enterprise (which the wire calls `business`), EDU, a plan not seen before.
+/// Guessing 1x would understate a large plan without saying so.
+fn plan_weight(plan_type: Option<&str>) -> Option<u32> {
+    match plan_type?.to_ascii_lowercase().as_str() {
+        "plus" | "team" => Some(1),
+        "prolite" | "self_serve_business_prolite" => Some(5),
+        "pro" => Some(10),
+        "promax" => Some(25),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1099,7 +1171,98 @@ mod tests {
         let window = monthly.window.as_ref().unwrap();
         assert_eq!(window.used_percent, Some(6));
         assert_eq!(window.window_minutes, Some(43200));
-        assert_eq!(usage.login_method.as_deref(), Some("free"));
+        assert_eq!(usage.login_method.as_deref(), Some("ChatGPT Free"));
+    }
+
+    /// The combined header weighs a Pro 200 and a Plus as 10 to 1.
+    #[test]
+    fn a_plan_weighs_its_nominal_multiplier() {
+        assert_eq!(plan_weight(Some("plus")), Some(1));
+        assert_eq!(plan_weight(Some("prolite")), Some(5));
+        assert_eq!(plan_weight(Some("pro")), Some(10));
+        assert_eq!(plan_weight(Some("promax")), Some(25));
+        assert_eq!(plan_weight(Some("team")), Some(1));
+        assert_eq!(plan_weight(Some("self_serve_business_prolite")), Some(5));
+        assert_eq!(plan_weight(Some("Pro")), Some(10));
+        for unweighted in [
+            "free",
+            "go",
+            "business",
+            "enterprise",
+            "edu",
+            "self_serve_business_usage_based",
+            "pro_ultra",
+        ] {
+            assert_eq!(plan_weight(Some(unweighted)), None, "{unweighted}");
+        }
+        assert_eq!(plan_weight(None), None);
+    }
+
+    #[test]
+    fn a_plan_reads_as_it_is_sold() {
+        assert_eq!(plan_label("plus"), "ChatGPT Plus");
+        assert_eq!(plan_label("prolite"), "ChatGPT Pro 100");
+        assert_eq!(plan_label("pro"), "ChatGPT Pro 200");
+        assert_eq!(plan_label("promax"), "ChatGPT Pro 500");
+        assert_eq!(plan_label("team"), "ChatGPT Business");
+        assert_eq!(
+            plan_label("self_serve_business_prolite"),
+            "ChatGPT Business Premium"
+        );
+        assert_eq!(
+            plan_label("self_serve_business_usage_based"),
+            "ChatGPT Business"
+        );
+        for enterprise in [
+            "business",
+            "ent26",
+            "enterprise",
+            "enterprise_cbp_automation",
+            "enterprise_cbp_usage_based",
+        ] {
+            assert_eq!(plan_label(enterprise), "ChatGPT Enterprise", "{enterprise}");
+        }
+        assert_eq!(plan_label("free"), "ChatGPT Free");
+        assert_eq!(plan_label("go"), "ChatGPT Go");
+        assert_eq!(plan_label("education"), "ChatGPT Edu");
+        assert_eq!(plan_label("edu_plus"), "ChatGPT Edu Plus");
+        assert_eq!(plan_label("edu_pro"), "ChatGPT Edu Pro");
+        assert_eq!(plan_label("PROLITE"), "ChatGPT Pro 100");
+        assert_eq!(plan_label("Pro_Ultra"), "Pro_Ultra");
+    }
+
+    #[test]
+    fn the_plan_weight_rides_on_the_payload() {
+        let body = |plan: &str| -> UsageResponse {
+            serde_json::from_str(&format!(
+                r#"{{"plan_type":{plan},"rate_limit":{{
+                    "primary_window":{{"used_percent":12,"reset_at":1786646643,"limit_window_seconds":18000}}}}}}"#
+            ))
+            .unwrap()
+        };
+        let plan = |plan: &str, hint: Option<&str>| {
+            let payload =
+                to_payload(body(plan), Utc::now(), "oauth", hint.map(String::from)).unwrap();
+            (
+                payload.usage.unwrap().login_method,
+                payload.credential.plan_weight,
+            )
+        };
+        let sold = |label: &str, weight| (Some(label.to_string()), weight);
+        assert_eq!(plan(r#""promax""#, None), sold("ChatGPT Pro 500", Some(25)));
+        assert_eq!(
+            plan("null", Some("prolite")),
+            sold("ChatGPT Pro 100", Some(5))
+        );
+        assert_eq!(
+            plan(r#""""#, Some("prolite")),
+            sold("ChatGPT Pro 100", Some(5))
+        );
+        assert_eq!(
+            plan(r#""pro""#, Some("plus")),
+            sold("ChatGPT Pro 200", Some(10))
+        );
+        assert_eq!(plan(r#""free""#, None), sold("ChatGPT Free", None));
     }
 
     #[test]
@@ -1399,6 +1562,18 @@ mod tests {
         assert_eq!(payload.credential.state, Some(CredentialState::Expired));
         assert!(payload.usage.unwrap().primary.is_none());
 
+        let with_plan = format!(
+            r#"{{"tokens":{{"access_token":"{}","id_token":"{}"}}}}"#,
+            jwt(now.timestamp() - 60),
+            jwt_with(r#"{"https://api.openai.com/auth":{"chatgpt_plan_type":"prolite"}}"#),
+        );
+        let payload = fetch_stored(&with_plan, Duration::from_secs(1), now).unwrap();
+        assert_eq!(payload.credential.plan_weight, Some(5));
+        assert_eq!(
+            payload.usage.unwrap().login_method.as_deref(),
+            Some("ChatGPT Pro 100")
+        );
+
         assert_eq!(
             check_stored(&stored(now.timestamp() + 3600), now).unwrap(),
             None
@@ -1409,6 +1584,27 @@ mod tests {
             Some("r-1"),
             "the refresh token is what finds the live login"
         );
+    }
+
+    /// An empty `plan_type` falls back to the plan the OAuth token claims.
+    #[test]
+    fn an_oauth_login_keeps_the_plan_its_token_claims() {
+        let cred = oauth(Tokens {
+            access_token: jwt_with(
+                r#"{"https://api.openai.com/auth":{"chatgpt_plan_type":"prolite"}}"#,
+            ),
+            refresh_token: None,
+            id_token: None,
+            account_id: None,
+        });
+        assert_eq!(cred.plan_hint.as_deref(), Some("prolite"));
+        let body: UsageResponse = serde_json::from_str(
+            r#"{"plan_type":"","rate_limit":{"primary_window":
+                {"used_percent":10,"reset_at":4102444800,"limit_window_seconds":18000}}}"#,
+        )
+        .unwrap();
+        let payload = to_payload(body, Utc::now(), cred.source, cred.plan_hint).unwrap();
+        assert_eq!(payload.credential.plan_weight, Some(5));
     }
 
     #[test]

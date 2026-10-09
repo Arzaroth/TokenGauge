@@ -19,6 +19,8 @@ use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
 const BILLING_ENDPOINT: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
 const SETTINGS_ENDPOINT: &str = "https://cli-chat-proxy.grok.com/v1/settings";
+/// The tier is a label, not a figure: it may not double a slow fetch.
+const SETTINGS_TIMEOUT: Duration = Duration::from_secs(3);
 
 // ---------------------------------------------------------------------------
 // Credentials (read-only)
@@ -475,6 +477,7 @@ fn tier_weight(label: &str) -> Option<u32> {
 fn subscription_tier(client: &reqwest::blocking::Client, token: &str) -> Option<String> {
     let resp = client
         .get(SETTINGS_ENDPOINT)
+        .timeout(SETTINGS_TIMEOUT)
         .header("authorization", format!("Bearer {token}"))
         .header("x-xai-token-auth", "xai-grok-cli")
         .header("accept", "application/json")

@@ -65,24 +65,39 @@ pub(crate) fn auth_path() -> PathBuf {
 }
 
 /// The Go key in opencode's `auth.json`, which holds every provider's login.
-fn file_key(text: &str) -> Option<String> {
-    let auth: serde_json::Value = serde_json::from_str(text).ok()?;
-    auth.get("opencode-go")?
-        .get("key")?
-        .as_str()
+/// A file that is not JSON is an error of its own, never quoted: it holds
+/// every provider's login.
+fn file_key(text: &str) -> Result<Option<String>> {
+    let auth: serde_json::Value = serde_json::from_str(text)
+        .map_err(|_| anyhow!("opencode's auth.json is not valid JSON"))?;
+    Ok(auth
+        .get("opencode-go")
+        .and_then(|e| e.get("key"))
+        .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|k| !k.is_empty())
-        .map(str::to_string)
+        .map(str::to_string))
+}
+
+/// No file is no key; a file that cannot be read says why.
+fn stored_file_key() -> Result<Option<String>> {
+    match std::fs::read_to_string(auth_path()) {
+        Ok(text) => file_key(&text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(anyhow!(
+            "opencode's auth.json could not be read: {}",
+            e.kind()
+        )),
+    }
 }
 
 pub(crate) fn api_key() -> Result<String> {
-    API_KEY_ENVS
-        .iter()
-        .find_map(|name| env_clean(name))
-        .or_else(|| file_key(&std::fs::read_to_string(auth_path()).ok()?))
-        .ok_or_else(|| {
-            anyhow!("opencode key missing - `/connect` it in opencode, or set OPENCODE_API_KEY")
-        })
+    if let Some(key) = API_KEY_ENVS.iter().find_map(|name| env_clean(name)) {
+        return Ok(key);
+    }
+    stored_file_key()?.ok_or_else(|| {
+        anyhow!("opencode key missing - `/connect` it in opencode, or set OPENCODE_API_KEY")
+    })
 }
 
 /// The usage endpoint, from an override a self-hosted gateway may set.
@@ -161,11 +176,13 @@ impl Window {
     }
 }
 
-fn to_payload(body: UsageResponse, now: DateTime<Utc>) -> Result<ProviderPayload> {
+fn to_payload(
+    body: UsageResponse,
+    now: DateTime<Utc>,
+    unauthorized_hint: &str,
+) -> Result<ProviderPayload> {
     if body.error.is_some() {
-        return Err(anyhow!(
-            "opencode returned an error - check OPENCODE_API_KEY"
-        ));
+        return Err(anyhow!("opencode returned an error - {unauthorized_hint}"));
     }
     let windows = body
         .usage
@@ -217,7 +234,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         &key,
         timeout,
         now,
-        "check OPENCODE_API_KEY",
+        "check OPENCODE_API_KEY, or `/connect` opencode Go again",
     )?])
 }
 
@@ -263,7 +280,7 @@ fn usage_for(
     let body: UsageResponse =
         serde_json::from_str(&text).context("opencode usage JSON was invalid")?;
 
-    to_payload(body, now)
+    to_payload(body, now, unauthorized_hint)
 }
 
 #[cfg(test)]
@@ -281,20 +298,26 @@ mod tests {
     fn the_go_key_is_read_from_its_entry_in_opencodes_file() {
         let text = r#"{"openrouter": {"type": "api", "key": "or"},
                        "opencode-go": {"type": "api", "key": " go-1 "}}"#;
-        assert_eq!(file_key(text).as_deref(), Some("go-1"));
+        assert_eq!(file_key(text).unwrap().as_deref(), Some("go-1"));
         assert_eq!(
-            file_key(r#"{"openrouter": {"type": "api", "key": "or"}}"#),
+            file_key(r#"{"openrouter": {"type": "api", "key": "or"}}"#).unwrap(),
             None
         );
         assert_eq!(
-            file_key(r#"{"opencode-go": {"type": "api", "key": ""}}"#),
+            file_key(r#"{"opencode-go": {"type": "api", "key": ""}}"#).unwrap(),
             None
         );
-        assert_eq!(file_key("not json"), None);
+        let err = file_key(r#"{"opencode-go": {"key": "go-secret""#).unwrap_err();
+        assert!(err.to_string().contains("not valid JSON"), "{err}");
+        assert!(!err.to_string().contains("go-secret"), "{err}");
     }
 
     fn parse(raw: &str) -> Result<ProviderPayload> {
-        to_payload(serde_json::from_str(raw).expect("fixture parses"), at())
+        to_payload(
+            serde_json::from_str(raw).expect("fixture parses"),
+            at(),
+            "check OPENCODE_API_KEY",
+        )
     }
 
     const FULL: &str = r#"{"usage":{

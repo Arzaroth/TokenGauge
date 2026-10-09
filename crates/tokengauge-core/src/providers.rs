@@ -227,8 +227,8 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         // one.
         label: "opencode Go",
         // The key is minted on the web and pasted into the TUI with
-        // `/connect`; opencode's own store has never been read here, so there
-        // is no CLI credential to name.
+        // `/connect`, which files it in opencode's auth.json beside every
+        // other provider's login: a key, not a CLI login to name.
         cli: None,
         glyph: "\u{f121}",
         color_hex: "#5B9DD9",
@@ -596,15 +596,17 @@ fn opencode_auth() -> AuthStatus {
             detail: format!("{var} set"),
             hint: "",
         },
-        None if opencode::api_key().is_ok() => AuthStatus {
-            ok: true,
-            detail: format!("key in {}", opencode::auth_path().display()),
-            hint: "",
-        },
-        None => AuthStatus {
-            ok: false,
-            detail: "no opencode Go key".to_string(),
-            hint: "subscribe to opencode Go and `/connect` it in opencode, or set OPENCODE_API_KEY from opencode.ai/auth",
+        None => match opencode::api_key() {
+            Ok(_) => AuthStatus {
+                ok: true,
+                detail: format!("key in {}", opencode::auth_path().display()),
+                hint: "",
+            },
+            Err(e) => AuthStatus {
+                ok: false,
+                detail: e.to_string(),
+                hint: "subscribe to opencode Go and `/connect` it in opencode, or set OPENCODE_API_KEY from opencode.ai/auth",
+            },
         },
     }
 }

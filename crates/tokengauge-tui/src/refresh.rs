@@ -13,6 +13,7 @@ use tokengauge_core::{
 pub struct RefreshResult {
     pub rows: Vec<ProviderRow>,
     pub errors: Vec<ProviderFetchError>,
+    pub panel: tokengauge_core::PanelConfig,
 }
 
 /// Kick off a fetch in a worker thread; the caller polls the returned receiver.
@@ -66,5 +67,6 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
     Ok(RefreshResult {
         rows: payload_to_rows_with_costs(payloads, &costs),
         errors,
+        panel: config.panel,
     })
 }

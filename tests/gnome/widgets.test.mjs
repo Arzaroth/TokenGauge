@@ -17,7 +17,9 @@ import * as Harness from './stubs/harness.js';
 const W = '../../build/frontends/gnome/tokengauge@arzaroth.github.io/widgets.js';
 const U = '../../build/frontends/gnome/tokengauge@arzaroth.github.io/util.js';
 
-const {box, label, spacer, barFill, hexToRgb, historyChart, attachTooltip, scrollView} = await import(W);
+const {
+    box, label, spacer, barFill, hexToRgb, historyChart, attachTooltip, scrollView, segmentSpans, splitBar,
+} = await import(W);
 const {shellQuote, isCancelled} = await import(U);
 
 /// What a drawing area painted. A repaint that bailed before asking for a
@@ -283,4 +285,28 @@ test('a scroll view takes its content the way the running shell wires it', () =>
     } finally {
         delete St.ScrollView.prototype.add_actor;
     }
+});
+
+test('a split bar gives each segment its share, less the gaps, filled to its own fraction', () => {
+    const segments = [
+        {width: 0.75, fraction: 0.5, tone: 'warn'},
+        {width: 0.25, fraction: 2, tone: 'critical'},
+    ];
+    assert.deepEqual(segmentSpans(segments, 103, 3), [
+        {x: 0, w: 75, filled: 37.5},
+        {x: 78, w: 25, filled: 25},
+    ]);
+    assert.deepEqual(segmentSpans([], 100, 3), []);
+});
+
+test('a split bar paints a track and a fill per segment, each fill in its own tier', () => {
+    const colours = {warn: '#ff0000', critical: '#0000ff'};
+    const area = splitBar(
+        [{width: 0.5, fraction: 0.5, tone: 'warn'}, {width: 0.5, fraction: 0, tone: 'critical'}],
+        tone => colours[tone],
+        [1, 1, 1, 0.12],
+    );
+    assert.equal(rectangles(area).length, 3, 'two tracks, and a fill only where there is usage');
+    const sources = painted(area).filter(c => c[0] === 'setSourceRGBA').map(c => c.slice(1));
+    assert.ok(sources.some(([r, g, b]) => r === 1 && g === 0 && b === 0), 'the warn fill is not red');
 });

@@ -98,6 +98,8 @@ PlasmoidItem {
     function openSyncSetup() { root.service.openSyncSetup() }
     function openRemuda() { root.service.openRemuda() }
     readonly property alias remudaServing: root.service.remudaServing
+    readonly property alias panelOptions: root.service.panelOptions
+    function setPanel(key, value) { root.service.setPanel(key, value) }
 
     Component.onDestruction: root.service.shutdown()
 

@@ -39,6 +39,7 @@ ccusage_enabled = false
 [credentials]
 store = ""
 
+
 [providers]
 claude = true
 codex = true

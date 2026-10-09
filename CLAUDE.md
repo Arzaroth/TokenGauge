@@ -276,8 +276,34 @@ Rules that are easy to regress:
   `panel::tests::every_frontend_with_a_header_offers_remuda_while_it_serves`
   is the list.
 - **The combined header weighs by nominal plan multiplier** (`plan_weight` in
-  `claude.rs`; Codex has no table and so no header). A plan with no known
-  weight is out of the total and says so, rather than guessed at 1x.
+  `claude.rs`; Codex has no table and so no header) unless `[panel]
+  plans_total = "absolute"`, where every asked credential counts 100% and
+  needs no weight. Weighted, a plan with no known weight is out of the total
+  and says so, rather than guessed at 1x.
+- **The `[panel]` options are content, so `panel_spec` reads them**, never a
+  frontend: `panel_spec(row, &config.panel)`, and `bar_tooltip` the same.
+  `active_credential_only` drops only a *healthy* inactive group - one that
+  is stale, was not asked or is out of the total stays, and `status` keeps
+  every group's reason - because a hidden group's figures still feed the
+  header, and hiding why they are old is the failure. The header's title
+  carries the count it covers.
+  `split_bars` rides on `PanelRow.segments`, a field no compiler makes a
+  frontend read - `panel::tests::every_panel_frontend_draws_split_bars` is the
+  backstop, and it matches each frontend's drawing call, not the word. The
+  pixel frontends draw `Segment.width`; waybar and the TUI draw in cells
+  through `panel::segment_cells`, which fills the bar exactly so a split bar
+  lines up with the plain ones. The settings panes flip the options through
+  `--set-panel` (the tray through `config_set_panel`) and read them back from
+  `--json`'s `panel_options`;
+  `panel::tests::every_settings_pane_offers_the_panel_options` is the list.
+  Waybar and the TUI have no pane, so theirs is `config.toml`. A `[panel]`
+  value that does not parse reads as its default, so a hand-edited typo
+  cannot take the config down with it.
+- **A setter waits for the daemon.** Frontends run `--set-* && --json` in one
+  subprocess, and with a daemon up the daemon answers the `--json`. The
+  daemon moves the revision once a SIGHUP reload has swapped the config in,
+  and `--set-panel` / `--set-primary` wait (two seconds at most) for that
+  before returning, or a switch reads back its old state.
 
 ## Costs are read, not shelled out for
 

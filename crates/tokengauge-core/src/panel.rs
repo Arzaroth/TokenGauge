@@ -20,7 +20,8 @@ use serde::Serialize;
 
 use crate::sync::DeviceCost;
 use crate::{
-    CostInfo, CreditLimit, CreditLimitKind, DayModelCost, ModelCost, ProviderRow, format_tokens,
+    CostInfo, CreditLimit, CreditLimitKind, DayModelCost, ModelCost, PanelConfig, PlansTotal,
+    ProviderRow, format_tokens,
 };
 
 /// Colour tier for a row, resolved from the value rather than from a palette -
@@ -94,6 +95,9 @@ pub struct PanelRow {
     pub footnote: String,
     /// Bar fill, 0.0-1.0. `None` draws no bar.
     pub fraction: Option<f64>,
+    /// The bar split into one segment per credential, left to right. Empty
+    /// draws `fraction` as one bar. Meters only.
+    pub segments: Vec<Segment>,
     pub tone: Tone,
     /// Today's row, the pinned row - drawn brighter and bold.
     pub emphasized: bool,
@@ -111,11 +115,75 @@ impl PanelRow {
             badge_tone: Tone::Dim,
             footnote: String::new(),
             fraction: None,
+            segments: Vec::new(),
             tone: Tone::Normal,
             emphasized: false,
             tooltip: String::new(),
         }
     }
+}
+
+/// One credential's stretch of a split bar.
+#[derive(Debug, Clone, Serialize)]
+pub struct Segment {
+    /// Share of the bar's width, 0.0-1.0. A row's segments add up to 1.
+    pub width: f64,
+    /// How much of its own stretch the segment fills, 0.0-1.0.
+    pub fraction: f64,
+    pub tone: Tone,
+}
+
+/// Whether a split bar of `count` segments has room for a separator between
+/// each pair and a cell for each segment in `width` cells.
+pub fn segment_separators(count: usize, width: usize) -> bool {
+    count > 0 && width >= 2 * count - 1
+}
+
+/// A split bar in a character grid: how many cells each segment gets and how
+/// many of those are filled, when the bar is `width` cells including the
+/// separators [`segment_separators`] says fit. The cells add up to exactly
+/// that, so a split bar lines up with the plain bars beside it and never runs
+/// past its slot; each segment gets one cell at least while there are cells
+/// enough to go round. Waybar and the TUI draw in cells; the pixel frontends
+/// use [`Segment::width`] directly.
+pub fn segment_cells(segments: &[Segment], width: usize) -> Vec<(usize, usize)> {
+    let n = segments.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let content = if segment_separators(n, width) {
+        width - (n - 1)
+    } else {
+        width
+    };
+    let least = usize::from(content >= n);
+    let ideal: Vec<f64> = segments.iter().map(|s| s.width * content as f64).collect();
+    let mut cells: Vec<usize> = ideal.iter().map(|i| (*i as usize).max(least)).collect();
+    while cells.iter().sum::<usize>() > content {
+        let Some(widest) = (0..n)
+            .filter(|i| cells[*i] > least)
+            .max_by_key(|i| cells[*i])
+        else {
+            break;
+        };
+        cells[widest] -= 1;
+    }
+    while cells.iter().sum::<usize>() < content {
+        let behind = (0..n)
+            .max_by(|a, b| {
+                (ideal[*a] - cells[*a] as f64).total_cmp(&(ideal[*b] - cells[*b] as f64))
+            })
+            .expect("at least one segment");
+        cells[behind] += 1;
+    }
+    segments
+        .iter()
+        .zip(cells)
+        .map(|(s, cells)| {
+            let filled = (s.fraction.clamp(0.0, 1.0) * cells as f64).round() as usize;
+            (cells, filled.min(cells))
+        })
+        .collect()
 }
 
 /// How a frontend draws a section's rows.
@@ -180,11 +248,11 @@ pub struct SyncNote {
 
 /// Build the panel for one provider. Sections with nothing to show are omitted
 /// rather than emitted empty, so a frontend can render the list blindly.
-pub fn panel_spec(row: &ProviderRow) -> Vec<Section> {
+pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
     let mut out = Vec::new();
 
     if !row.credentials.is_empty() {
-        out.extend(credential_sections(&row.credentials));
+        out.extend(credential_sections(&row.credentials, options));
     } else {
         // First, because it says whether to believe anything under it.
         let status = status_rows(row, None);
@@ -355,8 +423,8 @@ pub struct BarTooltip {
 ///
 /// Read off [`panel_spec`] rather than off the row, so the summary can never
 /// name a window the panel under it does not draw.
-pub fn bar_tooltip(row: &ProviderRow) -> BarTooltip {
-    let sections = panel_spec(row);
+pub fn bar_tooltip(row: &ProviderRow, options: &PanelConfig) -> BarTooltip {
+    let sections = panel_spec(row, options);
     let mut lines = Vec::new();
 
     let line = |r: &PanelRow, tone: Tone| BarTooltipLine {
@@ -605,23 +673,48 @@ fn credential_name(row: &ProviderRow) -> String {
         .unwrap_or_else(|| "live login".to_string())
 }
 
-/// Whether a credential is in the combined figure: it was asked, and its
-/// plan has a known weight.
-fn counted(row: &ProviderRow) -> Option<u32> {
+/// A credential's weight in the combined figure, or `None` when it is left
+/// out. Only a credential that was asked counts; weighted, its plan also needs
+/// a known weight, and absolute, every plan weighs the same.
+fn counted(row: &ProviderRow, total: PlansTotal) -> Option<u32> {
     let credential = row.credential.as_ref()?;
-    credential
-        .state
-        .is_none()
-        .then_some(credential.plan_weight)
-        .flatten()
-        .filter(|w| *w > 0)
+    credential.state.is_none().then_some(())?;
+    match total {
+        PlansTotal::Weighted => credential.plan_weight.filter(|w| *w > 0),
+        PlansTotal::Absolute => Some(1),
+    }
 }
 
 /// The sections a provider with several credentials draws in place of its
 /// one `status` and `limits`: every stale group's reason, the combined
 /// header, then one group per credential, active first.
-fn credential_sections(groups: &[ProviderRow]) -> Vec<Section> {
+///
+/// With `active_credential_only`, the groups shrink to the active one while
+/// the header still adds every credential up, so the header has to say how
+/// many it covers - or the active group does, when there is no header. Only a
+/// healthy group is ever dropped: one that is stale, was not asked or is out
+/// of the total has something to say that its numbers alone do not, and the
+/// status section keeps every group's reason.
+fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Section> {
     let mut out = Vec::new();
+
+    let plans = plan_rows(groups, options);
+    let has_total = !plans.is_empty();
+    let has_active = groups
+        .iter()
+        .any(|g| g.credential.as_ref().and_then(|c| c.active) == Some(true));
+    let droppable = |g: &ProviderRow| {
+        let credential = g.credential.clone().unwrap_or_default();
+        credential.active != Some(true)
+            && credential.state.is_none()
+            && !g.stale
+            && (!has_total || counted(g, options.plans_total).is_some())
+    };
+    let shown: Vec<&ProviderRow> = groups
+        .iter()
+        .filter(|g| !(options.active_credential_only && has_active && droppable(g)))
+        .collect();
+    let hidden = groups.len() - shown.len();
 
     let status: Vec<PanelRow> = groups
         .iter()
@@ -637,19 +730,21 @@ fn credential_sections(groups: &[ProviderRow]) -> Vec<Section> {
         });
     }
 
-    let plans = plan_rows(groups);
-    let has_total = !plans.is_empty();
     if has_total {
         out.push(Section {
             id: "plans",
-            title: "ALL PLANS".into(),
+            title: if hidden > 0 {
+                format!("ALL PLANS · {} credentials", groups.len())
+            } else {
+                "ALL PLANS".into()
+            },
             kind: SectionKind::Meters,
             rows: plans,
             group: None,
         });
     }
 
-    for g in groups {
+    for g in &shown {
         let credential = g.credential.clone().unwrap_or_default();
         let name = credential_name(g);
         let mut title = vec![name.clone()];
@@ -658,8 +753,11 @@ fn credential_sections(groups: &[ProviderRow]) -> Vec<Section> {
         if credential.active == Some(true) {
             title.push("active".to_string());
         }
-        if has_total && credential.state.is_none() && counted(g).is_none() {
+        if has_total && credential.state.is_none() && counted(g, options.plans_total).is_none() {
             title.push("not in total".to_string());
+        }
+        if hidden > 0 && !has_total && credential.active == Some(true) {
+            title.push(format!("{} of {} shown", shown.len(), groups.len()));
         }
         let (kind, rows) = match credential.state {
             Some(state) => (SectionKind::Rows, vec![state_row(state)]),
@@ -713,24 +811,29 @@ fn state_row(state: crate::CredentialState) -> PanelRow {
     r
 }
 
-/// The combined header: one meter per window at least two weighted
+/// The combined header: one meter per window at least two counted
 /// credentials report.
 ///
-/// Counted in units of the largest plan, so a Max 20x and a Pro both at 100%
-/// read "105% of 105%": each contributes `used × weight ÷ largest`, and the
-/// capacity is the same sum at 100%. The bar fills to the pooled fraction,
-/// `Σ used × weight ÷ Σ weight`, so an idle Pro cannot make two busy plans look
-/// free. The weights are the nominal multipliers the plans are sold with, so
-/// the figure is an estimate and says so.
-fn plan_rows(groups: &[ProviderRow]) -> Vec<PanelRow> {
+/// Weighted, it counts in units of the largest plan, so a Max 20x and a Pro
+/// both at 100% read "105% of 105%": each contributes `used × weight ÷
+/// largest`, and the capacity is the same sum at 100%. Absolute, every plan
+/// weighs 1 and the largest is 1 too, so five plans read "409% of 500%". The
+/// bar fills to the pooled fraction, `Σ used × weight ÷ Σ weight`, so an idle
+/// Pro cannot make two busy plans look free; split, each credential gets the
+/// stretch of it its weight buys. The weights are the nominal multipliers the
+/// plans are sold with, so the weighted figure is an estimate and says so.
+fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
     struct Share<'a> {
         name: String,
         weight: u32,
         window: Window<'a>,
     }
+    let total_mode = options.plans_total;
     let mut by_label: Vec<(&str, Vec<Share<'_>>)> = Vec::new();
     for g in groups {
-        let Some(weight) = counted(g) else { continue };
+        let Some(weight) = counted(g, total_mode) else {
+            continue;
+        };
         for window in windows(g) {
             let share = Share {
                 name: credential_name(g),
@@ -746,7 +849,8 @@ fn plan_rows(groups: &[ProviderRow]) -> Vec<PanelRow> {
     let left_out: Vec<String> = groups
         .iter()
         .filter(|g| {
-            g.credential.as_ref().is_some_and(|c| c.state.is_none()) && counted(g).is_none()
+            g.credential.as_ref().is_some_and(|c| c.state.is_none())
+                && counted(g, total_mode).is_none()
         })
         .map(credential_name)
         .collect();
@@ -772,6 +876,18 @@ fn plan_rows(groups: &[ProviderRow]) -> Vec<PanelRow> {
             );
             r.fraction = Some((pooled / 100.0).clamp(0.0, 1.0));
             r.tone = Tone::for_percent(crate::pct_u8(pooled));
+            if options.split_bars {
+                let weights: Vec<f64> = shares.iter().map(|s| f64::from(s.weight)).collect();
+                r.segments = shares
+                    .iter()
+                    .zip(segment_widths(&weights))
+                    .map(|(s, width)| Segment {
+                        width,
+                        fraction: (f64::from(s.window.used) / 100.0).clamp(0.0, 1.0),
+                        tone: Tone::for_percent(s.window.used),
+                    })
+                    .collect();
+            }
             let earliest = shares
                 .iter()
                 .filter_map(|s| {
@@ -783,27 +899,34 @@ fn plan_rows(groups: &[ProviderRow]) -> Vec<PanelRow> {
             r.footnote = earliest
                 .map(|s| reset_footnote(s.window.used, s.window.reset))
                 .unwrap_or_default();
-            r.badge = "estimate".to_string();
-            r.badge_tone = Tone::Dim;
             let mut lines: Vec<String> = shares
                 .iter()
                 .map(|s| {
-                    format!(
-                        "{}  {}% × {}{}",
-                        s.name,
-                        s.window.used,
-                        s.weight,
-                        match reset_footnote(s.window.used, s.window.reset) {
-                            f if f.is_empty() => String::new(),
-                            f => format!(" · {}", f.to_lowercase()),
+                    let reset = match reset_footnote(s.window.used, s.window.reset) {
+                        f if f.is_empty() => String::new(),
+                        f => format!(" · {}", f.to_lowercase()),
+                    };
+                    match total_mode {
+                        PlansTotal::Weighted => {
+                            format!("{}  {}% × {}{reset}", s.name, s.window.used, s.weight)
                         }
-                    )
+                        PlansTotal::Absolute => format!("{}  {}%{reset}", s.name, s.window.used),
+                    }
                 })
                 .collect();
-            lines.push(
-                "Weighted by each plan's nominal multiplier. The real limits are not published, so this is an estimate."
-                    .to_string(),
-            );
+            match total_mode {
+                PlansTotal::Weighted => {
+                    r.badge = "estimate".to_string();
+                    r.badge_tone = Tone::Dim;
+                    lines.push(
+                        "Weighted by each plan's nominal multiplier. The real limits are not published, so this is an estimate."
+                            .to_string(),
+                    );
+                }
+                PlansTotal::Absolute => {
+                    lines.push("Every plan counts as 100%, whatever its size.".to_string());
+                }
+            }
             if !left_out.is_empty() {
                 lines.push(format!("Not in the total: {}", left_out.join(", ")));
             }
@@ -811,6 +934,54 @@ fn plan_rows(groups: &[ProviderRow]) -> Vec<PanelRow> {
             r
         })
         .collect()
+}
+
+/// A split bar's narrowest segment, as a share of the bar.
+const MIN_SEGMENT_WIDTH: f64 = 0.1;
+
+/// Each weight's share of a split bar, none under [`MIN_SEGMENT_WIDTH`]. A
+/// Max 20x beside two Pro seats would otherwise draw them as slivers next to
+/// one bar that reads as pooled. Segments held at the minimum are taken out
+/// and the rest is shared again by weight, until none falls under it.
+fn segment_widths(weights: &[f64]) -> Vec<f64> {
+    let n = weights.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    if MIN_SEGMENT_WIDTH * n as f64 >= 1.0 {
+        return vec![1.0 / n as f64; n];
+    }
+    let mut pinned = vec![false; n];
+    loop {
+        let free = 1.0 - MIN_SEGMENT_WIDTH * pinned.iter().filter(|p| **p).count() as f64;
+        let weight: f64 = weights
+            .iter()
+            .zip(&pinned)
+            .filter(|(_, p)| !**p)
+            .map(|(w, _)| w)
+            .sum();
+        let widths: Vec<f64> = weights
+            .iter()
+            .zip(&pinned)
+            .map(|(w, p)| {
+                if *p {
+                    MIN_SEGMENT_WIDTH
+                } else {
+                    w / weight * free
+                }
+            })
+            .collect();
+        let mut moved = false;
+        for (i, width) in widths.iter().enumerate() {
+            if !pinned[i] && *width < MIN_SEGMENT_WIDTH {
+                pinned[i] = true;
+                moved = true;
+            }
+        }
+        if !moved {
+            return widths;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1236,6 +1407,14 @@ mod tests {
     use super::*;
     use crate::{BurnRate, DayCost, ExtraWindowRow};
 
+    fn panel_spec(row: &ProviderRow) -> Vec<Section> {
+        super::panel_spec(row, &PanelConfig::default())
+    }
+
+    fn bar_tooltip(row: &ProviderRow) -> BarTooltip {
+        super::bar_tooltip(row, &PanelConfig::default())
+    }
+
     fn row() -> ProviderRow {
         ProviderRow {
             stale_reason: None,
@@ -1508,6 +1687,223 @@ mod tests {
         assert!(spec.iter().all(|s| s.id != "plans"));
         assert!(spec.iter().all(|s| !s.title.contains("not in total")));
         assert_eq!(spec.iter().filter(|s| s.id == "limits").count(), 2);
+    }
+
+    fn five_plans() -> ProviderRow {
+        grouped(vec![
+            credential("work", true, Some(20), 90, 10),
+            credential("perso", false, Some(5), 100, 40),
+            credential("corp", false, None, 50, 80),
+        ])
+    }
+
+    #[test]
+    fn absolute_counts_every_plan_as_100_percent_and_leaves_none_out() {
+        let options = PanelConfig {
+            plans_total: PlansTotal::Absolute,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&five_plans(), &options);
+        let session = &section(&spec, "plans", None).rows[0];
+        assert_eq!(session.value, "240% of 300%");
+        assert!((session.fraction.unwrap() - 0.8).abs() < 1e-9);
+        assert_eq!(session.badge, "");
+        assert!(!session.tooltip.contains("Not in the total"));
+        assert!(spec.iter().all(|s| !s.title.contains("not in total")));
+    }
+
+    /// Codex has no weight table, so only the absolute total gives it a header.
+    #[test]
+    fn absolute_draws_a_header_for_plans_with_no_known_weight() {
+        let groups = grouped(vec![
+            credential("work", true, None, 30, 10),
+            credential("perso", false, None, 40, 40),
+        ]);
+        let options = PanelConfig {
+            plans_total: PlansTotal::Absolute,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&groups, &options);
+        assert_eq!(section(&spec, "plans", None).rows[0].value, "70% of 200%");
+    }
+
+    #[test]
+    fn a_split_bar_gives_each_plan_the_stretch_its_weight_buys() {
+        let spec = panel_spec(&five_plans());
+        let segments = &section(&spec, "plans", None).rows[0].segments;
+        let widths: Vec<f64> = segments.iter().map(|s| s.width).collect();
+        assert_eq!(widths, [0.8, 0.2]);
+        let fills: Vec<f64> = segments.iter().map(|s| s.fraction).collect();
+        assert_eq!(fills, [0.9, 1.0]);
+        assert_eq!(segments[0].tone, Tone::Critical);
+
+        let options = PanelConfig {
+            plans_total: PlansTotal::Absolute,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&five_plans(), &options);
+        let segments = &section(&spec, "plans", None).rows[0].segments;
+        assert_eq!(segments.len(), 3);
+        assert!(segments.iter().all(|s| (s.width - 1.0 / 3.0).abs() < 1e-9));
+
+        let options = PanelConfig {
+            split_bars: false,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&five_plans(), &options);
+        assert!(section(&spec, "plans", None).rows[0].segments.is_empty());
+    }
+
+    #[test]
+    fn a_split_bar_keeps_a_small_plan_wide_enough_to_read() {
+        let close = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9);
+        let widths = segment_widths(&[20.0, 1.0, 1.0]);
+        assert!(close(&widths, &[0.8, 0.1, 0.1]), "{widths:?}");
+        let widths = segment_widths(&[20.0, 5.0, 1.0]);
+        assert!(close(&widths, &[0.72, 0.18, 0.1]), "{widths:?}");
+        assert!(close(&segment_widths(&[1.0; 12]), &[1.0 / 12.0; 12]));
+        assert!(segment_widths(&[]).is_empty());
+
+        let spec = panel_spec(&grouped(vec![
+            credential("work", true, Some(20), 30, 10),
+            credential("a", false, Some(1), 40, 40),
+            credential("b", false, Some(1), 40, 40),
+        ]));
+        let segments = &section(&spec, "plans", None).rows[0].segments;
+        let total: f64 = segments.iter().map(|s| s.width).sum();
+        assert!((total - 1.0).abs() < 1e-9);
+        assert!(segments.iter().all(|s| s.width >= MIN_SEGMENT_WIDTH - 1e-9));
+    }
+
+    #[test]
+    fn segment_cells_fill_the_bar_exactly_with_one_cell_at_least_each() {
+        let seg = |width, fraction| Segment {
+            width,
+            fraction,
+            tone: Tone::Good,
+        };
+        let total = |cells: &[(usize, usize)]| cells.iter().map(|c| c.0).sum::<usize>();
+        let cells = segment_cells(&[seg(0.8, 0.5), seg(0.1, 1.0), seg(0.1, 0.0)], 10);
+        assert_eq!(total(&cells) + 2, 10, "{cells:?}");
+        assert_eq!(cells, [(6, 3), (1, 1), (1, 0)]);
+        let thirds = vec![seg(1.0 / 3.0, 0.0); 3];
+        assert_eq!(total(&segment_cells(&thirds, 40)) + 2, 40);
+        assert_eq!(
+            segment_cells(&[seg(0.75, 0.5), seg(0.25, 1.0)], 41),
+            [(30, 15), (10, 10)]
+        );
+        // Too many to separate, and then too many for a cell each: the bar
+        // still never runs past its slot.
+        let six = vec![seg(1.0 / 6.0, 1.0); 6];
+        assert!(!segment_separators(6, 10));
+        assert_eq!(total(&segment_cells(&six, 10)), 10);
+        assert!(segment_cells(&six, 10).iter().all(|c| c.0 >= 1));
+        let many = vec![seg(1.0 / 12.0, 1.0); 12];
+        assert_eq!(total(&segment_cells(&many, 10)), 10);
+        assert!(segment_separators(3, 10));
+        assert!(segment_cells(&[], 10).is_empty());
+    }
+
+    #[test]
+    fn active_only_keeps_the_total_and_says_how_many_it_covers() {
+        let mut stale = credential("perso", false, Some(5), 100, 40);
+        stale.stale = true;
+        stale.stale_reason = Some("Claude rate-limited - try again shortly".into());
+        let groups = grouped(vec![
+            credential("work", true, Some(20), 90, 10),
+            stale,
+            credential("corp", false, Some(1), 50, 80),
+        ]);
+        let options = PanelConfig {
+            active_credential_only: true,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&groups, &options);
+        let ids: Vec<(&str, Option<&str>)> =
+            spec.iter().map(|s| (s.id, s.group.as_deref())).collect();
+        // The stale one keeps its group and its reason: hiding it would leave
+        // its old figures in the total with nothing saying why.
+        assert_eq!(
+            ids[..4],
+            [
+                ("status", None),
+                ("plans", None),
+                ("limits", Some("work")),
+                ("limits", Some("perso")),
+            ]
+        );
+        assert_eq!(spec.iter().filter(|s| s.id == "limits").count(), 2);
+        assert_eq!(
+            section(&spec, "status", None).rows[0].label,
+            "Stale · perso"
+        );
+        let plans = section(&spec, "plans", None);
+        assert_eq!(plans.title, "ALL PLANS · 3 credentials");
+        assert_eq!(plans.rows[0].segments.len(), 3);
+
+        let tip = super::bar_tooltip(&groups, &options);
+        assert_eq!(tip.title, "Claude · work");
+        let labels: Vec<&str> = tip.lines.iter().map(|l| l.label.as_str()).collect();
+        assert!(labels.contains(&"Session · all plans"), "{labels:?}");
+    }
+
+    #[test]
+    fn active_only_keeps_a_credential_that_was_not_asked_or_is_out_of_the_total() {
+        let mut expired = credential("old", false, Some(5), 0, 0);
+        expired.credential.as_mut().unwrap().state = Some(crate::CredentialState::Expired);
+        let groups = grouped(vec![
+            credential("work", true, Some(20), 30, 10),
+            credential("perso", false, Some(1), 40, 40),
+            credential("corp", false, None, 50, 50),
+            expired,
+        ]);
+        let options = PanelConfig {
+            active_credential_only: true,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&groups, &options);
+        let groups: Vec<&str> = spec
+            .iter()
+            .filter(|s| s.id == "limits")
+            .filter_map(|s| s.group.as_deref())
+            .collect();
+        assert_eq!(groups, ["work", "corp", "old"]);
+        assert_eq!(
+            section(&spec, "limits", Some("corp")).title,
+            "corp · corp plan · not in total"
+        );
+    }
+
+    #[test]
+    fn active_only_with_no_header_puts_the_count_on_the_group() {
+        let groups = grouped(vec![
+            credential("work", true, None, 30, 10),
+            credential("perso", false, None, 40, 40),
+        ]);
+        let options = PanelConfig {
+            active_credential_only: true,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&groups, &options);
+        let limits: Vec<&Section> = spec.iter().filter(|s| s.id == "limits").collect();
+        assert_eq!(limits.len(), 1);
+        assert_eq!(limits[0].title, "work · work plan · active · 1 of 2 shown");
+    }
+
+    /// With no credential marked active there is no one to keep, so all draw.
+    #[test]
+    fn active_only_with_no_active_credential_draws_them_all() {
+        let groups = grouped(vec![
+            credential("work", false, Some(20), 30, 10),
+            credential("perso", false, Some(1), 40, 40),
+        ]);
+        let options = PanelConfig {
+            active_credential_only: true,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&groups, &options);
+        assert_eq!(spec.iter().filter(|s| s.id == "limits").count(), 2);
+        assert_eq!(section(&spec, "plans", None).title, "ALL PLANS");
     }
 
     #[test]
@@ -2018,6 +2414,120 @@ mod tests {
                     sources.iter().any(|src| src.contains(needle)),
                     "{id} ({dir}) never reads `{needle}` - it is not drawing the \
                      history series the core resolved"
+                );
+            }
+        }
+    }
+
+    /// A split bar is a `segments` list on a meter row, which no frontend's
+    /// compiler knows about: one that never draws it shows the pooled bar and
+    /// looks finished. The needle is the call that draws a meter's segments,
+    /// not the word, which a type declaration alone would carry.
+    #[test]
+    fn every_panel_frontend_draws_split_bars() {
+        let frontends = [
+            (
+                "waybar",
+                "crates/tokengauge-waybar/src",
+                "rs",
+                "segmented_bar(&row.segments)",
+            ),
+            (
+                "tray",
+                "crates/tokengauge-tray/src",
+                "rs",
+                "split_bar(ui, &row.segments",
+            ),
+            (
+                "tui",
+                "crates/tokengauge-tui/src",
+                "rs",
+                "split_bar_spans(&row.segments",
+            ),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+                "model: segmented.segments",
+            ),
+            (
+                "gnome",
+                "gnome/tokengauge@arzaroth.github.io",
+                "ts",
+                "add_child(splitBar(",
+            ),
+            (
+                "quickshell",
+                "omarchy/arzaroth.tokengauge",
+                "qml",
+                "model: meterRow.segments",
+            ),
+        ];
+        for (id, dir, extension, needle) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            assert!(
+                sources.iter().any(|src| src.contains(needle)),
+                "{id} ({dir}) never draws a meter's `segments` (`{needle}`)"
+            );
+        }
+    }
+
+    /// The `[panel]` options are flipped from every settings pane. Each
+    /// needle is the pane's own call with that key, not the key alone, which
+    /// the data layer and the type declarations carry whether or not a pane
+    /// draws a control for it. Waybar and the TUI have no pane, so theirs is
+    /// config.toml.
+    #[test]
+    fn every_settings_pane_offers_the_panel_options() {
+        let frontends: [(&str, &str, &str, [&str; 3]); 4] = [
+            (
+                "tray",
+                "crates/tokengauge-tray/src",
+                "rs",
+                [
+                    "\"active_credential_only\",",
+                    "Some((\"split_bars\"",
+                    "Some((\"plans_total\"",
+                ],
+            ),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+                [
+                    "root.setPanel(\"active_credential_only\"",
+                    "root.setPanel(\"split_bars\"",
+                    "root.setPanel(\"plans_total\"",
+                ],
+            ),
+            (
+                "gnome",
+                "gnome/tokengauge@arzaroth.github.io",
+                "ts",
+                [
+                    "toggle(_('Active credential only'), 'active_credential_only')",
+                    "toggle(_('Split ALL PLANS bars'), 'split_bars')",
+                    "write(total, 'plans_total'",
+                ],
+            ),
+            (
+                "quickshell",
+                "omarchy/arzaroth.tokengauge",
+                "qml",
+                [
+                    "{ key: \"active_credential_only\"",
+                    "{ key: \"split_bars\"",
+                    "usage.setPanel(\"plans_total\"",
+                ],
+            ),
+        ];
+        for (id, dir, extension, needles) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            for needle in needles {
+                assert!(
+                    sources.iter().any(|src| src.contains(needle)),
+                    "{id} ({dir}) never draws a control for `{needle}` - a panel \
+                     option is missing from its settings pane"
                 );
             }
         }

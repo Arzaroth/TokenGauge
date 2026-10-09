@@ -217,6 +217,23 @@ test('a provider with several credentials draws a group each, as the core titled
     );
 });
 
+test('a meter carrying segments draws a split bar in place of the single fill', () => {
+    const {indicator} = enabled();
+    const split = JSON.parse(panelJson);
+    const limits = split.rows[0].panel.find(s => s.kind === 'meters');
+    limits.rows = limits.rows.slice(0, 1);
+    limits.rows[0].segments = [
+        {width: 0.5, fraction: 0.2, tone: 'good'},
+        {width: 0.5, fraction: 0.9, tone: 'critical'},
+    ];
+    answer(JSON.stringify(split));
+    const box = open(indicator);
+
+    assert.equal(Harness.byStyle(box, 'tokengauge-meter-split').length, 1);
+    const meters = split.rows[0].panel.filter(s => s.kind === 'meters').flatMap(s => s.rows);
+    assert.equal(Harness.byStyle(box, 'tokengauge-meter-fill').length, meters.length - 1);
+});
+
 test('a meter fill is painted rather than merely laid out', () => {
     const {indicator} = enabled();
     answer();

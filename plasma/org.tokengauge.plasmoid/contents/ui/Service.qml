@@ -102,6 +102,21 @@ Item {
 
     readonly property bool remudaServing: !!(snapshot.remuda && snapshot.remuda.serving)
 
+    // An older binary carries no `panel_options`; its panel is drawn with the
+    // defaults, so that is what the settings show.
+    readonly property var panelOptions: {
+        var o = snapshot.panel_options || {}
+        return {
+            active_credential_only: o.active_credential_only === true,
+            plans_total: o.plans_total === "absolute" ? "absolute" : "weighted",
+            split_bars: o.split_bars !== false
+        }
+    }
+
+    function setPanel(key, value) {
+        action("--set-panel " + shellQuote(key + "=" + value))
+    }
+
     function openRemuda() {
         action("--open=remuda")
     }

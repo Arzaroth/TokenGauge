@@ -7,7 +7,7 @@ use ratatui::widgets::{
     Paragraph, Wrap,
 };
 use ratatui::{Frame, Terminal};
-use tokengauge_core::panel::{PanelRow, Section, SectionKind, Tone, panel_spec};
+use tokengauge_core::panel::{PanelRow, Section, SectionKind, Segment, Tone, panel_spec};
 use tokengauge_core::{ProviderRow, format_updated_relative, theme};
 
 use crate::app::{AppState, Overlay};
@@ -228,7 +228,7 @@ fn render_detail(frame: &mut Frame, area: Rect, state: &mut AppState) {
     // The core resolves the whole panel: which sections exist, in what order,
     // and every string in them. This frontend picks a shape per kind and loops,
     // so a section added in panel.rs reaches the terminal with no edit here.
-    let spec = panel_spec(row);
+    let spec = panel_spec(row, &state.panel);
 
     let mut block = Block::default()
         .borders(Borders::ALL)
@@ -404,6 +404,29 @@ fn section_header(title: &str) -> Paragraph<'static> {
     )))
 }
 
+fn split_bar_spans(segments: &[Segment], width: usize) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let separated = tokengauge_core::segment_separators(segments.len(), width);
+    for (i, (seg, (cells, filled))) in segments
+        .iter()
+        .zip(tokengauge_core::segment_cells(segments, width))
+        .enumerate()
+    {
+        if i > 0 && separated {
+            spans.push(Span::styled("│", Style::default().fg(dim())));
+        }
+        spans.push(Span::styled(
+            "█".repeat(filled),
+            Style::default().fg(tone_color(seg.tone)),
+        ));
+        spans.push(Span::styled(
+            "░".repeat(cells - filled),
+            Style::default().fg(dim()),
+        ));
+    }
+    spans
+}
+
 /// A heading riding a top border, for the kinds that do.
 fn section_block(title: &str) -> Block<'static> {
     Block::default()
@@ -487,19 +510,22 @@ fn render_meters(frame: &mut Frame, area: Rect, section: &Section) {
 
         let color = tone_color(row.tone);
         let bar_w = bar_slot.width.saturating_sub(value_w as u16 + 2) as usize;
-        let filled = (row.fraction.unwrap_or(0.0).clamp(0.0, 1.0) * bar_w as f64).round() as usize;
-        let filled = filled.min(bar_w);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
+        let mut spans = if row.segments.is_empty() {
+            let filled =
+                (row.fraction.unwrap_or(0.0).clamp(0.0, 1.0) * bar_w as f64).round() as usize;
+            let filled = filled.min(bar_w);
+            vec![
                 Span::styled("█".repeat(filled), Style::default().fg(color)),
                 Span::styled("░".repeat(bar_w - filled), Style::default().fg(dim())),
-                Span::styled(
-                    format!(" {:>value_w$}", row.value),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-            ])),
-            bar_slot,
-        );
+            ]
+        } else {
+            split_bar_spans(&row.segments, bar_w)
+        };
+        spans.push(Span::styled(
+            format!(" {:>value_w$}", row.value),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+        frame.render_widget(Paragraph::new(Line::from(spans)), bar_slot);
 
         let Some(trail_area) = trail_slot else {
             continue;
@@ -1036,7 +1062,7 @@ mod tests {
     }
 
     fn section(row: &ProviderRow, id: &str) -> Section {
-        panel_spec(row)
+        panel_spec(row, &Default::default())
             .into_iter()
             .find(|s| s.id == id)
             .unwrap_or_else(|| panic!("no `{id}` section"))
@@ -1112,7 +1138,7 @@ mod tests {
     #[test]
     fn every_section_kind_has_a_height_and_a_renderer() {
         let row = provider_with_sync_note();
-        for section in panel_spec(&row) {
+        for section in panel_spec(&row, &Default::default()) {
             assert!(
                 section_height(&section) > 0,
                 "{} reserves no lines",

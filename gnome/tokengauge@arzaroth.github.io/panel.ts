@@ -13,6 +13,15 @@ export type Tone = 'normal' | 'dim' | 'good' | 'warn' | 'critical';
 /// the compiler's way of asking for the builder that goes with it.
 export type SectionKind = 'meters' | 'bars' | 'rows';
 
+/// One credential's stretch of a split bar.
+export interface Segment {
+    /// Share of the bar's width, 0 to 1. A row's segments add up to 1.
+    width: number;
+    /// How much of its own stretch the segment fills, 0 to 1.
+    fraction: number;
+    tone: Tone;
+}
+
 export interface SectionRow {
     label: string;
     value: string;
@@ -22,6 +31,9 @@ export interface SectionRow {
     footnote: string;
     /// Bar fill, 0 to 1. Null draws no bar.
     fraction: number | null;
+    /// The bar split into one segment per credential. Empty draws `fraction`
+    /// as one bar. Absent from a binary older than split bars.
+    segments?: Segment[];
     tone: Tone;
     emphasized: boolean;
     tooltip: string;
@@ -124,6 +136,22 @@ export interface Remuda {
     version: string | null;
 }
 
+export type PlansTotal = 'weighted' | 'absolute';
+
+/// The `[panel]` options the binary drew the panel with, for the settings that
+/// flip them to read back.
+export interface PanelOptions {
+    active_credential_only: boolean;
+    plans_total: PlansTotal;
+    split_bars: boolean;
+}
+
+export const DEFAULT_PANEL_OPTIONS: PanelOptions = {
+    active_credential_only: false,
+    plans_total: 'weighted',
+    split_bars: true,
+};
+
 export interface Snapshot {
     version: string;
     rows: Row[];
@@ -136,6 +164,8 @@ export interface Snapshot {
     update: UpdateStatus | null;
     /// Absent from a binary older than the remuda button.
     remuda?: Remuda;
+    /// Absent from a binary older than the `[panel]` options.
+    panel_options?: PanelOptions;
     /// The few bytes the binary rewrites after every fetch. Watching it is what
     /// makes another frontend's fetch land here at once instead of on the next
     /// poll.

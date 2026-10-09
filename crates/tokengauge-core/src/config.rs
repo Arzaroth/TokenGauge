@@ -134,6 +134,7 @@ pub struct TokenGaugeConfig {
     pub update: UpdateConfig,
     pub sync: SyncConfig,
     pub credentials: CredentialsConfig,
+    pub panel: PanelConfig,
     /// Unknown top-level keys (e.g. the removed `codexbar_bin`) left over from
     /// older configs. Captured so `--doctor` can warn instead of ignoring.
     #[serde(flatten)]
@@ -174,6 +175,7 @@ impl TokenGaugeConfig {
                 .keys()
                 .map(|k| format!("credentials.{k}")),
         );
+        keys.extend(self.panel.unknown.keys().map(|k| format!("panel.{k}")));
         keys.sort();
         keys
     }
@@ -235,6 +237,70 @@ impl CredentialsConfig {
         };
         Some(dirs::home_dir()?.join(rest))
     }
+}
+
+/// `[panel]`: how a provider with several credentials is drawn. Read by
+/// [`crate::panel_spec`] rather than by a frontend, so every surface agrees.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PanelConfig {
+    /// Draw the active credential's limits and none of the others'. The
+    /// `plans` header still adds them all up, and says how many there are.
+    #[serde(deserialize_with = "or_default")]
+    pub active_credential_only: bool,
+    #[serde(deserialize_with = "or_default")]
+    pub plans_total: PlansTotal,
+    /// One bar segment per credential under each `plans` meter, in place of
+    /// a single pooled bar.
+    #[serde(deserialize_with = "or_true")]
+    pub split_bars: bool,
+    #[serde(flatten)]
+    pub unknown: HashMap<String, toml::Value>,
+}
+
+/// A `[panel]` value that does not parse reads as the default rather than
+/// failing the whole config: these are hand-edited, and a config that does not
+/// load takes every frontend down, `--set-panel` that would repair it included.
+fn or_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    Ok(toml::Value::deserialize(deserializer)?
+        .try_into()
+        .unwrap_or_default())
+}
+
+fn or_true<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(toml::Value::deserialize(deserializer)?
+        .as_bool()
+        .unwrap_or(true))
+}
+
+impl Default for PanelConfig {
+    fn default() -> Self {
+        Self {
+            active_credential_only: false,
+            plans_total: PlansTotal::default(),
+            split_bars: true,
+            unknown: HashMap::new(),
+        }
+    }
+}
+
+/// How the `plans` header adds credentials up.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PlansTotal {
+    /// By each plan's nominal multiplier, in units of the largest plan. A plan
+    /// with no known weight is left out.
+    #[default]
+    Weighted,
+    /// Every credential counts 100%, whatever its plan.
+    Absolute,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -361,6 +427,16 @@ click_action = "tui"
 # Seconds before a credential the CLI is not signed into is asked again.
 # inactive_refresh_secs = 1800
 
+[panel]
+# With several credentials for one provider: draw only the active one's
+# limits. The ALL PLANS header still adds every credential up.
+# active_credential_only = false
+# How ALL PLANS adds credentials up: "weighted" by each plan's nominal
+# multiplier, or "absolute", where every credential counts 100%.
+# plans_total = "weighted"
+# One bar segment per credential under ALL PLANS, instead of one pooled bar.
+# split_bars = true
+
 [providers]
 # OAuth providers - set to true/false to enable/disable
 codex = true
@@ -461,6 +537,39 @@ pub fn config_set_oauth_provider(path: &Path, name: &str, enabled: bool) -> Resu
     })
 }
 
+/// The keys `--set-panel` accepts, with the values each takes.
+pub const PANEL_KEYS: &[(&str, &[&str])] = &[
+    ("active_credential_only", &["true", "false"]),
+    ("plans_total", &["weighted", "absolute"]),
+    ("split_bars", &["true", "false"]),
+];
+
+/// Set one `[panel]` key. Validated against [`PANEL_KEYS`] before anything is
+/// written, so a typo from a frontend cannot land a key the doctor then has
+/// to call unknown.
+pub fn config_set_panel(path: &Path, key: &str, value: &str) -> Result<()> {
+    let (key, values) = PANEL_KEYS.iter().find(|(k, _)| *k == key).ok_or_else(|| {
+        let known: Vec<&str> = PANEL_KEYS.iter().map(|(k, _)| *k).collect();
+        anyhow!(
+            "unknown panel key '{key}' (expected one of: {})",
+            known.join(", ")
+        )
+    })?;
+    if !values.contains(&value) {
+        return Err(anyhow!(
+            "invalid value '{value}' for {key} (expected one of: {})",
+            values.join(", ")
+        ));
+    }
+    edit_config_file(path, |doc| {
+        let panel = ensure_table(doc, "panel");
+        panel[*key] = match value.parse::<bool>() {
+            Ok(b) => toml_edit::value(b),
+            Err(_) => toml_edit::value(value),
+        };
+    })
+}
+
 /// Set (or clear, when `None`) the pinned `[waybar].primary` provider.
 pub fn config_set_primary(path: &Path, primary: Option<&str>) -> Result<()> {
     let primary = primary.map(|s| s.to_string());
@@ -513,6 +622,47 @@ mod tests {
         assert!(out.contains("window = \"daily\""));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_panel_writes_typed_values_and_refuses_what_it_does_not_know() {
+        let dir = std::env::temp_dir().join(format!("tg-cfgpanel-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("config.toml");
+        fs::write(&path, "# mine\n[providers]\nclaude = true\n").unwrap();
+
+        config_set_panel(&path, "active_credential_only", "true").unwrap();
+        config_set_panel(&path, "plans_total", "absolute").unwrap();
+        config_set_panel(&path, "split_bars", "false").unwrap();
+        assert!(config_set_panel(&path, "plans_total", "true").is_err());
+        assert!(config_set_panel(&path, "colour", "red").is_err());
+
+        let out = fs::read_to_string(&path).unwrap();
+        assert!(out.starts_with("# mine"), "{out}");
+        let config: TokenGaugeConfig = toml::from_str(&out).unwrap();
+        assert!(config.panel.active_credential_only);
+        assert_eq!(config.panel.plans_total, PlansTotal::Absolute);
+        assert!(!config.panel.split_bars);
+        assert!(config.unknown_config_keys().is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_panel_value_that_does_not_parse_reads_as_the_default() {
+        let config: TokenGaugeConfig = toml::from_str(
+            "[panel]\nactive_credential_only = \"yes\"\nplans_total = \"Absolute\"\nsplit_bars = \"no\"\n",
+        )
+        .unwrap();
+        assert!(!config.panel.active_credential_only);
+        assert_eq!(config.panel.plans_total, PlansTotal::Weighted);
+        assert!(config.panel.split_bars);
+
+        let config: TokenGaugeConfig =
+            toml::from_str("[panel]\nplans_total = \"absolute\"\nsplit_bars = false\n").unwrap();
+        assert_eq!(config.panel.plans_total, PlansTotal::Absolute);
+        assert!(!config.panel.split_bars);
     }
 
     #[test]

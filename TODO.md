@@ -275,3 +275,12 @@ one product rather than five.
   "axxone-mba4" + "2.3B" reads "axxone-mba42.3B" in tokens by device;
   `tests/gnome/shell/run.sh --live` shows it, and it can now show the GNOME
   history screen above as well.
+- **Nothing tests the daemon's post-reload revision bump.** `--set-panel` and
+  `--set-primary` wait on it so a chained `--json` sees the new config; a test
+  would need a daemon in the e2e harness, which has none.
+- **The QML harnesses never drive the split-bar delegates.** They load
+  `Service.qml` and `Usage.qml` only, so `FullRep.qml`'s and `Panel.qml`'s
+  segment Repeaters are checked by qmllint alone.
+- **The tray's split bar floors each segment to 2px and gives its value a
+  fixed 90px.** Harmless while segments are a tenth of the bar at least, but a
+  long value can still run past the flyout's edge.

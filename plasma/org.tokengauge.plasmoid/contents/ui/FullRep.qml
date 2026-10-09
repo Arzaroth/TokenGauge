@@ -118,7 +118,40 @@ Item {
                 font.bold: true
             }
         }
+        // One stretch per credential, each its own share of the track.
+        Item {
+            id: segmented
+            readonly property var segments: Array.isArray(modelData.segments) ? modelData.segments : []
+            visible: segments.length > 0
+            Layout.fillWidth: true
+            height: Kirigami.Units.gridUnit * 0.5
+            Row {
+                id: segmentRow
+                anchors.fill: parent
+                spacing: 2
+                Repeater {
+                    model: segmented.segments
+                    Rectangle {
+                        required property var modelData
+                        width: Math.max(0, segmentRow.width - segmentRow.spacing * (segmented.segments.length - 1))
+                               * Math.max(0, Math.min(1, Number(modelData.width) || 0))
+                        height: segmentRow.height
+                        radius: height / 2
+                        color: Kirigami.Theme.backgroundColor
+                        border.width: 1
+                        border.color: Kirigami.Theme.disabledTextColor
+                        Rectangle {
+                            height: parent.height
+                            radius: parent.radius
+                            width: parent.width * Math.max(0, Math.min(1, Number(parent.modelData.fraction) || 0))
+                            color: root.toneColor(parent.modelData.tone)
+                        }
+                    }
+                }
+            }
+        }
         Rectangle {
+            visible: segmented.segments.length === 0
             Layout.fillWidth: true
             height: Kirigami.Units.gridUnit * 0.5
             radius: height / 2
@@ -629,6 +662,46 @@ Item {
                         text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
                         checked: (root.snapshot.enabled || []).indexOf(modelData) !== -1
                         onToggled: root.action("--set-provider " + modelData + "=" + (checked ? "true" : "false"))
+                    }
+                }
+                Kirigami.Separator {
+                    Layout.fillWidth: true
+                    visible: full.settingsOpen
+                }
+                PlasmaComponents.Label {
+                    textFormat: Text.PlainText
+                    visible: full.settingsOpen
+                    text: i18n("Several credentials")
+                    font.bold: true
+                }
+                PlasmaComponents.CheckBox {
+                    visible: full.settingsOpen
+                    text: i18n("Active credential only")
+                    checked: root.panelOptions.active_credential_only
+                    onToggled: root.setPanel("active_credential_only", checked ? "true" : "false")
+                }
+                PlasmaComponents.CheckBox {
+                    visible: full.settingsOpen
+                    text: i18n("Split ALL PLANS bars")
+                    checked: root.panelOptions.split_bars
+                    onToggled: root.setPanel("split_bars", checked ? "true" : "false")
+                }
+                RowLayout {
+                    visible: full.settingsOpen
+                    spacing: Kirigami.Units.smallSpacing
+                    PlasmaComponents.Label {
+                        textFormat: Text.PlainText
+                        text: i18n("ALL PLANS:")
+                    }
+                    PlasmaComponents.RadioButton {
+                        text: i18n("Weighted")
+                        checked: root.panelOptions.plans_total === "weighted"
+                        onToggled: if (checked) root.setPanel("plans_total", "weighted")
+                    }
+                    PlasmaComponents.RadioButton {
+                        text: i18n("Absolute")
+                        checked: root.panelOptions.plans_total === "absolute"
+                        onToggled: if (checked) root.setPanel("plans_total", "absolute")
                     }
                 }
                 Kirigami.Separator {

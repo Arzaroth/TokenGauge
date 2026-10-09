@@ -110,6 +110,14 @@ Panel {
     usage.setProvider(id, usage.enabledProviders.indexOf(id) < 0)
   }
 
+  function togglePanelOption(key) {
+    var options = usage.panelOptions
+    if (key === "plans_total")
+      usage.setPanel(key, options.plans_total === "absolute" ? "weighted" : "absolute")
+    else
+      usage.setPanel(key, options[key] ? "false" : "true")
+  }
+
   function cyclePin() {
     var choices = ["highest"].concat(usage.enabledProviders.map(function(id) { return String(id) }))
     var current = present(usage.primary) === "" ? "highest" : String(usage.primary).toLowerCase()
@@ -203,6 +211,9 @@ Panel {
     property string tooltip: ""
     property bool emphasized: false
     property color fill: root.foreground
+    // One stretch per credential, each its own share of the track; empty draws
+    // the single bar.
+    property var segments: []
 
     width: parent ? parent.width : 0
     spacing: Style.space(4)
@@ -246,7 +257,36 @@ Panel {
       }
     }
 
+    Row {
+      id: segmentedTrack
+      visible: meterRow.segments.length > 0
+      width: parent.width
+      spacing: Style.space(3)
+
+      Repeater {
+        model: meterRow.segments
+
+        Rectangle {
+          required property var modelData
+          width: Math.max(0, (segmentedTrack.width - segmentedTrack.spacing * (meterRow.segments.length - 1))
+                             * root.clamp(Number(modelData.width) || 0, 0, 1))
+          height: Math.max(Style.space(4), Math.round(Style.spacing.controlHeight * 0.14))
+          radius: height / 2
+          color: root.track
+
+          Rectangle {
+            width: parent.width * root.clamp(Number(parent.modelData.fraction) || 0, 0, 1)
+            height: parent.height
+            radius: parent.radius
+            color: root.toneColor(parent.modelData.tone)
+            visible: width > 0
+          }
+        }
+      }
+    }
+
     Rectangle {
+      visible: meterRow.segments.length === 0
       width: parent.width
       height: Math.max(Style.space(4), Math.round(Style.spacing.controlHeight * 0.14))
       radius: height / 2
@@ -482,6 +522,9 @@ Panel {
         else if (root.historyOpen && /^[1-9]$/.test(t)) root.selectHistoryRange(Number(t) - 1)
         else if (root.settingsOpen && (t === "p" || t === "P")) root.cyclePin()
         else if (root.settingsOpen && (t === "y" || t === "Y")) usage.openSyncSetup()
+        else if (root.settingsOpen && (t === "a" || t === "A")) root.togglePanelOption("active_credential_only")
+        else if (root.settingsOpen && (t === "t" || t === "T")) root.togglePanelOption("plans_total")
+        else if (root.settingsOpen && (t === "b" || t === "B")) root.togglePanelOption("split_bars")
         else if (root.settingsOpen && /^[1-9]$/.test(t)) root.toggleProviderAt(Number(t) - 1)
         else if (t === "u" || t === "U") root.openProviderUrl("dashboard_url")
         else if (t === "s" || t === "S") root.openProviderUrl("status_url")
@@ -738,6 +781,7 @@ Panel {
                   value: modelData.value
                   fraction: Number(modelData.fraction) || 0
                   fill: root.toneColor(modelData.tone)
+                  segments: Array.isArray(modelData.segments) ? modelData.segments : []
                   footnote: root.present(modelData.footnote)
                   badge: root.present(modelData.badge)
                   badgeColor: root.toneColor(modelData.badge_tone)
@@ -1095,12 +1139,83 @@ Panel {
             onChanged: function(value) { usage.setPrimary(value) }
           }
 
+          PanelSectionHeader {
+            visible: root.settingsOpen
+            width: parent.width
+            text: "SEVERAL CREDENTIALS"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.space(6)
+            visible: root.settingsOpen
+
+            Repeater {
+              model: [
+                { key: "active_credential_only", label: "a  Active credential only" },
+                { key: "split_bars", label: "b  Split ALL PLANS bars" }
+              ]
+
+              Item {
+                required property var modelData
+                width: parent.width
+                height: optionToggle.implicitHeight
+
+                Text {
+                  textFormat: Text.PlainText
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: parent.modelData.label
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+
+                ToggleSwitch {
+                  id: optionToggle
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  checked: usage.panelOptions[parent.modelData.key] === true
+                  busy: usage.loading
+                  foreground: root.foreground
+                  accent: Color.accent
+                  onToggled: root.togglePanelOption(parent.modelData.key)
+                }
+              }
+            }
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            visible: root.settingsOpen
+            text: "t  ALL PLANS"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          ButtonGroup {
+            visible: root.settingsOpen
+            width: parent.width
+            foreground: root.foreground
+            accent: Color.accent
+            fontFamily: root.fontFamily
+            options: [
+              { value: "weighted", label: "Weighted" },
+              { value: "absolute", label: "Absolute" }
+            ]
+            value: usage.panelOptions.plans_total
+            onChanged: function(value) { usage.setPanel("plans_total", value) }
+          }
+
           Text {
             textFormat: Text.PlainText
             visible: root.settingsOpen
             width: parent.width
             topPadding: Style.space(4)
-            text: "A number toggles a provider, p walks the pin, y sets up fleet sync so tokens and cost add up across your machines, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml."
+            text: "A number toggles a provider, p walks the pin, a, b and t switch how several credentials are drawn, y sets up fleet sync so tokens and cost add up across your machines, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

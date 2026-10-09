@@ -443,7 +443,15 @@ fn usage_for(auth: Auth, timeout: Duration, now: DateTime<Utc>) -> Result<Provid
     // supplied the token, and a 429 can mean either a rate limit or a spent
     // quota. What is left is the shared ladder, which now owns 403 for every
     // provider - this is where that wording came from.
-    check_status(status, "Kimi", "run `kimi` to log in")?;
+    check_status(
+        status,
+        "Kimi",
+        if auth.source == "store" {
+            "remuda refreshes stored credentials (`remuda refresh`)"
+        } else {
+            "run `kimi` to log in"
+        },
+    )?;
 
     let body: UsageResponse = resp.json().context("Kimi usage JSON was invalid")?;
     to_payload(body, auth.source, auth.login_method, now)
@@ -496,9 +504,23 @@ pub(crate) fn stored_tokens(text: &str) -> LoginTokens {
         .unwrap_or_default()
 }
 
+/// `expires_at` first, then the token's own `exp`, as remuda reads it. A
+/// token that says neither is asked about, and the answer decides.
 fn stored_state(file: &CredentialFile, now: DateTime<Utc>) -> Option<CredentialState> {
     let now_unix = now.timestamp() as f64;
-    (!is_fresh(file.expires_at.as_ref(), now_unix)).then_some(CredentialState::Expired)
+    let expiry = file
+        .expires_at
+        .clone()
+        .filter(|v| value_as_f64(v).is_some_and(f64::is_finite))
+        .or_else(|| {
+            crate::provider::jwt_claims(&file.access_token)?
+                .get("exp")
+                .cloned()
+        });
+    match expiry {
+        Some(at) => (!is_fresh(Some(&at), now_unix)).then_some(CredentialState::Expired),
+        None => None,
+    }
 }
 
 pub(crate) fn check_stored(text: &str, now: DateTime<Utc>) -> Result<Option<CredentialState>> {
@@ -633,6 +655,18 @@ mod tests {
         assert_eq!(
             check_stored(dead, now).unwrap(),
             Some(CredentialState::Expired)
+        );
+        let by_claim = format!(
+            r#"{{"access_token": "{}"}}"#,
+            crate::provider::fake_jwt(r#"{"exp":1}"#)
+        );
+        assert_eq!(
+            check_stored(&by_claim, now).unwrap(),
+            Some(CredentialState::Expired)
+        );
+        assert_eq!(
+            check_stored(r#"{"access_token": "opaque"}"#, now).unwrap(),
+            None
         );
         let payload = fetch_stored(dead, Duration::from_secs(1), now).unwrap();
         assert_eq!(payload.credential.state, Some(CredentialState::Expired));

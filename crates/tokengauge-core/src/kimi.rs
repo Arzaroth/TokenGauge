@@ -151,6 +151,46 @@ struct UsageResponse {
     usage: Detail,
     #[serde(default)]
     limits: Option<Vec<RateLimit>>,
+    /// Read loosely: a membership block that changed shape must not cost the
+    /// usage beside it.
+    #[serde(default)]
+    user: Option<Value>,
+    #[serde(default)]
+    version: Option<Value>,
+}
+
+/// The membership's name and weight against Plus, the way kimi.com sells the
+/// current plans (Pro 2x, Max 5x, Ultra 10x). The older catalog
+/// (`GOODS_VERSION_V1`) is named after tempos and sold as no multiple, so it
+/// has no weight. A level not listed reads as sent.
+fn plan(resp: &UsageResponse) -> Option<(String, Option<u32>)> {
+    let level = resp
+        .user
+        .as_ref()?
+        .get("membership")?
+        .get("level")?
+        .as_str()?
+        .trim();
+    let key = level
+        .strip_prefix("LEVEL_")
+        .unwrap_or(level)
+        .to_ascii_lowercase();
+    let legacy = resp.version.as_ref().and_then(Value::as_str) == Some("GOODS_VERSION_V1");
+    let (name, weight) = match (key.as_str(), legacy) {
+        ("" | "unspecified", _) => return None,
+        ("free", true) => ("Adagio", None),
+        ("trial", true) => ("Andante", None),
+        ("basic", true) => ("Moderato", None),
+        ("intermediate", true) => ("Allegretto", None),
+        ("advanced", true) => ("Allegro", None),
+        ("free", false) => ("Free", None),
+        ("plus", false) => ("Plus", Some(1)),
+        ("pro", false) => ("Pro", Some(2)),
+        ("max", false) => ("Max", Some(5)),
+        ("ultra", false) => ("Ultra", Some(10)),
+        _ => return Some((level.to_string(), None)),
+    };
+    Some((format!("Kimi {name}"), weight))
 }
 
 #[derive(Deserialize)]
@@ -307,17 +347,20 @@ fn to_payload(
         return Err(anyhow!("Kimi returned no usage windows"));
     }
 
-    Ok(ProviderPayload::live(
+    let (label, weight) = plan(&resp).unwrap_or_else(|| (login_method.to_string(), None));
+    let mut payload = ProviderPayload::live(
         "kimi",
         source,
         UsageSnapshot {
             primary,
             secondary,
-            login_method: Some(login_method.to_string()),
+            login_method: Some(label),
             extra_rate_windows,
             ..UsageSnapshot::at(now)
         },
-    ))
+    );
+    payload.credential.plan_weight = weight;
+    Ok(payload)
 }
 
 // ---------------------------------------------------------------------------
@@ -468,6 +511,47 @@ mod tests {
 
     fn resp(json: &str) -> UsageResponse {
         serde_json::from_str(json).expect("fixture parses")
+    }
+
+    /// The combined header weighs an Ultra and a Plus as 10 to 1.
+    #[test]
+    fn a_membership_weighs_its_multiplier() {
+        let plan_of = |extra: &str| {
+            let body = resp(&format!(
+                r#"{{"usage": {{"limit": 100, "used": 10}}{extra}}}"#
+            ));
+            let payload = to_payload(body, "code-cli", "Kimi Code", Utc::now()).unwrap();
+            (
+                payload.usage.unwrap().login_method,
+                payload.credential.plan_weight,
+            )
+        };
+        let sold = |label: &str, weight| (Some(label.to_string()), weight);
+        let member = |level: &str| format!(r#", "user": {{"membership": {{"level": "{level}"}}}}"#);
+        assert_eq!(plan_of(&member("LEVEL_PLUS")), sold("Kimi Plus", Some(1)));
+        assert_eq!(plan_of(&member("LEVEL_PRO")), sold("Kimi Pro", Some(2)));
+        assert_eq!(plan_of(&member("max")), sold("Kimi Max", Some(5)));
+        assert_eq!(
+            plan_of(&member("LEVEL_ULTRA")),
+            sold("Kimi Ultra", Some(10))
+        );
+        assert_eq!(
+            plan_of(&format!(
+                r#"{}, "version": "GOODS_VERSION_V1""#,
+                member("LEVEL_BASIC")
+            )),
+            sold("Kimi Moderato", None)
+        );
+        assert_eq!(plan_of(&member("LEVEL_GOLD")), sold("LEVEL_GOLD", None));
+        assert_eq!(
+            plan_of(&member("LEVEL_UNSPECIFIED")),
+            sold("Kimi Code", None)
+        );
+        assert_eq!(
+            plan_of(r#", "user": {"membership": 3}"#),
+            sold("Kimi Code", None)
+        );
+        assert_eq!(plan_of(""), sold("Kimi Code", None));
     }
 
     #[test]

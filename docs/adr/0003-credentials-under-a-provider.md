@@ -272,6 +272,19 @@ each.
   API-spend-equivalent allowances still stands: the weights are the ones the
   plans are sold under, an estimate like Claude's, and a plan that reports no
   5h window simply has no share in that meter.
+- **The other providers.** GLM and Cursor carry tables ahead of a store reader:
+  GLM in weekly credits by thousand (`level` `lite`, `pro`, `max` at 10, 60,
+  140), Cursor against Pro (`pro_plus` 3, `ultra` 20). A team seat on either is
+  sold as a Standard or Premium seat the wire does not name, so it has no
+  weight. Kimi is weighed against Plus (`user.membership.level`
+  `LEVEL_PRO` 2, `LEVEL_MAX` 5, `LEVEL_ULTRA` 10); its older tempo-named
+  catalog (`GOODS_VERSION_V1`) was sold as no multiple and has none. xAI
+  publishes no multiplier between SuperGrok tiers, so Grok is weighed by price
+  (3, 10, 30 for $30, $100, $300), read off the CLI settings'
+  `subscription_tier_display`: a price is the one figure the user chose by,
+  and a guessed 1x would have hidden a Heavy behind a SuperGrok. opencode Go
+  Plus is 2x to 8x Go depending on the model and the usage response names no
+  tier, so opencode has no table.
 - `CACHE_SCHEMA_VERSION` is 2. It is still written and never checked on read.
 
 ## The snapshot contract

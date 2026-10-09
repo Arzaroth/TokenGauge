@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- GLM and Cursor plans carry a weight, ready for the combined header once those
+  providers can hold several credentials. GLM weighs by weekly credits (Lite,
+  Pro and Max as 1, 6 and 14), Cursor against Pro (Pro+ 3x, Ultra 20x). A
+  Cursor Teams seat and a GLM team seat stay out of the total: neither API says
+  whether the seat is Standard or Premium.
+- Kimi and Grok plans carry a weight as well. Kimi weighs its membership against
+  Plus (Pro 2x, Max 5x, Ultra 10x). xAI publishes no multiplier between
+  SuperGrok tiers, so Grok weighs them by price: SuperGrok 3, Plus 10, Heavy 30.
+
+### Changed
+
+- GLM reads its tier from the quota response's `level`: `GLM Coding Pro`
+  rather than the generic `GLM Coding Plan`. A Cursor plan reads as it is
+  sold: `Cursor Pro+` rather than `pro_plus`.
+- A Grok plan is named by the tier the grok CLI's settings report, so a
+  SuperGrok Heavy subscription reads as `SuperGrok Heavy` rather than
+  `SuperGrok`. That costs one more request per Grok refresh; when it fails, the
+  label falls back to the sign-in kind as before.
+- A Kimi plan is named by the membership the usage response reports: `Kimi Pro`
+  rather than `Kimi Code`.
+
 ## [0.41.0] - 2026-10-09
 
 ### Added

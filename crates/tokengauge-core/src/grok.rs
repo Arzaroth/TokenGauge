@@ -18,6 +18,9 @@ use crate::provider::check_status;
 use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
 const BILLING_ENDPOINT: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
+const SETTINGS_ENDPOINT: &str = "https://cli-chat-proxy.grok.com/v1/settings";
+/// The tier is a label, not a figure: it may not double a slow fetch.
+const SETTINGS_TIMEOUT: Duration = Duration::from_secs(3);
 
 // ---------------------------------------------------------------------------
 // Credentials (read-only)
@@ -431,6 +434,66 @@ fn to_payload(
     )
 }
 
+/// What a `subscription_tier_display` is sold as. A tier not listed reads as
+/// sent.
+fn tier_label(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let key: String = raw
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '_' | '-'))
+        .collect::<String>()
+        .to_lowercase();
+    let name = match key.as_str() {
+        "" => return None,
+        "supergrok" => "SuperGrok",
+        "supergrokplus" | "plus" => "SuperGrok Plus",
+        "supergrokheavy" | "heavy" => "SuperGrok Heavy",
+        _ => return Some(raw.to_string()),
+    };
+    Some(name.to_string())
+}
+
+#[derive(serde::Deserialize)]
+struct Settings {
+    #[serde(default)]
+    subscription_tier_display: Option<String>,
+}
+
+/// A plan's weight by its price per $10, since xAI publishes no multiplier
+/// between tiers: SuperGrok $30, Plus $100, Heavy $300.
+fn tier_weight(label: &str) -> Option<u32> {
+    match label {
+        "SuperGrok" => Some(3),
+        "SuperGrok Plus" => Some(10),
+        "SuperGrok Heavy" => Some(30),
+        _ => None,
+    }
+}
+
+/// The plan as the CLI's settings name it. The billing response carries no
+/// tier, and `auth_mode` says only how the user signed in, so without this
+/// every paid plan reads as SuperGrok. Best effort: a failure keeps the
+/// `auth_mode` label rather than failing the fetch.
+fn subscription_tier(client: &reqwest::blocking::Client, token: &str) -> Option<String> {
+    let resp = client
+        .get(SETTINGS_ENDPOINT)
+        .timeout(SETTINGS_TIMEOUT)
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-xai-token-auth", "xai-grok-cli")
+        .header("accept", "application/json")
+        .header("user-agent", "TokenGauge")
+        .send()
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let settings: Settings = resp.json().ok()?;
+    settings
+        .subscription_tier_display
+        .as_deref()
+        .and_then(tier_label)
+}
+
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let creds = read_credentials(&auth_path(), now)?;
@@ -461,7 +524,11 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
 
     let bytes = resp.bytes().context("Grok billing read failed")?;
     let billing = parse_grpc_web_response(&bytes, header_status, now)?;
-    Ok(vec![to_payload(billing, creds.login_method, now)])
+    let tier = subscription_tier(&client, &creds.access_token);
+    let weight = tier.as_deref().and_then(tier_weight);
+    let mut payload = to_payload(billing, tier.or(creds.login_method), now);
+    payload.credential.plan_weight = weight;
+    Ok(vec![payload])
 }
 
 #[cfg(test)]
@@ -562,6 +629,32 @@ mod tests {
             named(r#"{"s": {"key": "t", "auth_mode": ""}}"#).as_deref(),
             Some("Grok")
         );
+    }
+
+    /// Heavy reads as Heavy, however the settings spell it.
+    #[test]
+    fn a_tier_reads_as_it_is_sold() {
+        let sold = |raw: &str| tier_label(raw);
+        assert_eq!(sold("SuperGrok").as_deref(), Some("SuperGrok"));
+        assert_eq!(sold("supergrok").as_deref(), Some("SuperGrok"));
+        assert_eq!(sold("SuperGrok Heavy").as_deref(), Some("SuperGrok Heavy"));
+        assert_eq!(sold("SUPERGROK_HEAVY").as_deref(), Some("SuperGrok Heavy"));
+        assert_eq!(sold("heavy").as_deref(), Some("SuperGrok Heavy"));
+        assert_eq!(sold("SuperGrok Plus").as_deref(), Some("SuperGrok Plus"));
+        assert_eq!(sold(" Enterprise ").as_deref(), Some("Enterprise"));
+        assert_eq!(sold("  "), None);
+        assert_eq!(sold("SuperGrok++").as_deref(), Some("SuperGrok++"));
+        assert_eq!(sold("超级").as_deref(), Some("超级"));
+    }
+
+    /// With no published multiplier, Heavy weighs ten SuperGroks, as it costs.
+    #[test]
+    fn a_tier_weighs_its_price() {
+        let weight = |raw: &str| tier_label(raw).as_deref().and_then(tier_weight);
+        assert_eq!(weight("SuperGrok"), Some(3));
+        assert_eq!(weight("SuperGrok Plus"), Some(10));
+        assert_eq!(weight("SUPERGROK_HEAVY"), Some(30));
+        assert_eq!(weight("Enterprise"), None);
     }
 
     #[test]

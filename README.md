@@ -18,7 +18,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **KDE Plasma 6 applet**: native panel widget (QML plasmoid) - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
 - **Native cost tracking**: today, month, 7-day rolling, per-model split, burn rate $/hr anchored to the provider's real session window, 7-day chart, today's spend vs the average of the prior days
 - **Multi-provider**: Claude, Codex, Kimi, Grok, GLM (z.ai), OpenRouter, opencode Go, and Cursor
-- **Several plans at one vendor**: with [remuda](https://github.com/Arzaroth/remuda) keeping your Claude and Codex logins, every one of them gets its own limits in the panel, the active one first, and Claude's plans are added up by their multiplier. See [Several plans per provider](#several-plans-per-provider).
+- **Several plans at one vendor**: with [remuda](https://github.com/Arzaroth/remuda) keeping your Claude and Codex logins, every one of them gets its own limits in the panel, the active one first, and the plans are added up by their multiplier. See [Several plans per provider](#several-plans-per-provider).
 - **GNOME Shell extension**: panel indicator for GNOME 45+ mirroring the Plasma applet - brand icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and pin-to-bar, plus an Adwaita preferences window for the provider toggles. Shares the same config, cache, and daemon as the Waybar module.
 - **Pace tracking**: every usage window - including Claude's model-scoped weeklies like `Fable only` - projects where it lands at reset from the current burn rate (`ends ~16%`, or `empty in 2h 15m` when it runs out first), shown next to each reset on every frontend (hidden until 3% of the window has elapsed)
 - **Provider rotation**: scroll the waybar module to cycle through providers, or pin a primary
@@ -315,14 +315,16 @@ stored tokens alive are remuda's job.
 
 The provider stays one tab. Its panel gets one group of limits per credential,
 titled with the store name, remuda's label and the plan, the active one first
-and marked; the bar keeps showing the plan the CLI is signed into. For Claude,
-an **ALL PLANS** header above them adds the plans up by their multiplier, in
+and marked; the bar keeps showing the plan the CLI is signed into. An **ALL
+PLANS** header above them adds the plans up by their multiplier, in
 units of the largest: a Max 20x and a Pro both spent read `105% of 105%`, a Max
 20x at 50% beside a Max 5x at 100% reads `75% of 125%`, and the bar fills to
 the pooled share. The multipliers are the nominal ones the plans are sold with,
 so the header says `estimate`. A Team seat counts as a Pro (standard) or a Max
-5x (premium). A plan with no known multiplier (Enterprise) is left out of it and
-marked `not in total`.
+5x (premium). Codex plans weigh against Plus: Pro 100, 200 and 500 count as 5,
+10 and 25, a Business seat as 1 and a Business Premium seat as 5. A plan with no
+known multiplier (Claude or ChatGPT Enterprise, ChatGPT Free) is left out of it
+and marked `not in total`.
 
 Three `[panel]` options change how this is drawn, from `config.toml`, from
 `tokengauge --set-panel KEY=VALUE`, or from the settings pane of the Plasma,
@@ -336,7 +338,7 @@ GNOME, Omarchy and tray panels:
 active_credential_only = false
 # "weighted" by multiplier as above, or "absolute": every credential counts
 # 100%, so five plans read "409% of 500%". Absolute needs no multiplier, so
-# Codex and an Enterprise plan get a header there too.
+# a plan with none (Enterprise) gets a header there too.
 plans_total = "weighted"
 # One bar segment per credential under each ALL PLANS meter, filled to its own
 # usage and as wide as its share of the total (a tenth of the bar at least, so

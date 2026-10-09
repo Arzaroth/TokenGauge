@@ -34,6 +34,12 @@ struct Credentials {
 }
 
 pub(crate) fn auth_path() -> PathBuf {
+    if let Ok(file) = std::env::var("GROK_AUTH_PATH") {
+        let file = file.trim();
+        if !file.is_empty() {
+            return PathBuf::from(file);
+        }
+    }
     if let Ok(home) = std::env::var("GROK_HOME") {
         let home = home.trim();
         if !home.is_empty() {
@@ -119,9 +125,24 @@ fn parse_credentials(text: &str, now: DateTime<Utc>) -> Result<Credentials> {
     let map = root
         .as_object()
         .ok_or_else(|| anyhow!("Grok auth.json was invalid"))?;
+    let entry = sent_entry(map, now)?;
+    let access_token = entry
+        .get("key")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("Grok not logged in - run `grok login`"))?
+        .to_string();
 
-    // Skip expired entries during selection, so an expired preferred (OIDC)
-    // token never masks a later still-valid keyed fallback.
+    Ok(Credentials {
+        access_token,
+        login_method: login_method(entry),
+    })
+}
+
+/// The entry whose token a fetch sends. Expired entries are skipped, so an
+/// expired preferred (OIDC) token never masks a later still-valid keyed
+/// fallback.
+fn sent_entry(map: &serde_json::Map<String, Value>, now: DateTime<Utc>) -> Result<&Value> {
     let mut selected: Option<&Value> = None;
     let mut saw_expired = false;
     for (scope, entry) in map {
@@ -145,22 +166,11 @@ fn parse_credentials(text: &str, now: DateTime<Utc>) -> Result<Credentials> {
         }
     }
 
-    let entry = match selected {
-        Some(entry) => entry,
-        None if saw_expired => return Err(anyhow!("Grok token expired - run `grok login`")),
-        None => return Err(anyhow!("Grok not logged in - run `grok login`")),
-    };
-    let access_token = entry
-        .get("key")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow!("Grok not logged in - run `grok login`"))?
-        .to_string();
-
-    Ok(Credentials {
-        access_token,
-        login_method: login_method(entry),
-    })
+    match selected {
+        Some(entry) => Ok(entry),
+        None if saw_expired => Err(anyhow!("Grok token expired - run `grok login`")),
+        None => Err(anyhow!("Grok not logged in - run `grok login`")),
+    }
 }
 
 fn login_method(entry: &Value) -> Option<String> {
@@ -588,16 +598,28 @@ fn usage_for(
 // Stored credentials (remuda)
 // ---------------------------------------------------------------------------
 
+/// The login whose token the fetch sends, so its usage is filed under the
+/// credential it belongs to; with every entry expired, the one remuda files.
 pub(crate) fn live_login() -> LiveLogin {
-    let Ok(text) = std::fs::read_to_string(auth_path()) else {
+    match std::fs::read_to_string(auth_path()) {
+        Ok(text) => live_from(&text, Utc::now()),
+        Err(_) => LiveLogin::default(),
+    }
+}
+
+fn live_from(text: &str, now: DateTime<Utc>) -> LiveLogin {
+    let Ok(root) = serde_json::from_str::<Value>(text) else {
         return LiveLogin::default();
     };
-    match stored_entry(&text) {
-        Ok(entry) => LiveLogin {
-            tokens: tokens_of(&entry),
-            account: account_of(&entry),
+    let Some(map) = root.as_object() else {
+        return LiveLogin::default();
+    };
+    match sent_entry(map, now).ok().or_else(|| preferred(map)) {
+        Some(entry) => LiveLogin {
+            tokens: tokens_of(entry),
+            account: account_of(entry),
         },
-        Err(_) => LiveLogin::default(),
+        None => LiveLogin::default(),
     }
 }
 
@@ -827,6 +849,26 @@ mod tests {
         assert_eq!(account_of(&opaque).as_deref(), Some("u-2"));
         assert!(stored_entry(r#"{"s": {"key": ""}}"#).is_err());
         assert!(stored_entry("[]").is_err());
+    }
+
+    /// The live login is the entry whose token is sent: with the OIDC token
+    /// expired and a keyed fallback still good, it is the fallback.
+    #[test]
+    fn the_live_login_is_the_entry_the_fetch_sends() {
+        let now = Utc::now();
+        let dead = jwt(r#"{"sub":"u-1","exp":1}"#);
+        let text = format!(
+            r#"{{"https://auth.x.ai::c": {{"key": "{dead}", "refresh_token": "r1",
+                                         "expires_at": "2020-01-01T00:00:00Z"}},
+                "https://accounts.x.ai/sign-in": {{"key": "fallback"}}}}"#
+        );
+        let live = live_from(&text, now);
+        assert_eq!(live.tokens.access.as_deref(), Some("fallback"));
+        assert_eq!(live.account, None);
+        let only_dead = format!(
+            r#"{{"https://auth.x.ai::c": {{"key": "{dead}", "expires_at": "2020-01-01T00:00:00Z"}}}}"#
+        );
+        assert_eq!(live_from(&only_dead, now).account.as_deref(), Some("u-1"));
     }
 
     /// A stored login past its expiry is shown as expired, not asked about:

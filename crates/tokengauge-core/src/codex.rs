@@ -317,11 +317,12 @@ fn pat_or_api_key(auth: AuthFile, resolve: impl FnOnce(&str) -> Whoami) -> Resul
         .ok_or_else(|| anyhow!("Codex not logged in - run `codex`"))
 }
 
+/// The token's own plan claim stands in when the usage answer names none.
 fn oauth(tokens: Tokens) -> Credential {
     Credential {
+        plan_hint: plan_of(&tokens),
         tokens,
         source: "oauth",
-        plan_hint: None,
     }
 }
 
@@ -1583,6 +1584,27 @@ mod tests {
             Some("r-1"),
             "the refresh token is what finds the live login"
         );
+    }
+
+    /// An empty `plan_type` falls back to the plan the OAuth token claims.
+    #[test]
+    fn an_oauth_login_keeps_the_plan_its_token_claims() {
+        let cred = oauth(Tokens {
+            access_token: jwt_with(
+                r#"{"https://api.openai.com/auth":{"chatgpt_plan_type":"prolite"}}"#,
+            ),
+            refresh_token: None,
+            id_token: None,
+            account_id: None,
+        });
+        assert_eq!(cred.plan_hint.as_deref(), Some("prolite"));
+        let body: UsageResponse = serde_json::from_str(
+            r#"{"plan_type":"","rate_limit":{"primary_window":
+                {"used_percent":10,"reset_at":4102444800,"limit_window_seconds":18000}}}"#,
+        )
+        .unwrap();
+        let payload = to_payload(body, Utc::now(), cred.source, cred.plan_hint).unwrap();
+        assert_eq!(payload.credential.plan_weight, Some(5));
     }
 
     #[test]

@@ -440,9 +440,9 @@ fn tier_label(raw: &str) -> Option<String> {
     let raw = raw.trim();
     let key: String = raw
         .chars()
-        .filter(char::is_ascii_alphanumeric)
+        .filter(|c| !matches!(c, ' ' | '_' | '-'))
         .collect::<String>()
-        .to_ascii_lowercase();
+        .to_lowercase();
     let name = match key.as_str() {
         "" => return None,
         "supergrok" => "SuperGrok",
@@ -643,6 +643,8 @@ mod tests {
         assert_eq!(sold("SuperGrok Plus").as_deref(), Some("SuperGrok Plus"));
         assert_eq!(sold(" Enterprise ").as_deref(), Some("Enterprise"));
         assert_eq!(sold("  "), None);
+        assert_eq!(sold("SuperGrok++").as_deref(), Some("SuperGrok++"));
+        assert_eq!(sold("超级").as_deref(), Some("超级"));
     }
 
     /// With no published multiplier, Heavy weighs ten SuperGroks, as it costs.

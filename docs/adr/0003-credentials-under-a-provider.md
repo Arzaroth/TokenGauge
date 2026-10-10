@@ -271,13 +271,14 @@ each.
   `estimate`, because the weights are nominal.
 - **The bar icon's hover** is the active group's windows, then the combined
   figures, then today's spend.
-- **Team seats weigh 1 (standard) and 5 (premium)**, as a Pro and a Max 5x.
-  A standard seat's tier (`default_raven`) carries no `Nx`, so the subscription
-  type decides; a premium seat is recognised by `premium` in either field or by
-  an `Nx` tier. Third-party guides quote 1.25 and 6.25 for the two seats; the
-  nominal pairing is used because nothing first-party states either, and no
-  machine-readable table of subscription multipliers exists to follow the way
-  `pricing.rs` follows LiteLLM's.
+- **Team seats weigh 1.25 (standard) and 6.25 (premium)**, the multiples of
+  Pro's per-session allowance Anthropic sells them as
+  ([What is the Team plan?](https://support.claude.com/en/articles/9266767-what-is-the-team-plan)).
+  They were 1 and 5, a Pro and a Max 5x, until that first-party figure was
+  found. A standard seat's tier (`default_raven`) carries no `Nx`, so the
+  subscription type decides; a premium seat is recognised by `premium` in
+  either field or by an `Nx` tier. No machine-readable table of subscription
+  multipliers exists to follow the way `pricing.rs` follows LiteLLM's.
 - **Codex weights.** First shipped without a table, on the grounds that Codex
   plans were not sold as multiples of one another. OpenAI has since split Pro
   into Pro 100, 200 and 500, sold as 5x, 10x and 25x Plus, and `plan_type`
@@ -325,8 +326,9 @@ Each entry of `payloads[]` gains:
   is a state it cannot draw, not a failure.
 - `credentialLabel` (string): the sidecar's `label`, absent when it has none or
   is not trusted.
-- `planWeight` (integer): the plan's multiplier relative to Claude Pro or
-  ChatGPT Plus, when one is known. Also absent on a live login that matches no
+- `planWeight` (number): the plan's multiplier relative to Claude Pro or
+  ChatGPT Plus, when one is known. A whole one is written as an integer; a
+  Team seat's is a fraction (1.25, 6.25), which remuda reads from 0.10.0. Also absent on a live login that matches no
   stored credential and cannot be told apart from one, which is how it is left
   out of the combined figure.
 

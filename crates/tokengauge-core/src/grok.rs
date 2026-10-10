@@ -590,7 +590,7 @@ fn usage_for(
     let tier = subscription_tier(&client, &creds.access_token);
     let weight = tier.as_deref().and_then(tier_weight);
     let mut payload = to_payload(billing, tier.or(creds.login_method), now);
-    payload.credential.plan_weight = weight;
+    payload.credential.plan_weight = weight.map(f64::from);
     Ok(payload)
 }
 

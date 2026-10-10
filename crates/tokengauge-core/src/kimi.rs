@@ -365,7 +365,7 @@ fn to_payload(
             ..UsageSnapshot::at(now)
         },
     );
-    payload.credential.plan_weight = weight;
+    payload.credential.plan_weight = weight.map(f64::from);
     Ok(payload)
 }
 
@@ -689,12 +689,12 @@ mod tests {
         };
         let sold = |label: &str, weight| (Some(label.to_string()), weight);
         let member = |level: &str| format!(r#", "user": {{"membership": {{"level": "{level}"}}}}"#);
-        assert_eq!(plan_of(&member("LEVEL_PLUS")), sold("Kimi Plus", Some(1)));
-        assert_eq!(plan_of(&member("LEVEL_PRO")), sold("Kimi Pro", Some(2)));
-        assert_eq!(plan_of(&member("max")), sold("Kimi Max", Some(5)));
+        assert_eq!(plan_of(&member("LEVEL_PLUS")), sold("Kimi Plus", Some(1.0)));
+        assert_eq!(plan_of(&member("LEVEL_PRO")), sold("Kimi Pro", Some(2.0)));
+        assert_eq!(plan_of(&member("max")), sold("Kimi Max", Some(5.0)));
         assert_eq!(
             plan_of(&member("LEVEL_ULTRA")),
-            sold("Kimi Ultra", Some(10))
+            sold("Kimi Ultra", Some(10.0))
         );
         assert_eq!(
             plan_of(&format!(

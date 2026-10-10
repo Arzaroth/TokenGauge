@@ -294,7 +294,7 @@ fn to_payload(body: UsageSummary, now: DateTime<Utc>) -> Result<ProviderPayload>
             ..UsageSnapshot::at(now)
         },
     );
-    payload.credential.plan_weight = weight;
+    payload.credential.plan_weight = weight.map(f64::from);
 
     // On-demand spend past the included allowance: a cap, with money on both
     // sides of it. Only when the user has actually turned it on - a disabled
@@ -580,10 +580,10 @@ mod tests {
             )
         };
         let sold = |label: &str, weight| (Some(label.to_string()), weight);
-        assert_eq!(plan("pro"), sold("Cursor Pro", Some(1)));
-        assert_eq!(plan("pro_student"), sold("Cursor Pro Student", Some(1)));
-        assert_eq!(plan("pro_plus"), sold("Cursor Pro+", Some(3)));
-        assert_eq!(plan("Ultra"), sold("Cursor Ultra", Some(20)));
+        assert_eq!(plan("pro"), sold("Cursor Pro", Some(1.0)));
+        assert_eq!(plan("pro_student"), sold("Cursor Pro Student", Some(1.0)));
+        assert_eq!(plan("pro_plus"), sold("Cursor Pro+", Some(3.0)));
+        assert_eq!(plan("Ultra"), sold("Cursor Ultra", Some(20.0)));
         assert_eq!(plan("team"), sold("Cursor Teams", None));
         assert_eq!(plan("free_trial"), sold("Cursor Pro Trial", None));
         assert_eq!(plan("hobby"), sold("Cursor Hobby", None));

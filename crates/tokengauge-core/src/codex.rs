@@ -528,7 +528,7 @@ pub(crate) fn fetch_stored(
                 },
             );
             payload.credential.state = Some(state);
-            payload.credential.plan_weight = plan_weight(plan.as_deref());
+            payload.credential.plan_weight = plan_weight(plan.as_deref()).map(f64::from);
             Ok(payload)
         }
     }
@@ -899,7 +899,7 @@ fn to_payload(
         },
     );
     payload.credits = credits;
-    payload.credential.plan_weight = weight;
+    payload.credential.plan_weight = weight.map(f64::from);
     Ok(payload)
 }
 
@@ -1239,18 +1239,21 @@ mod tests {
             )
         };
         let sold = |label: &str, weight| (Some(label.to_string()), weight);
-        assert_eq!(plan(r#""promax""#, None), sold("ChatGPT Pro 500", Some(25)));
+        assert_eq!(
+            plan(r#""promax""#, None),
+            sold("ChatGPT Pro 500", Some(25.0))
+        );
         assert_eq!(
             plan("null", Some("prolite")),
-            sold("ChatGPT Pro 100", Some(5))
+            sold("ChatGPT Pro 100", Some(5.0))
         );
         assert_eq!(
             plan(r#""""#, Some("prolite")),
-            sold("ChatGPT Pro 100", Some(5))
+            sold("ChatGPT Pro 100", Some(5.0))
         );
         assert_eq!(
             plan(r#""pro""#, Some("plus")),
-            sold("ChatGPT Pro 200", Some(10))
+            sold("ChatGPT Pro 200", Some(10.0))
         );
         assert_eq!(plan(r#""free""#, None), sold("ChatGPT Free", None));
     }
@@ -1558,7 +1561,7 @@ mod tests {
             jwt_with(r#"{"https://api.openai.com/auth":{"chatgpt_plan_type":"prolite"}}"#),
         );
         let payload = fetch_stored(&with_plan, Duration::from_secs(1), now).unwrap();
-        assert_eq!(payload.credential.plan_weight, Some(5));
+        assert_eq!(payload.credential.plan_weight, Some(5.0));
         assert_eq!(
             payload.usage.unwrap().login_method.as_deref(),
             Some("ChatGPT Pro 100")
@@ -1594,7 +1597,7 @@ mod tests {
         )
         .unwrap();
         let payload = to_payload(body, Utc::now(), cred.source, cred.plan_hint).unwrap();
-        assert_eq!(payload.credential.plan_weight, Some(5));
+        assert_eq!(payload.credential.plan_weight, Some(5.0));
     }
 
     #[test]

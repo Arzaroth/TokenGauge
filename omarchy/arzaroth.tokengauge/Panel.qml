@@ -781,7 +781,7 @@ Panel {
                   value: modelData.value
                   fraction: Number(modelData.fraction) || 0
                   fill: root.toneColor(modelData.tone)
-                  segments: Array.isArray(modelData.segments) ? modelData.segments : []
+                  segments: modelData.segments && modelData.segments.length > 0 ? modelData.segments : []
                   footnote: root.present(modelData.footnote)
                   badge: root.present(modelData.badge)
                   badgeColor: root.toneColor(modelData.badge_tone)

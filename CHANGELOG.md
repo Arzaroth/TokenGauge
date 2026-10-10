@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Plasma and Quickshell panels draw split ALL PLANS bars.** Since 0.40.0
+  both drew one pooled bar even with `split_bars` on: the segments reached the
+  panel, but it asked Qt whether they were a JavaScript array, which a list in
+  a QML delegate never is.
+
 ## [0.42.0] - 2026-10-09
 
 ### Added

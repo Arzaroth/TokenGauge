@@ -2473,6 +2473,25 @@ mod tests {
         }
     }
 
+    /// A list a QML delegate reads off `modelData` is a sequence Qt has
+    /// converted, not a JavaScript array: `Array.isArray` says false over a
+    /// full list, which is how both QML panels drew a split bar pooled from
+    /// 0.40.0 to 0.42.0. Test a list by its length.
+    #[test]
+    fn no_qml_frontend_asks_whether_a_delegates_list_is_an_array() {
+        for (id, dir) in [
+            ("plasma", "plasma/org.tokengauge.plasmoid/contents/ui"),
+            ("quickshell", "omarchy/arzaroth.tokengauge"),
+        ] {
+            for src in frontend_sources(id, dir, "qml") {
+                assert!(
+                    !src.contains("Array.isArray(modelData."),
+                    "{id} ({dir}) tests a delegate's list with Array.isArray, which is false for it"
+                );
+            }
+        }
+    }
+
     /// The `[panel]` options are flipped from every settings pane. Each
     /// needle is the pane's own call with that key, not the key alone, which
     /// the data layer and the type declarations carry whether or not a pane

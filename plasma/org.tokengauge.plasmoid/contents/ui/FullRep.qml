@@ -121,7 +121,7 @@ Item {
         // One stretch per credential, each its own share of the track.
         Item {
             id: segmented
-            readonly property var segments: Array.isArray(modelData.segments) ? modelData.segments : []
+            readonly property var segments: modelData.segments && modelData.segments.length > 0 ? modelData.segments : []
             visible: segments.length > 0
             Layout.fillWidth: true
             height: Kirigami.Units.gridUnit * 0.5

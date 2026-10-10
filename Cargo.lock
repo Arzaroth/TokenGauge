@@ -290,7 +290,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
  "x11rb",
 ]
 
@@ -933,7 +933,7 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width 0.2.0",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -4499,8 +4499,8 @@ dependencies = [
 
 [[package]]
 name = "selvedge"
-version = "0.5.0"
-source = "git+https://github.com/Arzaroth/selvedge?tag=v0.5.0#5a92b5032f02586224f376365e334c205fff7a03"
+version = "0.6.0"
+source = "git+https://github.com/Arzaroth/selvedge?tag=v0.6.0#84ae06907764bc25186d953e1802a04c433ef045"
 dependencies = [
  "anyhow",
  "http",

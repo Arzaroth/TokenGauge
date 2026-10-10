@@ -523,6 +523,13 @@ declarations: the binaries, the repository, the aliases, the frontends, the MSI
 marker key. `TOKENGAUGE` is threaded into every selvedge call rather than read
 from a global there.
 
+selvedge is not only the updater. `selvedge::plans` is the ALL PLANS
+arithmetic - units of the largest plan, half-even rounding, the pooled fill,
+split-bar widths - which `panel.rs` calls and remuda's page shares, so the two
+cannot print different figures for the same plans. A change to how plans add
+up is made there, tested there, tagged, and repinned in both; `panel.rs` keeps
+only the words around the numbers.
+
 Three things are easy to get wrong:
 
 - **The cached update status is at TokenGauge's path, not selvedge's.** The

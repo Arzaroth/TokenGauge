@@ -532,10 +532,12 @@ fn plan_weight(subscription_type: Option<&str>, tier: Option<&str>) -> Option<f6
         })
     };
     let sub = subscription_type.unwrap_or_default().to_lowercase();
-    if sub.contains("team") {
-        let premium = sub.contains("premium")
-            || tier.is_some_and(|t| t.to_lowercase().contains("premium"))
-            || multiplier().is_some();
+    let tier_text = tier.unwrap_or_default().to_lowercase();
+    // The tier alone names a Team plan when the subscription type is missing,
+    // as `plan_label` reads it.
+    if sub.contains("team") || (sub.is_empty() && tier_text.contains("team")) {
+        let premium =
+            sub.contains("premium") || tier_text.contains("premium") || multiplier().is_some();
         return Some(if premium { 6.25 } else { 1.25 });
     }
     multiplier().or_else(|| {
@@ -1104,6 +1106,12 @@ mod tests {
             Some(6.25)
         );
         assert_eq!(plan_weight(Some("team_premium"), None), Some(6.25));
+        // The tier alone names the Team plan when the type is missing.
+        assert_eq!(
+            plan_weight(None, Some("default_claude_team_5x")),
+            Some(6.25)
+        );
+        assert_eq!(plan_weight(None, Some("default_claude_team")), Some(1.25));
         // Nothing known: out of the total rather than guessed at 1x.
         assert_eq!(
             plan_weight(Some("enterprise"), Some("default_claude_ai")),

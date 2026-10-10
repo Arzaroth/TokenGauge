@@ -1712,6 +1712,30 @@ mod tests {
         assert!(spec.iter().all(|s| !s.title.contains("not in total")));
     }
 
+    /// A Team seat weighs 1.25 Pros: beside a Max 20x, two spent Standard
+    /// seats add 12.5% to the total, and each says so in the tooltip.
+    #[test]
+    fn a_team_seat_weighs_a_fraction_of_a_pro() {
+        let seat = |name: &str| {
+            let mut g = credential(name, false, Some(1), 100, 100);
+            g.credential.as_mut().unwrap().plan_weight = Some(1.25);
+            g
+        };
+        let groups = grouped(vec![
+            credential("perso", true, Some(20), 0, 0),
+            seat("axeo"),
+            seat("idc"),
+        ]);
+        let spec = super::panel_spec(&groups, &PanelConfig::default());
+        let session = &section(&spec, "plans", None).rows[0];
+        assert_eq!(session.value, "12% of 112%");
+        assert!(
+            session.tooltip.contains("axeo  100% × 1.25"),
+            "{}",
+            session.tooltip
+        );
+    }
+
     /// Plans with no known weight (Enterprise, ChatGPT Free) draw a header
     /// only under the absolute total.
     #[test]

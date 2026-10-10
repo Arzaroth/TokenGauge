@@ -517,13 +517,14 @@ fn plan_label(subscription_type: Option<&str>, tier: Option<&str>) -> Option<Str
 ///
 /// `None` for anything else - Enterprise, or a tier not seen before. Guessing
 /// 1x would understate a large plan without saying so.
-fn plan_weight(subscription_type: Option<&str>, tier: Option<&str>) -> Option<u32> {
+fn plan_weight(subscription_type: Option<&str>, tier: Option<&str>) -> Option<f64> {
     let multiplier = tier.and_then(|tier| {
         tier.split(|c: char| !c.is_ascii_alphanumeric())
             .filter_map(|word| word.strip_suffix(['x', 'X']))
             .filter(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
             .find_map(|digits| digits.parse::<u32>().ok())
             .filter(|n| *n > 0)
+            .map(f64::from)
     });
     multiplier.or_else(|| {
         let sub = subscription_type?.to_lowercase();
@@ -532,12 +533,13 @@ fn plan_weight(subscription_type: Option<&str>, tier: Option<&str>) -> Option<u3
             // A standard seat is sold as a Pro's allowance and a premium one as a
             // Max 5x's. A standard seat's tier (`default_raven`) names neither.
             return Some(if sub.contains("premium") || tier.contains("premium") {
-                5
+                5.0
             } else {
-                1
+                1.0
             });
         }
-        (sub.contains("pro") && !["max", "enterprise"].iter().any(|k| sub.contains(k))).then_some(1)
+        (sub.contains("pro") && !["max", "enterprise"].iter().any(|k| sub.contains(k)))
+            .then_some(1.0)
     })
 }
 
@@ -1079,24 +1081,27 @@ mod tests {
     fn a_plan_weighs_its_nominal_multiplier() {
         assert_eq!(
             plan_weight(Some("max"), Some("default_claude_max_20x")),
-            Some(20)
+            Some(20.0)
         );
         assert_eq!(
             plan_weight(Some("max"), Some("default_claude_max_5x")),
-            Some(5)
+            Some(5.0)
         );
         assert_eq!(
             plan_weight(Some("team"), Some("default_claude_team_5x")),
-            Some(5)
+            Some(5.0)
         );
-        assert_eq!(plan_weight(Some("pro"), Some("default_claude_ai")), Some(1));
+        assert_eq!(
+            plan_weight(Some("pro"), Some("default_claude_ai")),
+            Some(1.0)
+        );
         // A Team seat: standard is a Pro's allowance, premium a Max 5x's.
-        assert_eq!(plan_weight(Some("team"), Some("default_raven")), Some(1));
+        assert_eq!(plan_weight(Some("team"), Some("default_raven")), Some(1.0));
         assert_eq!(
             plan_weight(Some("team"), Some("default_raven_premium")),
-            Some(5)
+            Some(5.0)
         );
-        assert_eq!(plan_weight(Some("team_premium"), None), Some(5));
+        assert_eq!(plan_weight(Some("team_premium"), None), Some(5.0));
         // Nothing known: out of the total rather than guessed at 1x.
         assert_eq!(
             plan_weight(Some("enterprise"), Some("default_claude_ai")),
@@ -1120,7 +1125,7 @@ mod tests {
         );
         let payload = fetch_stored(&expired, Duration::from_secs(1), now).unwrap();
         assert_eq!(payload.credential.state, Some(CredentialState::Expired));
-        assert_eq!(payload.credential.plan_weight, Some(1));
+        assert_eq!(payload.credential.plan_weight, Some(1.0));
         assert_eq!(
             payload.usage.unwrap().login_method.as_deref(),
             Some("Claude Pro")

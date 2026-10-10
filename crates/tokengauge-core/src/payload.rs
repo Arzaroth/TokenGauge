@@ -167,10 +167,20 @@ pub struct ProviderPayload {
 
 /// A payload's place among its provider's credentials.
 ///
+/// A whole weight is written as an integer, `20` and not `20.0`: remuda up to
+/// 0.9.0 reads `planWeight` as an integer and would drop a `20.0`.
+fn whole_as_integer<S: serde::Serializer>(w: &Option<f64>, s: S) -> Result<S::Ok, S::Error> {
+    match w {
+        Some(w) if w.fract() == 0.0 && (0.0..9.0e15).contains(w) => s.serialize_u64(*w as u64),
+        Some(w) => s.serialize_f64(*w),
+        None => s.serialize_none(),
+    }
+}
+
 /// Every key is optional on the wire. A provider without a credential store
 /// writes none of them, and a snapshot from before they existed reads as
 /// exactly that.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct CredentialInfo {
     /// The store name, `<name>` in `<store>/<provider>/<name>.json`. `None`
     /// for a live login no stored credential matches.
@@ -204,9 +214,10 @@ pub struct CredentialInfo {
     #[serde(
         rename = "planWeight",
         default,
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "whole_as_integer"
     )]
-    pub plan_weight: Option<u32>,
+    pub plan_weight: Option<f64>,
     /// A short digest of the credential's account, so a carried payload is
     /// never served under a name that now holds another account. TokenGauge's
     /// own: no reader needs it.
@@ -599,7 +610,7 @@ mod tests {
             active: Some(false),
             state: Some(CredentialState::Expired),
             label: Some("Acme".into()),
-            plan_weight: Some(20),
+            plan_weight: Some(20.0),
             account_digest: None,
         };
         let json = serde_json::to_value(&payload).unwrap();
@@ -608,6 +619,11 @@ mod tests {
         assert_eq!(json["credentialState"], "expired");
         assert_eq!(json["credentialLabel"], "Acme");
         assert_eq!(json["planWeight"], 20);
+        let seat = CredentialInfo {
+            plan_weight: Some(1.25),
+            ..CredentialInfo::default()
+        };
+        assert_eq!(serde_json::to_value(&seat).unwrap()["planWeight"], 1.25);
         let back: ProviderPayload = serde_json::from_value(json).unwrap();
         assert_eq!(back.credential, payload.credential);
 

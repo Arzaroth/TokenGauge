@@ -1056,7 +1056,7 @@ pub(crate) mod tests {
         if access == "expired" {
             payload.credential.state = Some(CredentialState::Expired);
         }
-        payload.credential.plan_weight = Some(5);
+        payload.credential.plan_weight = Some(5.0);
         Ok(payload)
     }
 
@@ -1074,7 +1074,7 @@ pub(crate) mod tests {
     fn live_payload() -> Result<Vec<ProviderPayload>> {
         let mut payload =
             ProviderPayload::live("claude", "oauth", crate::UsageSnapshot::at(Utc::now()));
-        payload.credential.plan_weight = Some(20);
+        payload.credential.plan_weight = Some(20.0);
         Ok(vec![payload])
     }
 
@@ -1267,7 +1267,7 @@ pub(crate) mod tests {
         let (payloads, _) = fetch_provider("claude", &reader, &config, &[], live_payload);
         assert_eq!(
             payloads[0].credential.plan_weight,
-            Some(20),
+            Some(20.0),
             "an identity no entry holds is a plan of its own"
         );
         let _ = std::fs::remove_dir_all(&store);
@@ -1284,6 +1284,6 @@ pub(crate) mod tests {
         assert!(errors.is_empty());
         assert_eq!(payloads[0].credential.active, Some(true));
         assert_eq!(payloads[0].credential.name, None);
-        assert_eq!(payloads[0].credential.plan_weight, Some(20));
+        assert_eq!(payloads[0].credential.plan_weight, Some(20.0));
     }
 }

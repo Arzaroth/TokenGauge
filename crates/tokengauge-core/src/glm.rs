@@ -303,7 +303,7 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
             ..UsageSnapshot::at(now)
         },
     );
-    payload.credential.plan_weight = weight;
+    payload.credential.plan_weight = weight.map(f64::from);
     Ok(payload)
 }
 
@@ -422,19 +422,19 @@ mod tests {
         let sold = |label: &str, weight| (Some(label.to_string()), weight);
         assert_eq!(
             plan_of(r#""level":"lite""#),
-            sold("GLM Coding Lite", Some(10))
+            sold("GLM Coding Lite", Some(10.0))
         );
         assert_eq!(
             plan_of(r#""level":"Pro""#),
-            sold("GLM Coding Pro", Some(60))
+            sold("GLM Coding Pro", Some(60.0))
         );
         assert_eq!(
             plan_of(r#""level":"max","planName":"GLM Coding Plan""#),
-            sold("GLM Coding Max", Some(140))
+            sold("GLM Coding Max", Some(140.0))
         );
         assert_eq!(
             plan_of(r#""planName":"Pro""#),
-            sold("GLM Coding Pro", Some(60))
+            sold("GLM Coding Pro", Some(60.0))
         );
         assert_eq!(
             plan_of(r#""planName":"GLM Coding Plan""#),

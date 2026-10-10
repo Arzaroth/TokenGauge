@@ -676,12 +676,12 @@ fn credential_name(row: &ProviderRow) -> String {
 /// A credential's weight in the combined figure, or `None` when it is left
 /// out. Only a credential that was asked counts; weighted, its plan also needs
 /// a known weight, and absolute, every plan weighs the same.
-fn counted(row: &ProviderRow, total: PlansTotal) -> Option<u32> {
+fn counted(row: &ProviderRow, total: PlansTotal) -> Option<f64> {
     let credential = row.credential.as_ref()?;
     credential.state.is_none().then_some(())?;
     match total {
-        PlansTotal::Weighted => credential.plan_weight.filter(|w| *w > 0),
-        PlansTotal::Absolute => Some(1),
+        PlansTotal::Weighted => credential.plan_weight.filter(|w| w.is_finite() && *w > 0.0),
+        PlansTotal::Absolute => Some(1.0),
     }
 }
 
@@ -825,7 +825,7 @@ fn state_row(state: crate::CredentialState) -> PanelRow {
 fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
     struct Share<'a> {
         name: String,
-        weight: u32,
+        weight: f64,
         window: Window<'a>,
     }
     let total_mode = options.plans_total;
@@ -859,11 +859,11 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
         .into_iter()
         .filter(|(_, shares)| shares.len() >= 2)
         .map(|(label, shares)| {
-            let largest = f64::from(shares.iter().map(|s| s.weight).max().unwrap_or(1));
-            let total: f64 = shares.iter().map(|s| f64::from(s.weight)).sum();
+            let largest = shares.iter().map(|s| s.weight).fold(0.0_f64, f64::max);
+            let total: f64 = shares.iter().map(|s| s.weight).sum();
             let weighted: f64 = shares
                 .iter()
-                .map(|s| f64::from(s.window.used) * f64::from(s.weight))
+                .map(|s| f64::from(s.window.used) * s.weight)
                 .sum();
             let pooled = weighted / total;
             let mut r = PanelRow::new(
@@ -877,7 +877,7 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
             r.fraction = Some((pooled / 100.0).clamp(0.0, 1.0));
             r.tone = Tone::for_percent(crate::pct_u8(pooled));
             if options.split_bars {
-                let weights: Vec<f64> = shares.iter().map(|s| f64::from(s.weight)).collect();
+                let weights: Vec<f64> = shares.iter().map(|s| s.weight).collect();
                 r.segments = shares
                     .iter()
                     .zip(segment_widths(&weights))
@@ -1563,7 +1563,7 @@ mod tests {
         r.credential = Some(crate::CredentialInfo {
             name: Some(name.into()),
             active: Some(active),
-            plan_weight: weight,
+            plan_weight: weight.map(f64::from),
             ..Default::default()
         });
         r

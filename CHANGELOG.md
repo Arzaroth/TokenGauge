@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A Claude Team seat weighs what Anthropic sells it as: a Standard seat 1.25x a
+  Pro's per-session allowance and a Premium seat 6.25x, rather than 1x and 5x.
+  A Max 20x beside two spent Standard seats now reads `12% of 112%`. remuda's
+  page needs 0.10.0 to count a fractional weight.
+
 ### Fixed
 
 - **The Plasma and Quickshell panels draw split ALL PLANS bars.** Since 0.40.0

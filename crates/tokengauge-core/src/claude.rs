@@ -579,16 +579,10 @@ fn plan_weight(subscription_type: Option<&str>, tier: Option<&str>) -> Option<f6
 /// it. `None` for a tier that is not a known Team seat, which leaves the
 /// token's own reading in place.
 pub(crate) fn seat_weight(seat_tier: &str) -> Option<f64> {
-    let tier = seat_tier.to_ascii_lowercase();
-    if !tier.contains("team") {
-        return None;
-    }
-    if tier.contains("premium") {
-        Some(TEAM_PREMIUM_WEIGHT)
-    } else if tier.contains("standard") {
-        Some(TEAM_STANDARD_WEIGHT)
-    } else {
-        None
+    match seat_tier.trim().to_ascii_lowercase().as_str() {
+        "team_premium" => Some(TEAM_PREMIUM_WEIGHT),
+        "team_standard" => Some(TEAM_STANDARD_WEIGHT),
+        _ => None,
     }
 }
 

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A Claude Team seat's weight follows the seat tier Anthropic's profile reports
+  (`team_standard` 1.25x, `team_premium` 6.25x), rather than a guess from the
+  token's subscription type and rate-limit tier. TokenGauge reads it from
+  remuda's sidecar for a stored login and from `.claude.json` for the live one.
+
 ## [0.43.0] - 2026-10-10
 
 ### Changed

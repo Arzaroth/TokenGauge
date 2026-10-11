@@ -40,7 +40,8 @@ alive are all the switcher's job.
   which names only the workspace every seat of a Team plan shares), `email`,
   `capturedAt`, an optional `label` the panel shows beside the name, and,
   for Claude only, the `oauthAccount` block the switcher restores into
-  `.claude.json` on a switch. Codex's `auth.json` is the whole
+  `.claude.json` on a switch. TokenGauge reads one field of that block,
+  `seatTier`, for a Team seat's weight. Codex's `auth.json` is the whole
   credential, so it has no such block.
 - The sidecar also records `credsDigest`, the SHA-256 of the credential file it
   was written for: over the file's exact bytes, as 64 lowercase hex
@@ -275,7 +276,11 @@ each.
   Pro's per-session allowance Anthropic sells them as
   ([What is the Team plan?](https://support.claude.com/en/articles/9266767-what-is-the-team-plan)).
   They were 1 and 5, a Pro and a Max 5x, until that first-party figure was
-  found. A standard seat's tier (`default_raven`) carries no `Nx`, so the
+  found. The profile names the seat where the token only hints at it, so the seat tier
+  Anthropic's profile reports decides when it names one: `oauthAccount.seatTier`
+  (`team_standard`, `team_premium`), off a sidecar whose digest matches its
+  tokens, or off `.claude.json` for a live token from Claude Code's own stores.
+  Without it, a standard seat's tier (`default_raven`) carries no `Nx`, so the
   subscription type decides; a premium seat is recognised by `premium` in
   either field or by an `Nx` tier. No machine-readable table of subscription
   multipliers exists to follow the way `pricing.rs` follows LiteLLM's.

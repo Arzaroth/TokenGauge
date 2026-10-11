@@ -285,6 +285,9 @@ Rules that are easy to regress:
   "absolute"`, where every asked credential counts 100% and needs no weight.
   Weighted, a plan with no known weight is out of the total and says so,
   rather than guessed at 1x.
+  A Claude Team seat's weight comes from `oauthAccount.seatTier` when it
+  names one (`claude::seat_weight`, through `StoreReader.seat_weight` for a
+  sidecar), because the profile names the seat where the token only hints.
 - **An API key is filed under a digest of itself.** GLM and opencode Go have no
   account behind a key, so remuda names one `key-` and the first 16 hex digits
   of its SHA-256, and `credentials::key_account` must say the same, or the

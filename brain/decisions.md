@@ -4,7 +4,7 @@ The non-obvious design decisions and the "why" behind them: the things you canno
 recover by reading the code, only by reading the rationale. Grouped by area; each
 entry links the doc that implements it. Entries numbered `0001`-`0004` were the
 repository's ADRs (`docs/adr/NNNN-*.md` until the brain migration) and keep their
-numbers so "ADR 000N" in commit history and test names stays traceable. New
+numbers so "ADR 000N" in commit history stays traceable. New
 decisions with real alternatives get the next number; smaller ones are bullets.
 
 ## Fleet sync

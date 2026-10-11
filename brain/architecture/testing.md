@@ -48,10 +48,9 @@ compiler can; the list is in [panel-spec.md](panel-spec.md#the-source-grepping-g
   See [sync.md](sync.md).
 - `crates/tokengauge-core/tests/state_files.rs`: every state file derives from
   the snapshot's parent.
-- Contract pins: `payload::tests::the_credential_keys_remuda_reads_are_spelled_as_the_adr_says`,
-  `remuda::tests::the_serve_keys_are_spelled_as_the_adr_says`,
-  `remuda::tests::a_start_time_is_the_twenty_second_stat_field`. "The ADR" in
-  their names is decisions 0003 and 0004.
+- Contract pins: `payload::tests::the_credential_keys_remuda_reads_are_spelled_as_decision_0003_says`,
+  `remuda::tests::the_serve_keys_are_spelled_as_decision_0004_says`,
+  `remuda::tests::a_start_time_is_the_twenty_second_stat_field`.
 
 ## Coverage
 

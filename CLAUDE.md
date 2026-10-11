@@ -242,7 +242,7 @@ stores a `StoreReader` (all of them but OpenRouter); `fetch_all_providers`
 asks the live login as before and every
 other stored credential beside it, tagging each payload with `credential`,
 `active`, `credentialState`, `credentialLabel` and `planWeight`.
-`payload::tests::the_credential_keys_remuda_reads_are_spelled_as_the_adr_says`
+`payload::tests::the_credential_keys_remuda_reads_are_spelled_as_decision_0003_says`
 pins those names: renaming one is a change to that contract and to remuda.
 
 Rules that are easy to regress:

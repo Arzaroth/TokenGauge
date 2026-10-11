@@ -136,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn the_serve_keys_are_spelled_as_the_adr_says() {
+    fn the_serve_keys_are_spelled_as_decision_0004_says() {
         let json = r#"{"pid": 42, "started": 123456, "port": 7429, "version": "0.5.0"}"#;
         let record: ServeRecord = serde_json::from_str(json).unwrap();
         assert_eq!(

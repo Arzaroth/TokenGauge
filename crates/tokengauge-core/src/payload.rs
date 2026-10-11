@@ -602,7 +602,7 @@ mod tests {
     /// remuda reads these keys by name (decision 0003's snapshot contract). A
     /// rename here is a break there, and nothing on this side would notice.
     #[test]
-    fn the_credential_keys_remuda_reads_are_spelled_as_the_adr_says() {
+    fn the_credential_keys_remuda_reads_are_spelled_as_decision_0003_says() {
         let mut payload =
             ProviderPayload::live("claude", "store", UsageSnapshot::at(chrono::Utc::now()));
         payload.credential = CredentialInfo {

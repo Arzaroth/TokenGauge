@@ -27,7 +27,7 @@ remuda's side is its `src/served.rs` and "Finding a running page" in its
   `remuda-serve.service` if installed and nothing serves (waiting up to 10s), and
   otherwise exits non-zero with a message.
 
-Pinned by `remuda::tests::the_serve_keys_are_spelled_as_the_adr_says` and
+Pinned by `remuda::tests::the_serve_keys_are_spelled_as_decision_0004_says` and
 `remuda::tests::a_start_time_is_the_twenty_second_stat_field`; renaming a key is a
 change to decision 0004 and to remuda. Needs a remuda newer than 0.4.2; against an
 older one the button never appears.

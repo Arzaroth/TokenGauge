@@ -125,7 +125,7 @@ after a failed fetch keeps `credential` and `active`, with `stale: true` and
 `staleReason`. Fields remuda already read are unchanged. No payload or error
 carries a token or an email.
 
-`payload::tests::the_credential_keys_remuda_reads_are_spelled_as_the_adr_says`
+`payload::tests::the_credential_keys_remuda_reads_are_spelled_as_decision_0003_says`
 pins the names: renaming one is a change to decision 0003 and to remuda. Every
 test config turns the store off (`CredentialsConfig::off()`, or
 `[credentials] store = ""`).

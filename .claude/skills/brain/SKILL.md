@@ -22,7 +22,7 @@ rules a change can break, each with the incident that taught it.
    suspect drift.
 4. Terms -> `brain/glossary.md` (each with the synonyms to avoid). Rationale /
    "why not the other way" -> `brain/decisions.md` (the former ADRs keep their
-   numbers: "ADR 0003" in a commit or a test name is `### 0003` there).
+   numbers: "ADR 0003" in a commit is `### 0003` there).
 5. About to change code -> also read the matching `CLAUDE.md` section
    (`grep -n '^##' CLAUDE.md`): frontend parity, snapshot and staleness,
    credentials, costs, history, the harnesses, the binary name, the updater,

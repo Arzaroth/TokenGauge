@@ -473,6 +473,7 @@ fn file_tokens(file: CredentialFile) -> LoginTokens {
 pub(crate) fn live_login() -> LiveLogin {
     if let Some(key) = cleaned(std::env::var(API_KEY_ENV).ok()) {
         return LiveLogin {
+            subscription: None,
             tokens: LoginTokens {
                 access: Some(key),
                 refresh: None,
@@ -481,6 +482,7 @@ pub(crate) fn live_login() -> LiveLogin {
         };
     }
     LiveLogin {
+        subscription: None,
         tokens: read_credential(&credentials_path())
             .map(file_tokens)
             .unwrap_or_default(),

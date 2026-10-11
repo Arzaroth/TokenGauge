@@ -327,6 +327,8 @@ pub(crate) struct LiveLogin {
     /// that describes the token actually sent carries one: an override
     /// variable, a personal access token, an API key.
     pub account: Option<String>,
+    /// The plan the token says it is on, where it says one.
+    pub subscription: Option<String>,
 }
 
 /// An API key's account, as remuda files it: it has none behind it to
@@ -339,6 +341,7 @@ pub(crate) fn key_account(key: &str) -> String {
 pub(crate) fn key_login(key: Option<String>) -> LiveLogin {
     let key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
     LiveLogin {
+        subscription: None,
         account: key.as_deref().map(key_account),
         tokens: LoginTokens {
             access: key,
@@ -872,6 +875,7 @@ pub(crate) mod tests {
 
     fn live(access: &str, refresh: &str, account: Option<&str>) -> LiveLogin {
         LiveLogin {
+            subscription: None,
             tokens: LoginTokens {
                 access: Some(access.into()),
                 refresh: Some(refresh.into()),

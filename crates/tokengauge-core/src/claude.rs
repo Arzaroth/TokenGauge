@@ -318,6 +318,7 @@ pub(crate) fn live_login() -> LiveLogin {
         return LiveLogin::default();
     };
     LiveLogin {
+        subscription: oauth.subscription_type.clone(),
         tokens: login_tokens(&oauth),
         account: live_account(source, &claude_json_path()),
     }

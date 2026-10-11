@@ -1463,6 +1463,26 @@ pub(crate) mod tests {
             Some(20.0),
             "a choice that names no seat leaves the live weight"
         );
+
+        fn on_max() -> LiveLogin {
+            LiveLogin {
+                subscription: Some("max".into()),
+                ..live("a-newer", "r-newer", Some("u-work"))
+            }
+        }
+        put_seat(&store, "claude", "work", Some("team_premium"));
+        let moved_on = StoreReader {
+            live: on_max,
+            ..FAKE
+        };
+        let (payloads, _) = fetch_provider("claude", &moved_on, &config, &[], live_payload);
+        let work = named(&payloads, "work");
+        assert_eq!(work.credential.active, Some(true));
+        assert_eq!(
+            work.credential.plan_weight,
+            Some(20.0),
+            "a live token on Max, matched by account to a stored Team copy"
+        );
         put_seat(&store, "claude", "work", None);
 
         let unseated = StoreReader {

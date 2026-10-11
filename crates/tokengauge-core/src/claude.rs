@@ -1304,6 +1304,21 @@ mod tests {
     }
 
     #[test]
+    fn a_chosen_seat_weighs_the_live_login_only_while_its_token_is_on_team() {
+        let team = r#"{"claudeAiOauth":{"accessToken":"a","subscriptionType":"team"}}"#;
+        assert_eq!(
+            live_seat_weight(team, Some("team"), "team_premium"),
+            Some(6.25)
+        );
+        assert_eq!(live_seat_weight(team, None, "team_premium"), Some(6.25));
+        assert_eq!(
+            live_seat_weight(team, Some("max"), "team_premium"),
+            None,
+            "a live token on Max, matched by account to a stored Team copy"
+        );
+    }
+
+    #[test]
     fn the_live_seat_tier_is_the_one_claude_json_records_for_its_own_login() {
         let dir = std::env::temp_dir().join(format!("tg-claude-seat-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

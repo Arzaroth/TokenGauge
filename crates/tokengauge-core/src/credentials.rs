@@ -123,7 +123,8 @@ pub struct ProviderStore {
 /// A credential is a `.json` file directly under the provider directory that
 /// neither starts with `.` nor ends in `.meta.json`: dot-files are the
 /// switcher's own, and the other suffix is a sidecar. Only names, so it is
-/// cheap enough for [`crate::cache_is_stale`] to call on every render.
+/// cheap enough for [`crate::cache_is_stale`] to call on every render;
+/// [`chosen_seats`] beside it reads each sidecar as well, a few small files.
 pub fn credential_names(store: &Path, provider: &str) -> Vec<String> {
     let Ok(read) = std::fs::read_dir(store.join(provider)) else {
         return Vec::new();
@@ -375,6 +376,10 @@ pub(crate) fn check_stored_key(text: &str, _now: DateTime<Utc>) -> Result<Option
 /// A stored credential's weight from its text and its sidecar's seat tier.
 pub(crate) type Weigh = fn(&str, Option<&str>) -> Option<f64>;
 
+/// A seat tier's weight for a stored credential, from its text and the tier;
+/// `None` when the tier names no seat that credential can hold.
+pub(crate) type SeatWeight = fn(&str, &str) -> Option<f64>;
+
 /// How one provider's credentials are read, for the providers a switcher
 /// stores. Function pointers rather than a trait, like the rest of the
 /// provider table.
@@ -393,6 +398,8 @@ pub(crate) struct StoreReader {
     /// It replaces the fetch's weight on every payload a verified entry
     /// produces, carried ones included.
     pub weigh: Option<Weigh>,
+    /// A chosen seat's weight, for the live login the entry is.
+    pub seat_weight: Option<SeatWeight>,
 }
 
 /// How a provider's store lines up with its live login.
@@ -550,10 +557,12 @@ pub(crate) fn fetch_provider(
         payload.credential.name = matched.map(|e| e.name.clone());
         payload.credential.label = matched.and_then(|e| e.label.clone());
         payload.credential.account_digest = matched.and_then(StoredCredential::account_digest);
-        if let Some((weigh, entry)) = reader.weigh.zip(matched)
-            && entry.chosen_seat.is_some()
+        if let Some(weight) = reader
+            .seat_weight
+            .zip(matched)
+            .and_then(|(seat, entry)| seat(&entry.text, entry.chosen_seat.as_deref()?))
         {
-            payload.credential.plan_weight = weigh(&entry.text, entry.chosen_seat.as_deref());
+            payload.credential.plan_weight = Some(weight);
         }
         if may_be_stored {
             payload.credential.plan_weight = None;
@@ -1115,6 +1124,7 @@ pub(crate) mod tests {
         fetch: crate::claude::fetch_stored,
         check: crate::claude::check_stored,
         weigh: Some(crate::claude::stored_weight),
+        seat_weight: Some(crate::claude::stored_seat_weight),
     };
 
     fn claude_creds(expires_ms: i64) -> String {
@@ -1224,6 +1234,10 @@ pub(crate) mod tests {
         seat_tier.and_then(crate::claude::seat_weight).or(Some(5.0))
     }
 
+    fn fake_seat(_: &str, seat_tier: &str) -> Option<f64> {
+        crate::claude::seat_weight(seat_tier)
+    }
+
     fn fake_check(_: &str, _: DateTime<Utc>) -> Result<Option<CredentialState>> {
         Ok(None)
     }
@@ -1234,6 +1248,7 @@ pub(crate) mod tests {
         fetch: fake_fetch,
         check: fake_check,
         weigh: Some(fake_weigh),
+        seat_weight: Some(fake_seat),
     };
 
     fn live_payload() -> Result<Vec<ProviderPayload>> {

@@ -151,8 +151,9 @@ provider that is enabled now was switched on - `CacheMeta.providers` records the
 set each fetch ran with - **or** a window it reported has reset since it was
 written, because those percentages describe a window that no longer exists -
 **or** the credential store changed under it (a credential added, removed or
-renamed against `CacheMeta.credentials`, or a switch in remuda's
-`.last-switch.json` after the write). Age
+renamed against `CacheMeta.credentials`, a seat chosen in remuda against
+`CacheMeta.seats`, or a switch in remuda's `.last-switch.json` after the
+write). Age
 alone was the old rule, and it is why enabling a provider used to do nothing for
 ten minutes. The rollover test compares against the write, not against now
 alone: a provider reporting an instant already past reports the same one on the
@@ -297,7 +298,9 @@ Rules that are easy to regress:
   names one (`claude::seat_weight`; a stored credential goes through
   `StoreReader.weigh`, which reweighs every payload a verified entry yields,
   carried ones included), because the profile names the seat where the token
-  only hints.
+  only hints. A seat chosen with `remuda seat` (the sidecar's top-level
+  `seatTier`) outranks the profile's, for the live login it matches too,
+  while that login's own token is still on Team.
 - **An API key is filed under a digest of itself.** GLM and opencode Go have no
   account behind a key, so remuda names one `key-` and the first 16 hex digits
   of its SHA-256, and `credentials::key_account` must say the same, or the

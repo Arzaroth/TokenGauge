@@ -49,7 +49,9 @@ token is "not signed in - run `claude setup-token`", distinct from "expired".
   an API key `key-` + first 16 hex of its SHA-256, mirrored by
   `credentials::key_account`), `email`, `capturedAt`, optional `label`, Claude's
   `oauthAccount` (TokenGauge reads only its `seatTier`, for a Team seat's
-  weight), and `credsDigest`.
+  weight), an optional top-level `seatTier` (the seat chosen with `remuda seat`,
+  kept out of `oauthAccount` because a switch restores that block into Claude
+  Code's file; it outranks the block's), and `credsDigest`.
 - **`credsDigest`** is the SHA-256 of the credential file's exact bytes, 64
   lowercase hex. On mismatch the sidecar is not trusted for that credential (the
   group draws `unverified`, unasked). The bytes are read once and those bytes

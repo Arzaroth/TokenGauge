@@ -616,6 +616,7 @@ fn live_from(text: &str, now: DateTime<Utc>) -> LiveLogin {
     };
     match sent_entry(map, now).ok().or_else(|| preferred(map)) {
         Some(entry) => LiveLogin {
+            subscription: None,
             tokens: tokens_of(entry),
             account: account_of(entry),
         },

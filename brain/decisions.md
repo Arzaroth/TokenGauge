@@ -134,7 +134,12 @@ keeping inactive tokens alive are the switcher's job.
   seat where the token only hints at it, so `oauthAccount.seatTier`
   (`team_standard`, `team_premium`) decides when it names one: off a sidecar
   whose digest matches its tokens, or off `.claude.json` for a live token from
-  Claude Code's own stores. Without it, the subscription type and an `Nx` tier
+  Claude Code's own stores. The profile has been seen to report a premium seat
+  as standard, so a seat the user chose in remuda (the sidecar's top-level
+  `seatTier`) outranks both, for the stored copy and for the live login it
+  matches while the live token is still on Team (an account match can pair a
+  newer Max token with an older Team copy). The snapshot records the chosen seats (`CacheMeta.seats`), and a new
+  choice makes it stale. Without either, the subscription type and an `Nx` tier
   decide. Codex first shipped
   without a table, then gained one when OpenAI split Pro into 5x / 10x / 25x Plus
   tiers named on the wire. Grok is weighed by price because xAI publishes no

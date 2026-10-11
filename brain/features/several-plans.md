@@ -34,7 +34,7 @@ estimate. A plan with no known weight stays out of the total and is marked
 
 | Provider | Base | Weights |
 | --- | --- | --- |
-| Claude (`claude.rs`) | Pro | Pro 1; an `Nx` tier N (Max 5x 5, Max 20x 20); Team standard 1.25, premium 6.25, from `oauthAccount.seatTier` when it names the seat. Enterprise none |
+| Claude (`claude.rs`) | Pro | Pro 1; an `Nx` tier N (Max 5x 5, Max 20x 20); Team standard 1.25, premium 6.25, from the seat chosen with `remuda seat`, else `oauthAccount.seatTier` when it names the seat. Enterprise none |
 | Codex (`codex.rs`, wire `plan_type`) | Plus | `plus` 1, `prolite` (Pro 100) 5, `pro` (Pro 200) 10, `promax` (Pro 500) 25, `team` (Business) 1, `self_serve_business_prolite` 5. `business` (Enterprise), free, Go, EDU none |
 | GLM (`glm.rs`) | weekly credits / 1000 | Lite 10, Pro 60, Max 140 |
 | Cursor (`cursor.rs`) | Pro | Pro 1, Pro+ 3, Ultra 20; team seats none |

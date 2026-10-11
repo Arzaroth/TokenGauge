@@ -318,6 +318,7 @@ pub(crate) fn live_login() -> LiveLogin {
         return LiveLogin::default();
     };
     LiveLogin {
+        subscription: oauth.subscription_type.clone(),
         tokens: login_tokens(&oauth),
         account: live_account(source, &claude_json_path()),
     }
@@ -338,12 +339,18 @@ fn live_seat_tier(source: &str, claude_json: &Path) -> Option<String> {
         .flatten()
 }
 
-/// The live login's weight: its seat tier's when that names a Team seat, else
-/// what the token said.
-fn live_weight(token_weight: Option<f64>, source: &str, claude_json: &Path) -> Option<f64> {
+/// The live login's weight: its seat tier's when that names a Team seat and
+/// the token is still on a Team plan, else what the token said.
+fn live_weight(
+    token_weight: Option<f64>,
+    subscription_type: Option<&str>,
+    source: &str,
+    claude_json: &Path,
+) -> Option<f64> {
     live_seat_tier(source, claude_json)
         .as_deref()
         .and_then(seat_weight)
+        .filter(|_| may_hold_seat(subscription_type))
         .or(token_weight)
 }
 
@@ -590,13 +597,47 @@ pub(crate) fn seat_weight(seat_tier: &str) -> Option<f64> {
 /// tier alone, so a payload carried from an earlier fetch is weighed as the
 /// store reads now.
 pub(crate) fn stored_weight(text: &str, seat_tier: Option<&str>) -> Option<f64> {
-    seat_tier.and_then(seat_weight).or_else(|| {
-        let oauth = parse_credentials(text).ok()?;
-        plan_weight(
-            oauth.subscription_type.as_deref(),
-            oauth.rate_limit_tier.as_deref(),
-        )
-    })
+    seat_tier
+        .and_then(|tier| stored_seat_weight(text, tier))
+        .or_else(|| {
+            let oauth = parse_credentials(text).ok()?;
+            plan_weight(
+                oauth.subscription_type.as_deref(),
+                oauth.rate_limit_tier.as_deref(),
+            )
+        })
+}
+
+/// A stored credential's seat weight: its seat tier's, while its token is
+/// still on a Team plan.
+pub(crate) fn stored_seat_weight(text: &str, seat_tier: &str) -> Option<f64> {
+    let oauth = parse_credentials(text).ok();
+    may_hold_seat(oauth.as_ref().and_then(|o| o.subscription_type.as_deref()))
+        .then(|| seat_weight(seat_tier))
+        .flatten()
+}
+
+/// The live login's seat weight: the stored entry it matched must still be on
+/// Team, and so must the live token, which may be newer than the entry when
+/// the two matched by account.
+pub(crate) fn live_seat_weight(
+    text: &str,
+    subscription_type: Option<&str>,
+    seat_tier: &str,
+) -> Option<f64> {
+    may_hold_seat(subscription_type)
+        .then(|| stored_seat_weight(text, seat_tier))
+        .flatten()
+}
+
+/// Whether a token's subscription type leaves room for a Team seat: it says
+/// `team`, or says nothing. A seat chosen or reported for a login that has
+/// since moved to Max is not its weight any more.
+fn may_hold_seat(subscription_type: Option<&str>) -> bool {
+    subscription_type
+        .map(str::trim)
+        .filter(|sub| !sub.is_empty())
+        .is_none_or(|sub| sub.to_ascii_lowercase().contains("team"))
 }
 
 /// The routines extra window, if any alias key is present.
@@ -781,8 +822,12 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
     let (oauth, source) = load_oauth(now)?;
     let mut payload = usage_for(&oauth, timeout, now, "run `claude` to log in")?;
-    payload.credential.plan_weight =
-        live_weight(payload.credential.plan_weight, source, &claude_json_path());
+    payload.credential.plan_weight = live_weight(
+        payload.credential.plan_weight,
+        oauth.subscription_type.as_deref(),
+        source,
+        &claude_json_path(),
+    );
     Ok(vec![payload])
 }
 
@@ -1246,6 +1291,31 @@ mod tests {
         assert_eq!(stored_weight(team, Some("enterprise_seat")), Some(1.25));
         assert_eq!(stored_weight("not json", Some("team_premium")), Some(6.25));
         assert_eq!(stored_weight("not json", None), None);
+
+        let max = r#"{"claudeAiOauth":{"accessToken":"a","subscriptionType":"max","rateLimitTier":"default_claude_max_20x"}}"#;
+        assert_eq!(
+            stored_weight(max, Some("team_premium")),
+            Some(20.0),
+            "a seat for a login that has left its Team plan"
+        );
+        assert_eq!(stored_seat_weight(max, "team_premium"), None);
+        assert_eq!(stored_seat_weight(team, "team_premium"), Some(6.25));
+        assert_eq!(stored_seat_weight(team, "team_unknown"), None);
+    }
+
+    #[test]
+    fn a_chosen_seat_weighs_the_live_login_only_while_its_token_is_on_team() {
+        let team = r#"{"claudeAiOauth":{"accessToken":"a","subscriptionType":"team"}}"#;
+        assert_eq!(
+            live_seat_weight(team, Some("team"), "team_premium"),
+            Some(6.25)
+        );
+        assert_eq!(live_seat_weight(team, None, "team_premium"), Some(6.25));
+        assert_eq!(
+            live_seat_weight(team, Some("max"), "team_premium"),
+            None,
+            "a live token on Max, matched by account to a stored Team copy"
+        );
     }
 
     #[test]
@@ -1268,14 +1338,23 @@ mod tests {
             "the override is not the file's login"
         );
         assert_eq!(
-            live_weight(Some(1.25), ".credentials.json", &path),
+            live_weight(Some(1.25), None, ".credentials.json", &path),
             Some(6.25)
         );
-        assert_eq!(live_weight(Some(1.25), ENV_TOKEN, &path), Some(1.25));
+        assert_eq!(live_weight(Some(1.25), None, ENV_TOKEN, &path), Some(1.25));
+        assert_eq!(
+            live_weight(Some(20.0), Some("max"), ".credentials.json", &path),
+            Some(20.0),
+            "a seat .claude.json still names after the login left Team"
+        );
+        assert_eq!(
+            live_weight(Some(1.25), Some("team"), ".credentials.json", &path),
+            Some(6.25)
+        );
         std::fs::write(&path, r#"{"oauthAccount":{"seatTier":null}}"#).unwrap();
         assert_eq!(live_seat_tier(".credentials.json", &path), None);
         assert_eq!(
-            live_weight(Some(20.0), ".credentials.json", &path),
+            live_weight(Some(20.0), None, ".credentials.json", &path),
             Some(20.0)
         );
         let _ = std::fs::remove_dir_all(&dir);

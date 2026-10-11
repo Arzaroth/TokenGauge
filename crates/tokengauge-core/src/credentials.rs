@@ -55,7 +55,8 @@ pub fn default_store() -> PathBuf {
 
 /// A sidecar, minus what TokenGauge never reads: `email` stays on the machine
 /// and out of every file TokenGauge writes, and `oauthAccount` is remuda's to
-/// restore on a switch, read here for its `seatTier` alone.
+/// restore on a switch, read here for its `seatTier` alone. The top-level
+/// `seatTier` is the seat the user chose in remuda, and outranks it.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Sidecar {
@@ -66,6 +67,8 @@ struct Sidecar {
     creds_digest: Option<String>,
     #[serde(default)]
     oauth_account: Option<serde_json::Value>,
+    #[serde(default)]
+    seat_tier: Option<serde_json::Value>,
 }
 
 /// One stored credential, as read.
@@ -80,9 +83,13 @@ pub struct StoredCredential {
     pub account_id: Option<String>,
     /// The sidecar's label, trusted on the same terms as its identity.
     pub label: Option<String>,
-    /// The seat tier the account's profile reported at capture
-    /// (`team_standard`), trusted on the same terms.
+    /// The seat tier the user chose in remuda, else the one the account's
+    /// profile reported at capture (`team_standard`), trusted on the same
+    /// terms.
     pub seat_tier: Option<String>,
+    /// The seat tier the user chose, alone: it describes the account, so it
+    /// weighs the live login too.
+    pub chosen_seat: Option<String>,
 }
 
 impl StoredCredential {
@@ -116,7 +123,8 @@ pub struct ProviderStore {
 /// A credential is a `.json` file directly under the provider directory that
 /// neither starts with `.` nor ends in `.meta.json`: dot-files are the
 /// switcher's own, and the other suffix is a sidecar. Only names, so it is
-/// cheap enough for [`crate::cache_is_stale`] to call on every render.
+/// cheap enough for [`crate::cache_is_stale`] to call on every render;
+/// [`chosen_seats`] beside it reads each sidecar as well, a few small files.
 pub fn credential_names(store: &Path, provider: &str) -> Vec<String> {
     let Ok(read) = std::fs::read_dir(store.join(provider)) else {
         return Vec::new();
@@ -128,6 +136,22 @@ pub fn credential_names(store: &Path, provider: &str) -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+/// The seat tier the user chose in remuda for each credential that has one, by
+/// name. Read to tell whether the store moved, so whether the sidecar matches
+/// its tokens does not matter here.
+pub fn chosen_seats(store: &Path, provider: &str) -> BTreeMap<String, String> {
+    let dir = store.join(provider);
+    credential_names(store, provider)
+        .into_iter()
+        .filter_map(|name| {
+            let text = std::fs::read_to_string(dir.join(format!("{name}.meta.json"))).ok()?;
+            let meta: serde_json::Value = serde_json::from_str(&text).ok()?;
+            let tier = meta.get("seatTier")?.as_str()?.trim().to_string();
+            (!tier.is_empty()).then_some((name, tier))
+        })
+        .collect()
 }
 
 /// When the switcher last changed a provider's active credential, in Unix
@@ -192,17 +216,27 @@ fn read_one(dir: &Path, name: &str) -> std::result::Result<StoredCredential, Str
         .creds_digest
         .as_deref()
         .is_none_or(|d| d.eq_ignore_ascii_case(&digest));
-    let seat_tier = sidecar
-        .oauth_account
-        .as_ref()
-        .and_then(|account| account.get("seatTier")?.as_str())
-        .map(str::trim)
-        .filter(|tier| verified && !tier.is_empty())
-        .map(str::to_string);
+    let tier = |value: Option<&serde_json::Value>| {
+        value
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|tier| verified && !tier.is_empty())
+            .map(str::to_string)
+    };
+    let chosen_seat = tier(sidecar.seat_tier.as_ref());
+    let seat_tier = chosen_seat.clone().or_else(|| {
+        tier(
+            sidecar
+                .oauth_account
+                .as_ref()
+                .and_then(|account| account.get("seatTier")),
+        )
+    });
     Ok(StoredCredential {
         name: name.to_string(),
         text,
         seat_tier,
+        chosen_seat,
         account_id: verified.then_some(sidecar.account_id),
         label: sidecar
             .label
@@ -293,6 +327,8 @@ pub(crate) struct LiveLogin {
     /// that describes the token actually sent carries one: an override
     /// variable, a personal access token, an API key.
     pub account: Option<String>,
+    /// The plan the token says it is on, where it says one.
+    pub subscription: Option<String>,
 }
 
 /// An API key's account, as remuda files it: it has none behind it to
@@ -305,6 +341,7 @@ pub(crate) fn key_account(key: &str) -> String {
 pub(crate) fn key_login(key: Option<String>) -> LiveLogin {
     let key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
     LiveLogin {
+        subscription: None,
         account: key.as_deref().map(key_account),
         tokens: LoginTokens {
             access: key,
@@ -342,6 +379,11 @@ pub(crate) fn check_stored_key(text: &str, _now: DateTime<Utc>) -> Result<Option
 /// A stored credential's weight from its text and its sidecar's seat tier.
 pub(crate) type Weigh = fn(&str, Option<&str>) -> Option<f64>;
 
+/// A seat tier's weight for the live login, from its stored entry's text, the
+/// subscription the live token names and the tier; `None` when the tier names
+/// no seat that login can hold.
+pub(crate) type SeatWeight = fn(&str, Option<&str>, &str) -> Option<f64>;
+
 /// How one provider's credentials are read, for the providers a switcher
 /// stores. Function pointers rather than a trait, like the rest of the
 /// provider table.
@@ -360,6 +402,8 @@ pub(crate) struct StoreReader {
     /// It replaces the fetch's weight on every payload a verified entry
     /// produces, carried ones included.
     pub weigh: Option<Weigh>,
+    /// A chosen seat's weight, for the live login the entry is.
+    pub seat_weight: Option<SeatWeight>,
 }
 
 /// How a provider's store lines up with its live login.
@@ -517,6 +561,15 @@ pub(crate) fn fetch_provider(
         payload.credential.name = matched.map(|e| e.name.clone());
         payload.credential.label = matched.and_then(|e| e.label.clone());
         payload.credential.account_digest = matched.and_then(StoredCredential::account_digest);
+        if let Some(weight) = reader.seat_weight.zip(matched).and_then(|(seat, entry)| {
+            seat(
+                &entry.text,
+                live.subscription.as_deref(),
+                entry.chosen_seat.as_deref()?,
+            )
+        }) {
+            payload.credential.plan_weight = Some(weight);
+        }
         if may_be_stored {
             payload.credential.plan_weight = None;
         }
@@ -778,10 +831,24 @@ pub(crate) mod tests {
     /// Give a sidecar `put` wrote the `oauthAccount` remuda restores on a
     /// switch, as its value.
     fn put_account(store: &Path, provider: &str, name: &str, account: serde_json::Value) {
+        put_meta(store, provider, name, "oauthAccount", account);
+    }
+
+    /// Choose a seat in a sidecar `put` wrote, as `remuda seat` does, or clear
+    /// the choice.
+    pub(crate) fn put_seat(store: &Path, provider: &str, name: &str, tier: Option<&str>) {
+        put_meta(store, provider, name, "seatTier", serde_json::json!(tier));
+    }
+
+    fn put_meta(store: &Path, provider: &str, name: &str, key: &str, value: serde_json::Value) {
         let meta_path = store.join(provider).join(format!("{name}.meta.json"));
         let mut meta: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
-        meta["oauthAccount"] = account;
+        if value.is_null() {
+            meta.as_object_mut().unwrap().remove(key);
+        } else {
+            meta[key] = value;
+        }
         std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()).unwrap();
         set_mode(&meta_path, 0o600);
     }
@@ -805,11 +872,13 @@ pub(crate) mod tests {
             account_id: account.map(str::to_string),
             label: None,
             seat_tier: None,
+            chosen_seat: None,
         }
     }
 
     fn live(access: &str, refresh: &str, account: Option<&str>) -> LiveLogin {
         LiveLogin {
+            subscription: None,
             tokens: LoginTokens {
                 access: Some(access.into()),
                 refresh: Some(refresh.into()),
@@ -874,6 +943,29 @@ pub(crate) mod tests {
         );
         assert_eq!(tier("odd"), None);
         assert_eq!(tier("plain"), None);
+
+        // The seat chosen in remuda outranks the one the profile reported.
+        put_seat(&store, "claude", "work", Some("team_standard"));
+        put_seat(&store, "claude", "moved", Some("team_standard"));
+        let read = read_provider(&store, "claude");
+        let entry = |name: &str| read.entries.iter().find(|e| e.name == name).unwrap();
+        assert_eq!(entry("work").seat_tier.as_deref(), Some("team_standard"));
+        assert_eq!(entry("work").chosen_seat.as_deref(), Some("team_standard"));
+        assert_eq!(entry("plain").chosen_seat, None);
+        assert_eq!(
+            entry("moved").chosen_seat,
+            None,
+            "a choice for other tokens"
+        );
+        assert_eq!(
+            chosen_seats(&store, "claude")
+                .into_iter()
+                .collect::<Vec<_>>(),
+            [
+                ("moved".to_string(), "team_standard".to_string()),
+                ("work".to_string(), "team_standard".to_string())
+            ]
+        );
         let _ = std::fs::remove_dir_all(&store);
     }
 
@@ -1039,6 +1131,7 @@ pub(crate) mod tests {
         fetch: crate::claude::fetch_stored,
         check: crate::claude::check_stored,
         weigh: Some(crate::claude::stored_weight),
+        seat_weight: Some(crate::claude::live_seat_weight),
     };
 
     fn claude_creds(expires_ms: i64) -> String {
@@ -1148,6 +1241,10 @@ pub(crate) mod tests {
         seat_tier.and_then(crate::claude::seat_weight).or(Some(5.0))
     }
 
+    fn fake_seat(text: &str, subscription: Option<&str>, seat_tier: &str) -> Option<f64> {
+        crate::claude::live_seat_weight(text, subscription, seat_tier)
+    }
+
     fn fake_check(_: &str, _: DateTime<Utc>) -> Result<Option<CredentialState>> {
         Ok(None)
     }
@@ -1158,6 +1255,7 @@ pub(crate) mod tests {
         fetch: fake_fetch,
         check: fake_check,
         weigh: Some(fake_weigh),
+        seat_weight: Some(fake_seat),
     };
 
     fn live_payload() -> Result<Vec<ProviderPayload>> {
@@ -1350,6 +1448,42 @@ pub(crate) mod tests {
             None,
             "a seat tier from a sidecar written for other tokens"
         );
+
+        // The live login is weighed by the seat chosen for the entry it is.
+        assert_eq!(named(&payloads, "work").credential.plan_weight, Some(20.0));
+        put_seat(&store, "claude", "work", Some("team_premium"));
+        let (payloads, _) = fetch_provider("claude", &FAKE, &config, &[], live_payload);
+        let work = named(&payloads, "work");
+        assert_eq!(work.credential.active, Some(true));
+        assert_eq!(work.credential.plan_weight, Some(6.25));
+        put_seat(&store, "claude", "work", Some("team_unknown"));
+        let (payloads, _) = fetch_provider("claude", &FAKE, &config, &[], live_payload);
+        assert_eq!(
+            named(&payloads, "work").credential.plan_weight,
+            Some(20.0),
+            "a choice that names no seat leaves the live weight"
+        );
+
+        fn on_max() -> LiveLogin {
+            LiveLogin {
+                subscription: Some("max".into()),
+                ..live("a-newer", "r-newer", Some("u-work"))
+            }
+        }
+        put_seat(&store, "claude", "work", Some("team_premium"));
+        let moved_on = StoreReader {
+            live: on_max,
+            ..FAKE
+        };
+        let (payloads, _) = fetch_provider("claude", &moved_on, &config, &[], live_payload);
+        let work = named(&payloads, "work");
+        assert_eq!(work.credential.active, Some(true));
+        assert_eq!(
+            work.credential.plan_weight,
+            Some(20.0),
+            "a live token on Max, matched by account to a stored Team copy"
+        );
+        put_seat(&store, "claude", "work", None);
 
         let unseated = StoreReader {
             weigh: None,

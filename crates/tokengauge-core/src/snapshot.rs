@@ -48,12 +48,21 @@ pub struct CacheMeta {
     /// make the snapshot stale.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials_at_ms: Option<i64>,
+    /// The seats chosen in remuda per provider and credential at the write.
+    /// See [`store_moved`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub seats: Seats,
 }
+
+/// Chosen seat tiers, by provider and then credential name.
+pub type Seats = BTreeMap<String, BTreeMap<String, String>>;
 
 /// The credential store as a fetch found it, taken before the fetch reads it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StoreSeen {
     pub names: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub seats: Seats,
     pub at_ms: i64,
 }
 
@@ -65,6 +74,7 @@ impl StoreSeen {
         let at_ms = now_ms();
         Self {
             names: store_listing(config),
+            seats: store_seats(config),
             at_ms,
         }
     }
@@ -203,6 +213,7 @@ pub fn write_cache_full(
                 .collect(),
             credentials: store.names,
             credentials_at_ms: Some(store.at_ms),
+            seats: store.seats,
         })),
     };
     let contents = serde_json::to_string(&data)?;
@@ -259,13 +270,32 @@ fn store_listing(config: &TokenGaugeConfig) -> BTreeMap<String, Vec<String>> {
         .collect()
 }
 
+/// The seats chosen in remuda, for the enabled providers that have any.
+fn store_seats(config: &TokenGaugeConfig) -> Seats {
+    let Some(store) = config.credentials.store_root() else {
+        return Seats::new();
+    };
+    crate::stored_providers()
+        .into_iter()
+        .filter(|provider| config.providers.is_enabled(provider))
+        .map(|provider| {
+            (
+                provider.to_string(),
+                crate::credentials::chosen_seats(&store, provider),
+            )
+        })
+        .filter(|(_, seats)| !seats.is_empty())
+        .collect()
+}
+
 /// True when the credential store changed under the snapshot.
 ///
-/// Neither change is visible in the payloads: a credential added since the
-/// write has no payload yet and never will, and a switch makes another
-/// credential the active one without touching any file the snapshot names.
-/// So the write records the store's names, and remuda's `.last-switch.json`
-/// says when a provider last switched.
+/// None of these changes is visible in the payloads: a credential added since
+/// the write has no payload yet and never will, a switch makes another
+/// credential the active one without touching any file the snapshot names,
+/// and a seat chosen in remuda changes a plan's weight in a sidecar. So the
+/// write records the store's names and chosen seats, and remuda's
+/// `.last-switch.json` says when a provider last switched.
 fn store_moved(
     meta: Option<&CacheMeta>,
     config: &TokenGaugeConfig,
@@ -276,6 +306,10 @@ fn store_moved(
         .and_then(|m| m.credentials_at_ms)
         .unwrap_or_else(|| written_at.timestamp_millis());
     if store_listing(config) != recorded {
+        return true;
+    }
+    // A seat chosen in remuda reweighs a plan, and nothing else on disk moves.
+    if store_seats(config) != meta.map(|m| m.seats.clone()).unwrap_or_default() {
         return true;
     }
     let Some(store) = config.credentials.store_root() else {
@@ -671,6 +705,30 @@ mod tests {
             !cache_is_stale(&config),
             "a clock that stepped back is not a switch"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&store);
+    }
+
+    /// A seat chosen in remuda changes a plan's weight and nothing else on
+    /// disk, so the snapshot records the choices.
+    #[test]
+    fn a_seat_chosen_since_the_write_makes_the_snapshot_stale() {
+        use crate::credentials::tests::{put, put_seat, temp_store};
+        let dir = cache_test_dir("seat");
+        let cache = dir.join("tokengauge-usage.json");
+        let store = temp_store("seat");
+        put(&store, "claude", "work", "{}", "u-1");
+        let config = store_config(&cache, &store);
+        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
+        assert!(!cache_is_stale(&config));
+
+        put_seat(&store, "claude", "work", Some("team_premium"));
+        assert!(cache_is_stale(&config), "a seat chosen since the write");
+        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
+        assert!(!cache_is_stale(&config));
+        put_seat(&store, "claude", "work", None);
+        assert!(cache_is_stale(&config), "a choice set back to auto");
 
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&store);

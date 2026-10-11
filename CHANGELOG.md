@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.43.1] - 2026-10-11
+
 ### Fixed
 
 - A Claude Team seat's weight follows the seat tier Anthropic's profile reports

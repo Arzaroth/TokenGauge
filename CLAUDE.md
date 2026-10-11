@@ -299,7 +299,8 @@ Rules that are easy to regress:
   `StoreReader.weigh`, which reweighs every payload a verified entry yields,
   carried ones included), because the profile names the seat where the token
   only hints. A seat chosen with `remuda seat` (the sidecar's top-level
-  `seatTier`) outranks the profile's, for the live login it matches too.
+  `seatTier`) outranks the profile's, for the live login it matches too,
+  while that login's own token is still on Team.
 - **An API key is filed under a digest of itself.** GLM and opencode Go have no
   account behind a key, so remuda names one `key-` and the first 16 hex digits
   of its SHA-256, and `credentials::key_account` must say the same, or the

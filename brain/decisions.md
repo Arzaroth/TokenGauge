@@ -130,7 +130,12 @@ keeping inactive tokens alive are the switcher's job.
   weight stays out of the total rather than guessed at 1x (which would understate
   a large plan silently). The header's reset is the earliest, when capacity first
   comes back. Team seats weigh 1.25 / 6.25 (Anthropic's first-party "What is the
-  Team plan?"; they were 1 and 5 until that was found). Codex first shipped
+  Team plan?"; they were 1 and 5 until that was found). The profile names the
+  seat where the token only hints at it, so `oauthAccount.seatTier`
+  (`team_standard`, `team_premium`) decides when it names one: off a sidecar
+  whose digest matches its tokens, or off `.claude.json` for a live token from
+  Claude Code's own stores. Without it, the subscription type and an `Nx` tier
+  decide. Codex first shipped
   without a table, then gained one when OpenAI split Pro into 5x / 10x / 25x Plus
   tiers named on the wire. Grok is weighed by price because xAI publishes no
   multiplier and a guessed 1x would hide a Heavy behind a SuperGrok. opencode Go

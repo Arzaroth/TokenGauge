@@ -54,7 +54,7 @@ pub fn default_store() -> PathBuf {
 
 /// A sidecar, minus what TokenGauge never reads: `email` stays on the machine
 /// and out of every file TokenGauge writes, and `oauthAccount` is remuda's to
-/// restore on a switch.
+/// restore on a switch, read here for its `seatTier` alone.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Sidecar {
@@ -63,6 +63,8 @@ struct Sidecar {
     label: Option<String>,
     #[serde(default)]
     creds_digest: Option<String>,
+    #[serde(default)]
+    oauth_account: Option<serde_json::Value>,
 }
 
 /// One stored credential, as read.
@@ -77,6 +79,9 @@ pub struct StoredCredential {
     pub account_id: Option<String>,
     /// The sidecar's label, trusted on the same terms as its identity.
     pub label: Option<String>,
+    /// The seat tier the account's profile reported at capture
+    /// (`team_standard`), trusted on the same terms.
+    pub seat_tier: Option<String>,
 }
 
 impl StoredCredential {
@@ -186,9 +191,17 @@ fn read_one(dir: &Path, name: &str) -> std::result::Result<StoredCredential, Str
         .creds_digest
         .as_deref()
         .is_none_or(|d| d.eq_ignore_ascii_case(&digest));
+    let seat_tier = sidecar
+        .oauth_account
+        .as_ref()
+        .and_then(|account| account.get("seatTier")?.as_str())
+        .map(str::trim)
+        .filter(|tier| verified && !tier.is_empty())
+        .map(str::to_string);
     Ok(StoredCredential {
         name: name.to_string(),
         text,
+        seat_tier,
         account_id: verified.then_some(sidecar.account_id),
         label: sidecar
             .label
@@ -338,6 +351,9 @@ pub(crate) struct StoreReader {
     pub fetch: fn(&str, Duration, DateTime<Utc>) -> Result<ProviderPayload>,
     /// The fetch's checks without the request, for `--doctor`.
     pub check: fn(&str, DateTime<Utc>) -> Result<Option<CredentialState>>,
+    /// A plan weight from a sidecar's seat tier, for a provider that sells
+    /// seats the token does not tell apart.
+    pub seat_weight: Option<fn(&str) -> Option<f64>>,
 }
 
 /// How a provider's store lines up with its live login.
@@ -461,11 +477,11 @@ pub(crate) fn fetch_provider(
             let mut payload =
                 ProviderPayload::live(provider, "store", crate::UsageSnapshot::at(now));
             payload.credential.state = Some(CredentialState::Unverified);
-            slots.push(Some(stored(payload, entry)));
+            slots.push(Some(stored(payload, entry, reader)));
             continue;
         }
         if let Some(payload) = carried(provider, entry, previous, now, max_age) {
-            slots.push(Some(stored(payload, entry)));
+            slots.push(Some(stored(payload, entry, reader)));
             continue;
         }
         let stagger = Duration::from_millis(config.stagger_ms).saturating_mul(asks.len() as u32);
@@ -510,7 +526,7 @@ pub(crate) fn fetch_provider(
             .join()
             .unwrap_or_else(|_| Err(anyhow::anyhow!("thread panicked")))
         {
-            Ok(payload) => slots[slot] = Some(stored(payload, entry)),
+            Ok(payload) => slots[slot] = Some(stored(payload, entry, reader)),
             Err(e) => {
                 // Named in the message itself: every frontend already draws an
                 // error as provider and message, and "Claude: 401" beside a
@@ -529,7 +545,18 @@ pub(crate) fn fetch_provider(
 }
 
 /// A payload made a stored credential's.
-fn stored(mut payload: ProviderPayload, entry: &StoredCredential) -> ProviderPayload {
+fn stored(
+    mut payload: ProviderPayload,
+    entry: &StoredCredential,
+    reader: &StoreReader,
+) -> ProviderPayload {
+    if let Some(weight) = reader
+        .seat_weight
+        .zip(entry.seat_tier.as_deref())
+        .and_then(|(weigh, tier)| weigh(tier))
+    {
+        payload.credential.plan_weight = Some(weight);
+    }
     payload.credential.name = Some(entry.name.clone());
     payload.credential.active = Some(false);
     payload.credential.label = entry.label.clone();
@@ -764,6 +791,7 @@ pub(crate) mod tests {
             text: creds(access, refresh),
             account_id: account.map(str::to_string),
             label: None,
+            seat_tier: None,
         }
     }
 
@@ -956,6 +984,7 @@ pub(crate) mod tests {
         tokens: crate::claude::stored_tokens,
         fetch: crate::claude::fetch_stored,
         check: crate::claude::check_stored,
+        seat_weight: Some(crate::claude::seat_weight),
     };
 
     fn claude_creds(expires_ms: i64) -> String {
@@ -1069,6 +1098,7 @@ pub(crate) mod tests {
         tokens: tokens_of,
         fetch: fake_fetch,
         check: fake_check,
+        seat_weight: Some(crate::claude::seat_weight),
     };
 
     fn live_payload() -> Result<Vec<ProviderPayload>> {

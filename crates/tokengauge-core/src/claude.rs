@@ -331,6 +331,22 @@ fn live_account(source: &str, claude_json: &Path) -> Option<String> {
         .flatten()
 }
 
+/// The seat tier of the live login, on the same terms as its identity.
+fn live_seat_tier(source: &str, claude_json: &Path) -> Option<String> {
+    (source != ENV_TOKEN)
+        .then(|| oauth_account_field(claude_json, "seatTier"))
+        .flatten()
+}
+
+/// The live login's weight: its seat tier's when that names a Team seat, else
+/// what the token said.
+fn live_weight(token_weight: Option<f64>, source: &str, claude_json: &Path) -> Option<f64> {
+    live_seat_tier(source, claude_json)
+        .as_deref()
+        .and_then(seat_weight)
+        .or(token_weight)
+}
+
 pub(crate) fn stored_tokens(text: &str) -> LoginTokens {
     parse_credentials(text)
         .map(|oauth| login_tokens(&oauth))
@@ -557,6 +573,25 @@ fn plan_weight(subscription_type: Option<&str>, tier: Option<&str>) -> Option<f6
     })
 }
 
+/// A Team seat's weight from the seat tier Anthropic's profile reports
+/// (`team_standard`, `team_premium`). It outranks [`plan_weight`]: the profile
+/// names the seat, where the token's subscription type and tier only hint at
+/// it. `None` for a tier that is not a known Team seat, which leaves the
+/// token's own reading in place.
+pub(crate) fn seat_weight(seat_tier: &str) -> Option<f64> {
+    let tier = seat_tier.to_ascii_lowercase();
+    if !tier.contains("team") {
+        return None;
+    }
+    if tier.contains("premium") {
+        Some(TEAM_PREMIUM_WEIGHT)
+    } else if tier.contains("standard") {
+        Some(TEAM_STANDARD_WEIGHT)
+    } else {
+        None
+    }
+}
+
 /// The routines extra window, if any alias key is present.
 ///
 /// A populated alias (one carrying a real `utilization`) wins. An *explicit*
@@ -737,13 +772,11 @@ fn to_payload(
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
-    let (oauth, _source) = load_oauth(now)?;
-    Ok(vec![usage_for(
-        &oauth,
-        timeout,
-        now,
-        "run `claude` to log in",
-    )?])
+    let (oauth, source) = load_oauth(now)?;
+    let mut payload = usage_for(&oauth, timeout, now, "run `claude` to log in")?;
+    payload.credential.plan_weight =
+        live_weight(payload.credential.plan_weight, source, &claude_json_path());
+    Ok(vec![payload])
 }
 
 /// One usage request with one credential's token.

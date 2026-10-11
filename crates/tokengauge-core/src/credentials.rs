@@ -55,7 +55,8 @@ pub fn default_store() -> PathBuf {
 
 /// A sidecar, minus what TokenGauge never reads: `email` stays on the machine
 /// and out of every file TokenGauge writes, and `oauthAccount` is remuda's to
-/// restore on a switch, read here for its `seatTier` alone.
+/// restore on a switch, read here for its `seatTier` alone. The top-level
+/// `seatTier` is the seat the user chose in remuda, and outranks it.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Sidecar {
@@ -66,6 +67,8 @@ struct Sidecar {
     creds_digest: Option<String>,
     #[serde(default)]
     oauth_account: Option<serde_json::Value>,
+    #[serde(default)]
+    seat_tier: Option<serde_json::Value>,
 }
 
 /// One stored credential, as read.
@@ -80,9 +83,13 @@ pub struct StoredCredential {
     pub account_id: Option<String>,
     /// The sidecar's label, trusted on the same terms as its identity.
     pub label: Option<String>,
-    /// The seat tier the account's profile reported at capture
-    /// (`team_standard`), trusted on the same terms.
+    /// The seat tier the user chose in remuda, else the one the account's
+    /// profile reported at capture (`team_standard`), trusted on the same
+    /// terms.
     pub seat_tier: Option<String>,
+    /// The seat tier the user chose, alone: it describes the account, so it
+    /// weighs the live login too.
+    pub chosen_seat: Option<String>,
 }
 
 impl StoredCredential {
@@ -128,6 +135,22 @@ pub fn credential_names(store: &Path, provider: &str) -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+/// The seat tier the user chose in remuda for each credential that has one, by
+/// name. Read to tell whether the store moved, so whether the sidecar matches
+/// its tokens does not matter here.
+pub fn chosen_seats(store: &Path, provider: &str) -> BTreeMap<String, String> {
+    let dir = store.join(provider);
+    credential_names(store, provider)
+        .into_iter()
+        .filter_map(|name| {
+            let text = std::fs::read_to_string(dir.join(format!("{name}.meta.json"))).ok()?;
+            let meta: serde_json::Value = serde_json::from_str(&text).ok()?;
+            let tier = meta.get("seatTier")?.as_str()?.trim().to_string();
+            (!tier.is_empty()).then_some((name, tier))
+        })
+        .collect()
 }
 
 /// When the switcher last changed a provider's active credential, in Unix
@@ -192,17 +215,27 @@ fn read_one(dir: &Path, name: &str) -> std::result::Result<StoredCredential, Str
         .creds_digest
         .as_deref()
         .is_none_or(|d| d.eq_ignore_ascii_case(&digest));
-    let seat_tier = sidecar
-        .oauth_account
-        .as_ref()
-        .and_then(|account| account.get("seatTier")?.as_str())
-        .map(str::trim)
-        .filter(|tier| verified && !tier.is_empty())
-        .map(str::to_string);
+    let tier = |value: Option<&serde_json::Value>| {
+        value
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|tier| verified && !tier.is_empty())
+            .map(str::to_string)
+    };
+    let chosen_seat = tier(sidecar.seat_tier.as_ref());
+    let seat_tier = chosen_seat.clone().or_else(|| {
+        tier(
+            sidecar
+                .oauth_account
+                .as_ref()
+                .and_then(|account| account.get("seatTier")),
+        )
+    });
     Ok(StoredCredential {
         name: name.to_string(),
         text,
         seat_tier,
+        chosen_seat,
         account_id: verified.then_some(sidecar.account_id),
         label: sidecar
             .label
@@ -517,6 +550,11 @@ pub(crate) fn fetch_provider(
         payload.credential.name = matched.map(|e| e.name.clone());
         payload.credential.label = matched.and_then(|e| e.label.clone());
         payload.credential.account_digest = matched.and_then(StoredCredential::account_digest);
+        if let Some((weigh, entry)) = reader.weigh.zip(matched)
+            && entry.chosen_seat.is_some()
+        {
+            payload.credential.plan_weight = weigh(&entry.text, entry.chosen_seat.as_deref());
+        }
         if may_be_stored {
             payload.credential.plan_weight = None;
         }
@@ -805,6 +843,7 @@ pub(crate) mod tests {
             account_id: account.map(str::to_string),
             label: None,
             seat_tier: None,
+            chosen_seat: None,
         }
     }
 

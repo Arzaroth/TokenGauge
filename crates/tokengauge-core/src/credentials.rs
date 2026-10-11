@@ -7,7 +7,7 @@
 //! anyone else could read or plant tokens in, and finds which stored credential
 //! the live login is. Decision 0003 in `brain/decisions.md` is the contract,
 //! detailed in `brain/architecture/credentials.md`; remuda's side of it is
-//! its `brain/architecture/store.md`.
+//! `brain/architecture/store.md` in the remuda repository.
 //!
 //! Nothing here refreshes, moves or writes a stored credential. A refresh
 //! token rotates on use, so two processes refreshing one lock one of them out,

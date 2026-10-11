@@ -1230,9 +1230,22 @@ mod tests {
         assert_eq!(seat_weight("team_standard"), Some(1.25));
         assert_eq!(seat_weight("team_premium"), Some(6.25));
         assert_eq!(seat_weight("TEAM_PREMIUM"), Some(6.25));
+        assert_eq!(seat_weight(" team_standard "), Some(1.25));
         assert_eq!(seat_weight("team_something_new"), None);
+        assert_eq!(seat_weight("not_team_premium"), None);
+        assert_eq!(seat_weight("team_premium_trial"), None);
         assert_eq!(seat_weight("enterprise_premium"), None);
         assert_eq!(seat_weight(""), None);
+    }
+
+    #[test]
+    fn a_stored_credential_weighs_by_its_seat_tier_then_its_token() {
+        let team = r#"{"claudeAiOauth":{"accessToken":"a","subscriptionType":"team","rateLimitTier":"default_raven"}}"#;
+        assert_eq!(stored_weight(team, None), Some(1.25));
+        assert_eq!(stored_weight(team, Some("team_premium")), Some(6.25));
+        assert_eq!(stored_weight(team, Some("enterprise_seat")), Some(1.25));
+        assert_eq!(stored_weight("not json", Some("team_premium")), Some(6.25));
+        assert_eq!(stored_weight("not json", None), None);
     }
 
     #[test]

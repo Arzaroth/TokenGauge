@@ -1288,6 +1288,14 @@ pub(crate) mod tests {
             fetch_provider("claude", &FAKE, &config, &[recent.clone()], live_payload);
         assert_eq!(named(&payloads, "perso").source.as_deref(), Some("carried"));
 
+        // Weighed as the store reads now, not as it read when it was asked.
+        let mut seated = recent.clone();
+        seated.credential.plan_weight = Some(6.25);
+        let (payloads, _) = fetch_provider("claude", &FAKE, &config, &[seated], live_payload);
+        let perso = named(&payloads, "perso");
+        assert_eq!(perso.source.as_deref(), Some("carried"));
+        assert_eq!(perso.credential.plan_weight, Some(5.0));
+
         // The same name, re-captured for another account, is asked afresh.
         let mut other = recent.clone();
         other.credential.account_digest = Some(hex_sha256(b"u-someone-else")[..16].to_string());

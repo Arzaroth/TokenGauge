@@ -1218,6 +1218,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn a_seat_tier_names_a_team_seat_or_nothing() {
+        assert_eq!(seat_weight("team_standard"), Some(1.25));
+        assert_eq!(seat_weight("team_premium"), Some(6.25));
+        assert_eq!(seat_weight("TEAM_PREMIUM"), Some(6.25));
+        assert_eq!(seat_weight("team_something_new"), None);
+        assert_eq!(seat_weight("enterprise_premium"), None);
+        assert_eq!(seat_weight(""), None);
+    }
+
+    #[test]
+    fn the_live_seat_tier_is_the_one_claude_json_records_for_its_own_login() {
+        let dir = std::env::temp_dir().join(format!("tg-claude-seat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".claude.json");
+        std::fs::write(
+            &path,
+            r#"{"oauthAccount":{"accountUuid":"u-1","seatTier":"team_premium"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            live_seat_tier(".credentials.json", &path).as_deref(),
+            Some("team_premium")
+        );
+        assert_eq!(
+            live_seat_tier(ENV_TOKEN, &path),
+            None,
+            "the override is not the file's login"
+        );
+        assert_eq!(
+            live_weight(Some(1.25), ".credentials.json", &path),
+            Some(6.25)
+        );
+        assert_eq!(live_weight(Some(1.25), ENV_TOKEN, &path), Some(1.25));
+        std::fs::write(&path, r#"{"oauthAccount":{"seatTier":null}}"#).unwrap();
+        assert_eq!(live_seat_tier(".credentials.json", &path), None);
+        assert_eq!(
+            live_weight(Some(20.0), ".credentials.json", &path),
+            Some(20.0)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// serde quotes what it rejected, and a credential file holding a bare
     /// token string would carry the token into errors[], --json and --doctor.
     #[test]

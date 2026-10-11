@@ -1,0 +1,244 @@
+# Fleet sync (architecture)
+
+How tokens and money spent on every machine reach one panel: the fleet store,
+the contribution document, the envelope, the transports and the cycle. The user
+view (setup, the by-device section, what crosses the wire) is
+[../features/fleet-sync.md](../features/fleet-sync.md); the decisions are
+[0001 and 0002 in ../decisions.md](../decisions.md#fleet-sync).
+
+Status: built. `crates/tokengauge-core/src/sync/` holds the model, the envelope,
+the transports and the cycle; `panel.rs` renders it; the TUI's sync screen sets
+it up.
+
+## Only costs are per-machine
+
+| Data | Where it comes from | Scope |
+| ---- | ------------------- | ----- |
+| Rate windows, `credits`, plan label | the provider's API, for the credential | **already fleet-wide** |
+| Cost and tokens (`CostInfo`, `cost/`) | transcripts on the local disk | **per-machine** |
+
+A 5h window at 62% is 62% on every machine, because the provider counts the
+credential, not the host. Merging limits would double-count them, so merging
+applies to the cost side only and the `limits` section is untouched.
+
+That is why this is not a snapshot sync. `tokengauge-usage.json` holds provider
+payloads, error strings and account detail, none of which should leave the
+machine. The synced document is purpose-built, carries token counts and nothing
+else, so a leak has to be written on purpose rather than inherited.
+
+## The unit is an hourly token bucket
+
+Key `(utc_hour, provider, model)`, value a `TokenCounts` (the five fields of
+`cost::TokenCounts`).
+
+- **Hourly, in UTC, because the reader owns the calendar.** Each machine converts
+  a bucket's hour into its own local day, so Paris and Montreal each see a
+  "today" that matches their own panel. The hour also keeps the 5h session figure
+  and the burn rate computable from peer data. Known limit: sub-hour offsets
+  (+05:45, +09:30) misplace at most one hour of tokens across a day boundary.
+- **Tokens, never dollars.** Money is tokens times the reader's price table (see
+  [cost.md](cost.md)).
+- **Granularity is a field.** A bucket carries `g: "hour"`; history rolls buckets
+  older than `HOURLY_RETENTION_DAYS` (35) up to `g: "day"` locally (see
+  [../features/spend-history.md](../features/spend-history.md)), but day buckets
+  are never sent: the rollup floor sits at or above `WIRE_RETENTION_DAYS`. A
+  ccusage-sourced provider has no per-call events, so it cannot produce hour
+  buckets and does not sync: its `[sync.providers]` entry is accepted and
+  ignored, it grows no `tokens_by_device` section, and `--doctor` names it. A
+  degraded day-granularity contribution is the reserved way to let it in
+  (tracked in `TODO.md`).
+- **A peer bucket becomes a synthetic `UsageEvent`** (`at` = start of the hour,
+  `date` = that instant in local time). `build_report` needs no changes: the peer
+  set is one more reader.
+
+## The fleet store is the durable record
+
+A contribution cannot be regenerated from transcripts, because
+`cost::window_start` reads back only to the start of the current month. Rebuilt
+every cycle it would forget its own history on the first of each month, while
+peers kept it.
+
+So the durable thing is the local **fleet store**,
+`<cache_file parent>/tokengauge-fleet.json`, keyed by `(device, hour, provider,
+model)` and covering every device including this one. Transcripts and peer
+contributions are both inputs, which makes self and peer one code path. It is
+maintained on every fetch whether or not sync is on (the gate is in
+`fetch.rs::native_costs`); sync gates only the cycle.
+
+- A transcript re-read **replaces** every self bucket from the read window's start
+  on (`FleetStore::upsert_local`) and leaves older ones untouched, so a poll never
+  double-counts.
+- Separate file from the snapshot on purpose: the snapshot is rewritten wholesale
+  on every fetch; the store must not be.
+- **Store retention and wire retention differ.** The store keeps
+  `STORE_RETENTION_DAYS` (400) and prunes beyond that; the contribution carries
+  `retention_days` (35 by default, `WIRE_RETENTION_DAYS`) because it is
+  re-uploaded on every change. A device joining late sees 35 days of everyone
+  else's history, which `coversFromHour` reports honestly.
+- Read on the **fetch path only**; `--json` serves the snapshot, so the parse is
+  per fetch, not per frontend poll.
+
+## The contribution document
+
+One file per device, written only by that device. Single-writer files remove
+conflict resolution entirely.
+
+```
+<root>/v1/<HMAC-SHA256(sync_key, device_id) as 32 hex>.tgsync
+```
+
+The object name is keyed, not the raw machine id, so the storage holder cannot
+link an object to a machine or carry a name across fleets. The real device id
+travels inside the encrypted body; `--sync-forget` resolves a name locally
+because this machine holds the key. Not hidden: **how many machines** (one object
+each) and **when you work** (write timing).
+
+Plaintext payload, before compression and encryption:
+
+```json
+{
+  "schemaVersion": 1,
+  "device": { "id": "9f3c...", "hostname": "boreas", "label": "desktop", "os": "linux" },
+  "writtenAtMs": 1756123456789,
+  "tzOffsetMinutes": 120,
+  "coversFromHour": "2026-07-21T00",
+  "providers": ["claude", "codex"],
+  "buckets": [
+    { "h": "2026-08-25T14", "p": "claude", "m": "claude-opus-5", "g": "hour",
+      "i": 812, "o": 3122, "cw5": 15300, "cw1h": 0, "cr": 981233 }
+  ],
+  "days": [ { "d": "2026-08-25", "n": 812, "x": "5a1e9f3c00b47d21" } ]
+}
+```
+
+- `coversFromHour` is the retention floor: absent buckets before it are *not
+  covered*, not zero, which lets the panel mark a total as partial.
+- `days[].n` / `days[].x` are an event count and an XOR-fold of `cost::dedup_key`
+  values for the day, used only to catch a shared transcript tree (hazard 1).
+  The key is a SHA-256 truncation, not `DefaultHasher`, whose output Rust does
+  not keep stable across releases.
+- `writtenAtMs` drives freshness display, never merge order: nothing needs
+  ordering.
+- Size: a heavy week is about 900 buckets, ~90 KB of JSON; 35 days stays under
+  half a megabyte before gzip.
+
+## Envelope and key
+
+```
+"TGSYNC1" | alg u8 | comp u8 | key_id [4] | nonce [24] | ciphertext
+```
+
+- `alg = 1` is XChaCha20-Poly1305 (`chacha20poly1305`, pure Rust); `comp = 1` is
+  gzip.
+- `key_id` is the first four bytes of `SHA256("tokengauge.sync.key-id.v1" || key)`,
+  so a file under another key is skipped by name, not reported as a corrupt
+  decrypt.
+- AAD is the header plus the `device_id` from the filename, binding a file to its
+  name: an object renamed over another device's is rejected.
+- Nonce: 24 random bytes per write; XChaCha's nonce space makes random safe.
+
+The key is 32 random bytes at `<state_dir>/tokengauge-sync-key`, mode 0600 on
+Unix only (on Windows it inherits the profile directory's ACL), printed as
+`tgsync1<base32>`. `--sync-init` generates it, `--sync-join -` installs it from
+stdin. No passphrase, no KDF. What it buys: the storage holder cannot read
+counts, model names or hostnames. Not multi-user, no per-device revocation, and
+possession of the key is the only authentication (decision 0002).
+
+## Transports
+
+`SyncTransport` (`sync/transport.rs`): `put`, `list` (name, version tag, size),
+`get` (`None` = unchanged), `delete`.
+
+- **`dir`** (default): atomic write, `read_dir`, unchanged by mtime and size.
+  Covers Syncthing, Dropbox, Nextcloud, iCloud Drive, rclone, a NAS mount; the
+  user's tool handles reachability and NAT.
+- **`s3`** (`sync/s3.rs`): PUT/GET/LIST over `reqwest::blocking` with SigV4
+  signed by hand (about 150 lines, tested against AWS's published vectors).
+  Works with S3, R2, B2, MinIO, Garage. `aws-sdk-s3` is rejected: it pulls tokio
+  and dozens of crates to sign three verbs. Peers are re-read with
+  `If-None-Match`, so an idle poll costs one 304.
+
+One transport is active; fan-out is a non-goal. Config lives under `[sync]`
+(`enabled`, `transport`, `label`, `retention_days` 35, `peer_max_age_days` 30),
+`[sync.providers]`, `[sync.dir] path`, `[sync.s3]` (`endpoint`, `region`,
+`bucket`, `prefix`), parsed in `sync/config.rs`;
+S3 credentials come from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, never the
+snapshot or a log, and `--doctor` redacts them.
+
+## When it runs
+
+The daemon owns sync wherever one runs. `--json` asks the daemon over the socket
+rather than fetching in its own subprocess, because a credential exported through
+`environment.d` reaches the systemd unit and not a panel spawned by the
+compositor (see [snapshot.md](snapshot.md)). Without a daemon, the frontend's
+subprocess is the only process and syncs itself, so the AWS variables must be
+visible to whatever launches the panel.
+
+Each cycle that rebuilds costs, before `write_cache_full`:
+
+1. Bucket local events; publish only if the content hash changed, so an idle
+   machine writes nothing.
+2. Pull peers conditionally and merge them into the store.
+3. Feed the store into `build_report` as synthetic events beside local ones.
+
+The merged `CostInfo` lands in the snapshot where the local one did, so every
+frontend shows the fleet number with no frontend code, and the revision file
+carries a peer's new data to watchers by the existing path. `--doctor`'s ccusage
+cross-check compares the **local slice** only, since ccusage sees one machine.
+
+Failure is never fatal: a transport error keeps the last merged peer set,
+surfaces in `--doctor`, the `sync` object on `--json` and the COST section's
+`Sync` row, and the panel renders. The local peer cache means a cold start with
+the network down still shows the fleet.
+
+## Hazards
+
+1. **A shared transcript tree double-counts.** Identical per-day `n` and digest
+   on two devices mean the same event set: the day is kept from the device with
+   the smaller id and `--doctor` names the pair. Partial overlap is undetectable
+   this cheaply and unsupported. Escape hatch: `[sync.providers] claude = false`.
+2. **Clock skew is a non-issue**: buckets come from transcript timestamps and no
+   merge orders by time.
+3. **A peer model with no local price** counts tokens and no money.
+4. **Retention truncation**: peer buckets age out on the local rule, not the
+   peer's, so a machine gone for two months does not take its history with it.
+5. **Re-keying starts a fleet rather than rotating one.** A store built under a
+   different key keeps only this device; retired key ids are remembered so our
+   own old objects are passed over silently, and the object published under the
+   old key is deleted. The real cost is peer history older than `retention_days`.
+6. **A retired machine** is reported quiet after `peer_max_age_days`, keeps its
+   historical days, and leaves the by-device rows once it has no tokens in the
+   period. `--sync-forget` deletes its object.
+7. **A cloned machine id** (VM template) shows as one id under two hostnames;
+   `--doctor` warns. Cure: regenerate `/etc/machine-id`
+   (`systemd-machine-id-setup`) or delete `tokengauge-device-id` beside the
+   snapshot.
+8. **Asymmetric per-provider config** silently excludes a machine from a
+   provider's total; the by-device section shows who contributed and `--doctor`
+   names a narrower provider set.
+9. **Orphaned objects** are never auto-deleted; `--doctor` lists candidates older
+   than `peer_max_age_days`, `--sync-forget` removes one.
+10. **A lost machine cannot be revoked**, only out-run by re-keying (decision 0002).
+11. **A future schema** is skipped with a named reason, never a parse crash.
+
+## Non-goals
+
+Merging limits or credits (wrong by construction). Team or multi-user fleets.
+Real-time push. P2P and LAN discovery. Several transports at once. A settings
+pane per desktop. A hosted service.
+
+## Tests that pin it
+
+Events -> buckets -> synthetic events -> report equals the direct report; one
+bucket set read at +02:00 and -07:00 lands in the expected local days; overlap
+detection fires on identical day digests; a tampered envelope byte fails and a
+foreign `key_id` is skipped by name; SigV4 matches AWS's vectors; merge tests run
+against a fake transport (`crates/tokengauge-core/tests/fleet_sync.rs`).
+
+## Sources
+
+- `crates/tokengauge-core/src/sync/{mod,contribution,fleet,hour,crypto,transport,s3,run,report,store,config}.rs`
+- `crates/tokengauge-core/src/fetch.rs` (`native_costs`), `crates/tokengauge-core/src/cost/mod.rs` (`window_start`, `dedup_key`)
+- `crates/tokengauge-core/src/device.rs`, `crates/tokengauge-core/src/doctor.rs`
+- `crates/tokengauge-waybar/src/sync_cli.rs`, `crates/tokengauge-tui/src/sync_view.rs`
+- `crates/tokengauge-core/tests/fleet_sync.rs`

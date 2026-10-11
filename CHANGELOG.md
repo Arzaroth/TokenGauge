@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A Claude Team seat chosen in remuda (`remuda seat <name> premium`, or the
+  seat picker on its page, from remuda 0.11.0) outranks the one Anthropic's
+  profile reports, for that login's stored copy and while it is the one in use.
+  Choosing a seat refreshes the snapshot.
+
 ## [0.43.1] - 2026-10-11
 
 ### Fixed

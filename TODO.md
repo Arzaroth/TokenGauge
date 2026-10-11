@@ -290,3 +290,8 @@ one product rather than five.
   reporting only that pool beside a Plus would share one "Session" meter with a
   5h window. Unseen on a real account; `plan_rows` in `panel.rs` could key on
   `window_minutes` as well.
+- **The macOS keychain and `CLAUDE_CONFIG_DIR` can name different logins.**
+  The keychain entry is read under the fixed `Claude Code-credentials`
+  service while `.claude.json` follows the config dir, so `live_account` and
+  `live_seat_tier` can describe a login other than the token sent. Find how
+  Claude Code names the service under a config dir and read the same one.

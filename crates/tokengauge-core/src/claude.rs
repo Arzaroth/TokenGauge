@@ -586,6 +586,19 @@ pub(crate) fn seat_weight(seat_tier: &str) -> Option<f64> {
     }
 }
 
+/// A stored credential's weight, from its own text and its sidecar's seat
+/// tier alone, so a payload carried from an earlier fetch is weighed as the
+/// store reads now.
+pub(crate) fn stored_weight(text: &str, seat_tier: Option<&str>) -> Option<f64> {
+    seat_tier.and_then(seat_weight).or_else(|| {
+        let oauth = parse_credentials(text).ok()?;
+        plan_weight(
+            oauth.subscription_type.as_deref(),
+            oauth.rate_limit_tier.as_deref(),
+        )
+    })
+}
+
 /// The routines extra window, if any alias key is present.
 ///
 /// A populated alias (one carrying a real `utilization`) wins. An *explicit*

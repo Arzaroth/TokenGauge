@@ -1,8 +1,9 @@
 //! The sealed envelope a contribution travels in, and the key that opens it.
 //!
 //! One symmetric key per fleet, copied between the user's own machines the way
-//! a Syncthing device id is. See `docs/adr/0002-symmetric-fleet-key.md` for what
-//! that buys and, more importantly, what it does not: there is no revocation.
+//! a Syncthing device id is. See decision 0002 in `brain/decisions.md` for
+//! what that buys and, more importantly, what it does not: there is no
+//! revocation.
 
 use std::fmt;
 use std::fs;
@@ -294,8 +295,9 @@ fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 }
 
 /// No permission is set on non-unix targets: the key inherits the directory's
-/// ACL, which on Windows means the user profile's. `docs/sync.md` states the
-/// limitation rather than implying the 0600 above applies everywhere.
+/// ACL, which on Windows means the user profile's. `brain/architecture/sync.md`
+/// states the limitation rather than implying the 0600 above applies
+/// everywhere.
 #[cfg(not(unix))]
 fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let mut body = contents.to_vec();

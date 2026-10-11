@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a TokenGauge release, the whole shebang - docs sweep (CHANGELOG, README, THIRD-PARTY.md, CLAUDE.md), version bump across the four crates, three frontend manifests and the panel fixture, full local gate, [master] chore(release) commit, annotated vX.Y.Z tag, push, then watch the Release workflow until the GitHub release has its assets. Use when the user says "cut a release", "release 0.36.0", "ship a version", or "the whole release shebang" in this repository.
+description: Cut a TokenGauge release, the whole shebang - docs sweep (CHANGELOG, README, THIRD-PARTY.md, CLAUDE.md, brain/), version bump across the four crates, three frontend manifests and the panel fixture, full local gate, [master] chore(release) commit, annotated vX.Y.Z tag, push, then watch the Release workflow until the GitHub release has its assets. Use when the user says "cut a release", "release 0.36.0", "ship a version", or "the whole release shebang" in this repository.
 ---
 
 # Cutting a TokenGauge release
@@ -44,7 +44,7 @@ knowing every file the version lives in and what CI does with the tag.
 - **`THIRD-PARTY.md`**: `git diff v<last>..HEAD -- Cargo.toml '*/Cargo.toml' package.json`.
   A new dependency whose code or protocol we took from a project gets credited
   there; a dropped one comes out.
-- **`CLAUDE.md` / `docs/`**: run the `brain` skill's audit scoped to what the
+- **`CLAUDE.md` / `brain/`**: run the `brain` skill's audit scoped to what the
   release touched.
 - Commit anything here as its own layer, `[master] docs(release): ...`, before
   the bump.

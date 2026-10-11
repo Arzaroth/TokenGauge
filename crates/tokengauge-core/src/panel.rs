@@ -1529,7 +1529,7 @@ mod tests {
             .unwrap_or_else(|| panic!("no {id} section for {group:?}"))
     }
 
-    /// The ADR's two worked examples, in units of the largest plan.
+    /// Decision 0003's two worked examples, in units of the largest plan.
     #[test]
     fn the_combined_header_weighs_each_plan_by_its_multiplier() {
         let spec = panel_spec(&grouped(vec![
@@ -2520,7 +2520,7 @@ mod tests {
         }
     }
 
-    /// remuda's button, on every surface that can draw one (ADR 0004).
+    /// remuda's button, on every surface that can draw one (decision 0004).
     ///
     /// Each must read `serving` off the status core resolves, and open the page
     /// only through what the binary runs, never through remuda or its files.

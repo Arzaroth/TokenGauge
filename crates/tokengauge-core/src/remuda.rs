@@ -1,11 +1,11 @@
 //! Whether remuda's page is being served, so a frontend can offer to open it.
 //!
-//! The contract is remuda's and is recorded in ADR 0004: a running
-//! `remuda serve` writes `serve.json` into its runtime directory and leaves it
-//! there when it stops, so the file alone proves nothing. Only the same
-//! process, its port still answering, counts. `serve.url` beside it carries
-//! the page's access token and is never read here: `remuda open` is the only
-//! way to the page.
+//! The contract is remuda's and is decision 0004 in `brain/decisions.md`: a
+//! running `remuda serve` writes `serve.json` into its runtime directory and
+//! leaves it there when it stops, so the file alone proves nothing. Only the
+//! same process, its port still answering, counts. `serve.url` beside it
+//! carries the page's access token and is never read here: `remuda open` is
+//! the only way to the page.
 
 use std::ffi::OsString;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
@@ -136,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn the_serve_keys_are_spelled_as_the_adr_says() {
+    fn the_serve_keys_are_spelled_as_decision_0004_says() {
         let json = r#"{"pid": 42, "started": 123456, "port": 7429, "version": "0.5.0"}"#;
         let record: ServeRecord = serde_json::from_str(json).unwrap();
         assert_eq!(

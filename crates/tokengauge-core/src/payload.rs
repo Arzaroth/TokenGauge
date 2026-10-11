@@ -160,7 +160,7 @@ pub struct ProviderPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reported_cost: Option<ReportedCost>,
     /// Which credential this payload belongs to. Flattened, so its keys sit
-    /// beside the others: remuda reads them by these names (ADR 0003).
+    /// beside the others: remuda reads them by these names (decision 0003).
     #[serde(flatten)]
     pub credential: CredentialInfo,
 }
@@ -599,10 +599,10 @@ mod tests {
         assert_eq!(primary.window_minutes, Some(300));
     }
 
-    /// remuda reads these keys by name (ADR 0003's snapshot contract). A
+    /// remuda reads these keys by name (decision 0003's snapshot contract). A
     /// rename here is a break there, and nothing on this side would notice.
     #[test]
-    fn the_credential_keys_remuda_reads_are_spelled_as_the_adr_says() {
+    fn the_credential_keys_remuda_reads_are_spelled_as_decision_0003_says() {
         let mut payload =
             ProviderPayload::live("claude", "store", UsageSnapshot::at(chrono::Utc::now()));
         payload.credential = CredentialInfo {

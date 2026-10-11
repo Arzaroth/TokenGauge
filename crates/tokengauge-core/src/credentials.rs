@@ -816,10 +816,24 @@ pub(crate) mod tests {
     /// Give a sidecar `put` wrote the `oauthAccount` remuda restores on a
     /// switch, as its value.
     fn put_account(store: &Path, provider: &str, name: &str, account: serde_json::Value) {
+        put_meta(store, provider, name, "oauthAccount", account);
+    }
+
+    /// Choose a seat in a sidecar `put` wrote, as `remuda seat` does, or clear
+    /// the choice.
+    pub(crate) fn put_seat(store: &Path, provider: &str, name: &str, tier: Option<&str>) {
+        put_meta(store, provider, name, "seatTier", serde_json::json!(tier));
+    }
+
+    fn put_meta(store: &Path, provider: &str, name: &str, key: &str, value: serde_json::Value) {
         let meta_path = store.join(provider).join(format!("{name}.meta.json"));
         let mut meta: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
-        meta["oauthAccount"] = account;
+        if value.is_null() {
+            meta.as_object_mut().unwrap().remove(key);
+        } else {
+            meta[key] = value;
+        }
         std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()).unwrap();
         set_mode(&meta_path, 0o600);
     }
@@ -913,6 +927,29 @@ pub(crate) mod tests {
         );
         assert_eq!(tier("odd"), None);
         assert_eq!(tier("plain"), None);
+
+        // The seat chosen in remuda outranks the one the profile reported.
+        put_seat(&store, "claude", "work", Some("team_standard"));
+        put_seat(&store, "claude", "moved", Some("team_standard"));
+        let read = read_provider(&store, "claude");
+        let entry = |name: &str| read.entries.iter().find(|e| e.name == name).unwrap();
+        assert_eq!(entry("work").seat_tier.as_deref(), Some("team_standard"));
+        assert_eq!(entry("work").chosen_seat.as_deref(), Some("team_standard"));
+        assert_eq!(entry("plain").chosen_seat, None);
+        assert_eq!(
+            entry("moved").chosen_seat,
+            None,
+            "a choice for other tokens"
+        );
+        assert_eq!(
+            chosen_seats(&store, "claude")
+                .into_iter()
+                .collect::<Vec<_>>(),
+            [
+                ("moved".to_string(), "team_standard".to_string()),
+                ("work".to_string(), "team_standard".to_string())
+            ]
+        );
         let _ = std::fs::remove_dir_all(&store);
     }
 
@@ -1389,6 +1426,15 @@ pub(crate) mod tests {
             None,
             "a seat tier from a sidecar written for other tokens"
         );
+
+        // The live login is weighed by the seat chosen for the entry it is.
+        assert_eq!(named(&payloads, "work").credential.plan_weight, Some(20.0));
+        put_seat(&store, "claude", "work", Some("team_premium"));
+        let (payloads, _) = fetch_provider("claude", &FAKE, &config, &[], live_payload);
+        let work = named(&payloads, "work");
+        assert_eq!(work.credential.active, Some(true));
+        assert_eq!(work.credential.plan_weight, Some(6.25));
+        put_seat(&store, "claude", "work", None);
 
         let unseated = StoreReader {
             weigh: None,

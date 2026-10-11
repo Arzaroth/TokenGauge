@@ -710,6 +710,30 @@ mod tests {
         let _ = fs::remove_dir_all(&store);
     }
 
+    /// A seat chosen in remuda changes a plan's weight and nothing else on
+    /// disk, so the snapshot records the choices.
+    #[test]
+    fn a_seat_chosen_since_the_write_makes_the_snapshot_stale() {
+        use crate::credentials::tests::{put, put_seat, temp_store};
+        let dir = cache_test_dir("seat");
+        let cache = dir.join("tokengauge-usage.json");
+        let store = temp_store("seat");
+        put(&store, "claude", "work", "{}", "u-1");
+        let config = store_config(&cache, &store);
+        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
+        assert!(!cache_is_stale(&config));
+
+        put_seat(&store, "claude", "work", Some("team_premium"));
+        assert!(cache_is_stale(&config), "a seat chosen since the write");
+        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
+        assert!(!cache_is_stale(&config));
+        put_seat(&store, "claude", "work", None);
+        assert!(cache_is_stale(&config), "a choice set back to auto");
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&store);
+    }
+
     /// A store change made while the fetch ran is after what the fetch read,
     /// however late the write lands.
     #[test]

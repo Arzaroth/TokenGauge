@@ -1449,6 +1449,13 @@ pub(crate) mod tests {
         let work = named(&payloads, "work");
         assert_eq!(work.credential.active, Some(true));
         assert_eq!(work.credential.plan_weight, Some(6.25));
+        put_seat(&store, "claude", "work", Some("team_unknown"));
+        let (payloads, _) = fetch_provider("claude", &FAKE, &config, &[], live_payload);
+        assert_eq!(
+            named(&payloads, "work").credential.plan_weight,
+            Some(20.0),
+            "a choice that names no seat leaves the live weight"
+        );
         put_seat(&store, "claude", "work", None);
 
         let unseated = StoreReader {

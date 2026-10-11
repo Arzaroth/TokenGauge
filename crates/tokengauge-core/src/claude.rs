@@ -1277,6 +1277,16 @@ mod tests {
         assert_eq!(stored_weight(team, Some("enterprise_seat")), Some(1.25));
         assert_eq!(stored_weight("not json", Some("team_premium")), Some(6.25));
         assert_eq!(stored_weight("not json", None), None);
+
+        let max = r#"{"claudeAiOauth":{"accessToken":"a","subscriptionType":"max","rateLimitTier":"default_claude_max_20x"}}"#;
+        assert_eq!(
+            stored_weight(max, Some("team_premium")),
+            Some(20.0),
+            "a seat for a login that has left its Team plan"
+        );
+        assert_eq!(stored_seat_weight(max, "team_premium"), None);
+        assert_eq!(stored_seat_weight(team, "team_premium"), Some(6.25));
+        assert_eq!(stored_seat_weight(team, "team_unknown"), None);
     }
 
     #[test]
@@ -1303,6 +1313,15 @@ mod tests {
             Some(6.25)
         );
         assert_eq!(live_weight(Some(1.25), None, ENV_TOKEN, &path), Some(1.25));
+        assert_eq!(
+            live_weight(Some(20.0), Some("max"), ".credentials.json", &path),
+            Some(20.0),
+            "a seat .claude.json still names after the login left Team"
+        );
+        assert_eq!(
+            live_weight(Some(1.25), Some("team"), ".credentials.json", &path),
+            Some(6.25)
+        );
         std::fs::write(&path, r#"{"oauthAccount":{"seatTier":null}}"#).unwrap();
         assert_eq!(live_seat_tier(".credentials.json", &path), None);
         assert_eq!(

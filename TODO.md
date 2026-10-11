@@ -83,8 +83,9 @@ There are two routes and the cheap one is not the obvious one:
 
 1. **Ship day-granularity contributions.** `contribution.rs` has reserved
    `Granularity::Day` since the sync design specifically as the degraded shape a
-   ccusage-sourced provider needs, and `docs/sync.md` says the gap "should not
-   stay open long". History now *produces* day buckets locally (compaction rolls
+   ccusage-sourced provider needs, and the sync design
+   (`brain/architecture/sync.md`) always called the gap one that should not
+   stay open long. History now *produces* day buckets locally (compaction rolls
    them up past 35 days), but they are still never sent: the compaction floor is
    deliberately at or above the wire retention. Emitting them would let GLM into
    sync with no reader at all. **Effort: S/M**, and the design already exists.
@@ -216,18 +217,19 @@ treats as worse than visibly broken.
 
 - **Sub-hour timezone offsets misplace up to an hour of tokens.** The bucket key
   is a whole UTC hour, so +05:45 and +09:30 land on the wrong side of a day
-  boundary (`docs/sync.md` §2). Small population, real wrong numbers.
+  boundary (`brain/architecture/sync.md`, the hourly bucket). Small
+  population, real wrong numbers.
 - **Partial transcript-tree overlap is undetectable.** The double-count check
   fingerprints whole days, so two machines sharing *some* of a day's transcripts
-  double-count in silence (`docs/sync.md` §8). The README only says to turn the
-  provider off.
+  double-count in silence (`brain/architecture/sync.md`, hazard 1). The README
+  only says to turn the provider off.
 - **No fleet key rotation.** Re-keying starts a new fleet rather than rotating
   one, and a lost machine can read the fleet until every other machine is
-  re-keyed. Inherent to the symmetric-key choice (ADR 0002), but the *recovery*
-  story could be better than it is.
+  re-keyed. Inherent to the symmetric-key choice (decision 0002 in
+  `brain/decisions.md`), but the *recovery* story could be better than it is.
 - **A history month of zeros is ambiguous** - nothing spent, or no transcript
   survives to say otherwise, and the data cannot tell you which. See
-  `docs/history.md` §6.
+  `brain/features/spend-history.md` (Hazards).
 
 ## Chrome inconsistencies
 

@@ -102,8 +102,10 @@ feature commits.
 ## 4. Update the brain
 
 Apply the `brain` skill's maintain checklist to what the branch changed: new
-rules into `CLAUDE.md`, new terms into `CONTEXT.md`, subsystem notes into
-`docs/`, an ADR for a decision with real alternatives, `README.md` for
+rules into `CLAUDE.md`, a new or changed feature into `brain/features/` (plus
+its index and `brain/BRAIN.md` rows), subsystem changes into
+`brain/architecture/`, new terms into `brain/glossary.md`, a decision with real
+alternatives into `brain/decisions.md` (next `NNNN` number), `README.md` for
 user-visible config, and a `CHANGELOG.md` `[Unreleased]` entry for anything a
 user sees. Commit as its own `docs(...)` layer on the branch so it ships in the
 same merge.

@@ -1,5 +1,11 @@
 # TokenGauge
 
+How TokenGauge works lives in `brain/` (start at `brain/BRAIN.md`); this file
+holds the rules a change can break. **The brain is load-bearing (hard rule):** a
+change that makes a brain doc wrong fixes that doc in the same branch, and an
+inconsistency you spot gets fixed with the code as the source of truth. See
+"The brain (knowledge base)" below.
+
 ## Frontend parity (hard rule)
 
 TokenGauge ships one gauge across six surfaces. **A user-facing feature lands
@@ -227,7 +233,8 @@ test reads a real keychain.
 
 ## A provider holds several credentials, and TokenGauge only reads them
 
-ADR 0003 is the design and, in its last section, the contract with
+Decision 0003 in `brain/decisions.md` is the design, and
+`brain/architecture/credentials.md` holds the store and snapshot contracts with
 [remuda](https://github.com/Arzaroth/remuda), which keeps every captured login
 under `[credentials] store` and reads TokenGauge's snapshot back.
 `credentials.rs` reads the store; `providers.rs` gives every provider remuda
@@ -236,7 +243,7 @@ asks the live login as before and every
 other stored credential beside it, tagging each payload with `credential`,
 `active`, `credentialState`, `credentialLabel` and `planWeight`.
 `payload::tests::the_credential_keys_remuda_reads_are_spelled_as_the_adr_says`
-pins those names: renaming one is a change to the ADR and to remuda.
+pins those names: renaming one is a change to that contract and to remuda.
 
 Rules that are easy to regress:
 
@@ -264,7 +271,8 @@ Rules that are easy to regress:
   draws the result as it is.
 - **Session cost and threshold notifications skip `active: false`.** One
   figure per provider, and it follows the plan being spent from.
-- **remuda's page is opened by `remuda open` and nothing else** (ADR 0004).
+- **remuda's page is opened by `remuda open` and nothing else** (decision
+  0004, `brain/features/remuda-page.md`).
   `remuda::status` decides whether a page is up from `serve.json`, `/proc` and
   a connect, and never reads `serve.url` beside it, which holds the page's
   token. It is resolved per render into `--json`'s `remuda`, not stored, and
@@ -433,7 +441,8 @@ The first fetch runs a one-time deep read (`cost::read_history`) behind
 of the month and the feature would otherwise ship empty for a year. It defeats
 the mtime filter `jsonl_files` leans on, so it must never run on a poll.
 
-Design notes in `docs/history.md`, vocabulary in `CONTEXT.md`.
+Design notes in `brain/features/spend-history.md`, vocabulary in
+`brain/glossary.md`.
 
 ## Three frontends are driven, not just read
 
@@ -624,6 +633,35 @@ WiX only runs properly on Windows, so the `.wxs` is compiled in CI's
 `build-windows` job as well as the release one. Do not trust a build of it on
 Linux: it reports false errors on plain `Directory/@Name` values, though it does
 still catch schema mistakes.
+
+## The brain (knowledge base)
+
+`brain/` is the committed knowledge base describing how TokenGauge works:
+architecture, features, decisions, glossary. It exists so a developer or AI can
+understand the project **without reading the source**. `brain/BRAIN.md` is the
+entry index - it links to the `architecture/` and `features/` sub-indexes, which
+link to leaf docs. Read it before hunting for where something lives, and
+navigate via the indexes rather than grepping the whole tree. The `brain` skill
+is the procedure.
+
+- It is load-bearing: keep it TRUE to the code. When a change makes a brain doc
+  wrong, fix the doc in the same branch, as its own docs layer on top of the
+  behaviour commit.
+- The code is the source of truth. If the brain disagrees with reality, reality
+  wins: correct the brain.
+- New feature -> add `brain/features/<name>.md`, plus a row in
+  `brain/features/index.md` and the features table in `brain/BRAIN.md`. New
+  cross-cutting subsystem -> add or update a `brain/architecture/*.md` and its
+  index rows.
+- Capture the WHY in `brain/decisions.md` (a decision with real alternatives gets
+  the next `NNNN` number; ADRs 0001-0004 live there) and new or renamed terms in
+  `brain/glossary.md`, with an `Avoid:` list, as they happen.
+- A new rule a future change could break, with the incident that taught it, goes
+  in the matching section of this file; the brain doc links to it rather than
+  repeating the incident.
+- Don't restate code: cite source paths, end every leaf with `## Sources`, and
+  cross-link sibling docs with relative markdown links. Dense, skimmable,
+  present tense, no em-dashes.
 
 ## Conventions
 

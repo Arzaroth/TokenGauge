@@ -5,8 +5,8 @@
 //! one provider and model within one UTC hour - and never a dollar figure,
 //! because money is tokens times the reader's own price table.
 //!
-//! See `docs/sync.md` for the design and `docs/adr/0001-fleet-sync-shape.md`
-//! for why it is shaped this way.
+//! See `brain/architecture/sync.md` for the design and decision 0001 in
+//! `brain/decisions.md` for why it is shaped this way.
 
 pub mod config;
 pub mod contribution;

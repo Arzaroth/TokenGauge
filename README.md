@@ -193,7 +193,7 @@ One row per day, provider, model and device, with the token split beside the
 money it was rated from. It goes through the same walk the chart does, so it
 drops the same double-read days and cannot disagree with what you see.
 
-The design notes are in [docs/history.md](docs/history.md).
+The design notes are in [brain/features/spend-history.md](brain/features/spend-history.md).
 
 ## Fleet sync
 

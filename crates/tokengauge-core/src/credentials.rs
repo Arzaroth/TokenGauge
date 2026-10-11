@@ -5,8 +5,9 @@
 //! each under `<store>/<provider>/<name>.json`, beside a `<name>.meta.json`
 //! sidecar naming whose it is. This module reads that layout, refuses a store
 //! anyone else could read or plant tokens in, and finds which stored credential
-//! the live login is. ADR 0003 is the contract; remuda's side of it is its
-//! `brain/architecture/store.md`.
+//! the live login is. Decision 0003 in `brain/decisions.md` is the contract,
+//! detailed in `brain/architecture/credentials.md`; remuda's side of it is
+//! its `brain/architecture/store.md`.
 //!
 //! Nothing here refreshes, moves or writes a stored credential. A refresh
 //! token rotates on use, so two processes refreshing one lock one of them out,

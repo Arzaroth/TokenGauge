@@ -25,7 +25,7 @@ use crate::*;
 use std::time::Duration;
 
 /// Bumped when the on-disk snapshot grows a field a reader has to know about.
-/// 2: payloads name their credential (ADR 0003).
+/// 2: payloads name their credential (decision 0003, `brain/decisions.md`).
 pub const CACHE_SCHEMA_VERSION: u32 = 2;
 
 /// Provenance of one snapshot write.

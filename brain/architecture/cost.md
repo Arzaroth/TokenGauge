@@ -19,7 +19,8 @@ are read, not shelled out for"). User-facing figures:
 
 Every reader emits the same unit, a `UsageEvent` (`provider`, `model`, `date`,
 `at`, `tokens`, `key`), so **a new CLI is one more reader**: add a field to
-`cost::Roots`, call it from `read_events_from`, flip its
+`cost::Roots` (filled by the reader's `roots()` in `Roots::discover`, listed in
+`Roots::all`), call the reader from `read_events_from`, flip its
 `ProviderMeta.natively_read` (below), and `build_report` does the rest. A fetch reads from `cost::window_start` (the start of the month,
 widest re-read 31 days) through `read_window`; `read_history` is the one-time deep
 read behind the backfill (see [../features/spend-history.md](../features/spend-history.md)).

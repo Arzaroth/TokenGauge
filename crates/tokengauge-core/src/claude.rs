@@ -276,12 +276,16 @@ fn claude_json_path() -> PathBuf {
 }
 
 fn account_uuid(path: &Path) -> Option<String> {
+    oauth_account_field(path, "accountUuid")
+}
+
+fn oauth_account_field(path: &Path, key: &str) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     let config: Value = serde_json::from_str(&text).ok()?;
-    config["oauthAccount"]["accountUuid"]
+    config["oauthAccount"][key]
         .as_str()
         .map(str::trim)
-        .filter(|id| !id.is_empty())
+        .filter(|value| !value.is_empty())
         .map(str::to_string)
 }
 
@@ -510,6 +514,9 @@ fn plan_label(subscription_type: Option<&str>, tier: Option<&str>) -> Option<Str
     Some(label)
 }
 
+const TEAM_STANDARD_WEIGHT: f64 = 1.25;
+const TEAM_PREMIUM_WEIGHT: f64 = 6.25;
+
 /// A plan's nominal multiplier against Pro: the `Nx` in a rate-limit tier
 /// (`default_claude_max_20x`), else 1 for Pro. A Team seat is sold against
 /// Pro's per-session allowance, not as a Max: a standard seat is 1.25x and a
@@ -538,7 +545,11 @@ fn plan_weight(subscription_type: Option<&str>, tier: Option<&str>) -> Option<f6
     if sub.contains("team") || (sub.is_empty() && tier_text.contains("team")) {
         let premium =
             sub.contains("premium") || tier_text.contains("premium") || multiplier().is_some();
-        return Some(if premium { 6.25 } else { 1.25 });
+        return Some(if premium {
+            TEAM_PREMIUM_WEIGHT
+        } else {
+            TEAM_STANDARD_WEIGHT
+        });
     }
     multiplier().or_else(|| {
         (sub.contains("pro") && !["max", "enterprise"].iter().any(|k| sub.contains(k)))

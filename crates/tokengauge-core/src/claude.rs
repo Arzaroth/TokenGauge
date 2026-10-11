@@ -276,12 +276,16 @@ fn claude_json_path() -> PathBuf {
 }
 
 fn account_uuid(path: &Path) -> Option<String> {
+    oauth_account_field(path, "accountUuid")
+}
+
+fn oauth_account_field(path: &Path, key: &str) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     let config: Value = serde_json::from_str(&text).ok()?;
-    config["oauthAccount"]["accountUuid"]
+    config["oauthAccount"][key]
         .as_str()
         .map(str::trim)
-        .filter(|id| !id.is_empty())
+        .filter(|value| !value.is_empty())
         .map(str::to_string)
 }
 
@@ -325,6 +329,22 @@ fn live_account(source: &str, claude_json: &Path) -> Option<String> {
     (source != ENV_TOKEN)
         .then(|| account_uuid(claude_json))
         .flatten()
+}
+
+/// The seat tier of the live login, on the same terms as its identity.
+fn live_seat_tier(source: &str, claude_json: &Path) -> Option<String> {
+    (source != ENV_TOKEN)
+        .then(|| oauth_account_field(claude_json, "seatTier"))
+        .flatten()
+}
+
+/// The live login's weight: its seat tier's when that names a Team seat, else
+/// what the token said.
+fn live_weight(token_weight: Option<f64>, source: &str, claude_json: &Path) -> Option<f64> {
+    live_seat_tier(source, claude_json)
+        .as_deref()
+        .and_then(seat_weight)
+        .or(token_weight)
 }
 
 pub(crate) fn stored_tokens(text: &str) -> LoginTokens {
@@ -510,6 +530,9 @@ fn plan_label(subscription_type: Option<&str>, tier: Option<&str>) -> Option<Str
     Some(label)
 }
 
+const TEAM_STANDARD_WEIGHT: f64 = 1.25;
+const TEAM_PREMIUM_WEIGHT: f64 = 6.25;
+
 /// A plan's nominal multiplier against Pro: the `Nx` in a rate-limit tier
 /// (`default_claude_max_20x`), else 1 for Pro. A Team seat is sold against
 /// Pro's per-session allowance, not as a Max: a standard seat is 1.25x and a
@@ -538,11 +561,41 @@ fn plan_weight(subscription_type: Option<&str>, tier: Option<&str>) -> Option<f6
     if sub.contains("team") || (sub.is_empty() && tier_text.contains("team")) {
         let premium =
             sub.contains("premium") || tier_text.contains("premium") || multiplier().is_some();
-        return Some(if premium { 6.25 } else { 1.25 });
+        return Some(if premium {
+            TEAM_PREMIUM_WEIGHT
+        } else {
+            TEAM_STANDARD_WEIGHT
+        });
     }
     multiplier().or_else(|| {
         (sub.contains("pro") && !["max", "enterprise"].iter().any(|k| sub.contains(k)))
             .then_some(1.0)
+    })
+}
+
+/// A Team seat's weight from the seat tier Anthropic's profile reports
+/// (`team_standard`, `team_premium`). It outranks [`plan_weight`]: the profile
+/// names the seat, where the token's subscription type and tier only hint at
+/// it. `None` for a tier that is not a known Team seat, which leaves the
+/// token's own reading in place.
+pub(crate) fn seat_weight(seat_tier: &str) -> Option<f64> {
+    match seat_tier.trim().to_ascii_lowercase().as_str() {
+        "team_premium" => Some(TEAM_PREMIUM_WEIGHT),
+        "team_standard" => Some(TEAM_STANDARD_WEIGHT),
+        _ => None,
+    }
+}
+
+/// A stored credential's weight, from its own text and its sidecar's seat
+/// tier alone, so a payload carried from an earlier fetch is weighed as the
+/// store reads now.
+pub(crate) fn stored_weight(text: &str, seat_tier: Option<&str>) -> Option<f64> {
+    seat_tier.and_then(seat_weight).or_else(|| {
+        let oauth = parse_credentials(text).ok()?;
+        plan_weight(
+            oauth.subscription_type.as_deref(),
+            oauth.rate_limit_tier.as_deref(),
+        )
     })
 }
 
@@ -726,13 +779,11 @@ fn to_payload(
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
-    let (oauth, _source) = load_oauth(now)?;
-    Ok(vec![usage_for(
-        &oauth,
-        timeout,
-        now,
-        "run `claude` to log in",
-    )?])
+    let (oauth, source) = load_oauth(now)?;
+    let mut payload = usage_for(&oauth, timeout, now, "run `claude` to log in")?;
+    payload.credential.plan_weight =
+        live_weight(payload.credential.plan_weight, source, &claude_json_path());
+    Ok(vec![payload])
 }
 
 /// One usage request with one credential's token.
@@ -1171,6 +1222,62 @@ mod tests {
         );
         std::fs::write(&path, r#"{"numStartups":3}"#).unwrap();
         assert_eq!(account_uuid(&path), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_seat_tier_names_a_team_seat_or_nothing() {
+        assert_eq!(seat_weight("team_standard"), Some(1.25));
+        assert_eq!(seat_weight("team_premium"), Some(6.25));
+        assert_eq!(seat_weight("TEAM_PREMIUM"), Some(6.25));
+        assert_eq!(seat_weight(" team_standard "), Some(1.25));
+        assert_eq!(seat_weight("team_something_new"), None);
+        assert_eq!(seat_weight("not_team_premium"), None);
+        assert_eq!(seat_weight("team_premium_trial"), None);
+        assert_eq!(seat_weight("enterprise_premium"), None);
+        assert_eq!(seat_weight(""), None);
+    }
+
+    #[test]
+    fn a_stored_credential_weighs_by_its_seat_tier_then_its_token() {
+        let team = r#"{"claudeAiOauth":{"accessToken":"a","subscriptionType":"team","rateLimitTier":"default_raven"}}"#;
+        assert_eq!(stored_weight(team, None), Some(1.25));
+        assert_eq!(stored_weight(team, Some("team_premium")), Some(6.25));
+        assert_eq!(stored_weight(team, Some("enterprise_seat")), Some(1.25));
+        assert_eq!(stored_weight("not json", Some("team_premium")), Some(6.25));
+        assert_eq!(stored_weight("not json", None), None);
+    }
+
+    #[test]
+    fn the_live_seat_tier_is_the_one_claude_json_records_for_its_own_login() {
+        let dir = std::env::temp_dir().join(format!("tg-claude-seat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".claude.json");
+        std::fs::write(
+            &path,
+            r#"{"oauthAccount":{"accountUuid":"u-1","seatTier":"team_premium"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            live_seat_tier(".credentials.json", &path).as_deref(),
+            Some("team_premium")
+        );
+        assert_eq!(
+            live_seat_tier(ENV_TOKEN, &path),
+            None,
+            "the override is not the file's login"
+        );
+        assert_eq!(
+            live_weight(Some(1.25), ".credentials.json", &path),
+            Some(6.25)
+        );
+        assert_eq!(live_weight(Some(1.25), ENV_TOKEN, &path), Some(1.25));
+        std::fs::write(&path, r#"{"oauthAccount":{"seatTier":null}}"#).unwrap();
+        assert_eq!(live_seat_tier(".credentials.json", &path), None);
+        assert_eq!(
+            live_weight(Some(20.0), ".credentials.json", &path),
+            Some(20.0)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

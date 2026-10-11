@@ -124,7 +124,7 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
             fetch: claude::fetch_stored,
             check: claude::check_stored,
             weigh: Some(claude::stored_weight),
-            seat_weight: Some(claude::stored_seat_weight),
+            seat_weight: Some(claude::live_seat_weight),
         }),
         auth: claude_auth,
         enabled_in: |c| c.claude,

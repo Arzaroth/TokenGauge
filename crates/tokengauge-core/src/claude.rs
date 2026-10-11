@@ -617,6 +617,19 @@ pub(crate) fn stored_seat_weight(text: &str, seat_tier: &str) -> Option<f64> {
         .flatten()
 }
 
+/// The live login's seat weight: the stored entry it matched must still be on
+/// Team, and so must the live token, which may be newer than the entry when
+/// the two matched by account.
+pub(crate) fn live_seat_weight(
+    text: &str,
+    subscription_type: Option<&str>,
+    seat_tier: &str,
+) -> Option<f64> {
+    may_hold_seat(subscription_type)
+        .then(|| stored_seat_weight(text, seat_tier))
+        .flatten()
+}
+
 /// Whether a token's subscription type leaves room for a Team seat: it says
 /// `team`, or says nothing. A seat chosen or reported for a login that has
 /// since moved to Max is not its weight any more.

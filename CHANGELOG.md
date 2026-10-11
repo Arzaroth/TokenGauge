@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-10-12
+
 ### Added
 
 - A Claude Team seat chosen in remuda (`remuda seat <name> premium`, or the

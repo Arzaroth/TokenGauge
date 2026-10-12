@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.45.1] - 2026-10-12
+
 ### Fixed
 
 - Grok, GLM, Cursor, opencode Go and OpenRouter had no logo in the Plasma,

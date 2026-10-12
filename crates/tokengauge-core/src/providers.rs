@@ -909,6 +909,39 @@ mod tests {
     }
 
     #[test]
+    fn every_provider_with_an_icon_slug_carries_its_logo() {
+        for meta in PROVIDER_META {
+            if let Some(slug) = meta.icon_slug {
+                assert!(
+                    PROVIDER_ICONS.iter().any(|(s, _)| *s == slug),
+                    "{} has icon slug `{slug}` and no logo in the binary",
+                    meta.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_missing_logo_is_written_where_the_frontends_look() {
+        let dir = std::env::temp_dir().join(format!("tg-icons-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let path = icon_svg_in(&dir, "grok", true).expect("grok logo written");
+        let svg = std::fs::read_to_string(&path).unwrap();
+        assert!(svg.contains(PROVIDER_ICON_FG));
+        assert!(!svg.contains("currentColor"));
+
+        std::fs::write(&path, "<svg/>").unwrap();
+        assert_eq!(icon_svg_in(&dir, "grok", true), Some(path.clone()));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "<svg/>");
+
+        assert_eq!(icon_svg_in(&dir, "codex", false), None);
+        assert!(!dir.join("ProviderIcon-codex.svg").exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn an_unknown_provider_degrades_rather_than_disappearing() {
         // A snapshot from a newer build still renders: its rows keep their own
         // name, get the generic window headings and the fallback glyph.

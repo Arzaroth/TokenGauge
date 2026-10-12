@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--update` refuses a binary a package manager installed (a distribution
   package, the Nix store, a snap) and says how to upgrade it instead, as it
   already did for Homebrew, and unpacks a release zip that lists its
-  directories (selvedge 0.7).
+  directories.
 
 ### Removed
 

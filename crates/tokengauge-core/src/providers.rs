@@ -707,9 +707,10 @@ const PROVIDER_ICONS: &[(&str, &str)] = &[
 const PROVIDER_ICON_FG: &str = "#cdd6f4";
 
 fn default_provider_icon_dir() -> PathBuf {
-    let base = std::env::var("XDG_DATA_HOME")
+    let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".local/share"));
+        .filter(|dir| dir.is_absolute())
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/share"));
     base.join("tokengauge").join("icons")
 }
 

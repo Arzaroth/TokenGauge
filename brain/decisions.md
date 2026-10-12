@@ -136,7 +136,8 @@ keeping inactive tokens alive are the switcher's job.
   token from Claude Code's own stores, and only while the token is still on
   Team. A premium seat reports `seatTier: "team_tier_1"`, and its token the
   organization's `default_raven`, so a `userRateLimitTier` naming an `Nx`
-  (`default_claude_max_5x`) is premium first; otherwise `seatTier`
+  (`default_claude_max_5x`) is premium first, as is a token tier naming one on
+  a token that says `team`; otherwise `seatTier`
   `team_standard` / `team_premium` decides, and no mapping is guessed for
   `team_tier_N`. Without either, the subscription type and an `Nx` tier
   decide. The rule is `selvedge::plans::team_seat`, shared with remuda. A

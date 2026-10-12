@@ -299,8 +299,10 @@ Rules that are easy to regress:
   payload a verified entry yields, carried ones included), because the
   profile names the seat where the token only hints. A premium seat reports
   `seatTier: "team_tier_1"` and a token tier of the organization's
-  `default_raven`, so a `userRateLimitTier` naming an `Nx` makes it premium
-  first, then `seatTier` `team_premium` / `team_standard`, then the token.
+  `default_raven`, so a tier naming an `Nx` makes it premium first -
+  `userRateLimitTier`, or the token's own when the token says `team` (one
+  that says nothing may be a Max) - then `seatTier` `team_premium` /
+  `team_standard`, then the token.
   The rule is `selvedge::plans::team_seat`, shared with remuda, and it
   applies only while the login's token is still on Team (`may_hold_seat`).
 - **An API key is filed under a digest of itself.** GLM and opencode Go have no

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-10-12
+
 ### Fixed
 
 - A Claude Team premium seat whose profile reports its seat tier as

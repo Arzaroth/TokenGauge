@@ -55,7 +55,8 @@ pub fn default_store() -> PathBuf {
 
 /// A sidecar, minus what TokenGauge never reads: `email` stays on the machine
 /// and out of every file TokenGauge writes, and `oauthAccount` is remuda's to
-/// restore on a switch, read here for its `seatTier` alone.
+/// restore on a switch, read here for its `seatTier` and `userRateLimitTier`
+/// alone.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Sidecar {
@@ -83,6 +84,9 @@ pub struct StoredCredential {
     /// The seat tier the account's profile reported at capture
     /// (`team_standard`), trusted on the same terms.
     pub seat_tier: Option<String>,
+    /// The rate-limit tier the profile reported for the user rather than the
+    /// organization (`default_claude_max_5x`), trusted on the same terms.
+    pub user_rate_limit_tier: Option<String>,
 }
 
 impl StoredCredential {
@@ -192,17 +196,20 @@ fn read_one(dir: &Path, name: &str) -> std::result::Result<StoredCredential, Str
         .creds_digest
         .as_deref()
         .is_none_or(|d| d.eq_ignore_ascii_case(&digest));
-    let seat_tier = sidecar
-        .oauth_account
-        .as_ref()
-        .and_then(|account| account.get("seatTier")?.as_str())
-        .map(str::trim)
-        .filter(|tier| verified && !tier.is_empty())
-        .map(str::to_string);
+    let profile = |key: &str| {
+        sidecar
+            .oauth_account
+            .as_ref()
+            .and_then(|account| account.get(key)?.as_str())
+            .map(str::trim)
+            .filter(|tier| verified && !tier.is_empty())
+            .map(str::to_string)
+    };
     Ok(StoredCredential {
         name: name.to_string(),
         text,
-        seat_tier,
+        seat_tier: profile("seatTier"),
+        user_rate_limit_tier: profile("userRateLimitTier"),
         account_id: verified.then_some(sidecar.account_id),
         label: sidecar
             .label
@@ -339,8 +346,9 @@ pub(crate) fn check_stored_key(text: &str, _now: DateTime<Utc>) -> Result<Option
     stored_key(text).map(|_| None)
 }
 
-/// A stored credential's weight from its text and its sidecar's seat tier.
-pub(crate) type Weigh = fn(&str, Option<&str>) -> Option<f64>;
+/// A stored credential's weight from its text, its sidecar's seat tier and
+/// its sidecar's user rate-limit tier.
+pub(crate) type Weigh = fn(&str, Option<&str>, Option<&str>) -> Option<f64>;
 
 /// How one provider's credentials are read, for the providers a switcher
 /// stores. Function pointers rather than a trait, like the rest of the
@@ -356,7 +364,7 @@ pub(crate) struct StoreReader {
     /// The fetch's checks without the request, for `--doctor`.
     pub check: fn(&str, DateTime<Utc>) -> Result<Option<CredentialState>>,
     /// A stored credential's plan weight from its text and its sidecar's
-    /// seat tier, for a provider that sells seats the token does not name.
+    /// profile, for a provider that sells seats the token does not name.
     /// It replaces the fetch's weight on every payload a verified entry
     /// produces, carried ones included.
     pub weigh: Option<Weigh>,
@@ -557,7 +565,11 @@ fn stored(
     reader: &StoreReader,
 ) -> ProviderPayload {
     if let Some(weigh) = reader.weigh.filter(|_| entry.verified()) {
-        payload.credential.plan_weight = weigh(&entry.text, entry.seat_tier.as_deref());
+        payload.credential.plan_weight = weigh(
+            &entry.text,
+            entry.seat_tier.as_deref(),
+            entry.user_rate_limit_tier.as_deref(),
+        );
     }
     payload.credential.name = Some(entry.name.clone());
     payload.credential.active = Some(false);
@@ -805,6 +817,7 @@ pub(crate) mod tests {
             account_id: account.map(str::to_string),
             label: None,
             seat_tier: None,
+            user_rate_limit_tier: None,
         }
     }
 
@@ -839,11 +852,18 @@ pub(crate) mod tests {
     #[test]
     fn a_seat_tier_is_read_off_a_sidecar_written_for_these_tokens() {
         let store = temp_store("seat-tier");
-        let seated = |tier: &str| serde_json::json!({"accountUuid": "u", "seatTier": tier});
+        let seated = |tier: &str| {
+            serde_json::json!({
+                "accountUuid": "u",
+                "seatTier": tier,
+                "organizationRateLimitTier": "default_raven",
+                "userRateLimitTier": " default_claude_max_5x ",
+            })
+        };
         put(&store, "claude", "work", r#"{"a":1}"#, "u-1");
-        put_account(&store, "claude", "work", seated(" team_premium "));
+        put_account(&store, "claude", "work", seated(" team_tier_1 "));
         put(&store, "claude", "moved", r#"{"b":1}"#, "u-2");
-        put_account(&store, "claude", "moved", seated("team_premium"));
+        put_account(&store, "claude", "moved", seated("team_tier_1"));
         let path = store.join("claude/moved.json");
         std::fs::write(&path, r#"{"b":2}"#).unwrap();
         set_mode(&path, 0o600);
@@ -858,22 +878,27 @@ pub(crate) mod tests {
         );
 
         let read = read_provider(&store, "claude");
-        let tier = |name: &str| {
+        let entry = |name: &str| {
             read.entries
                 .iter()
                 .find(|e| e.name == name)
                 .unwrap_or_else(|| panic!("{name} was not read: {:?}", read.skipped))
-                .seat_tier
-                .clone()
         };
-        assert_eq!(tier("work").as_deref(), Some("team_premium"));
+        let tier = |name: &str| entry(name).seat_tier.clone();
+        assert_eq!(tier("work").as_deref(), Some("team_tier_1"));
+        assert_eq!(
+            entry("work").user_rate_limit_tier.as_deref(),
+            Some("default_claude_max_5x")
+        );
         assert_eq!(
             tier("moved"),
             None,
             "a seat tier from other tokens' sidecar"
         );
+        assert_eq!(entry("moved").user_rate_limit_tier, None);
         assert_eq!(tier("odd"), None);
         assert_eq!(tier("plain"), None);
+        assert_eq!(entry("plain").user_rate_limit_tier, None);
         let _ = std::fs::remove_dir_all(&store);
     }
 
@@ -1143,9 +1168,9 @@ pub(crate) mod tests {
         Ok(payload)
     }
 
-    /// Claude's seat tiers over the 5x every fake credential's token reads as.
-    fn fake_weigh(_: &str, seat_tier: Option<&str>) -> Option<f64> {
-        seat_tier.and_then(crate::claude::seat_weight).or(Some(5.0))
+    /// Claude's seats over the 5x every fake credential's token reads as.
+    fn fake_weigh(text: &str, seat_tier: Option<&str>, user_tier: Option<&str>) -> Option<f64> {
+        crate::claude::stored_weight(text, seat_tier, user_tier).or(Some(5.0))
     }
 
     fn fake_check(_: &str, _: DateTime<Utc>) -> Result<Option<CredentialState>> {
@@ -1324,15 +1349,21 @@ pub(crate) mod tests {
     }
 
     /// The token cannot tell a premium Team seat from a standard one, so the
-    /// seat tier the sidecar recorded decides, expired or not; a tier that is
+    /// profile the sidecar recorded decides, expired or not: a user tier
+    /// naming a multiplier, else a seat tier naming the seat. One that names
     /// no known seat leaves the fetch's own weight.
     #[test]
-    fn a_stored_team_seat_weighs_what_its_seat_tier_says() {
+    fn a_stored_team_seat_weighs_what_its_profile_says() {
         let (store, config) = store_with_every_kind("seat-weight");
         let seated = |tier: &str| serde_json::json!({"seatTier": tier});
-        put_account(&store, "claude", "perso", seated("team_premium"));
+        let premium = serde_json::json!({
+            "seatTier": "team_tier_1",
+            "organizationRateLimitTier": "default_raven",
+            "userRateLimitTier": "default_claude_max_5x",
+        });
+        put_account(&store, "claude", "perso", premium.clone());
         put_account(&store, "claude", "old", seated("team_standard"));
-        put_account(&store, "claude", "moved", seated("team_premium"));
+        put_account(&store, "claude", "moved", premium);
         put(
             &store,
             "claude",
@@ -1340,7 +1371,7 @@ pub(crate) mod tests {
             &creds("a-corp", "r-corp"),
             "u-corp",
         );
-        put_account(&store, "claude", "corp", seated("enterprise_seat"));
+        put_account(&store, "claude", "corp", seated("team_tier_1"));
         let (payloads, _) = fetch_provider("claude", &FAKE, &config, &[], live_payload);
         assert_eq!(named(&payloads, "perso").credential.plan_weight, Some(6.25));
         assert_eq!(named(&payloads, "old").credential.plan_weight, Some(1.25));

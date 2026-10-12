@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
+use selvedge::plans::{Seat, team_seat, tier_multiplier};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -331,25 +332,29 @@ fn live_account(source: &str, claude_json: &Path) -> Option<String> {
         .flatten()
 }
 
-/// The seat tier of the live login, on the same terms as its identity.
-fn live_seat_tier(source: &str, claude_json: &Path) -> Option<String> {
+/// A field of the live login's profile (`seatTier`, `userRateLimitTier`), on
+/// the same terms as its identity.
+fn live_profile_field(source: &str, claude_json: &Path, key: &str) -> Option<String> {
     (source != ENV_TOKEN)
-        .then(|| oauth_account_field(claude_json, "seatTier"))
+        .then(|| oauth_account_field(claude_json, key))
         .flatten()
 }
 
-/// The live login's weight: its seat tier's when that names a Team seat and
-/// the token is still on a Team plan, else what the token said.
+/// The live login's weight: the Team seat its profile names while the token
+/// is still on a Team plan, else what the token said.
 fn live_weight(
     token_weight: Option<f64>,
     subscription_type: Option<&str>,
     source: &str,
     claude_json: &Path,
 ) -> Option<f64> {
-    live_seat_tier(source, claude_json)
-        .as_deref()
-        .and_then(seat_weight)
-        .filter(|_| may_hold_seat(subscription_type))
+    if !may_hold_seat(subscription_type) {
+        return token_weight;
+    }
+    let seat_tier = live_profile_field(source, claude_json, "seatTier");
+    let user_tier = live_profile_field(source, claude_json, "userRateLimitTier");
+    team_seat(seat_tier.as_deref(), &[user_tier.as_deref()])
+        .map(Seat::weight)
         .or(token_weight)
 }
 
@@ -536,84 +541,56 @@ fn plan_label(subscription_type: Option<&str>, tier: Option<&str>) -> Option<Str
     Some(label)
 }
 
-const TEAM_STANDARD_WEIGHT: f64 = 1.25;
-const TEAM_PREMIUM_WEIGHT: f64 = 6.25;
-
 /// A plan's nominal multiplier against Pro: the `Nx` in a rate-limit tier
 /// (`default_claude_max_20x`), else 1 for Pro. A Team seat is sold against
 /// Pro's per-session allowance, not as a Max: a standard seat is 1.25x and a
 /// premium one 6.25x (support.claude.com, "What is the Team plan?"). Premium
-/// is named in the subscription type or the tier, or shows as a tier with an
-/// `Nx` (`default_claude_team_5x`); a standard seat's tier (`default_raven`)
-/// names neither.
+/// is named in the subscription type, or read off the tier by
+/// [`team_seat`]; a standard seat's tier (`default_raven`) names neither.
 ///
 /// `None` for anything else - Enterprise, or a tier not seen before. Guessing
 /// 1x would understate a large plan without saying so.
 fn plan_weight(subscription_type: Option<&str>, tier: Option<&str>) -> Option<f64> {
-    let multiplier = || {
-        tier.and_then(|tier| {
-            tier.split(|c: char| !c.is_ascii_alphanumeric())
-                .filter_map(|word| word.strip_suffix(['x', 'X']))
-                .filter(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
-                .find_map(|digits| digits.parse::<u32>().ok())
-                .filter(|n| *n > 0)
-                .map(f64::from)
-        })
-    };
     let sub = subscription_type.unwrap_or_default().to_lowercase();
     let tier_text = tier.unwrap_or_default().to_lowercase();
     // The tier alone names a Team plan when the subscription type is missing,
     // as `plan_label` reads it.
     if sub.contains("team") || (sub.is_empty() && tier_text.contains("team")) {
-        let premium =
-            sub.contains("premium") || tier_text.contains("premium") || multiplier().is_some();
-        return Some(if premium {
-            TEAM_PREMIUM_WEIGHT
+        let seat = if sub.contains("premium") {
+            Seat::Premium
         } else {
-            TEAM_STANDARD_WEIGHT
-        });
+            team_seat(None, &[tier]).unwrap_or(Seat::Standard)
+        };
+        return Some(seat.weight());
     }
-    multiplier().or_else(|| {
+    tier.and_then(tier_multiplier).map(f64::from).or_else(|| {
         (sub.contains("pro") && !["max", "enterprise"].iter().any(|k| sub.contains(k)))
             .then_some(1.0)
     })
 }
 
-/// A Team seat's weight from the seat tier Anthropic's profile reports
-/// (`team_standard`, `team_premium`). It outranks [`plan_weight`]: the profile
-/// names the seat, where the token's subscription type and tier only hint at
-/// it. `None` for a tier that is not a known Team seat, which leaves the
-/// token's own reading in place.
-pub(crate) fn seat_weight(seat_tier: &str) -> Option<f64> {
-    match seat_tier.trim().to_ascii_lowercase().as_str() {
-        "team_premium" => Some(TEAM_PREMIUM_WEIGHT),
-        "team_standard" => Some(TEAM_STANDARD_WEIGHT),
-        _ => None,
-    }
-}
-
-/// A stored credential's weight, from its own text and its sidecar's seat
-/// tier alone, so a payload carried from an earlier fetch is weighed as the
-/// store reads now.
-pub(crate) fn stored_weight(text: &str, seat_tier: Option<&str>) -> Option<f64> {
-    seat_tier
-        .and_then(|tier| stored_seat_weight(text, tier))
-        .or_else(|| {
-            let oauth = parse_credentials(text).ok()?;
-            plan_weight(
-                oauth.subscription_type.as_deref(),
-                oauth.rate_limit_tier.as_deref(),
-            )
-        })
-}
-
-/// A stored credential's seat weight: its seat tier's, while its token is
-/// still on a Team plan.
-fn stored_seat_weight(text: &str, seat_tier: &str) -> Option<f64> {
+/// A stored credential's weight, from its own text and what its sidecar's
+/// `oauthAccount` says alone, so a payload carried from an earlier fetch is
+/// weighed as the store reads now.
+///
+/// While the token is still on a Team plan, the profile names the seat where
+/// the token only hints at it: a premium seat's token carries the
+/// organization's `default_raven`, and its profile `team_tier_1` beside a
+/// user tier of `default_claude_max_5x`. [`team_seat`] reads them, and the
+/// token's own reading is the fallback.
+pub(crate) fn stored_weight(
+    text: &str,
+    seat_tier: Option<&str>,
+    user_tier: Option<&str>,
+) -> Option<f64> {
     let oauth = parse_credentials(text).ok();
-    may_hold_seat(oauth.as_ref().and_then(|o| o.subscription_type.as_deref()))
-        .then(|| seat_weight(seat_tier))
+    let subscription = oauth.as_ref().and_then(|o| o.subscription_type.as_deref());
+    let token_tier = oauth.as_ref().and_then(|o| o.rate_limit_tier.as_deref());
+    may_hold_seat(subscription)
+        .then(|| team_seat(seat_tier, &[user_tier]))
         .flatten()
+        .map(Seat::weight)
+        .or_else(|| plan_weight(subscription, token_tier))
 }
 
 /// Whether a token's subscription type leaves room for a Team seat: it says
@@ -1256,74 +1233,109 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A premium seat's token carries the organization's `default_raven`, and
+    /// its profile `team_tier_1` beside a user tier of `default_claude_max_5x`;
+    /// a standard seat's profile says `team_standard` with no user tier.
     #[test]
-    fn a_seat_tier_names_a_team_seat_or_nothing() {
-        assert_eq!(seat_weight("team_standard"), Some(1.25));
-        assert_eq!(seat_weight("team_premium"), Some(6.25));
-        assert_eq!(seat_weight("TEAM_PREMIUM"), Some(6.25));
-        assert_eq!(seat_weight(" team_standard "), Some(1.25));
-        assert_eq!(seat_weight("team_something_new"), None);
-        assert_eq!(seat_weight("not_team_premium"), None);
-        assert_eq!(seat_weight("team_premium_trial"), None);
-        assert_eq!(seat_weight("enterprise_premium"), None);
-        assert_eq!(seat_weight(""), None);
-    }
-
-    #[test]
-    fn a_stored_credential_weighs_by_its_seat_tier_then_its_token() {
+    fn a_stored_credential_weighs_by_its_profile_then_its_token() {
         let team = r#"{"claudeAiOauth":{"accessToken":"a","subscriptionType":"team","rateLimitTier":"default_raven"}}"#;
-        assert_eq!(stored_weight(team, None), Some(1.25));
-        assert_eq!(stored_weight(team, Some("team_premium")), Some(6.25));
-        assert_eq!(stored_weight(team, Some("enterprise_seat")), Some(1.25));
-        assert_eq!(stored_weight("not json", Some("team_premium")), Some(6.25));
-        assert_eq!(stored_weight("not json", None), None);
+        assert_eq!(
+            stored_weight(team, Some("team_tier_1"), Some("default_claude_max_5x")),
+            Some(6.25),
+            "a premium seat its seat tier does not name"
+        );
+        assert_eq!(stored_weight(team, Some("team_standard"), None), Some(1.25));
+        assert_eq!(
+            stored_weight(team, Some("team_standard"), Some("default_raven")),
+            Some(1.25)
+        );
+        assert_eq!(stored_weight(team, Some("team_premium"), None), Some(6.25));
+        assert_eq!(
+            stored_weight(team, Some("team_tier_1"), None),
+            Some(1.25),
+            "a seat tier that names no weight leaves the token's"
+        );
+        assert_eq!(stored_weight(team, None, None), Some(1.25));
+        assert_eq!(
+            stored_weight(team, Some("enterprise_seat"), None),
+            Some(1.25)
+        );
+        assert_eq!(
+            stored_weight("not json", Some("team_premium"), None),
+            Some(6.25)
+        );
+        assert_eq!(stored_weight("not json", None, None), None);
 
         let max = r#"{"claudeAiOauth":{"accessToken":"a","subscriptionType":"max","rateLimitTier":"default_claude_max_20x"}}"#;
         assert_eq!(
-            stored_weight(max, Some("team_premium")),
+            stored_weight(max, Some("team_tier_1"), Some("default_claude_max_5x")),
             Some(20.0),
             "a seat for a login that has left its Team plan"
         );
-        assert_eq!(stored_seat_weight(max, "team_premium"), None);
-        assert_eq!(stored_seat_weight(team, "team_premium"), Some(6.25));
-        assert_eq!(stored_seat_weight(team, "team_unknown"), None);
+        assert_eq!(stored_weight(max, Some("team_premium"), None), Some(20.0));
     }
 
     #[test]
-    fn the_live_seat_tier_is_the_one_claude_json_records_for_its_own_login() {
+    fn the_live_seat_is_the_one_claude_json_records_for_its_own_login() {
         let dir = std::env::temp_dir().join(format!("tg-claude-seat-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(".claude.json");
         std::fs::write(
             &path,
-            r#"{"oauthAccount":{"accountUuid":"u-1","seatTier":"team_premium"}}"#,
+            r#"{"oauthAccount":{"accountUuid":"u-1","seatTier":"team_tier_1","organizationRateLimitTier":"default_raven","userRateLimitTier":"default_claude_max_5x"}}"#,
         )
         .unwrap();
         assert_eq!(
-            live_seat_tier(".credentials.json", &path).as_deref(),
-            Some("team_premium")
+            live_profile_field(".credentials.json", &path, "userRateLimitTier").as_deref(),
+            Some("default_claude_max_5x")
         );
         assert_eq!(
-            live_seat_tier(ENV_TOKEN, &path),
+            live_profile_field(ENV_TOKEN, &path, "seatTier"),
             None,
             "the override is not the file's login"
+        );
+        assert_eq!(
+            live_weight(Some(1.25), Some("team"), ".credentials.json", &path),
+            Some(6.25),
+            "a premium seat its seat tier does not name"
         );
         assert_eq!(
             live_weight(Some(1.25), None, ".credentials.json", &path),
             Some(6.25)
         );
-        assert_eq!(live_weight(Some(1.25), None, ENV_TOKEN, &path), Some(1.25));
+        assert_eq!(
+            live_weight(Some(1.25), Some("team"), ENV_TOKEN, &path),
+            Some(1.25)
+        );
         assert_eq!(
             live_weight(Some(20.0), Some("max"), ".credentials.json", &path),
             Some(20.0),
             "a seat .claude.json still names after the login left Team"
         );
+
+        std::fs::write(
+            &path,
+            r#"{"oauthAccount":{"accountUuid":"u-2","seatTier":"team_premium"}}"#,
+        )
+        .unwrap();
         assert_eq!(
             live_weight(Some(1.25), Some("team"), ".credentials.json", &path),
             Some(6.25)
         );
+        std::fs::write(
+            &path,
+            r#"{"oauthAccount":{"accountUuid":"u-3","seatTier":"team_standard"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            live_weight(Some(1.25), Some("team"), ".credentials.json", &path),
+            Some(1.25)
+        );
         std::fs::write(&path, r#"{"oauthAccount":{"seatTier":null}}"#).unwrap();
-        assert_eq!(live_seat_tier(".credentials.json", &path), None);
+        assert_eq!(
+            live_profile_field(".credentials.json", &path, "seatTier"),
+            None
+        );
         assert_eq!(
             live_weight(Some(20.0), None, ".credentials.json", &path),
             Some(20.0)

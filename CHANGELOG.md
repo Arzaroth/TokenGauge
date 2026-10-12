@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A Claude Team premium seat whose profile reports its seat tier as
+  `team_tier_1` is weighed as premium (6.25x) rather than standard. The seat's
+  own rate-limit tier (`default_claude_max_5x`) is what names it, where the
+  token carries the organization's `default_raven`.
+
+### Changed
+
+- `--update` refuses a binary a package manager installed (a distribution
+  package, the Nix store, a snap) and says how to upgrade it instead, as it
+  already did for Homebrew, and unpacks a release zip that lists its
+  directories (selvedge 0.7).
+
+### Removed
+
+- The Team seat chosen in remuda (`remuda seat`) is no longer read: the
+  profile now says which seat a login holds.
+
 ## [0.44.0] - 2026-10-12
 
 ### Added

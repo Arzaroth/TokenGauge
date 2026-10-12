@@ -131,16 +131,18 @@ keeping inactive tokens alive are the switcher's job.
   a large plan silently). The header's reset is the earliest, when capacity first
   comes back. Team seats weigh 1.25 / 6.25 (Anthropic's first-party "What is the
   Team plan?"; they were 1 and 5 until that was found). The profile names the
-  seat where the token only hints at it, so `oauthAccount.seatTier`
-  (`team_standard`, `team_premium`) decides when it names one: off a sidecar
-  whose digest matches its tokens, or off `.claude.json` for a live token from
-  Claude Code's own stores. The profile has been seen to report a premium seat
-  as standard, so a seat the user chose in remuda (the sidecar's top-level
-  `seatTier`) outranks both, for the stored copy and for the live login it
-  matches while the live token is still on Team (an account match can pair a
-  newer Max token with an older Team copy). The snapshot records the chosen seats (`CacheMeta.seats`), and a new
-  choice makes it stale. Without either, the subscription type and an `Nx` tier
-  decide. Codex first shipped
+  seat where the token only hints at it, so `oauthAccount` decides: off a
+  sidecar whose digest matches its tokens, or off `.claude.json` for a live
+  token from Claude Code's own stores, and only while the token is still on
+  Team. A premium seat reports `seatTier: "team_tier_1"`, and its token the
+  organization's `default_raven`, so a `userRateLimitTier` naming an `Nx`
+  (`default_claude_max_5x`) is premium first; otherwise `seatTier`
+  `team_standard` / `team_premium` decides, and no mapping is guessed for
+  `team_tier_N`. Without either, the subscription type and an `Nx` tier
+  decide. The rule is `selvedge::plans::team_seat`, shared with remuda. A
+  seat chosen by hand in remuda (`remuda seat`) outranked the profile for one
+  release, while the profile read wrong; it went once the user tier was read.
+  Codex first shipped
   without a table, then gained one when OpenAI split Pro into 5x / 10x / 25x Plus
   tiers named on the wire. Grok is weighed by price because xAI publishes no
   multiplier and a guessed 1x would hide a Heavy behind a SuperGrok. opencode Go
@@ -229,8 +231,8 @@ See [features/remuda-page.md](features/remuda-page.md).
   [architecture/distribution.md](architecture/distribution.md).
 - **The updater is selvedge, shared with TailGauge**: both projects had the same
   1,500 lines and fixed the same bug twice. Gaps are fixed there, not worked
-  around here. `selvedge::plans` holds the ALL PLANS arithmetic so remuda's page
-  cannot print different figures.
+  around here. `selvedge::plans` holds the ALL PLANS arithmetic and the Team seat
+  rule so remuda's page cannot print different figures.
 - **macOS keeps XDG paths**, so installer, binaries and docs name one place on
   every Unix. The `.app` does not self-update (it would break the seal).
 - **Windows installs into one directory**, `%LOCALAPPDATA%\TokenGauge\bin`, and an

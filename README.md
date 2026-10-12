@@ -327,9 +327,9 @@ units of the largest: a Max 20x and a Pro both spent read `105% of 105%`, a Max
 20x at 50% beside a Max 5x at 100% reads `75% of 125%`, and the bar fills to
 the pooled share. The multipliers are the nominal ones the plans are sold with,
 so the header says `estimate`. A Team seat counts as 1.25 Pros (standard) or
-6.25 (premium), as Anthropic sells them, going by the seat tier Anthropic's
-profile reports for the login, or the one chosen with `remuda seat` when the
-profile has it wrong. Codex plans weigh against Plus: Pro 100, 200 and 500 count as 5,
+6.25 (premium), as Anthropic sells them, going by what Anthropic's profile
+reports for the login: a rate-limit tier naming a multiplier is a premium
+seat, whatever the seat tier is called. Codex plans weigh against Plus: Pro 100, 200 and 500 count as 5,
 10 and 25, a Business seat as 1 and a Business Premium seat as 5. A plan with no
 known multiplier (Claude or ChatGPT Enterprise, ChatGPT Free) is left out of it
 and marked `not in total`.

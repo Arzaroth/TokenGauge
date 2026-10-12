@@ -456,12 +456,10 @@ pub(crate) fn live_login() -> LiveLogin {
     };
     match auth.tokens {
         Some(tokens) => LiveLogin {
-            subscription: None,
             account: seat_of(&tokens.access_token, tokens.id_token.as_deref()),
             tokens: oauth_tokens(&tokens),
         },
         None => LiveLogin {
-            subscription: None,
             tokens: LoginTokens {
                 access: trimmed(auth.personal_access_token).or_else(|| trimmed(auth.api_key)),
                 refresh: None,

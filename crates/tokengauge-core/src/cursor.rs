@@ -399,7 +399,6 @@ pub(crate) fn live_login() -> LiveLogin {
             .unwrap_or_default(),
     };
     LiveLogin {
-        subscription: None,
         account: tokens.access.as_deref().and_then(|t| user_id(t).ok()),
         tokens,
     }

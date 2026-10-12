@@ -318,7 +318,6 @@ pub(crate) fn live_login() -> LiveLogin {
         return LiveLogin::default();
     };
     LiveLogin {
-        subscription: oauth.subscription_type.clone(),
         tokens: login_tokens(&oauth),
         account: live_account(source, &claude_json_path()),
     }
@@ -610,29 +609,16 @@ pub(crate) fn stored_weight(text: &str, seat_tier: Option<&str>) -> Option<f64> 
 
 /// A stored credential's seat weight: its seat tier's, while its token is
 /// still on a Team plan.
-pub(crate) fn stored_seat_weight(text: &str, seat_tier: &str) -> Option<f64> {
+fn stored_seat_weight(text: &str, seat_tier: &str) -> Option<f64> {
     let oauth = parse_credentials(text).ok();
     may_hold_seat(oauth.as_ref().and_then(|o| o.subscription_type.as_deref()))
         .then(|| seat_weight(seat_tier))
         .flatten()
 }
 
-/// The live login's seat weight: the stored entry it matched must still be on
-/// Team, and so must the live token, which may be newer than the entry when
-/// the two matched by account.
-pub(crate) fn live_seat_weight(
-    text: &str,
-    subscription_type: Option<&str>,
-    seat_tier: &str,
-) -> Option<f64> {
-    may_hold_seat(subscription_type)
-        .then(|| stored_seat_weight(text, seat_tier))
-        .flatten()
-}
-
 /// Whether a token's subscription type leaves room for a Team seat: it says
-/// `team`, or says nothing. A seat chosen or reported for a login that has
-/// since moved to Max is not its weight any more.
+/// `team`, or says nothing. A seat reported for a login that has since moved
+/// to Max is not its weight any more.
 fn may_hold_seat(subscription_type: Option<&str>) -> bool {
     subscription_type
         .map(str::trim)
@@ -1301,21 +1287,6 @@ mod tests {
         assert_eq!(stored_seat_weight(max, "team_premium"), None);
         assert_eq!(stored_seat_weight(team, "team_premium"), Some(6.25));
         assert_eq!(stored_seat_weight(team, "team_unknown"), None);
-    }
-
-    #[test]
-    fn a_chosen_seat_weighs_the_live_login_only_while_its_token_is_on_team() {
-        let team = r#"{"claudeAiOauth":{"accessToken":"a","subscriptionType":"team"}}"#;
-        assert_eq!(
-            live_seat_weight(team, Some("team"), "team_premium"),
-            Some(6.25)
-        );
-        assert_eq!(live_seat_weight(team, None, "team_premium"), Some(6.25));
-        assert_eq!(
-            live_seat_weight(team, Some("max"), "team_premium"),
-            None,
-            "a live token on Max, matched by account to a stored Team copy"
-        );
     }
 
     #[test]

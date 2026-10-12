@@ -28,7 +28,8 @@ desktop payloads from the same archive. TailGauge runs on it too.
 aliases, frontends, MSI marker key); `TOKENGAUGE` is threaded into every call.
 
 - `selvedge::plans` is also the ALL PLANS arithmetic (units of the largest plan,
-  half-even rounding, pooled fill, split-bar widths), shared with remuda's page.
+  half-even rounding, pooled fill, split-bar widths) and the Claude Team seat
+  rule (`team_seat`), shared with remuda's page.
   `panel.rs` keeps only the words.
 - The cached update status lives at `update_status_path` beside the snapshot, not
   selvedge's default `$XDG_CACHE_HOME/<binary>/update.json`; pass it to every

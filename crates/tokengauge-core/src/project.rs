@@ -1,7 +1,7 @@
 //! What selvedge cannot know: which binaries this is, where its releases live,
 //! and what it ships beside them.
 
-use selvedge::{Frontend, Project, Restart, VersionSource};
+use selvedge::{Frontend, Project, Restart, SHORT_TARGETS, VersionSource};
 
 /// Every executable the release archive carries, the primary one first. That
 /// one also names the assets, so on Windows - where the archive is built
@@ -29,6 +29,7 @@ pub const TOKENGAUGE: Project = Project {
     aliases: &["tokengauge-waybar"],
     legacy: &[],
     msi_marker_key: Some(r"HKCU\Software\TokenGauge"),
+    targets: SHORT_TARGETS,
 };
 
 pub const FRONTENDS: &[Frontend] = &[
@@ -126,7 +127,7 @@ mod tests {
     fn the_workflow_publishes_the_asset_this_build_asks_for() {
         use selvedge::update::{ARCHIVE_SUFFIX, arch_target};
         let workflow = release_workflow();
-        let target = arch_target().expect("a supported arch builds this test");
+        let target = arch_target(&TOKENGAUGE).expect("a supported arch builds this test");
         assert!(
             workflow
                 .split(|c: char| c.is_whitespace() || c == '"' || c == ',')

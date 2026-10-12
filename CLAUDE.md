@@ -151,9 +151,8 @@ provider that is enabled now was switched on - `CacheMeta.providers` records the
 set each fetch ran with - **or** a window it reported has reset since it was
 written, because those percentages describe a window that no longer exists -
 **or** the credential store changed under it (a credential added, removed or
-renamed against `CacheMeta.credentials`, a seat chosen in remuda against
-`CacheMeta.seats`, or a switch in remuda's `.last-switch.json` after the
-write). Age
+renamed against `CacheMeta.credentials`, or a switch in remuda's
+`.last-switch.json` after the write). Age
 alone was the old rule, and it is why enabling a provider used to do nothing for
 ten minutes. The rollover test compares against the write, not against now
 alone: a provider reporting an instant already past reports the same one on the
@@ -294,13 +293,18 @@ Rules that are easy to regress:
   "absolute"`, where every asked credential counts 100% and needs no weight.
   Weighted, a plan with no known weight is out of the total and says so,
   rather than guessed at 1x.
-  A Claude Team seat's weight comes from `oauthAccount.seatTier` when it
-  names one (`claude::seat_weight`; a stored credential goes through
-  `StoreReader.weigh`, which reweighs every payload a verified entry yields,
-  carried ones included), because the profile names the seat where the token
-  only hints. A seat chosen with `remuda seat` (the sidecar's top-level
-  `seatTier`) outranks the profile's, for the live login it matches too,
-  while that login's own token is still on Team.
+  A Claude Team seat's weight comes from the profile in `oauthAccount`
+  (`.claude.json` for the live login, a verified sidecar for a stored one;
+  a stored credential goes through `StoreReader.weigh`, which reweighs every
+  payload a verified entry yields, carried ones included), because the
+  profile names the seat where the token only hints. A premium seat reports
+  `seatTier: "team_tier_1"` and a token tier of the organization's
+  `default_raven`, so a tier naming an `Nx` makes it premium first -
+  `userRateLimitTier`, or the token's own when the token says `team` (one
+  that says nothing may be a Max) - then `seatTier` `team_premium` /
+  `team_standard`, then the token.
+  The rule is `selvedge::plans::team_seat`, shared with remuda, and it
+  applies only while the login's token is still on Team (`may_hold_seat`).
 - **An API key is filed under a digest of itself.** GLM and opencode Go have no
   account behind a key, so remuda names one `key-` and the first 16 hex digits
   of its SHA-256, and `credentials::key_account` must say the same, or the
@@ -542,8 +546,9 @@ from a global there.
 
 selvedge is not only the updater. `selvedge::plans` is the ALL PLANS
 arithmetic - units of the largest plan, half-even rounding, the pooled fill,
-split-bar widths - which `panel.rs` calls and remuda's page shares, so the two
-cannot print different figures for the same plans. A change to how plans add
+split-bar widths, and which seat a Claude Team login holds (`team_seat`) -
+which `panel.rs` and `claude.rs` call and remuda shares, so the two cannot
+print different figures for the same plans. A change to how plans add
 up is made there, tested there, tagged, and repinned in both; `panel.rs` keeps
 only the words around the numbers.
 

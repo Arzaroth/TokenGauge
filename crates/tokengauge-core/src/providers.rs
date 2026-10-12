@@ -717,10 +717,13 @@ fn default_provider_icon_dir() -> PathBuf {
 /// `TOKENGAUGE_ICON_DIR` (e.g. point it at the repo `assets/providers` when
 /// running a dev build).
 pub fn provider_icon_dir() -> PathBuf {
-    match std::env::var("TOKENGAUGE_ICON_DIR") {
-        Ok(dir) => PathBuf::from(dir),
-        Err(_) => default_provider_icon_dir(),
-    }
+    icon_dir_override().unwrap_or_else(default_provider_icon_dir)
+}
+
+fn icon_dir_override() -> Option<PathBuf> {
+    std::env::var_os("TOKENGAUGE_ICON_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
 }
 
 /// Path to a provider's brand SVG, or None when there is none to point at
@@ -729,9 +732,9 @@ pub fn provider_icon_dir() -> PathBuf {
 /// `TOKENGAUGE_ICON_DIR` is the caller's and is only read.
 pub fn provider_icon_svg_path(label: &str) -> Option<PathBuf> {
     let slug = provider_icon_slug(label)?;
-    match std::env::var("TOKENGAUGE_ICON_DIR") {
-        Ok(dir) => icon_svg_in(Path::new(&dir), slug, false),
-        Err(_) => icon_svg_in(&default_provider_icon_dir(), slug, true),
+    match icon_dir_override() {
+        Some(dir) => icon_svg_in(&dir, slug, false),
+        None => icon_svg_in(&default_provider_icon_dir(), slug, true),
     }
 }
 

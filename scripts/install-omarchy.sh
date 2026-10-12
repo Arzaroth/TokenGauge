@@ -9,8 +9,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
-DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
-ICON_DIR="$DATA_DIR/tokengauge/icons"
 
 PLUGIN_ID="arzaroth.tokengauge"
 PLUGIN_SRC="$REPO_DIR/omarchy/$PLUGIN_ID"
@@ -70,17 +68,6 @@ done
 # still default to that name. Keep it resolving.
 rm -f "$INSTALL_DIR/tokengauge-waybar"
 ln -s tokengauge "$INSTALL_DIR/tokengauge-waybar"
-
-info "Installing provider logos to $ICON_DIR"
-mkdir -p "$ICON_DIR"
-shopt -s nullglob
-icons=("$REPO_DIR"/assets/providers/ProviderIcon-*.svg)
-shopt -u nullglob
-if [[ ${#icons[@]} -eq 0 ]]; then
-  fail "No provider icons found in $REPO_DIR/assets/providers"
-  exit 1
-fi
-install -m 0644 "${icons[@]}" "$ICON_DIR/"
 
 # The daemon keeps serving from the binary it started with, so a fresh build
 # only reaches the widget once the unit restarts.

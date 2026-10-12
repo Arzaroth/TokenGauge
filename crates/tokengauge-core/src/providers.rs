@@ -14,7 +14,7 @@
 //! `[providers]` - so the row carries an accessor for its field instead, and a
 //! test asserts every id in the table has one that works.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
@@ -664,25 +664,94 @@ fn glm_auth() -> AuthStatus {
     }
 }
 
-/// Directory the installer drops provider SVG logos into. Overridable with
-/// `TOKENGAUGE_ICON_DIR` (e.g. point it at the repo `assets/providers` when
-/// running a dev build).
-pub fn provider_icon_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("TOKENGAUGE_ICON_DIR") {
-        return PathBuf::from(dir);
-    }
-    let base = std::env::var("XDG_DATA_HOME")
+/// The logos the frontends load by path. The binary carries them because
+/// `--update` replaces binaries and desktop payloads, never this directory, so
+/// a provider added after install would otherwise never get one.
+const PROVIDER_ICONS: &[(&str, &str)] = &[
+    (
+        "claude",
+        include_str!("../../../assets/providers/ProviderIcon-claude.svg"),
+    ),
+    (
+        "codex",
+        include_str!("../../../assets/providers/ProviderIcon-codex.svg"),
+    ),
+    (
+        "cursor",
+        include_str!("../../../assets/providers/ProviderIcon-cursor.svg"),
+    ),
+    (
+        "glm",
+        include_str!("../../../assets/providers/ProviderIcon-glm.svg"),
+    ),
+    (
+        "grok",
+        include_str!("../../../assets/providers/ProviderIcon-grok.svg"),
+    ),
+    (
+        "kimi",
+        include_str!("../../../assets/providers/ProviderIcon-kimi.svg"),
+    ),
+    (
+        "opencode",
+        include_str!("../../../assets/providers/ProviderIcon-opencode.svg"),
+    ),
+    (
+        "openrouter",
+        include_str!("../../../assets/providers/ProviderIcon-openrouter.svg"),
+    ),
+];
+
+/// Monochrome marks are drawn in `currentColor`, which an `Image` loading the
+/// file by path resolves to black.
+const PROVIDER_ICON_FG: &str = "#cdd6f4";
+
+fn default_provider_icon_dir() -> PathBuf {
+    let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".local/share"));
+        .filter(|dir| dir.is_absolute())
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/share"));
     base.join("tokengauge").join("icons")
 }
 
-/// Path to a provider's bundled brand SVG, or None when no logo is installed
-/// (the frontend then falls back to the glyph icon).
+/// Directory the provider SVG logos are read from. Overridable with
+/// `TOKENGAUGE_ICON_DIR` (e.g. point it at the repo `assets/providers` when
+/// running a dev build).
+pub fn provider_icon_dir() -> PathBuf {
+    icon_dir_override().unwrap_or_else(default_provider_icon_dir)
+}
+
+fn icon_dir_override() -> Option<PathBuf> {
+    std::env::var_os("TOKENGAUGE_ICON_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Path to a provider's brand SVG, or None when there is none to point at
+/// (the frontend then falls back to the glyph icon). A logo missing from the
+/// default directory is written there from the copy the binary carries; a
+/// `TOKENGAUGE_ICON_DIR` is the caller's and is only read.
 pub fn provider_icon_svg_path(label: &str) -> Option<PathBuf> {
     let slug = provider_icon_slug(label)?;
-    let path = provider_icon_dir().join(format!("ProviderIcon-{slug}.svg"));
-    path.exists().then_some(path)
+    match icon_dir_override() {
+        Some(dir) => icon_svg_in(&dir, slug, false),
+        None => icon_svg_in(&default_provider_icon_dir(), slug, true),
+    }
+}
+
+fn icon_svg_in(dir: &Path, slug: &str, fill: bool) -> Option<PathBuf> {
+    let path = dir.join(format!("ProviderIcon-{slug}.svg"));
+    if path.exists() {
+        return Some(path);
+    }
+    if !fill {
+        return None;
+    }
+    let (_, svg) = PROVIDER_ICONS.iter().find(|(s, _)| *s == slug)?;
+    let svg = svg.replace("currentColor", PROVIDER_ICON_FG);
+    crate::statefiles::write_atomic(&path, svg.as_bytes())
+        .ok()
+        .map(|()| path)
 }
 
 #[cfg(test)]
@@ -841,6 +910,39 @@ mod tests {
             );
             assert!(config.is_enabled(meta.id));
         }
+    }
+
+    #[test]
+    fn every_provider_with_an_icon_slug_carries_its_logo() {
+        for meta in PROVIDER_META {
+            if let Some(slug) = meta.icon_slug {
+                assert!(
+                    PROVIDER_ICONS.iter().any(|(s, _)| *s == slug),
+                    "{} has icon slug `{slug}` and no logo in the binary",
+                    meta.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_missing_logo_is_written_where_the_frontends_look() {
+        let dir = std::env::temp_dir().join(format!("tg-icons-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let path = icon_svg_in(&dir, "grok", true).expect("grok logo written");
+        let svg = std::fs::read_to_string(&path).unwrap();
+        assert!(svg.contains(PROVIDER_ICON_FG));
+        assert!(!svg.contains("currentColor"));
+
+        std::fs::write(&path, "<svg/>").unwrap();
+        assert_eq!(icon_svg_in(&dir, "grok", true), Some(path.clone()));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "<svg/>");
+
+        assert_eq!(icon_svg_in(&dir, "codex", false), None);
+        assert!(!dir.join("ProviderIcon-codex.svg").exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

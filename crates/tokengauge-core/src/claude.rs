@@ -345,17 +345,19 @@ fn live_profile_field(source: &str, claude_json: &Path, key: &str) -> Option<Str
 fn live_weight(
     token_weight: Option<f64>,
     subscription_type: Option<&str>,
+    token_tier: Option<&str>,
     source: &str,
     claude_json: &Path,
 ) -> Option<f64> {
-    if !may_hold_seat(subscription_type) {
-        return token_weight;
-    }
     let seat_tier = live_profile_field(source, claude_json, "seatTier");
     let user_tier = live_profile_field(source, claude_json, "userRateLimitTier");
-    team_seat(seat_tier.as_deref(), &[user_tier.as_deref()])
-        .map(Seat::weight)
-        .or(token_weight)
+    seat_weight(
+        subscription_type,
+        token_tier,
+        seat_tier.as_deref(),
+        user_tier.as_deref(),
+    )
+    .or(token_weight)
 }
 
 pub(crate) fn stored_tokens(text: &str) -> LoginTokens {
@@ -586,11 +588,24 @@ pub(crate) fn stored_weight(
     let oauth = parse_credentials(text).ok();
     let subscription = oauth.as_ref().and_then(|o| o.subscription_type.as_deref());
     let token_tier = oauth.as_ref().and_then(|o| o.rate_limit_tier.as_deref());
-    may_hold_seat(subscription)
-        .then(|| team_seat(seat_tier, &[user_tier]))
-        .flatten()
-        .map(Seat::weight)
+    seat_weight(subscription, token_tier, seat_tier, user_tier)
         .or_else(|| plan_weight(subscription, token_tier))
+}
+
+/// A Team seat's weight, read as remuda reads it: every rate-limit tier the
+/// login carries, then its seat tier. The token's own tier counts only on a
+/// token that says `team`, since one that says nothing may be a Max.
+fn seat_weight(
+    subscription: Option<&str>,
+    token_tier: Option<&str>,
+    seat_tier: Option<&str>,
+    user_tier: Option<&str>,
+) -> Option<f64> {
+    if !may_hold_seat(subscription) {
+        return None;
+    }
+    let on_team = subscription.is_some_and(|sub| sub.to_ascii_lowercase().contains("team"));
+    team_seat(seat_tier, &[user_tier, token_tier.filter(|_| on_team)]).map(Seat::weight)
 }
 
 /// Whether a token's subscription type leaves room for a Team seat: it says
@@ -788,6 +803,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     payload.credential.plan_weight = live_weight(
         payload.credential.plan_weight,
         oauth.subscription_type.as_deref(),
+        oauth.rate_limit_tier.as_deref(),
         source,
         &claude_json_path(),
     );
@@ -1250,6 +1266,15 @@ mod tests {
             Some(1.25)
         );
         assert_eq!(stored_weight(team, Some("team_premium"), None), Some(6.25));
+        let remuda_signed = r#"{"claudeAiOauth":{"accessToken":"a","subscriptionType":"team","rateLimitTier":"default_claude_max_5x"}}"#;
+        assert_eq!(
+            stored_weight(remuda_signed, Some("team_standard"), None),
+            Some(6.25),
+            "a tier naming a multiplier outranks the seat tier, as in remuda"
+        );
+        let unlabelled =
+            r#"{"claudeAiOauth":{"accessToken":"a","rateLimitTier":"default_claude_max_20x"}}"#;
+        assert_eq!(stored_weight(unlabelled, None, None), Some(20.0));
         assert_eq!(
             stored_weight(team, Some("team_tier_1"), None),
             Some(1.25),
@@ -1295,20 +1320,20 @@ mod tests {
             "the override is not the file's login"
         );
         assert_eq!(
-            live_weight(Some(1.25), Some("team"), ".credentials.json", &path),
+            live_weight(Some(1.25), Some("team"), None, ".credentials.json", &path),
             Some(6.25),
             "a premium seat its seat tier does not name"
         );
         assert_eq!(
-            live_weight(Some(1.25), None, ".credentials.json", &path),
+            live_weight(Some(1.25), None, None, ".credentials.json", &path),
             Some(6.25)
         );
         assert_eq!(
-            live_weight(Some(1.25), Some("team"), ENV_TOKEN, &path),
+            live_weight(Some(1.25), Some("team"), None, ENV_TOKEN, &path),
             Some(1.25)
         );
         assert_eq!(
-            live_weight(Some(20.0), Some("max"), ".credentials.json", &path),
+            live_weight(Some(20.0), Some("max"), None, ".credentials.json", &path),
             Some(20.0),
             "a seat .claude.json still names after the login left Team"
         );
@@ -1319,7 +1344,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            live_weight(Some(1.25), Some("team"), ".credentials.json", &path),
+            live_weight(Some(1.25), Some("team"), None, ".credentials.json", &path),
             Some(6.25)
         );
         std::fs::write(
@@ -1328,7 +1353,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            live_weight(Some(1.25), Some("team"), ".credentials.json", &path),
+            live_weight(Some(1.25), Some("team"), None, ".credentials.json", &path),
             Some(1.25)
         );
         std::fs::write(&path, r#"{"oauthAccount":{"seatTier":null}}"#).unwrap();
@@ -1337,7 +1362,7 @@ mod tests {
             None
         );
         assert_eq!(
-            live_weight(Some(20.0), None, ".credentials.json", &path),
+            live_weight(Some(20.0), None, None, ".credentials.json", &path),
             Some(20.0)
         );
         let _ = std::fs::remove_dir_all(&dir);

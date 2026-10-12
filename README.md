@@ -452,8 +452,7 @@ module keeps working exactly as before. From a local checkout:
 bash scripts/install-plasma.sh
 ```
 
-The script builds the release binaries, installs the provider logos to
-`~/.local/share/tokengauge/icons`, and registers the applet with
+The script builds the release binaries and registers the applet with
 `kpackagetool6`. Then add it: right-click a panel or the desktop -> **Add
 Widgets** -> search **TokenGauge**. If it doesn't show up yet, restart Plasma
 (`kquitapp6 plasmashell && kstart plasmashell`).
@@ -482,8 +481,7 @@ bash scripts/install-gnome.sh
 ```
 
 The script compiles the extension's TypeScript, builds the release binaries,
-installs the provider logos to `~/.local/share/tokengauge/icons`, copies the
-extension into
+copies the extension into
 `~/.local/share/gnome-shell/extensions/tokengauge@arzaroth.github.io`, compiles
 its GSettings schema, and enables it. Reload the shell afterwards - Alt+F2 then
 `r` on Xorg, or log out and back in on Wayland.

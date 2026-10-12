@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Grok, GLM, Cursor, opencode Go and OpenRouter had no logo in the Plasma,
+  GNOME and Omarchy provider tabs. The logos were downloaded once by
+  `install.sh`, from a list that stopped at five providers, and `--update`
+  never refreshed them. The binary now carries every logo and writes a
+  missing one into `~/.local/share/tokengauge/icons` itself.
+
 ## [0.45.0] - 2026-10-12
 
 ### Fixed

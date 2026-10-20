@@ -784,6 +784,7 @@ fn to_payload(
             updated_at: Some(now.to_rfc3339()),
             login_method: plan,
             extra_rate_windows,
+            banked_resets: None,
         }),
         credits: None,
         error: None,

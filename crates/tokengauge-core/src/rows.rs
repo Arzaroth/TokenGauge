@@ -586,6 +586,7 @@ mod tests {
                 ),
                 login_method: None,
                 extra_rate_windows: Vec::new(),
+                banked_resets: None,
             }),
             credits: None,
             error: None,

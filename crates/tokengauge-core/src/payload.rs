@@ -30,6 +30,17 @@ pub struct UsageSnapshot {
     pub login_method: Option<String>,
     #[serde(default)]
     pub extra_rate_windows: Vec<ExtraRateWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banked_resets: Option<BankedResets>,
+}
+
+/// Limit resets the provider has granted and the account can spend now.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankedResets {
+    pub available: u32,
+    /// The soonest grant's expiry, as the provider wrote it.
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

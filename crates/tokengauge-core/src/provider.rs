@@ -182,6 +182,7 @@ impl UsageSnapshot {
             updated_at: Some(now.to_rfc3339()),
             login_method: None,
             extra_rate_windows: Vec::new(),
+            banked_resets: None,
         }
     }
 }

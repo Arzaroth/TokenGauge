@@ -291,7 +291,8 @@ fn store_moved(
         .any(|switched| switched > seen_at && switched <= crate::now_ms())
 }
 
-/// True when a window this snapshot reported has reset since it was written.
+/// True when a window this snapshot reported has reset, or a banked reset it
+/// reported has expired, since it was written.
 ///
 /// The percentages beside such a window describe a window that no longer
 /// exists, so serving them is wrong however young the snapshot is - and the
@@ -319,6 +320,15 @@ pub(crate) fn rolled_over(
                 )
         })
         .filter_map(|window| window.resets_at.as_deref())
+        .chain(payloads.iter().filter_map(|payload| {
+            payload
+                .usage
+                .as_ref()?
+                .banked_resets
+                .as_ref()?
+                .expires_at
+                .as_deref()
+        }))
         .filter_map(|iso| DateTime::parse_from_rfc3339(iso).ok())
         .any(|reset| {
             let reset = reset.with_timezone(&Utc);
@@ -366,6 +376,7 @@ mod tests {
                 updated_at: None,
                 login_method: None,
                 extra_rate_windows: Vec::new(),
+                banked_resets: None,
             }),
             credits: None,
             error: None,
@@ -383,6 +394,35 @@ mod tests {
 
         let pending = payload_resetting_at(Some(&(now + chrono::Duration::hours(2)).to_rfc3339()));
         assert!(!rolled_over(&[pending], written_at, now));
+    }
+
+    #[test]
+    fn a_banked_reset_that_expired_since_the_write_is_stale() {
+        let now = Utc::now();
+        let written_at = now - chrono::Duration::minutes(5);
+        let banked = |at: chrono::DateTime<Utc>| {
+            let mut p = payload_resetting_at(None);
+            p.usage.as_mut().unwrap().banked_resets = Some(crate::BankedResets {
+                available: 1,
+                expires_at: Some(at.to_rfc3339()),
+            });
+            p
+        };
+        assert!(rolled_over(
+            &[banked(now - chrono::Duration::minutes(1))],
+            written_at,
+            now
+        ));
+        assert!(!rolled_over(
+            &[banked(now + chrono::Duration::days(2))],
+            written_at,
+            now
+        ));
+        assert!(!rolled_over(
+            &[banked(now - chrono::Duration::hours(1))],
+            written_at,
+            now
+        ));
     }
 
     #[test]

@@ -30,6 +30,17 @@ pub struct UsageSnapshot {
     pub login_method: Option<String>,
     #[serde(default)]
     pub extra_rate_windows: Vec<ExtraRateWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banked_resets: Option<BankedResets>,
+}
+
+/// Limit resets the provider has granted and the account can spend now.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankedResets {
+    pub available: u32,
+    /// The soonest grant's expiry, as the provider wrote it.
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -597,6 +608,25 @@ mod tests {
         let primary = usage.primary.as_ref().unwrap();
         assert_eq!(primary.used_percent, Some(19));
         assert_eq!(primary.window_minutes, Some(300));
+    }
+
+    #[test]
+    fn the_banked_reset_keys_remuda_reads_are_spelled_as_decision_0003_says() {
+        let usage = UsageSnapshot {
+            banked_resets: Some(BankedResets {
+                available: 1,
+                expires_at: Some("2026-10-22T16:00:00+00:00".into()),
+            }),
+            ..UsageSnapshot::at(chrono::Utc::now())
+        };
+        let json = serde_json::to_value(&usage).unwrap();
+        assert_eq!(json["bankedResets"]["available"], 1);
+        assert_eq!(
+            json["bankedResets"]["expiresAt"],
+            "2026-10-22T16:00:00+00:00"
+        );
+        let none = serde_json::to_value(UsageSnapshot::at(chrono::Utc::now())).unwrap();
+        assert!(none.get("bankedResets").is_none());
     }
 
     /// remuda reads these keys by name (decision 0003's snapshot contract). A

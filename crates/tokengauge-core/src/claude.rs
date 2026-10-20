@@ -27,12 +27,14 @@ use serde_json::{Map, Value};
 use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::check_status;
 use crate::{
-    CredentialState, ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client,
-    pct_u8, slug,
+    BankedResets, CredentialState, ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow,
+    http_client, pct_u8, slug,
 };
 
-const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
-const USER_AGENT: &str = "claude-code/2.1.0";
+const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
+/// Claude Code's own, from 2.1.304: the endpoint withholds the `cedar_ember`
+/// grants from any client it does not take for the CLI.
+const USER_AGENT: &str = "claude-cli/2.1.304 (external, cli)";
 
 /// Routine alias keys, highest priority first. A populated alias beats a null
 /// one; a null (present) alias still emits the window at 0% so the bar stays
@@ -473,9 +475,67 @@ struct Model {
     display_name: Option<String>,
 }
 
+/// `cedar_ember`, the banked limit resets an account was granted.
+#[derive(Deserialize)]
+struct CedarEmber {
+    eligible: Option<bool>,
+    at_limit: Option<bool>,
+    #[serde(default, deserialize_with = "crate::provider::null_as_default")]
+    grants: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+struct Grant {
+    resets_left: Option<f64>,
+    paused: Option<bool>,
+    usable_now: Option<bool>,
+    use_requires_limit: Option<bool>,
+    ends_at: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Pure mapping
 // ---------------------------------------------------------------------------
+
+fn banked_resets(rest: &Map<String, Value>) -> Option<BankedResets> {
+    let block: CedarEmber = serde_json::from_value(rest.get("cedar_ember")?.clone()).ok()?;
+    if block.eligible != Some(true) {
+        return None;
+    }
+    let at_limit = block.at_limit == Some(true);
+    let grants: Vec<Grant> = block
+        .grants
+        .iter()
+        .filter_map(|g| serde_json::from_value(g.clone()).ok())
+        .collect();
+    let usable: Vec<&Grant> = grants
+        .iter()
+        .filter(|g| {
+            g.resets_left.is_some_and(|n| n >= 1.0)
+                && g.paused != Some(true)
+                && g.usable_now == Some(true)
+                && (at_limit || g.use_requires_limit != Some(true))
+        })
+        .collect();
+    if usable.is_empty() {
+        return None;
+    }
+    let expires_at = usable
+        .iter()
+        .filter_map(|g| {
+            let at = g.ends_at.as_deref()?;
+            Some((DateTime::parse_from_rfc3339(at).ok()?, at))
+        })
+        .min_by_key(|(t, _)| *t)
+        .map(|(_, at)| at.to_string());
+    Some(BankedResets {
+        available: usable
+            .iter()
+            .map(|g| g.resets_left.unwrap_or(0.0) as u32)
+            .fold(0u32, u32::saturating_add),
+        expires_at,
+    })
+}
 
 /// A window counts only when it carries a non-nil `utilization`.
 fn to_window(win: Option<&Win>, minutes: u32) -> Option<UsageWindow> {
@@ -784,6 +844,7 @@ fn to_payload(
             updated_at: Some(now.to_rfc3339()),
             login_method: plan,
             extra_rate_windows,
+            banked_resets: banked_resets(&resp.rest),
         }),
         credits: None,
         error: None,
@@ -1016,6 +1077,152 @@ mod tests {
         // No windows, no extras -> error so the stale fallback keeps last-good.
         let body = resp(r#"{"seven_day":null}"#);
         assert!(to_payload(body, None, Utc::now()).is_err());
+    }
+
+    fn grant(changes: Value) -> Value {
+        let mut g = serde_json::json!({
+            "id": "opus55-launch-team-20260921", "resets_total": 1, "resets_left": 1,
+            "starts_at": "2026-09-22T16:00:00+00:00", "ends_at": "2026-10-22T16:00:00+00:00",
+            "paused": false, "usable_now": true, "use_requires_limit": false,
+            "type": "full", "unavailable_reason": null
+        });
+        g.as_object_mut()
+            .unwrap()
+            .extend(changes.as_object().unwrap().clone());
+        g
+    }
+
+    fn banked(block: Value) -> Option<BankedResets> {
+        let body = serde_json::json!({"five_hour": {"utilization": 3.0}, "cedar_ember": block});
+        let payload = to_payload(resp(&body.to_string()), None, Utc::now()).unwrap();
+        payload.usage.unwrap().banked_resets
+    }
+
+    fn block(at_limit: bool, grants: Vec<Value>) -> Value {
+        serde_json::json!({"eligible": true, "ineligible_reason": null, "at_limit": at_limit,
+                           "exhausted": [], "grants": grants, "cooldown_until": null})
+    }
+
+    #[test]
+    fn a_usable_grant_is_a_banked_reset() {
+        assert_eq!(
+            banked(block(false, vec![grant(serde_json::json!({}))])),
+            Some(BankedResets {
+                available: 1,
+                expires_at: Some("2026-10-22T16:00:00+00:00".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn no_block_or_an_ineligible_one_banks_nothing() {
+        let body = resp(r#"{"five_hour":{"utilization":3.0}}"#);
+        assert!(
+            to_payload(body, None, Utc::now())
+                .unwrap()
+                .usage
+                .unwrap()
+                .banked_resets
+                .is_none()
+        );
+        assert_eq!(banked(Value::Null), None);
+        assert_eq!(
+            banked(
+                serde_json::json!({"eligible": false, "ineligible_reason": "surface",
+                                       "grants": [grant(serde_json::json!({}))]})
+            ),
+            None
+        );
+        assert_eq!(
+            banked(serde_json::json!({"eligible": true, "grants": null})),
+            None
+        );
+        assert_eq!(banked(serde_json::json!("garbled")), None);
+    }
+
+    #[test]
+    fn a_paused_spent_or_unusable_grant_banks_nothing() {
+        for changes in [
+            serde_json::json!({"paused": true}),
+            serde_json::json!({"resets_left": 0, "usable_now": false, "unavailable_reason": "unavailable"}),
+            serde_json::json!({"usable_now": false}),
+        ] {
+            assert_eq!(
+                banked(block(false, vec![grant(changes.clone())])),
+                None,
+                "{changes}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_grant_needs_a_whole_reset_left() {
+        for left in [serde_json::json!(0), serde_json::json!(0.5), Value::Null] {
+            let g = grant(serde_json::json!({"resets_left": left.clone()}));
+            assert_eq!(banked(block(false, vec![g])), None, "{left}");
+        }
+        let one = grant(serde_json::json!({"resets_left": 1.0}));
+        assert_eq!(banked(block(false, vec![one])).unwrap().available, 1);
+    }
+
+    #[test]
+    fn a_malformed_grant_leaves_the_others_counted() {
+        let resets = banked(block(
+            false,
+            vec![
+                grant(serde_json::json!({"id": "odd", "ends_at": 1792000000})),
+                grant(serde_json::json!({"id": "good"})),
+            ],
+        ))
+        .unwrap();
+        assert_eq!(resets.available, 1);
+        assert_eq!(
+            resets.expires_at.as_deref(),
+            Some("2026-10-22T16:00:00+00:00")
+        );
+    }
+
+    #[test]
+    fn an_absurd_count_saturates() {
+        let huge = || grant(serde_json::json!({"resets_left": 3e9}));
+        assert_eq!(
+            banked(block(false, vec![huge(), huge()]))
+                .unwrap()
+                .available,
+            u32::MAX
+        );
+    }
+
+    #[test]
+    fn a_grant_held_for_the_limit_counts_only_at_it() {
+        let held = grant(serde_json::json!({"use_requires_limit": true}));
+        assert_eq!(banked(block(false, vec![held.clone()])), None);
+        assert_eq!(banked(block(true, vec![held])).unwrap().available, 1);
+    }
+
+    #[test]
+    fn grants_add_up_and_expire_with_the_soonest() {
+        let resets = banked(block(
+            false,
+            vec![
+                grant(serde_json::json!({"id": "a", "resets_left": 2})),
+                grant(serde_json::json!({"id": "b", "resets_left": 3, "ends_at": "2026-10-22T17:00:00+02:00"})),
+                grant(serde_json::json!({"id": "c", "paused": true, "ends_at": "2026-10-01T00:00:00Z"})),
+            ],
+        ))
+        .unwrap();
+        assert_eq!(resets.available, 5);
+        assert_eq!(
+            resets.expires_at.as_deref(),
+            Some("2026-10-22T17:00:00+02:00")
+        );
+    }
+
+    #[test]
+    fn the_usage_request_asks_for_grants_as_the_cli() {
+        assert!(USAGE_URL.ends_with("?cedar_ember=1"));
+        assert!(USER_AGENT.starts_with("claude-cli/"));
+        assert!(USER_AGENT.ends_with(" (external, cli)"));
     }
 
     #[test]

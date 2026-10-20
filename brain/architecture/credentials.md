@@ -117,6 +117,10 @@ Each `payloads[]` entry gains:
 - `planWeight` - the plan multiplier when known; an integer when whole, a
   fraction for Team seats (1.25, 6.25; remuda reads fractions from 0.10.0).
   Absent on an unmatched live login that cannot be told apart from a stored one.
+- `usage.bankedResets` - on a Claude payload holding a usable banked reset:
+  `available` (how many) and `expiresAt` (the soonest grant's expiry, RFC 3339
+  as Anthropic wrote it, or null). Absent otherwise
+  ([../features/banked-resets.md](../features/banked-resets.md)).
 - `accountDigest` - TokenGauge's own guard against carrying one account's figures
   under a name that now holds another; remuda need not read it.
 
@@ -127,7 +131,8 @@ after a failed fetch keeps `credential` and `active`, with `stale: true` and
 carries a token or an email.
 
 `payload::tests::the_credential_keys_remuda_reads_are_spelled_as_decision_0003_says`
-pins the names: renaming one is a change to decision 0003 and to remuda. Every
+and `payload::tests::the_banked_reset_keys_remuda_reads_are_spelled_as_decision_0003_says`
+pin the names: renaming one is a change to decision 0003 and to remuda. Every
 test config turns the store off (`CredentialsConfig::off()`, or
 `[credentials] store = ""`).
 

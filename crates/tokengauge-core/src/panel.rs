@@ -268,9 +268,11 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
 
         let limits = limit_rows(row);
         if !limits.is_empty() {
+            let mut title = vec!["LIMITS".to_string()];
+            title.extend(banked_marker(row));
             out.push(Section {
                 id: "limits",
-                title: "LIMITS".into(),
+                title: title.join(" · "),
                 kind: SectionKind::Meters,
                 rows: limits,
                 group: None,
@@ -643,6 +645,36 @@ fn reset_footnote(used: u8, reset: &str) -> String {
     }
 }
 
+/// `1 reset banked, expires in 2d 8h`.
+fn banked_marker(row: &ProviderRow) -> Option<String> {
+    let banked = row.banked_resets.as_ref().filter(|b| b.available > 0)?;
+    let left = banked
+        .expires_at
+        .as_deref()
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .map(|at| {
+            at.with_timezone(&chrono::Utc)
+                .signed_duration_since(chrono::Utc::now())
+        });
+    if left.is_some_and(|d| d.num_minutes() < 1) {
+        return None;
+    }
+    let noun = if banked.available == 1 {
+        "reset"
+    } else {
+        "resets"
+    };
+    let expiry = left
+        .map(|d| {
+            format!(
+                ", expires in {}",
+                crate::fmt::format_duration(d.num_minutes(), 2)
+            )
+        })
+        .unwrap_or_default();
+    Some(format!("{} {noun} banked{expiry}", banked.available))
+}
+
 fn limit_rows(row: &ProviderRow) -> Vec<PanelRow> {
     windows(row)
         .into_iter()
@@ -759,6 +791,7 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
         if hidden > 0 && !has_total && credential.active == Some(true) {
             title.push(format!("{} of {} shown", shown.len(), groups.len()));
         }
+        title.extend(banked_marker(g));
         let (kind, rows) = match credential.state {
             Some(state) => (SectionKind::Rows, vec![state_row(state)]),
             None => {
@@ -1390,6 +1423,7 @@ mod tests {
             session_resets_at: None,
             weekly_resets_at: None,
             tertiary_resets_at: None,
+            banked_resets: None,
         }
     }
 
@@ -2822,5 +2856,57 @@ mod tests {
         assert_eq!(exact_tokens(999), "999");
         assert_eq!(exact_tokens(1_000), "1,000");
         assert_eq!(exact_tokens(384_000_000), "384,000,000");
+    }
+
+    fn banked(available: u32, expires_in_minutes: Option<i64>) -> Option<crate::BankedResets> {
+        Some(crate::BankedResets {
+            available,
+            expires_at: expires_in_minutes.map(|m| {
+                (chrono::Utc::now() + chrono::Duration::minutes(m) + chrono::Duration::seconds(30))
+                    .to_rfc3339()
+            }),
+        })
+    }
+
+    #[test]
+    fn a_banked_reset_is_marked_on_its_limits_title() {
+        let mut r = row();
+        r.banked_resets = banked(1, Some(2 * 1440 + 8 * 60));
+        assert_eq!(
+            section(&panel_spec(&r), "limits", None).title,
+            "LIMITS · 1 reset banked, expires in 2d 8h"
+        );
+        r.banked_resets = banked(2, None);
+        assert_eq!(
+            section(&panel_spec(&r), "limits", None).title,
+            "LIMITS · 2 resets banked"
+        );
+    }
+
+    #[test]
+    fn an_expired_or_empty_bank_marks_nothing() {
+        let mut r = row();
+        for gone in [banked(1, Some(-60)), banked(0, Some(60)), None] {
+            r.banked_resets = gone;
+            assert_eq!(section(&panel_spec(&r), "limits", None).title, "LIMITS");
+        }
+    }
+
+    #[test]
+    fn each_credential_marks_its_own_banked_resets() {
+        let mut work = credential("work", true, Some(1), 10, 20);
+        work.banked_resets = banked(1, Some(90));
+        let spec = panel_spec(&grouped(vec![
+            work,
+            credential("perso", false, Some(20), 30, 40),
+        ]));
+        assert_eq!(
+            section(&spec, "limits", Some("work")).title,
+            "work · work plan · active · 1 reset banked, expires in 1h 30m"
+        );
+        assert_eq!(
+            section(&spec, "limits", Some("perso")).title,
+            "perso · perso plan"
+        );
     }
 }

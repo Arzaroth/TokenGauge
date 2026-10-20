@@ -481,7 +481,7 @@ struct CedarEmber {
     eligible: Option<bool>,
     at_limit: Option<bool>,
     #[serde(default, deserialize_with = "crate::provider::null_as_default")]
-    grants: Vec<Grant>,
+    grants: Vec<Value>,
 }
 
 #[derive(Deserialize)]
@@ -497,16 +497,18 @@ struct Grant {
 // Pure mapping
 // ---------------------------------------------------------------------------
 
-/// The resets the account can spend now. A grant held for when a limit is hit
-/// counts only once one is.
 fn banked_resets(rest: &Map<String, Value>) -> Option<BankedResets> {
     let block: CedarEmber = serde_json::from_value(rest.get("cedar_ember")?.clone()).ok()?;
     if block.eligible != Some(true) {
         return None;
     }
     let at_limit = block.at_limit == Some(true);
-    let usable: Vec<&Grant> = block
+    let grants: Vec<Grant> = block
         .grants
+        .iter()
+        .filter_map(|g| serde_json::from_value(g.clone()).ok())
+        .collect();
+    let usable: Vec<&Grant> = grants
         .iter()
         .filter(|g| {
             g.resets_left.is_some_and(|n| n >= 1.0)
@@ -530,7 +532,7 @@ fn banked_resets(rest: &Map<String, Value>) -> Option<BankedResets> {
         available: usable
             .iter()
             .map(|g| g.resets_left.unwrap_or(0.0) as u32)
-            .sum(),
+            .fold(0u32, u32::saturating_add),
         expires_at,
     })
 }

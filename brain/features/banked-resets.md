@@ -33,3 +33,4 @@ or remuda's page's.
 - `crates/tokengauge-core/src/payload.rs` (`BankedResets`)
 - `crates/tokengauge-core/src/rows.rs` (`ProviderRow.banked_resets`)
 - `crates/tokengauge-core/src/panel.rs` (`banked_marker`)
+- `crates/tokengauge-core/src/snapshot.rs` (`rolled_over`)

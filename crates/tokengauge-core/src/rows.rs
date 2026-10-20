@@ -65,8 +65,6 @@ pub struct ProviderRow {
     pub weekly_resets_at: Option<String>,
     #[serde(skip)]
     pub tertiary_resets_at: Option<String>,
-    /// Resets the provider granted that can be spent now.
-    /// [`crate::panel`] says so in the limits title.
     #[serde(skip)]
     pub banked_resets: Option<BankedResets>,
 }

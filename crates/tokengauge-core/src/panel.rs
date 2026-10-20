@@ -645,9 +645,7 @@ fn reset_footnote(used: u8, reset: &str) -> String {
     }
 }
 
-/// `1 reset banked, expires in 2d 8h`: the limit resets a credential can
-/// spend now, carried on its limits title because a reset clears every window
-/// under it. One already expired is gone, so it says nothing.
+/// `1 reset banked, expires in 2d 8h`.
 fn banked_marker(row: &ProviderRow) -> Option<String> {
     let banked = row.banked_resets.as_ref().filter(|b| b.available > 0)?;
     let left = banked

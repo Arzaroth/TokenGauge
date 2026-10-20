@@ -27,12 +27,14 @@ use serde_json::{Map, Value};
 use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::check_status;
 use crate::{
-    CredentialState, ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client,
-    pct_u8, slug,
+    BankedResets, CredentialState, ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow,
+    http_client, pct_u8, slug,
 };
 
-const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
-const USER_AGENT: &str = "claude-code/2.1.0";
+const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
+/// Claude Code's own, from 2.1.304: the endpoint withholds the `cedar_ember`
+/// grants from any client it does not take for the CLI.
+const USER_AGENT: &str = "claude-cli/2.1.304 (external, cli)";
 
 /// Routine alias keys, highest priority first. A populated alias beats a null
 /// one; a null (present) alias still emits the window at 0% so the bar stays
@@ -473,9 +475,65 @@ struct Model {
     display_name: Option<String>,
 }
 
+/// `cedar_ember`, the banked limit resets an account was granted.
+#[derive(Deserialize)]
+struct CedarEmber {
+    eligible: Option<bool>,
+    at_limit: Option<bool>,
+    #[serde(default, deserialize_with = "crate::provider::null_as_default")]
+    grants: Vec<Grant>,
+}
+
+#[derive(Deserialize)]
+struct Grant {
+    resets_left: Option<f64>,
+    paused: Option<bool>,
+    usable_now: Option<bool>,
+    use_requires_limit: Option<bool>,
+    ends_at: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Pure mapping
 // ---------------------------------------------------------------------------
+
+/// The resets the account can spend now. A grant held for when a limit is hit
+/// counts only once one is.
+fn banked_resets(rest: &Map<String, Value>) -> Option<BankedResets> {
+    let block: CedarEmber = serde_json::from_value(rest.get("cedar_ember")?.clone()).ok()?;
+    if block.eligible != Some(true) {
+        return None;
+    }
+    let at_limit = block.at_limit == Some(true);
+    let usable: Vec<&Grant> = block
+        .grants
+        .iter()
+        .filter(|g| {
+            g.resets_left.is_some_and(|n| n >= 1.0)
+                && g.paused != Some(true)
+                && g.usable_now == Some(true)
+                && (at_limit || g.use_requires_limit != Some(true))
+        })
+        .collect();
+    if usable.is_empty() {
+        return None;
+    }
+    let expires_at = usable
+        .iter()
+        .filter_map(|g| {
+            let at = g.ends_at.as_deref()?;
+            Some((DateTime::parse_from_rfc3339(at).ok()?, at))
+        })
+        .min_by_key(|(t, _)| *t)
+        .map(|(_, at)| at.to_string());
+    Some(BankedResets {
+        available: usable
+            .iter()
+            .map(|g| g.resets_left.unwrap_or(0.0) as u32)
+            .sum(),
+        expires_at,
+    })
+}
 
 /// A window counts only when it carries a non-nil `utilization`.
 fn to_window(win: Option<&Win>, minutes: u32) -> Option<UsageWindow> {
@@ -784,7 +842,7 @@ fn to_payload(
             updated_at: Some(now.to_rfc3339()),
             login_method: plan,
             extra_rate_windows,
-            banked_resets: None,
+            banked_resets: banked_resets(&resp.rest),
         }),
         credits: None,
         error: None,

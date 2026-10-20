@@ -65,6 +65,10 @@ pub struct ProviderRow {
     pub weekly_resets_at: Option<String>,
     #[serde(skip)]
     pub tertiary_resets_at: Option<String>,
+    /// Resets the provider granted that can be spent now.
+    /// [`crate::panel`] says so in the limits title.
+    #[serde(skip)]
+    pub banked_resets: Option<BankedResets>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -169,6 +173,7 @@ fn vacant(row: &ProviderRow) -> ProviderRow {
         session_resets_at: None,
         weekly_resets_at: None,
         tertiary_resets_at: None,
+        banked_resets: None,
         ..row.clone()
     }
 }
@@ -284,8 +289,10 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
     let mut session_resets_at = None;
     let mut weekly_resets_at = None;
     let mut tertiary_resets_at = None;
+    let mut banked_resets = None;
 
     if let Some(usage) = payload.usage {
+        banked_resets = usage.banked_resets.clone();
         let now = Utc::now();
         // `used` stopped moving when the fetch did, so a pace measured against
         // a clock that kept going decays on its own: the longer the outage
@@ -403,6 +410,7 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
         session_resets_at,
         weekly_resets_at,
         tertiary_resets_at,
+        banked_resets,
     }
 }
 

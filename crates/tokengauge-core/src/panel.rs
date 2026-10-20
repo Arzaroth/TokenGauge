@@ -268,9 +268,11 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
 
         let limits = limit_rows(row);
         if !limits.is_empty() {
+            let mut title = vec!["LIMITS".to_string()];
+            title.extend(banked_marker(row));
             out.push(Section {
                 id: "limits",
-                title: "LIMITS".into(),
+                title: title.join(" · "),
                 kind: SectionKind::Meters,
                 rows: limits,
                 group: None,
@@ -643,6 +645,38 @@ fn reset_footnote(used: u8, reset: &str) -> String {
     }
 }
 
+/// `1 reset banked, expires in 2d 8h`: the limit resets a credential can
+/// spend now, carried on its limits title because a reset clears every window
+/// under it. One already expired is gone, so it says nothing.
+fn banked_marker(row: &ProviderRow) -> Option<String> {
+    let banked = row.banked_resets.as_ref().filter(|b| b.available > 0)?;
+    let left = banked
+        .expires_at
+        .as_deref()
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .map(|at| {
+            at.with_timezone(&chrono::Utc)
+                .signed_duration_since(chrono::Utc::now())
+        });
+    if left.is_some_and(|d| d.num_minutes() < 1) {
+        return None;
+    }
+    let noun = if banked.available == 1 {
+        "reset"
+    } else {
+        "resets"
+    };
+    let expiry = left
+        .map(|d| {
+            format!(
+                ", expires in {}",
+                crate::fmt::format_duration(d.num_minutes(), 2)
+            )
+        })
+        .unwrap_or_default();
+    Some(format!("{} {noun} banked{expiry}", banked.available))
+}
+
 fn limit_rows(row: &ProviderRow) -> Vec<PanelRow> {
     windows(row)
         .into_iter()
@@ -759,6 +793,7 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
         if hidden > 0 && !has_total && credential.active == Some(true) {
             title.push(format!("{} of {} shown", shown.len(), groups.len()));
         }
+        title.extend(banked_marker(g));
         let (kind, rows) = match credential.state {
             Some(state) => (SectionKind::Rows, vec![state_row(state)]),
             None => {
@@ -1390,6 +1425,7 @@ mod tests {
             session_resets_at: None,
             weekly_resets_at: None,
             tertiary_resets_at: None,
+            banked_resets: None,
         }
     }
 

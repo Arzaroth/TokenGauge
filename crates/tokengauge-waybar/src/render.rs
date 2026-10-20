@@ -673,6 +673,7 @@ pub(crate) mod tests {
             session_resets_at: None,
             weekly_resets_at: None,
             tertiary_resets_at: None,
+            banked_resets: None,
         }
     }
 

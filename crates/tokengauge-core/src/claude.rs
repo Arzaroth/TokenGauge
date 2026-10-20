@@ -1077,6 +1077,114 @@ mod tests {
         assert!(to_payload(body, None, Utc::now()).is_err());
     }
 
+    fn grant(changes: Value) -> Value {
+        let mut g = serde_json::json!({
+            "id": "opus55-launch-team-20260921", "resets_total": 1, "resets_left": 1,
+            "starts_at": "2026-09-22T16:00:00+00:00", "ends_at": "2026-10-22T16:00:00+00:00",
+            "paused": false, "usable_now": true, "use_requires_limit": false,
+            "type": "full", "unavailable_reason": null
+        });
+        g.as_object_mut()
+            .unwrap()
+            .extend(changes.as_object().unwrap().clone());
+        g
+    }
+
+    fn banked(block: Value) -> Option<BankedResets> {
+        let body = serde_json::json!({"five_hour": {"utilization": 3.0}, "cedar_ember": block});
+        let payload = to_payload(resp(&body.to_string()), None, Utc::now()).unwrap();
+        payload.usage.unwrap().banked_resets
+    }
+
+    fn block(at_limit: bool, grants: Vec<Value>) -> Value {
+        serde_json::json!({"eligible": true, "ineligible_reason": null, "at_limit": at_limit,
+                           "exhausted": [], "grants": grants, "cooldown_until": null})
+    }
+
+    #[test]
+    fn a_usable_grant_is_a_banked_reset() {
+        assert_eq!(
+            banked(block(false, vec![grant(serde_json::json!({}))])),
+            Some(BankedResets {
+                available: 1,
+                expires_at: Some("2026-10-22T16:00:00+00:00".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn no_block_or_an_ineligible_one_banks_nothing() {
+        let body = resp(r#"{"five_hour":{"utilization":3.0}}"#);
+        assert!(
+            to_payload(body, None, Utc::now())
+                .unwrap()
+                .usage
+                .unwrap()
+                .banked_resets
+                .is_none()
+        );
+        assert_eq!(banked(Value::Null), None);
+        assert_eq!(
+            banked(
+                serde_json::json!({"eligible": false, "ineligible_reason": "surface",
+                                       "grants": [grant(serde_json::json!({}))]})
+            ),
+            None
+        );
+        assert_eq!(
+            banked(serde_json::json!({"eligible": true, "grants": null})),
+            None
+        );
+        assert_eq!(banked(serde_json::json!("garbled")), None);
+    }
+
+    #[test]
+    fn a_paused_spent_or_unusable_grant_banks_nothing() {
+        for changes in [
+            serde_json::json!({"paused": true}),
+            serde_json::json!({"resets_left": 0, "usable_now": false, "unavailable_reason": "unavailable"}),
+            serde_json::json!({"usable_now": false}),
+        ] {
+            assert_eq!(
+                banked(block(false, vec![grant(changes.clone())])),
+                None,
+                "{changes}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_grant_held_for_the_limit_counts_only_at_it() {
+        let held = grant(serde_json::json!({"use_requires_limit": true}));
+        assert_eq!(banked(block(false, vec![held.clone()])), None);
+        assert_eq!(banked(block(true, vec![held])).unwrap().available, 1);
+    }
+
+    #[test]
+    fn grants_add_up_and_expire_with_the_soonest() {
+        let resets = banked(block(
+            false,
+            vec![
+                grant(serde_json::json!({"id": "a", "resets_left": 2})),
+                grant(serde_json::json!({"id": "b", "resets_left": 3, "ends_at": "2026-10-22T17:00:00+02:00"})),
+                grant(serde_json::json!({"id": "c", "paused": true, "ends_at": "2026-10-01T00:00:00Z"})),
+            ],
+        ))
+        .unwrap();
+        assert_eq!(resets.available, 5);
+        assert_eq!(
+            resets.expires_at.as_deref(),
+            Some("2026-10-22T17:00:00+02:00")
+        );
+    }
+
+    #[test]
+    fn the_usage_request_asks_for_grants_as_the_cli() {
+        assert!(USAGE_URL.ends_with("?cedar_ember=1"));
+        assert!(USER_AGENT.starts_with("claude-cli/"));
+        assert!(USER_AGENT.ends_with(" (external, cli)"));
+    }
+
     #[test]
     fn scoped_weekly_filters_and_dedupes() {
         let body = resp(

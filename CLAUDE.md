@@ -215,6 +215,12 @@ a hollow file must never shadow a good keychain entry. An empty access token is
 "not signed in - run `claude setup-token`", a distinct state from "expired",
 because re-login does not repopulate a file the desktop app owns.
 
+The usage request's `USER_AGENT` is Claude Code's own (`claude-cli/<version>
+(external, cli)`), not a TokenGauge name: the endpoint lists banked resets
+(`cedar_ember`) only to a client it takes for the CLI, and `claude-code/2.1.0`
+got `ineligible_reason: "surface"` on accounts holding one
+([brain/features/banked-resets.md](brain/features/banked-resets.md)).
+
 Two rules fall out of this and are easy to regress:
 
 - `--doctor`'s Credentials check must **validate, not stat**. `provider_auth_status`

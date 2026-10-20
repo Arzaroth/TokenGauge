@@ -57,6 +57,7 @@ use the indexes.
 | [cost-tracking.md](features/cost-tracking.md) | COST and TOKENS sections from local transcripts. |
 | [spend-history.md](features/spend-history.md) | 30 d / 90 d / 12 mo second screen, price archive, backfill, export. |
 | [fleet-sync.md](features/fleet-sync.md) | Fleet-wide figures, TOKENS BY DEVICE, setup, status. |
+| [banked-resets.md](features/banked-resets.md) | Claude's banked limit resets on the limits title. |
 | [pace.md](features/pace.md) | Projected usage at reset per window. |
 | [notifications.md](features/notifications.md) | Threshold alerts, active plan only. |
 | [remuda-page.md](features/remuda-page.md) | The button that opens `remuda serve`'s page. |

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A Claude credential holding a banked limit reset says so on its limits
+  title, with when it expires: `1 reset banked, expires in 2d 8h`. The usage
+  request now identifies as Claude Code's CLI, the only client Anthropic lists
+  the grants to, and remuda reads them from the snapshot as
+  `usage.bankedResets`.
+
 ## [0.45.1] - 2026-10-12
 
 ### Fixed

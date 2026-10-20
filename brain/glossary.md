@@ -10,6 +10,10 @@ commits; the **Avoid** list names the synonyms that blur it.
   codex. The unit of enable/disable everywhere in config, and of the cost
   readers and the brand. See [features/providers.md](features/providers.md).
   Avoid: backend, service, account.
+- **Banked reset** - a Claude limit reset Anthropic granted to spend later,
+  clearing every window at once; one the account can spend now is marked on
+  its limits title. See [features/banked-resets.md](features/banked-resets.md).
+  Avoid: credit, free reset, grant (the wire's word for the allowance).
 - **Window** - a provider-reported rate limit over a fixed span, with a
   percentage used and a reset instant. Credential-scoped, so it reads the same on
   every machine. See [architecture/snapshot.md](architecture/snapshot.md).

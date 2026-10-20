@@ -397,6 +397,35 @@ mod tests {
     }
 
     #[test]
+    fn a_banked_reset_that_expired_since_the_write_is_stale() {
+        let now = Utc::now();
+        let written_at = now - chrono::Duration::minutes(5);
+        let banked = |at: chrono::DateTime<Utc>| {
+            let mut p = payload_resetting_at(None);
+            p.usage.as_mut().unwrap().banked_resets = Some(crate::BankedResets {
+                available: 1,
+                expires_at: Some(at.to_rfc3339()),
+            });
+            p
+        };
+        assert!(rolled_over(
+            &[banked(now - chrono::Duration::minutes(1))],
+            written_at,
+            now
+        ));
+        assert!(!rolled_over(
+            &[banked(now + chrono::Duration::days(2))],
+            written_at,
+            now
+        ));
+        assert!(!rolled_over(
+            &[banked(now - chrono::Duration::hours(1))],
+            written_at,
+            now
+        ));
+    }
+
+    #[test]
     fn a_reset_time_already_past_at_the_write_never_asks_again() {
         // Otherwise a provider reporting a stale instant would have every
         // render refetch, and every fetch report the same instant.

@@ -689,6 +689,42 @@ mod tests {
     }
 
     #[test]
+    fn payload_to_rows_carries_the_banked_resets_to_the_panel() {
+        let banked = crate::BankedResets {
+            available: 1,
+            expires_at: Some((chrono::Utc::now() + chrono::Duration::hours(3)).to_rfc3339()),
+        };
+        let payload = ProviderPayload {
+            stale_reason: None,
+            reported_cost: None,
+            provider: "claude".to_string(),
+            version: None,
+            source: None,
+            usage: Some(UsageSnapshot {
+                primary: Some(UsageWindow {
+                    used_percent: Some(10),
+                    reset_description: None,
+                    resets_at: None,
+                    window_minutes: Some(300),
+                }),
+                banked_resets: Some(banked.clone()),
+                ..UsageSnapshot::at(chrono::Utc::now())
+            }),
+            credits: None,
+            error: None,
+            stale: false,
+            credential: Default::default(),
+        };
+        let rows = rows_of(vec![payload]);
+        assert_eq!(rows[0].banked_resets, Some(banked));
+        let spec = crate::panel::panel_spec(&rows[0], &Default::default());
+        assert!(
+            spec.iter().any(|s| s.title.contains("1 reset banked")),
+            "no section says so"
+        );
+    }
+
+    #[test]
     fn payload_to_rows_carries_the_credit_balance() {
         let payload = ProviderPayload {
             stale_reason: None,

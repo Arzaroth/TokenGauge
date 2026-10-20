@@ -1156,6 +1156,44 @@ mod tests {
     }
 
     #[test]
+    fn a_grant_needs_a_whole_reset_left() {
+        for left in [serde_json::json!(0), serde_json::json!(0.5), Value::Null] {
+            let g = grant(serde_json::json!({"resets_left": left.clone()}));
+            assert_eq!(banked(block(false, vec![g])), None, "{left}");
+        }
+        let one = grant(serde_json::json!({"resets_left": 1.0}));
+        assert_eq!(banked(block(false, vec![one])).unwrap().available, 1);
+    }
+
+    #[test]
+    fn a_malformed_grant_leaves_the_others_counted() {
+        let resets = banked(block(
+            false,
+            vec![
+                grant(serde_json::json!({"id": "odd", "ends_at": 1792000000})),
+                grant(serde_json::json!({"id": "good"})),
+            ],
+        ))
+        .unwrap();
+        assert_eq!(resets.available, 1);
+        assert_eq!(
+            resets.expires_at.as_deref(),
+            Some("2026-10-22T16:00:00+00:00")
+        );
+    }
+
+    #[test]
+    fn an_absurd_count_saturates() {
+        let huge = || grant(serde_json::json!({"resets_left": 3e9}));
+        assert_eq!(
+            banked(block(false, vec![huge(), huge()]))
+                .unwrap()
+                .available,
+            u32::MAX
+        );
+    }
+
+    #[test]
     fn a_grant_held_for_the_limit_counts_only_at_it() {
         let held = grant(serde_json::json!({"use_requires_limit": true}));
         assert_eq!(banked(block(false, vec![held.clone()])), None);

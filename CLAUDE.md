@@ -149,7 +149,8 @@ holds the only record of past days' tokens and costs.
 stale when it is missing, older than `refresh_secs`, **or** was written before a
 provider that is enabled now was switched on - `CacheMeta.providers` records the
 set each fetch ran with - **or** a window it reported has reset since it was
-written, because those percentages describe a window that no longer exists -
+written, because those percentages describe a window that no longer exists,
+or a banked reset it reported has expired, which leaves its count unknown -
 **or** the credential store changed under it (a credential added, removed or
 renamed against `CacheMeta.credentials`, or a switch in remuda's
 `.last-switch.json` after the write). Age

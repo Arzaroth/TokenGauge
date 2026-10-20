@@ -13,16 +13,18 @@ or remuda's page's.
 - The endpoint lists grants only to a client it takes for Claude Code's CLI:
   `USER_AGENT` is `claude-cli/<version> (external, cli)`. Any other agent gets
   `eligible: false, ineligible_reason: "surface"` and no grants.
-- A grant counts when the block is eligible and the grant has `resets_left`
-  above zero, is not paused, is `usable_now`, and either needs no limit hit
+- A grant counts when the block is eligible and the grant has at least one
+  whole reset left (`resets_left`), is not paused, is `usable_now`, and either needs no limit hit
   (`use_requires_limit`) or the account is `at_limit`. Counts add up across
-  grants; the expiry is the soonest `ends_at`.
+  grants (saturating), the expiry is the soonest `ends_at`, and a grant that
+  does not parse is skipped without hiding the others.
 - Usable grants land on the payload as `usage.bankedResets: {available,
   expiresAt}`, omitted when there are none. remuda reads it
   ([../architecture/credentials.md](../architecture/credentials.md)).
 - The marker is resolved in `panel.rs` when the row renders, so the countdown
-  moves between fetches, and a grant already past its expiry drops out
-  without one. It is a title marker rather than a row because a reset clears
+  moves between fetches. Once the soonest expiry passes the marker goes, since
+  the count no longer says how many are left, and `rolled_over` makes the
+  snapshot stale at that moment so the next fetch brings the count back. It is a title marker rather than a row because a reset clears
   every window in the section, and it needs no new section kind.
 
 ## Sources

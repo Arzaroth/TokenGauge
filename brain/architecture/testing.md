@@ -49,6 +49,7 @@ compiler can; the list is in [panel-spec.md](panel-spec.md#the-source-grepping-g
 - `crates/tokengauge-core/tests/state_files.rs`: every state file derives from
   the snapshot's parent.
 - Contract pins: `payload::tests::the_credential_keys_remuda_reads_are_spelled_as_decision_0003_says`,
+  `payload::tests::the_banked_reset_keys_remuda_reads_are_spelled_as_decision_0003_says`,
   `remuda::tests::the_serve_keys_are_spelled_as_decision_0004_says`,
   `remuda::tests::a_start_time_is_the_twenty_second_stat_field`.
 

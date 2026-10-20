@@ -2859,4 +2859,56 @@ mod tests {
         assert_eq!(exact_tokens(1_000), "1,000");
         assert_eq!(exact_tokens(384_000_000), "384,000,000");
     }
+
+    fn banked(available: u32, expires_in_minutes: Option<i64>) -> Option<crate::BankedResets> {
+        Some(crate::BankedResets {
+            available,
+            expires_at: expires_in_minutes.map(|m| {
+                (chrono::Utc::now() + chrono::Duration::minutes(m) + chrono::Duration::seconds(30))
+                    .to_rfc3339()
+            }),
+        })
+    }
+
+    #[test]
+    fn a_banked_reset_is_marked_on_its_limits_title() {
+        let mut r = row();
+        r.banked_resets = banked(1, Some(2 * 1440 + 8 * 60));
+        assert_eq!(
+            section(&panel_spec(&r), "limits", None).title,
+            "LIMITS · 1 reset banked, expires in 2d 8h"
+        );
+        r.banked_resets = banked(2, None);
+        assert_eq!(
+            section(&panel_spec(&r), "limits", None).title,
+            "LIMITS · 2 resets banked"
+        );
+    }
+
+    #[test]
+    fn an_expired_or_empty_bank_marks_nothing() {
+        let mut r = row();
+        for gone in [banked(1, Some(-60)), banked(0, Some(60)), None] {
+            r.banked_resets = gone;
+            assert_eq!(section(&panel_spec(&r), "limits", None).title, "LIMITS");
+        }
+    }
+
+    #[test]
+    fn each_credential_marks_its_own_banked_resets() {
+        let mut work = credential("work", true, Some(1), 10, 20);
+        work.banked_resets = banked(1, Some(90));
+        let spec = panel_spec(&grouped(vec![
+            work,
+            credential("perso", false, Some(20), 30, 40),
+        ]));
+        assert_eq!(
+            section(&spec, "limits", Some("work")).title,
+            "work · work plan · active · 1 reset banked, expires in 1h 30m"
+        );
+        assert_eq!(
+            section(&spec, "limits", Some("perso")).title,
+            "perso · perso plan"
+        );
+    }
 }

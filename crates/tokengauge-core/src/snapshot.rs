@@ -291,7 +291,8 @@ fn store_moved(
         .any(|switched| switched > seen_at && switched <= crate::now_ms())
 }
 
-/// True when a window this snapshot reported has reset since it was written.
+/// True when a window this snapshot reported has reset, or a banked reset it
+/// reported has expired, since it was written.
 ///
 /// The percentages beside such a window describe a window that no longer
 /// exists, so serving them is wrong however young the snapshot is - and the
@@ -319,6 +320,15 @@ pub(crate) fn rolled_over(
                 )
         })
         .filter_map(|window| window.resets_at.as_deref())
+        .chain(payloads.iter().filter_map(|payload| {
+            payload
+                .usage
+                .as_ref()?
+                .banked_resets
+                .as_ref()?
+                .expires_at
+                .as_deref()
+        }))
         .filter_map(|iso| DateTime::parse_from_rfc3339(iso).ok())
         .any(|reset| {
             let reset = reset.with_timezone(&Utc);

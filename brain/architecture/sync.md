@@ -89,10 +89,9 @@ maintained on every fetch whether or not sync is on (the gate is in
   it. So a read with any gap replaces nothing: `FleetStore::merge_local` adds
   only the calls the record has not counted. The local slice keeps the
   readers' dedup keys for its own hourly buckets (`DeviceSlice.counted`,
-  never published; per provider and hour a `KeySet`, keys folded to 32 bits
-  and written as one base64 blob, about 5 bytes a call, where a key apiece
-  was 40 times the rest of the store) and, per provider, the hour from which
-  that list is complete (`counted_from`); a whole read rewrites both with its replace and
+  never published, kept compact because the store is rewritten on every
+  fetch) and, per provider, the hour from which that list is complete
+  (`counted_from`); a whole read rewrites both with its replace and
   compaction prunes them with the hourly buckets. Totals or a larger-of rule
   cannot do this: new usage covers for a missing hour, and distinct usage
   shares an hour with what is missing. Where the keys say nothing (before a
@@ -339,7 +338,7 @@ against a fake transport (`crates/tokengauge-core/tests/fleet_sync.rs`).
 
 ## Sources
 
-- `crates/tokengauge-core/src/sync/{mod,contribution,fleet,hour,crypto,transport,s3,run,report,store,config}.rs` (`adopt`, `settle_adoptions`, `drop_vanished`, `store::lock`)
+- `crates/tokengauge-core/src/sync/{mod,contribution,fleet,hour,crypto,transport,s3,run,report,store,config}.rs` (`adopt`, `settle_adoptions`, `drop_vanished`, `store::lock`, `merge_local`, `KeySet`)
 - `crates/tokengauge-core/src/fetch.rs` (`native_costs`), `crates/tokengauge-core/src/cost/mod.rs` (`window_start`, `dedup_key`, `read_checked`, `TranscriptRead`)
 - `crates/tokengauge-core/src/device.rs`, `crates/tokengauge-core/src/doctor.rs`
 - `crates/tokengauge-waybar/src/sync_cli.rs`, `crates/tokengauge-tui/src/sync_view.rs`

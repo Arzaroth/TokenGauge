@@ -560,7 +560,7 @@ fn a_provider_this_build_cannot_rate_is_reported_not_swallowed() {
     );
 }
 
-const OLD_ID: &str = "0000000000001d1e";
+const OLD_ID: &str = "01d1e00000000000";
 const NEW_ID: &str = "000000000000000e";
 
 /// A contribution from any device, written straight into the folder.
@@ -660,9 +660,10 @@ fn adopting_a_reinstalled_machine_keeps_its_history_and_leaves_the_fleet() {
         format!("{ambiguous}").contains(OLD_ID),
         "the ids are what tells the two apart: {ambiguous}"
     );
-    assert!(sync::adopt(&config, &local, || {}).is_err(), "this machine");
+    let refused = sync::adopt(&config, &local, || {}).expect_err("this machine");
+    assert!(format!("{refused}").contains("old entry"), "{refused}");
 
-    let adoption = sync::adopt(&config, OLD_ID, || {}).expect("adopted by id");
+    let adoption = sync::adopt(&config, &OLD_ID[..8], || {}).expect("adopted by an id prefix");
     assert_eq!(adoption.device.id, OLD_ID);
     assert_eq!(
         adoption.buckets, 1,

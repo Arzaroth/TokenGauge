@@ -430,7 +430,11 @@ pub fn forget(config: &TokenGaugeConfig, wanted: &str, waiting: impl FnOnce()) -
     let _lock = store::lock(&config.cache_file, waiting).ok();
     let (mut store, _) = store::load(&config.cache_file);
     let local = crate::device_identity(&config.cache_file).machine_id;
-    let id = resolve_device(&store, &local, wanted)?;
+    let id = resolve_device(&store, wanted)?;
+    anyhow::ensure!(
+        id != local,
+        "that is this machine; turn sync off in the config instead"
+    );
 
     let label = store
         .devices
@@ -466,7 +470,11 @@ pub fn adopt(config: &TokenGaugeConfig, wanted: &str, waiting: impl FnOnce()) ->
         anyhow::bail!("{error}");
     }
     let local = crate::device_identity(&config.cache_file).machine_id;
-    let id = resolve_device(&store, &local, wanted)?;
+    let id = resolve_device(&store, wanted)?;
+    anyhow::ensure!(
+        id != local,
+        "that is this machine; name the old entry it replaced"
+    );
     anyhow::ensure!(
         store.devices.contains_key(&local),
         "this machine has recorded nothing yet; let one fetch run first"
@@ -518,13 +526,19 @@ pub fn adopt(config: &TokenGaugeConfig, wanted: &str, waiting: impl FnOnce()) ->
     Ok(adoption)
 }
 
-/// The one non-local device `wanted` names, by id, label or hostname.
-fn resolve_device(store: &FleetStore, local: &str, wanted: &str) -> Result<String> {
+/// The one device `wanted` names: by label, hostname, id, or a prefix of the
+/// id at least six digits long, since a whole one is 32.
+fn resolve_device(store: &FleetStore, wanted: &str) -> Result<String> {
+    let prefix = (wanted.len() >= 6 && wanted.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| wanted.to_ascii_lowercase());
     let matched: Vec<String> = store
         .devices
         .iter()
         .filter(|(id, slice)| {
             id.eq_ignore_ascii_case(wanted)
+                || prefix
+                    .as_ref()
+                    .is_some_and(|prefix| id.starts_with(prefix.as_str()))
                 || slice.device.display().eq_ignore_ascii_case(wanted)
                 || slice.device.hostname.eq_ignore_ascii_case(wanted)
         })
@@ -547,10 +561,6 @@ fn resolve_device(store: &FleetStore, local: &str, wanted: &str) -> Result<Strin
                 .join(", ")
         );
     };
-    anyhow::ensure!(
-        *id != local,
-        "that is this machine; turn sync off in the config instead"
-    );
     Ok(id.clone())
 }
 

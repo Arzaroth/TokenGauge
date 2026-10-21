@@ -636,6 +636,10 @@ fn adopting_a_reinstalled_machine_keeps_its_history_and_leaves_the_fleet() {
         format!("{ambiguous}").contains("more than one"),
         "{ambiguous}"
     );
+    assert!(
+        format!("{ambiguous}").contains(OLD_ID),
+        "the ids are what tells the two apart: {ambiguous}"
+    );
     assert!(sync::adopt(&config, &local).is_err(), "this machine");
 
     let adoption = sync::adopt(&config, OLD_ID).expect("adopted by id");

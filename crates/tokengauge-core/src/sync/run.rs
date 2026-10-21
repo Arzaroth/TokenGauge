@@ -527,8 +527,8 @@ fn resolve_device(store: &FleetStore, local: &str, wanted: &str) -> Result<Strin
             },
             store
                 .devices
-                .values()
-                .map(|slice| slice.device.display().to_string())
+                .iter()
+                .map(|(id, slice)| format!("{} ({id})", slice.device.display()))
                 .collect::<Vec<_>>()
                 .join(", ")
         );

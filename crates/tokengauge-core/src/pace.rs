@@ -11,6 +11,9 @@ use serde::Serialize;
 /// numbers are noise.
 const MIN_ELAPSED_FRACTION: f64 = 0.03;
 
+/// See [`UsagePace::early`].
+const EARLY_FRACTION: f64 = 0.15;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PaceStage {
@@ -47,6 +50,10 @@ pub struct UsagePace {
     pub eta_seconds: Option<i64>,
     /// True when the current burn rate lasts to the reset without running out.
     pub will_last_to_reset: bool,
+    /// The opening stretch of a window with most of it still unspent, where a
+    /// burst of work projects to an early run-out it is far from.
+    #[serde(skip)]
+    pub early: bool,
 }
 
 fn stage_for_delta(delta: f64) -> PaceStage {
@@ -122,6 +129,7 @@ impl UsagePace {
             projected_percent: (actual / elapsed * duration_secs).clamp(0.0, 100.0),
             eta_seconds,
             will_last_to_reset,
+            early: elapsed < duration_secs * EARLY_FRACTION && actual <= 50.0,
         })
     }
 
@@ -149,6 +157,27 @@ mod tests {
 
     fn at(now: DateTime<Utc>, mins_until_reset: i64) -> String {
         (now + Duration::minutes(mins_until_reset)).to_rfc3339()
+    }
+
+    /// ai-usagebar #390: a burst in the first stretch of a week projects to
+    /// a run-out that is days away, with most of the week unspent.
+    #[test]
+    fn the_opening_stretch_with_most_left_is_early() {
+        let now = Utc::now();
+        let week = 10080;
+        // 10% into the week, 30% spent: far ahead, but early.
+        let early = UsagePace::for_window(30, Some(week), Some(&at(now, 9072)), now).unwrap();
+        assert!(early.stage.is_ahead());
+        assert!(early.early);
+        assert_eq!(crate::Tone::for_pace(&early), crate::Tone::Warn);
+        // The same burst past half the allowance is not early any more.
+        let spent = UsagePace::for_window(60, Some(week), Some(&at(now, 9072)), now).unwrap();
+        assert!(!spent.early);
+        assert_eq!(crate::Tone::for_pace(&spent), crate::Tone::Critical);
+        // Nor is it a fifth of the way in.
+        let later = UsagePace::for_window(40, Some(week), Some(&at(now, 8064)), now).unwrap();
+        assert!(!later.early);
+        assert_eq!(crate::Tone::for_pace(&later), crate::Tone::Critical);
     }
 
     #[test]

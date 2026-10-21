@@ -630,6 +630,38 @@ Three things are easy to get wrong:
   only in selvedge's CI, which has a `windows-latest` job for exactly that
   reason.
 
+## Linux packages are the release archive, repackaged
+
+The `.deb`, the `.rpm` and `tokengauge-bin` are made from the `linux-<arch>`
+archive (`scripts/package.sh`, `scripts/arch.sh`, decision 0005), so a package
+and `--update` cannot install different bytes. `brain/architecture/distribution.md`
+has the layout. Rules that are easy to regress:
+
+- **A packaged binary is its package manager's.** selvedge's `update::owner`
+  makes `--update` refuse it, so `--json` carries `update.upgraded_by` and every
+  frontend with an Update button shows that name instead
+  (`panel::tests::every_frontend_with_an_update_button_hides_it_for_a_packaged_install`).
+  A new button that runs `--update` reads it too.
+- **The unit and the schemas are rewritten for `/usr`.** The unit's `ExecStart`
+  names `%h/.local/bin`, and each packager seds that one line; the GNOME schemas
+  ship as XML and each packager compiles them, because the shell refuses a
+  `schemas/` with no blob. Change either in the source and the packagers'
+  pattern stops matching - `project::tests` pins both.
+- **No Omarchy widget in a package**: Omarchy loads third-party plugins only from
+  `~/.config/omarchy/plugins`, and a package does not write into a home.
+- **Package names stay clear of `linux-<arch>`**, for the same reason the MSI is
+  `win64` (see Windows below).
+- **The release workflow rehearses on pull requests** that touch it or the
+  packaging: everything a tag would build and verify, unsigned, published
+  nowhere. A tag is never moved, so the first run of a changed release must not
+  be the one that ships. `publish` needs `verify`, which installs every package on
+  a clean Debian 12, Ubuntu 22.04, Fedora and Arch.
+- **Signing switches on with `packaging/tokengauge.asc`.** Once it is committed a
+  tag without the `TOKENGAUGE_GPG_KEY` / `TOKENGAUGE_GPG_PASSPHRASE` secrets
+  refuses to publish, and a secret that is not that key's fails the run.
+- **`install.sh` checks `SHA256SUMS`**, so the sums are taken after every asset is
+  in (and signed), and a release without them cannot be installed by it.
+
 ## macOS is two LaunchAgents
 
 On macOS `scripts/install.sh` installs the `tokengauge` binary, the TUI and the

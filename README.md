@@ -62,6 +62,29 @@ The installer detects `systemd --user`, drops in a `tokengauge-daemon.service`, 
 
 The same command installs on macOS, where it sets up the menu bar instead of Waybar. See [macOS](#macos).
 
+The installer downloads the latest release and refuses an archive that does not match the release's `SHA256SUMS`. `bash -s -- --version v0.49.0` installs a given release instead (0.49.0 is the first to publish the checksums).
+
+### Packages
+
+Every release also carries a `.deb`, an `.rpm` and an Arch `tokengauge-bin` package for x86_64 and aarch64, built from the same archive `--update` installs. They run on Debian 12, Ubuntu 22.04, Fedora and Arch, and later releases of each:
+
+```bash
+sudo apt install ./tokengauge_0.49.0_amd64.deb        # Debian, Ubuntu
+sudo dnf install ./tokengauge-0.49.0-1.x86_64.rpm     # Fedora
+sudo pacman -U tokengauge-bin-0.49.0-1-x86_64.pkg.tar.zst
+systemctl --user enable --now tokengauge-daemon.service
+```
+
+A package puts the binaries in `/usr/bin`, the daemon's user unit in `/usr/lib/systemd/user` (enable it yourself, a package cannot do it for every user), the Plasma widget and the GNOME extension under `/usr/share`, and the Waybar snippet in `/usr/share/doc/tokengauge`. The Omarchy widget is not in any package: Omarchy only loads third-party widgets from `~/.config/omarchy/plugins/`, so run `tokengauge --install-frontend omarchy` once. The release also attaches a `pkgbuild.tar.gz` with the `tokengauge` (from source) and `tokengauge-bin` PKGBUILDs, for an AUR helper or a local `makepkg`.
+
+A packaged binary upgrades through its package manager: `--update` refuses it, and the panel's banner says so instead of offering to install.
+
+From 0.49.0 the `.rpm`s and the Arch packages are signed and `SHA256SUMS.asc` signs the checksums, so any download can be checked against `tokengauge-release-key.asc`, whose fingerprint is `8B50428BFB8B6A9303EA8FEF0F78D1DAEC502262`:
+
+```bash
+gpg --import tokengauge-release-key.asc && gpg --verify SHA256SUMS.asc SHA256SUMS && sha256sum -c --ignore-missing SHA256SUMS
+```
+
 ### Placement
 
 By default the module is added to `modules-right` (before the tray on Omarchy). To put it on the left instead (right after `hyprland/workspaces`), run:
@@ -571,6 +594,8 @@ macOS the tray's **Update TokenGauge** menu item runs the updater; restart the
 app to load the new binaries.
 
 Set `TOKENGAUGE_REPO=owner/repo` to update from a fork's releases.
+
+A binary installed by a package manager (a `.deb`, an `.rpm`, an Arch package) is that package manager's to replace: `--update` refuses it and says how to upgrade, the daemon's notification names the package manager, and the Plasma, GNOME and Omarchy banners do the same in place of the **Update** button.
 
 The shell installers still work if you prefer them:
 

@@ -384,11 +384,15 @@ Item {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: root.snapshot.theme && root.snapshot.theme.green ? root.snapshot.theme.green : "#a6e3a1"
-                text: root.updateInfo && root.updateInfo.latest
+                text: root.updateInfo && root.updateInfo.upgraded_by
+                    ? i18n("Update available: v%1 - upgrade it with %2", root.updateInfo.latest, root.updateInfo.upgraded_by)
+                    : root.updateInfo && root.updateInfo.latest
                     ? i18n("Update available: v%1", root.updateInfo.latest)
                     : i18n("Update available")
             }
             PlasmaComponents.Button {
+                // `--update` refuses a binary a package manager owns.
+                visible: !(root.updateInfo && root.updateInfo.upgraded_by)
                 icon.name: "system-software-update"
                 text: root.updating ? i18n("Updating…") : i18n("Update")
                 // Disabled while an update is in flight so a double-trigger can't

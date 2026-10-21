@@ -2612,6 +2612,34 @@ mod tests {
         }
     }
 
+    /// `--update` refuses a binary a package manager installed, so an Update
+    /// button offered to one fails on click. `upgraded_by` in `--json` says
+    /// who upgrades it instead, and every frontend that draws the button reads
+    /// it. The TUI and waybar draw no banner; the tray builds only for
+    /// Windows and macOS, where no package manager installs TokenGauge.
+    #[test]
+    fn every_frontend_with_an_update_button_hides_it_for_a_packaged_install() {
+        for (id, dir, extension) in [
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+            ),
+            ("gnome", "gnome/tokengauge@arzaroth.github.io", "ts"),
+            ("quickshell", "omarchy/arzaroth.tokengauge", "qml"),
+        ] {
+            let sources = frontend_sources(id, dir, extension);
+            assert!(
+                sources.iter().any(|src| src.contains("--update")),
+                "{id} ({dir}) no longer runs --update; drop it from this list"
+            );
+            assert!(
+                sources.iter().any(|src| src.contains("upgraded_by")),
+                "{id} ({dir}) offers --update to a binary its package manager owns"
+            );
+        }
+    }
+
     /// Every frontend says when it last refreshed.
     ///
     /// Five of the six put the sentence behind their refresh control: hovering

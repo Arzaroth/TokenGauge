@@ -46,7 +46,8 @@ GNOME JavaScript, and a JSON parse of the frontend manifests.
 ## Install and run
 
 - Linux / macOS: `scripts/install.sh` (`--no-daemon`, `--placement=left|right`,
-  `--no-tray` on macOS); Windows: `scripts/install.ps1` or the MSI. Desktop
+  `--version vX.Y.Z`, `--no-tray` on macOS), or on Linux the release's `.deb`,
+  `.rpm` or `tokengauge-bin` package; Windows: `scripts/install.ps1` or the MSI. Desktop
   payloads: `scripts/install-{plasma,gnome,omarchy}.sh` or
   `tokengauge --install-frontend plasma|gnome|omarchy|all`. Details in
   [architecture/distribution.md](architecture/distribution.md).
@@ -65,7 +66,10 @@ The `release` skill (`.claude/skills/release/SKILL.md`) is the procedure: docs
 sweep, version bump in the four crate `Cargo.toml`s, `Cargo.lock`, the GNOME
 (`version-name`), Omarchy and Plasma manifests and `tests/qml/fixtures/panel.json`,
 the gate, `[master] chore(release): x.y.z`, annotated `vx.y.z` tag, push, then
-watch `release.yml` until the GitHub release has its seven assets. `CHANGELOG.md`
+watch `release.yml` until the GitHub release has its assets (seven archives and
+installers, six Linux packages, the PKGBUILD bundle, `SHA256SUMS`, and once the
+key is committed the signatures and the public key). A pull request touching the
+release or the packaging rehearses all of it without publishing. `CHANGELOG.md`
 is the source of the release notes: the workflow extracts the `## [x.y.z]`
 section. Pre-1.0: minor for a user-facing change, patch for fixes.
 

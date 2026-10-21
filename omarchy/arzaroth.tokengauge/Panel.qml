@@ -567,11 +567,14 @@ Panel {
 
               Text {
                 textFormat: Text.PlainText
-                width: parent.width - updateButton.width - parent.spacing
+                width: parent.width - (updateButton.visible ? updateButton.width + parent.spacing : 0)
                 anchors.verticalCenter: parent.verticalCenter
-                text: usage.updateStatus && usage.updateStatus.latest
+                text: (usage.updateStatus && usage.updateStatus.latest
                   ? "TokenGauge v" + usage.updateStatus.latest + " is available"
-                  : "A TokenGauge update is available"
+                  : "A TokenGauge update is available")
+                  + (usage.updateStatus && usage.updateStatus.upgraded_by
+                    ? " - upgrade it with " + usage.updateStatus.upgraded_by
+                    : "")
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
@@ -580,6 +583,8 @@ Panel {
 
               Button {
                 id: updateButton
+                // `--update` refuses a binary a package manager owns.
+                visible: !(usage.updateStatus && usage.updateStatus.upgraded_by)
                 anchors.verticalCenter: parent.verticalCenter
                 text: usage.updating ? "Updating…" : "Update"
                 bordered: true

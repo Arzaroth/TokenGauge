@@ -1,0 +1,38 @@
+# Maintainer: Marc-Etienne Barrut <lekva+github@arzaroth.com>
+#
+# Repackages the binaries and the frontend payloads of a GitHub release
+# archive. The release workflow attaches a copy of this file with pkgver and
+# sha256sums filled in, and the packages it builds from it.
+
+pkgname=tokengauge-bin
+pkgver=0.48.0
+pkgrel=1
+pkgdesc="Token usage, costs and limits for AI coding assistants in Waybar, KDE Plasma, GNOME Shell and a TUI (release binary)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Arzaroth/TokenGauge"
+license=('MIT OR WTFPL')
+depends=('gcc-libs' 'glibc')
+makedepends=('glib2')
+provides=("tokengauge=$pkgver")
+conflicts=('tokengauge')
+optdepends=('waybar: the bar module'
+  'libnotify: limit and update notifications')
+options=('!strip' '!debug')
+source_x86_64=("$url/releases/download/v$pkgver/tokengauge-v$pkgver-linux-x86_64.tar.gz")
+source_aarch64=("$url/releases/download/v$pkgver/tokengauge-v$pkgver-linux-aarch64.tar.gz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+  install -Dm755 tokengauge "$pkgdir/usr/bin/tokengauge"
+  install -Dm755 tokengauge-tui "$pkgdir/usr/bin/tokengauge-tui"
+  ln -s tokengauge "$pkgdir/usr/bin/tokengauge-waybar"
+  install -d "$pkgdir/usr/lib/systemd/user"
+  sed 's|^ExecStart=%h/\.local/bin/tokengauge |ExecStart=/usr/bin/tokengauge |' \
+    systemd/tokengauge-daemon.service >"$pkgdir/usr/lib/systemd/user/tokengauge-daemon.service"
+  install -d "$pkgdir/usr/share/plasma/plasmoids" "$pkgdir/usr/share/gnome-shell/extensions"
+  cp -r --no-preserve=ownership frontends/plasma/org.tokengauge.plasmoid "$pkgdir/usr/share/plasma/plasmoids/"
+  cp -r --no-preserve=ownership frontends/gnome/tokengauge@arzaroth.github.io "$pkgdir/usr/share/gnome-shell/extensions/"
+  glib-compile-schemas "$pkgdir/usr/share/gnome-shell/extensions/tokengauge@arzaroth.github.io/schemas"
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" LICENSE LICENSE-MIT LICENSE-WTFPL THIRD-PARTY.md
+}

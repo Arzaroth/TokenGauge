@@ -91,7 +91,9 @@ mod tests {
 
     fn release_workflow() -> String {
         let path = repo_root().join(".github/workflows/release.yml");
-        std::fs::read_to_string(&path).expect("the release workflow is what names the assets")
+        std::fs::read_to_string(&path)
+            .expect("the release workflow is what names the assets")
+            .replace("\r\n", "\n")
     }
 
     #[test]
@@ -187,5 +189,188 @@ mod tests {
             TOKENGAUGE.aliases.contains(&"tokengauge-waybar"),
             "a 0.22.x updater upgrades by the old name and would find nothing"
         );
+    }
+
+    /// One job of the release workflow, from its name to the next job's.
+    fn job(workflow: &str, name: &str) -> String {
+        let (_, rest) = workflow
+            .split_once(&format!("\n  {name}:\n"))
+            .unwrap_or_else(|| panic!("no {name} job"));
+        rest.lines()
+            .take_while(|line| {
+                line.is_empty() || line.starts_with("   ") || line.starts_with("  #")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// `install.sh` refuses an archive SHA256SUMS does not list, so the sums
+    /// are taken once every build job has handed its assets over, and
+    /// published with them.
+    #[test]
+    fn the_release_publishes_the_checksums_of_every_asset() {
+        let workflow = release_workflow();
+        let checksums = job(&workflow, "checksums");
+        let sums = checksums
+            .find("sha256sum -- * >SHA256SUMS")
+            .expect("the release takes no checksums");
+        let downloaded = checksums
+            .find("actions/download-artifact")
+            .expect("the checksums job downloads no assets");
+        assert!(
+            downloaded < sums,
+            "the checksums are taken before the assets are in"
+        );
+        let uploaded = job(&workflow, "publish");
+        let uploaded = uploaded.split("files: |").nth(1).expect("no files block");
+        assert!(
+            uploaded.contains("dist/SHA256SUMS"),
+            "SHA256SUMS is not uploaded"
+        );
+    }
+
+    fn repo_file(rel: &str) -> String {
+        // A Windows checkout ends its lines in CRLF.
+        std::fs::read_to_string(repo_root().join(rel))
+            .unwrap_or_else(|e| panic!("{rel}: {e}"))
+            .replace("\r\n", "\n")
+    }
+
+    const PKGBUILDS: [&str; 2] = [
+        "packaging/arch/tokengauge/PKGBUILD",
+        "packaging/arch/tokengauge-bin/PKGBUILD",
+    ];
+
+    /// A package puts each payload where its desktop loads system-wide
+    /// extensions from; a payload anywhere else installs and is never drawn.
+    /// The GNOME one also needs its schemas compiled, which the archive leaves
+    /// to the machine that installs it.
+    #[test]
+    fn every_package_puts_the_desktop_payloads_where_the_desktop_looks() {
+        let nfpm = repo_file("packaging/nfpm.yaml");
+        for (id, dir) in [
+            ("plasma", "/usr/share/plasma/plasmoids"),
+            ("gnome", "/usr/share/gnome-shell/extensions"),
+        ] {
+            let f = TOKENGAUGE
+                .frontends
+                .iter()
+                .find(|f| f.id == id)
+                .expect("a frontend");
+            // `tree`: a plain directory source flattens its subdirectories.
+            assert!(
+                nfpm.contains(&format!("    dst: {dir}/{}\n    type: tree\n", f.artifact)),
+                "nfpm.yaml does not install the {id} payload as a tree under {dir}"
+            );
+            for rel in PKGBUILDS {
+                assert!(
+                    repo_file(rel).contains(&format!("/{}/{} \"$pkgdir{dir}/\"", f.id, f.artifact)),
+                    "{rel} does not copy the {id} payload into {dir}"
+                );
+            }
+        }
+        assert!(
+            repo_file("scripts/package.sh")
+                .contains("glib-compile-schemas \"$stage/archive/frontends/gnome/"),
+            "the .deb and .rpm ship the GNOME schemas uncompiled"
+        );
+        for rel in PKGBUILDS {
+            assert!(
+                repo_file(rel).contains("glib-compile-schemas \"$pkgdir/usr/share/gnome-shell/"),
+                "{rel} ships the GNOME schemas uncompiled"
+            );
+        }
+        assert!(
+            repo_file("scripts/check-package.sh").contains("schemas/gschemas.compiled"),
+            "the package check does not look for the compiled schemas"
+        );
+    }
+
+    /// The unit runs `%h/.local/bin/tokengauge`, where install.sh puts it; a
+    /// package puts it in /usr/bin, and each packager rewrites that one line.
+    #[test]
+    fn every_package_points_the_daemon_unit_at_usr_bin() {
+        let unit = repo_file("scripts/tokengauge-daemon.service");
+        assert!(unit.contains("\nExecStart=%h/.local/bin/tokengauge --daemon\n"));
+        let rewrite = r"'s|^ExecStart=%h/\.local/bin/tokengauge |ExecStart=/usr/bin/tokengauge |'";
+        for rel in ["scripts/package.sh", PKGBUILDS[0], PKGBUILDS[1]] {
+            assert!(
+                repo_file(rel).contains(rewrite),
+                "{rel} does not rewrite ExecStart"
+            );
+        }
+        assert!(
+            repo_file("scripts/check-package.sh")
+                .contains("'ExecStart=/usr/bin/tokengauge --daemon'"),
+            "the package check does not look at the unit"
+        );
+    }
+
+    /// Packages are made from the archive `--update` downloads, so the two
+    /// cannot carry different bytes, and the archive carries the unit they
+    /// install.
+    #[test]
+    fn the_packages_are_built_from_the_release_archive() {
+        let workflow = release_workflow();
+        assert!(workflow.contains("scripts/package.sh \"$archive\" dist"));
+        assert!(workflow.contains("cp scripts/tokengauge-daemon.service dist/systemd/"));
+        let bin = repo_file("packaging/arch/tokengauge-bin/PKGBUILD");
+        for arch in ["x86_64", "aarch64"] {
+            assert!(
+                workflow.contains(&format!(
+                    "-linux-{arch}.tar.gz\" -C dist tokengauge tokengauge-waybar tokengauge-tui frontends systemd"
+                )),
+                "the {arch} archive does not carry the unit"
+            );
+            assert!(
+                bin.contains(&format!(
+                    "/releases/download/v$pkgver/tokengauge-v$pkgver-linux-{arch}.tar.gz"
+                )),
+                "tokengauge-bin does not download the {arch} archive"
+            );
+        }
+    }
+
+    /// Nothing is published that the verify job has not installed, and every
+    /// package and signature it checked is uploaded.
+    #[test]
+    fn the_release_uploads_every_package_once_it_has_been_installed() {
+        let workflow = release_workflow();
+        let publish = job(&workflow, "publish");
+        assert!(
+            publish.contains("needs: verify"),
+            "the release publishes unverified packages"
+        );
+        let uploaded = publish.split("files: |").nth(1).expect("no files block");
+        for glob in [
+            "dist/*.deb",
+            "dist/*.rpm",
+            "dist/*.pkg.tar.zst",
+            "dist/*.sig",
+            "dist/*.asc",
+        ] {
+            assert!(uploaded.contains(glob), "{glob} is not uploaded");
+        }
+        assert!(job(&workflow, "verify").contains("sh /s/check-package.sh"));
+    }
+
+    /// A 0.22.x updater takes the first asset whose name contains
+    /// `linux-<arch>`. The packaging tools name theirs `amd64`, `x86_64.rpm`
+    /// and `-x86_64.pkg.tar.zst`, none of which it matches; the PKGBUILD
+    /// bundle must not either.
+    #[test]
+    fn no_package_is_named_so_an_old_updater_could_mistake_it_for_the_archive() {
+        let workflow = release_workflow();
+        assert!(workflow.contains("\"out/tokengauge-$safe-pkgbuild.tar.gz\""));
+        for rel in ["packaging/nfpm.yaml", PKGBUILDS[0], PKGBUILDS[1]] {
+            for line in repo_file(rel).lines() {
+                let line = line.trim();
+                assert!(
+                    !(line.starts_with("name:") || line.starts_with("pkgname="))
+                        || !line.contains("linux-"),
+                    "{rel}: `{line}` names a package an old updater would download"
+                );
+            }
+        }
     }
 }

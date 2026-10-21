@@ -29,7 +29,8 @@ never runs on a poll.
 
 `Roots::unreadable` lists the roots that exist and cannot be read (any
 `read_dir` error but `NotFound`). `jsonl_files` reads such a root as no files,
-which the fleet store would take as a month of nothing, so the sync layer keeps
+and the fleet store, replacing a provider from the oldest event the other
+roots still found, would drop every day only it held, so the sync layer keeps
 this device's record instead ([sync.md](sync.md#the-fleet-store-is-the-durable-record)). A root that
 does not exist is a CLI never used and reads as empty.
 

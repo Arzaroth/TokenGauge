@@ -320,9 +320,10 @@ impl Roots {
     }
 
     /// Roots that are there and could not be read. A read of them comes back
-    /// empty, which the fleet store would take as a month of nothing and
-    /// replace its own record with. A root that does not exist is a CLI never
-    /// used, and reads as empty truthfully.
+    /// empty, and the fleet store, replacing each provider from the oldest
+    /// event the other roots still found, would drop every day only they held.
+    /// A root that does not exist is a CLI never used, and reads as empty
+    /// truthfully.
     pub fn unreadable(&self) -> Vec<PathBuf> {
         self.all()
             .into_iter()

@@ -474,10 +474,12 @@ and would erase a `--sync-adopt`ed history the same way.
 
 **A read with gaps never replaces.** A transcript directory or file that exists
 and cannot be read reads as nothing in it, so the readers report it
-(`TranscriptRead.gaps`, from their own walk) and such a read is merged into the
-store hour by hour, the larger of record and read, never used to replace it.
-A comparison of totals was tried first and cannot work: new usage covers for a
-missing hour. The backfill merges a read with gaps the same way and leaves its
+(`TranscriptRead.gaps`, from their own walk) and such a read never replaces:
+it adds only the calls whose dedup key the store has not counted
+(`DeviceSlice.counted`), and where no keys cover an hour it only fills an empty
+day. Totals and a larger-of-the-two rule were both tried and both lose usage:
+new usage covers for a missing hour, and distinct usage shares an hour with
+what is missing. Only call identity tells overlap from new. The backfill merges a read with gaps the same way and leaves its
 marker off, retrying behind `tokengauge-backfill-retry` an hour later rather
 than on the next fetch.
 

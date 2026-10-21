@@ -86,10 +86,18 @@ maintained on every fetch whether or not sync is on (the gate is in
   `read_file` push to it), and `sync::refresh` takes them as `gaps`. Skipped,
   such a path reads as nothing in it, and the replace would drop every day only
   it held, which a comparison of totals cannot see once new usage covers for
-  it. So a read with any gap replaces nothing: `FleetStore::merge_local` folds
-  it in per hour, provider and model as the larger of record and read
-  (transcripts only grow, so the larger is never the stale one). A missing hour
-  keeps its record, new usage still lands, and the report counts this device
+  it. So a read with any gap replaces nothing: `FleetStore::merge_local` adds
+  only the calls the record has not counted. The local slice keeps the
+  readers' dedup keys for its own hourly buckets (`DeviceSlice.counted`,
+  never published) and, per provider, the hour from which that list is
+  complete (`counted_from`); a whole read rewrites both with its replace and
+  compaction prunes them with the hourly buckets. Totals or a larger-of rule
+  cannot do this: new usage covers for a missing hour, and distinct usage
+  shares an hour with what is missing. Where the keys say nothing (before a
+  whole read recorded them, or past the hourly window), a read with gaps only
+  fills a day the record holds nothing for, so a retry or a rolled-up day
+  cannot double it. A missing hour keeps its record, new usage still lands,
+  and the report counts this device
   from the record (`SyncOutcome.held`: `events` carries its buckets and
   `native_costs` drops its own read of them, so nothing counts twice). The sync
   status carries the error. `sync::backfill` merges a deep read with gaps the

@@ -52,11 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps failing, whose dead figures fed the combined plans header.
 - A transcript folder or file that exists but cannot be read (a permission
   error, a volume that came up unreadable) no longer costs the spend history
-  the days only it held. Readable folders are still read and their new usage
-  still counted, but merged into the recorded history hour by hour rather
-  than replacing it, so an hour the read could not reach keeps its figure, and
-  the sync status says why. The one-time backfill waits until the whole tree
-  can be read.
+  the days only it held. Readable folders are still read and their new calls
+  added to the recorded history rather than replacing it, so an hour the read
+  could not reach keeps its figure, a call already recorded is not counted
+  again, and the sync status says why. The one-time backfill does the same
+  and tries again hourly until the whole tree can be read.
 - A request whose prompt runs past a model's long-context threshold (Sonnet 4.5
   and the grok-4 line past 200k, gpt-5.4 onwards past 272k) is rated at
   LiteLLM's long-context price rather than the base price. Only single Claude

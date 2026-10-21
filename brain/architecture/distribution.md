@@ -65,7 +65,7 @@ from `scripts/install-{plasma,gnome,omarchy}.sh` or `--install-frontend`.
   `--version vX.Y.Z` names a release instead.
 - It downloads `SHA256SUMS` first, picks the one `<os>-<arch>.tar.gz` it lists,
   and refuses an archive whose digest differs, or a release with no sums
-  (anything before 0.47.0). It runs the extracted `tokengauge --version` before
+  (anything before 0.48.0). It runs the extracted `tokengauge --version` before
   installing it.
 - `TOKENGAUGE_DOWNLOAD_BASE=<dir>` reads the assets from a directory: the release
   workflow's `verify` job and `crates/tokengauge-waybar/tests/install.rs` run it

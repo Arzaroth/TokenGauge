@@ -6,7 +6,7 @@
 # have to checksum.
 
 pkgname=tokengauge
-pkgver=0.46.0
+pkgver=0.47.0
 pkgrel=1
 pkgdesc="Token usage, costs and limits for AI coding assistants in Waybar, KDE Plasma, GNOME Shell and a TUI"
 arch=('x86_64' 'aarch64')

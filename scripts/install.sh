@@ -79,7 +79,7 @@ fetch_release() {
   esac
 
   if ! curl -fsSL "$base/SHA256SUMS" -o "$TMP_DIR/SHA256SUMS"; then
-    fail "No SHA256SUMS in $base: releases before 0.47.0 do not publish one"
+    fail "No SHA256SUMS in $base: releases before 0.48.0 do not publish one"
     exit 1
   fi
   pattern="tokengauge-${tag:-v[0-9][^ ]*}-$asset_os-$asset_arch\.tar\.gz"

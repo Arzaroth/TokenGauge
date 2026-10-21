@@ -91,7 +91,9 @@ mod tests {
 
     fn release_workflow() -> String {
         let path = repo_root().join(".github/workflows/release.yml");
-        std::fs::read_to_string(&path).expect("the release workflow is what names the assets")
+        std::fs::read_to_string(&path)
+            .expect("the release workflow is what names the assets")
+            .replace("\r\n", "\n")
     }
 
     #[test]
@@ -228,7 +230,10 @@ mod tests {
     }
 
     fn repo_file(rel: &str) -> String {
-        std::fs::read_to_string(repo_root().join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
+        // A Windows checkout ends its lines in CRLF.
+        std::fs::read_to_string(repo_root().join(rel))
+            .unwrap_or_else(|e| panic!("{rel}: {e}"))
+            .replace("\r\n", "\n")
     }
 
     const PKGBUILDS: [&str; 2] = [

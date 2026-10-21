@@ -88,9 +88,13 @@ pub(crate) fn notify_update_available(config: &TokenGaugeConfig) {
     let _ = selvedge::state::announce_if_new(
         &tokengauge_core::update_status_path(&config.cache_file),
         |latest, current| {
+            let how = match crate::snapshot::upgraded_by() {
+                by if by.is_empty() => "Run tokengauge --update.".to_string(),
+                by => format!("Upgrade it with {by}."),
+            };
             notify(
                 "TokenGauge: update available",
-                &format!("v{latest} is available (you have v{current}). Run tokengauge --update."),
+                &format!("v{latest} is available (you have v{current}). {how}"),
                 Urgency::Normal,
                 true,
             )

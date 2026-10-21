@@ -112,6 +112,9 @@ export interface UpdateStatus {
     current: string;
     latest: string | null;
     available: boolean;
+    /** The package manager a packaged binary upgrades through; empty when
+     * `--update` may replace it. Only present while `available`. */
+    upgraded_by?: string;
 }
 
 export interface Row {

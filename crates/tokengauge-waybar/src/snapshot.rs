@@ -234,7 +234,7 @@ pub(crate) fn json_snapshot(
             "red": t.red,
             "neutral": t.neutral,
         },
-        "update": update_status,
+        "update": update_json(update_status),
         // A parameter rather than looked up here, so a test of this function
         // never reads the developer's own runtime directory.
         "remuda": remuda,
@@ -249,6 +249,38 @@ pub(crate) fn json_snapshot(
 /// bar renders the refreshing state meanwhile. Unlike `--refresh` this does not
 /// fork: the caller is a frontend that chains `--json` behind it and needs the
 /// snapshot to be current by the time this returns.
+/// The cached update status, and when an update is available, who has to
+/// install it: `upgraded_by` names the package manager a packaged binary
+/// upgrades through, since `--update` refuses to replace it, and is empty when
+/// the binary replaces itself. A frontend with an Update button hides it for a
+/// name.
+fn update_json(status: Option<tokengauge_core::UpdateStatus>) -> serde_json::Value {
+    let mut value = serde_json::to_value(&status).unwrap_or(serde_json::Value::Null);
+    if let Some(update) = value.as_object_mut()
+        && status.is_some_and(|s| s.available)
+    {
+        update.insert("upgraded_by".into(), upgraded_by().into());
+    }
+    value
+}
+
+/// Who upgrades this binary when `--update` would refuse to, by where it runs
+/// from.
+pub(crate) fn upgraded_by() -> String {
+    use selvedge::update::Owner;
+    match selvedge::update::owner(&TOKENGAUGE) {
+        Ok(Some(Owner::Homebrew)) => "Homebrew",
+        Ok(Some(Owner::Nix)) => "Nix",
+        Ok(Some(Owner::Snap)) => "snap",
+        // `--update` runs the MSI itself.
+        #[cfg(windows)]
+        Ok(Some(Owner::Msi)) => return String::new(),
+        Ok(Some(_)) => "your package manager",
+        Ok(None) | Err(_) => return String::new(),
+    }
+    .into()
+}
+
 pub(crate) fn refresh_inline(config: &TokenGaugeConfig) {
     let sentinel = refresh_sentinel_path(&config.cache_file);
     let _ = std::fs::write(&sentinel, refresh_sentinel_deadline_ms(config).to_string());

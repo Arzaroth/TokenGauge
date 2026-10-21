@@ -650,8 +650,14 @@ class TokenGaugeIndicator extends PanelMenu.Button {
     _updateBanner(): St.BoxLayout {
         const banner = box(false, {style_class: 'tokengauge-banner', x_expand: true});
         const latest = this._snapshot.update?.latest;
-        const text = latest ? `${_('Update available')}: v${latest}` : _('Update available');
+        const upgradedBy = this._snapshot.update?.upgraded_by;
+        let text = latest ? `${_('Update available')}: v${latest}` : _('Update available');
+        if (upgradedBy)
+            text += ` - ${_('upgrade it with')} ${upgradedBy}`;
         banner.add_child(label(text, 'tokengauge-update-text', `color: ${this._theme().green};`));
+        // `--update` refuses a binary a package manager owns.
+        if (upgradedBy)
+            return banner;
         banner.add_child(spacer());
         const button = new St.Button({
             style_class: 'tokengauge-button',

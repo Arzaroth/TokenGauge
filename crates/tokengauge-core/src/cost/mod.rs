@@ -671,13 +671,21 @@ mod tests {
     #[test]
     fn a_root_that_is_there_and_cannot_be_read_is_unreadable() {
         use std::os::unix::fs::PermissionsExt;
+        /// Unlocks and removes the tree however the test ends.
+        struct Unlock(PathBuf, PathBuf);
+        impl Drop for Unlock {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.1, std::fs::Permissions::from_mode(0o755));
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
         let base = crate::statefiles::tests::cache_test_dir("unreadable-root");
         let locked = base.join("locked");
         std::fs::create_dir_all(&locked).unwrap();
+        let _unlock = Unlock(base.clone(), locked.clone());
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
         // Root reads anything, so the check means nothing there.
         if std::fs::read_dir(&locked).is_ok() {
-            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
             return;
         }
         let roots = Roots {
@@ -686,8 +694,6 @@ mod tests {
             ..Roots::default()
         };
         assert_eq!(roots.unreadable(), vec![locked.clone()]);
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::remove_dir_all(&base).ok();
     }
 
     /// Two machines on different builds have to produce the same day

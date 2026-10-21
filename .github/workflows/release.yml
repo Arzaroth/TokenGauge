@@ -4,6 +4,22 @@ on:
   push:
     tags:
       - 'v*'
+  # A rehearsal: everything a tag would build and check, published nowhere. A
+  # tag is never moved, so the first run of a changed release must not be the
+  # one that ships.
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'scripts/install.sh'
+      - 'scripts/package.sh'
+      - 'scripts/arch.sh'
+      - 'scripts/check-package.sh'
+      - 'scripts/build.sh'
+      - 'scripts/package-macos.sh'
+      - 'scripts/tokengauge-daemon.service'
+      - 'packaging/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
   workflow_dispatch:
     inputs:
       tag:
@@ -11,8 +27,16 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
   actions: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REF: ${{ github.event.inputs.tag || github.ref }}
+  PUBLISH: ${{ github.event_name != 'pull_request' }}
 
 jobs:
   build-x86_64:
@@ -21,8 +45,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ env.REF }}
           persist-credentials: false
+
+      # The tag being released, or on a pull request the one the workspace
+      # version would be tagged as.
+      - name: The tag
+        shell: bash
+        run: |
+          if [[ $PUBLISH == true ]]; then
+            echo "REF_NAME=${REF#refs/tags/}" >>"$GITHUB_ENV"
+          else
+            echo "REF_NAME=v$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/tokengauge-waybar/Cargo.toml | head -1)" >>"$GITHUB_ENV"
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
@@ -62,8 +97,6 @@ jobs:
         run: cross build --release --target x86_64-unknown-linux-gnu -p tokengauge-waybar -p tokengauge-tui
 
       - name: Package
-        env:
-          REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           # Sanitize the tag/ref so path separators can't break the archive path.
           SAFE_REF="${REF_NAME//[^A-Za-z0-9._-]/_}"
@@ -99,8 +132,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ env.REF }}
           persist-credentials: false
+
+      # The tag being released, or on a pull request the one the workspace
+      # version would be tagged as.
+      - name: The tag
+        shell: bash
+        run: |
+          if [[ $PUBLISH == true ]]; then
+            echo "REF_NAME=${REF#refs/tags/}" >>"$GITHUB_ENV"
+          else
+            echo "REF_NAME=v$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/tokengauge-waybar/Cargo.toml | head -1)" >>"$GITHUB_ENV"
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
@@ -140,8 +184,6 @@ jobs:
         run: cross build --release --target aarch64-unknown-linux-gnu -p tokengauge-waybar -p tokengauge-tui
 
       - name: Package
-        env:
-          REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           # Sanitize the tag/ref so path separators can't break the archive path.
           SAFE_REF="${REF_NAME//[^A-Za-z0-9._-]/_}"
@@ -178,8 +220,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ env.REF }}
           persist-credentials: false
+
+      # The tag being released, or on a pull request the one the workspace
+      # version would be tagged as.
+      - name: The tag
+        shell: bash
+        run: |
+          if [[ $PUBLISH == true ]]; then
+            echo "REF_NAME=${REF#refs/tags/}" >>"$GITHUB_ENV"
+          else
+            echo "REF_NAME=v$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/tokengauge-waybar/Cargo.toml | head -1)" >>"$GITHUB_ENV"
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
@@ -201,8 +254,6 @@ jobs:
 
       - name: Package
         shell: pwsh
-        env:
-          REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           # Sanitize the tag/ref so path separators can't break out of dist/.
           # Must match scripts/install.ps1 so the published asset name lines up.
@@ -223,8 +274,6 @@ jobs:
       # package to the zip extractor. See ARCHIVE_SUFFIX in selvedge.
       - name: Build MSI
         shell: pwsh
-        env:
-          REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           $safe = $env:REF_NAME -replace '[^A-Za-z0-9._-]', '_'
           # ProductVersion is numeric only: no leading v, no pre-release suffix.
@@ -252,14 +301,27 @@ jobs:
     # Signing and notarization need the Developer ID secrets; a fork without
     # them still releases, unsigned, the way it did before they existed.
     env:
-      APPLE_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
-      APPLE_NOTARY: ${{ secrets.APPLE_API_KEY_P8 != '' }}
+      # A rehearsal neither signs nor notarizes: PR CI already builds the
+      # bundle unsigned, and Apple's queue is no place for a pull request.
+      APPLE_SIGNING: ${{ github.event_name != 'pull_request' && secrets.MACOS_CERTIFICATE_P12 != '' }}
+      APPLE_NOTARY: ${{ github.event_name != 'pull_request' && secrets.APPLE_API_KEY_P8 != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ env.REF }}
           persist-credentials: false
+
+      # The tag being released, or on a pull request the one the workspace
+      # version would be tagged as.
+      - name: The tag
+        shell: bash
+        run: |
+          if [[ $PUBLISH == true ]]; then
+            echo "REF_NAME=${REF#refs/tags/}" >>"$GITHUB_ENV"
+          else
+            echo "REF_NAME=v$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/tokengauge-waybar/Cargo.toml | head -1)" >>"$GITHUB_ENV"
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
@@ -311,8 +373,6 @@ jobs:
       # Signs the per-architecture binaries the tarballs carry, and builds
       # TokenGauge.app and its DMG from them.
       - name: Sign, and build the app
-        env:
-          REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
         run: scripts/package-macos.sh "$REF_NAME"
 
       # A bare binary cannot carry a stapled ticket, so the tarballs' binaries
@@ -366,8 +426,6 @@ jobs:
           fi
 
       - name: Package
-        env:
-          REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           SAFE_REF="${REF_NAME//[^A-Za-z0-9._-]/_}"
           package() {
@@ -393,11 +451,25 @@ jobs:
   release:
     runs-on: ubuntu-latest
     needs: [build-x86_64, build-aarch64, build-windows, build-macos]
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ env.REF }}
           persist-credentials: false
+
+      # The tag being released, or on a pull request the one the workspace
+      # version would be tagged as.
+      - name: The tag
+        shell: bash
+        run: |
+          if [[ $PUBLISH == true ]]; then
+            echo "REF_NAME=${REF#refs/tags/}" >>"$GITHUB_ENV"
+          else
+            echo "REF_NAME=v$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/tokengauge-waybar/Cargo.toml | head -1)" >>"$GITHUB_ENV"
+          fi
 
       - name: Download artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -415,8 +487,6 @@ jobs:
           cat SHA256SUMS
 
       - name: Extract release notes from CHANGELOG
-        env:
-          REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           VERSION="${REF_NAME#v}"
           awk -v hdr="## [$VERSION]" '
@@ -429,9 +499,10 @@ jobs:
           fi
 
       - name: Publish GitHub release
+        if: env.PUBLISH == 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ env.REF_NAME }}
           body_path: release-notes.md
           generate_release_notes: true
           files: |

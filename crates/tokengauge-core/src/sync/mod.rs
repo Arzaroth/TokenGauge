@@ -25,8 +25,8 @@ pub use contribution::{
 };
 pub use crypto::{FleetKey, OpenError, key_path, load_key, store_key};
 pub use fleet::{
-    DeviceCost, DeviceSlice, ExportRow, FleetStore, HOURLY_RETENTION_DAYS, KeyChange, ObjectState,
-    Overlap, STORE_RETENTION_DAYS, Step,
+    Adoption, DeviceCost, DeviceSlice, ExportRow, FleetStore, HOURLY_RETENTION_DAYS, KeyChange,
+    ObjectState, Overlap, STORE_RETENTION_DAYS, Step,
 };
 pub use hour::Hour;
 pub use report::{

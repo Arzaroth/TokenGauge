@@ -75,6 +75,18 @@ pub struct DeviceSlice {
     pub buckets: Vec<Bucket>,
     #[serde(default)]
     pub days: Vec<DayDigest>,
+    /// Devices whose history this one took over with [`FleetStore::adopt`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adopted: Vec<String>,
+}
+
+/// What [`FleetStore::adopt`] moved from the retired device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Adoption {
+    pub device: DeviceRecord,
+    pub buckets: usize,
+    /// The UTC dates of the oldest and newest bucket moved, when any was.
+    pub range: Option<(NaiveDate, NaiveDate)>,
 }
 
 /// Two devices that read the same transcripts for the same day.
@@ -332,6 +344,61 @@ impl FleetStore {
         if let Some(slice) = self.devices.get_mut(&device.id) {
             slice.covers_from = slice.covers_from.map(|covers| covers.min(reach));
         }
+    }
+
+    /// Fold a retired device's history into `into_id` and drop the retired
+    /// slice.
+    ///
+    /// Only what predates `into_id`'s own coverage moves: inside that window
+    /// its buckets are authoritative, and a retired copy of the same day would
+    /// count it twice. A rolled-up day straddling the edge stays behind with
+    /// the retired slice, because it can no longer be split at the hour.
+    pub fn adopt(&mut self, retired_id: &str, into_id: &str) -> Option<Adoption> {
+        if retired_id == into_id || !self.devices.contains_key(into_id) {
+            return None;
+        }
+        let retired = self.devices.remove(retired_id)?;
+        let into = self.devices.get_mut(into_id)?;
+        let edge = into.covers_from;
+        let older = |bucket: &Bucket| {
+            edge.is_none_or(|edge| match bucket.granularity {
+                Granularity::Hour => bucket.hour < edge,
+                Granularity::Day => day_start(bucket.hour.utc_date().succ_opt()) <= edge,
+            })
+        };
+
+        let moved: Vec<Bucket> = retired.buckets.into_iter().filter(older).collect();
+        let range = moved
+            .iter()
+            .map(|bucket| bucket.hour.utc_date())
+            .min()
+            .zip(moved.iter().map(|bucket| bucket.hour.utc_date()).max());
+        let count = moved.len();
+        into.buckets.extend(moved);
+        into.buckets.sort_by(sort_key);
+
+        into.days.extend(
+            retired
+                .days
+                .into_iter()
+                .filter(|day| edge.is_none_or(|edge| day.date < edge.utc_date())),
+        );
+        into.days.sort_by_key(|day| day.date);
+
+        into.covers_from = match (into.covers_from, retired.covers_from) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        into.adopted.push(retired_id.to_string());
+        into.adopted.extend(retired.adopted);
+        into.adopted.sort();
+        into.adopted.dedup();
+
+        Some(Adoption {
+            device: retired.device,
+            buckets: count,
+            range,
+        })
     }
 
     /// Take a peer's contribution. Its covered range replaces what we hold;
@@ -758,6 +825,14 @@ impl FleetStore {
     }
 }
 
+/// The first hour of a UTC date.
+fn day_start(date: Option<NaiveDate>) -> Hour {
+    let midnight = date
+        .and_then(|date| date.and_hms_opt(0, 0, 0))
+        .unwrap_or_default();
+    Hour::containing(midnight.and_utc())
+}
+
 /// Whether this bucket belongs to the copy of a day that the fleet drops.
 fn is_dropped(dropped: &[(NaiveDate, String)], bucket: &Bucket, device_id: &str) -> bool {
     dropped
@@ -902,7 +977,91 @@ mod tests {
         assert_eq!(store.devices["a"].covers_from, Some(reach));
 
         store.backfill_local(&device("a"), reach, &[], now);
-        assert_eq!(tokens_for(&store, "a"), 155, "finding nothing erases nothing");
+        assert_eq!(
+            tokens_for(&store, "a"),
+            155,
+            "finding nothing erases nothing"
+        );
+    }
+
+    #[test]
+    fn adopting_moves_only_what_predates_the_new_device() {
+        let mut store = FleetStore::new();
+        store.upsert_local(
+            &device("old"),
+            hour("2025-09-15T00"),
+            &[
+                event("claude", "opus", hour("2026-09-29T09"), 1, Some(1)),
+                event("claude", "opus", hour("2026-09-30T21"), 2, Some(2)),
+                event("claude", "opus", hour("2026-09-30T23"), 4, Some(3)),
+                event("claude", "opus", hour("2026-10-12T09"), 8, Some(4)),
+            ],
+            1,
+        );
+        let slice = store.devices.get_mut("old").expect("old slice");
+        for (date, out) in [("2026-01-14", 16), ("2026-09-30", 32)] {
+            slice.buckets.push(Bucket {
+                hour: Hour::midday(date.parse().expect("date")),
+                provider: "claude".into(),
+                model: "opus".into(),
+                granularity: Granularity::Day,
+                tokens: TokenCounts {
+                    output: out,
+                    ..Default::default()
+                },
+            });
+        }
+        store.upsert_local(
+            &device("new"),
+            hour("2026-09-30T22"),
+            &[
+                event("claude", "opus", hour("2026-09-30T23"), 64, Some(3)),
+                event("claude", "opus", hour("2026-10-12T09"), 128, Some(5)),
+            ],
+            2,
+        );
+
+        let adoption = store.adopt("old", "new").expect("adopted");
+        assert_eq!(adoption.buckets, 3);
+        assert_eq!(
+            adoption.range,
+            Some((
+                "2026-01-14".parse().expect("date"),
+                "2026-09-30".parse().expect("date")
+            ))
+        );
+        assert!(!store.devices.contains_key("old"));
+        assert_eq!(
+            tokens_for(&store, "new"),
+            16 + 1 + 2 + 64 + 128,
+            "the new device's own window wins, and the straddling day stays out"
+        );
+        let new = &store.devices["new"];
+        assert_eq!(new.covers_from, Some(hour("2025-09-15T00")));
+        assert_eq!(new.adopted, vec!["old".to_string()]);
+        let days: Vec<String> = new.days.iter().map(|d| d.date.to_string()).collect();
+        assert_eq!(days, ["2026-09-29", "2026-09-30", "2026-10-12"]);
+        assert_eq!(
+            new.days.last().map(|d| d.events),
+            Some(1),
+            "the new device's digest for a shared day is the one kept"
+        );
+
+        assert!(store.adopt("old", "new").is_none(), "nothing left to adopt");
+        assert!(store.adopt("new", "new").is_none());
+
+        let now = hour("2026-10-21T12").start();
+        store.compact(now, WIRE_RETENTION_DAYS);
+        store.prune(now);
+        let once = store.devices["new"].buckets.clone();
+        store.compact(now, WIRE_RETENTION_DAYS);
+        store.prune(now);
+        assert_eq!(once, store.devices["new"].buckets);
+        assert_eq!(
+            tokens_for(&store, "new"),
+            16 + 1 + 2 + 64 + 128,
+            "compacting an adopted slice moves tokens, it does not lose them"
+        );
     }
 
     #[test]

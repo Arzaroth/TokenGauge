@@ -46,7 +46,10 @@ feature.
   exactly as the JSON names it.
 - **Quickshell (Omarchy).** Adapted from omarchy's `omarchy.agents` plugin (MIT
   notice in `NOTICE`); watches the revision with `FileView`. Collapses
-  `good`/`warn` onto the bar foreground.
+  `good`/`warn` onto the bar foreground. Reads the shell palette as `Commons.Color`
+  (`import qs.Commons as Commons`), never bare `Color`: Qt 6.12 adds a QtQuick
+  `Color` type that shadows it whatever the import order, and every bare
+  `Color.*` read undefined.
 - **Tray.** Gated to Windows and macOS (GUI deps only there), so it does not
   type-check on Linux; CI's Windows and macOS jobs are the authority. History is
   painted with egui (`draw_history_chart`). The tray quits when it launches an

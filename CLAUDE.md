@@ -77,6 +77,11 @@ a colour. Each frontend maps it onto its own palette - the Omarchy widget
 deliberately collapses `good`/`warn` onto the bar foreground, because omarchy
 themes carry a foreground and an urgent colour and nothing between them.
 
+The Quickshell widget reads that palette as `Commons.Color` (`import qs.Commons
+as Commons`), never bare `Color`. Qt 6.12 added a QtQuick `Color` type that
+shadows the shell's whatever the import order, and every bare `Color.*` in the
+panel read undefined; the alias works on older shells too.
+
 ### Chrome that is still content
 
 The refresh control is chrome - every toolkit draws its own - but what it says
@@ -369,6 +374,12 @@ A provider whose models are sold under someone else's namespace needs an entry i
 `vendor_prefixes` or it is counted and rated at zero - and that zero hides
 itself, because the `auto` fallback only asks ccusage about providers the readers
 found *nothing* for.
+
+**A long-context tier is a fact about one request.** `ModelPrice.long_context`
+bills every token of a request past its threshold at the tier, so
+`cost_of_request` runs only on a `UsageEvent` with `one_request` (a Claude
+message, a Codex rollout response). A Kimi or Grok turn, a `codex exec` row and
+a fleet bucket are sums of requests: tiering one bills all of it at the premium.
 
 The token counts must match ccusage exactly - they come from the same files.
 Three things assert it, at widening cost: `tests/cost_fixture.rs` diffs the

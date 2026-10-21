@@ -50,8 +50,9 @@ Key `(utc_hour, provider, model)`, value a `TokenCounts` (the five fields of
   degraded day-granularity contribution is the reserved way to let it in
   (tracked in `TODO.md`).
 - **A peer bucket becomes a synthetic `UsageEvent`** (`at` = start of the hour,
-  `date` = that instant in local time). `build_report` needs no changes: the peer
-  set is one more reader.
+  `date` = that instant in local time, `one_request: false`, so a bucket is
+  never billed at a long-context tier; see [cost.md](cost.md#pricing)).
+  `build_report` needs no changes: the peer set is one more reader.
 
 ## The fleet store is the durable record
 
@@ -79,6 +80,14 @@ maintained on every fetch whether or not sync is on (the gate is in
   `tokengauge-fleet.lock` (`store::lock`) from load to save. The lock blocks
   while another writer holds it (the CLI says it is waiting); a filesystem
   that cannot lock at all leaves every writer unlocked alike.
+- **An unreadable transcript root skips that replace.** A root that exists but
+  cannot be read (`cost::Roots::unreadable`, passed to `sync::refresh` as
+  `unreadable`) reads as no events. With another root of the same provider
+  still readable, the replace would start at that root's oldest event and drop
+  every day only the unreadable one held. So this device's record is kept as
+  it was and the sync status carries the error. `sync::backfill` returns the
+  same error without writing its marker, so it runs again once the tree can
+  be read.
 - Separate file from the snapshot on purpose: the snapshot is rewritten wholesale
   on every fetch; the store must not be.
 - **Store retention and wire retention differ.** The store keeps
@@ -312,7 +321,7 @@ against a fake transport (`crates/tokengauge-core/tests/fleet_sync.rs`).
 ## Sources
 
 - `crates/tokengauge-core/src/sync/{mod,contribution,fleet,hour,crypto,transport,s3,run,report,store,config}.rs` (`adopt`, `settle_adoptions`, `drop_vanished`, `store::lock`)
-- `crates/tokengauge-core/src/fetch.rs` (`native_costs`), `crates/tokengauge-core/src/cost/mod.rs` (`window_start`, `dedup_key`)
+- `crates/tokengauge-core/src/fetch.rs` (`native_costs`), `crates/tokengauge-core/src/cost/mod.rs` (`window_start`, `dedup_key`, `Roots::unreadable`)
 - `crates/tokengauge-core/src/device.rs`, `crates/tokengauge-core/src/doctor.rs`
 - `crates/tokengauge-waybar/src/sync_cli.rs`, `crates/tokengauge-tui/src/sync_view.rs`
 - `crates/tokengauge-core/tests/fleet_sync.rs`

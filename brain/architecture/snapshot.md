@@ -60,6 +60,14 @@ builds the row, so every frontend re-renders on a short cycle while visible
 15s; the daemon renders each socket request fresh). None of that asks a provider
 anything.
 
+A window whose reset passed **after the payload's `updated_at`** is read as the
+empty window that replaced it (0%, no reset time) when rows are built
+(`rows::expire_elapsed`), the same predicate as `snapshot::rolled_over`. For the
+live login the refetch is seconds away, but a stored credential that is expired
+is never asked again and a failing fetch keeps its old payload; without this
+their spent figures fed the combined plans header. A reset already past when the
+provider reported it keeps its figure.
+
 ## The daemon
 
 `tokengauge --daemon` (systemd user unit `scripts/tokengauge-daemon.service`, or
@@ -87,5 +95,6 @@ update check, and reloads config on SIGHUP (`signal_daemon_reload` matches
 - `crates/tokengauge-core/src/snapshot.rs` (`cache_is_stale`, `write_cache_full`, `retain_enabled`, `CacheMeta`, `CACHE_SCHEMA_VERSION`)
 - `crates/tokengauge-core/src/statefiles.rs`, `crates/tokengauge-core/src/config.rs`
 - `crates/tokengauge-core/src/fetch.rs` (`fetch_all_providers`, `apply_stale_fallback`)
+- `crates/tokengauge-core/src/rows.rs` (`expire_elapsed`)
 - `crates/tokengauge-waybar/src/daemon.rs`, `crates/tokengauge-waybar/src/snapshot.rs`, `crates/tokengauge-waybar/src/main.rs`
 - `crates/tokengauge-core/tests/state_files.rs`

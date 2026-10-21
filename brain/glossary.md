@@ -56,6 +56,9 @@ commits; the **Avoid** list names the synonyms that blur it.
 - **Pace** - where a window lands at reset if the current burn continues
   (`ends ~16%`, or `empty in 2h 15m`). Hidden until 3% of the window has
   elapsed. See [features/pace.md](features/pace.md).
+- **Early pace** - `UsagePace.early`: the first 15% of a window with at most
+  half of it used, where running ahead tints warn at most, never critical.
+  Avoid: grace period, warm-up.
 
 ## Panel and frontends
 
@@ -97,6 +100,14 @@ commits; the **Avoid** list names the synonyms that blur it.
   the source.
 - **Unpriced** - tokens for a model the price table does not carry; proof the
   table is behind, which buys one out-of-window refetch.
+- **Long-context tier** - `ModelPrice.long_context`: the price LiteLLM bills
+  every token of a request at once its prompt runs past a threshold
+  (`_above_<N>k_tokens`). See [architecture/cost.md](architecture/cost.md#pricing).
+  Avoid: 1M pricing, premium price, context surcharge.
+- **One request** - `UsageEvent.one_request`: the event's tokens are a single
+  API call (a Claude message, a Codex response), the only unit a long-context
+  tier applies to. A turn of several calls and a fleet bucket are not.
+  Avoid: single call, atomic event.
 
 ## Fleet sync
 
@@ -147,7 +158,8 @@ commits; the **Avoid** list names the synonyms that blur it.
   actually moved, so a past month is rated at a past month's prices.
   Avoid: price history, old prices.
 - **Backfill** - the one-time deep read of every transcript still on disk,
-  filling the store with history a fetch's window never reaches.
+  filling the store with history a fetch's window never reaches. Left unmarked
+  while a transcript root is unreadable, so it runs again.
   Avoid: import, initial sync, catch-up.
 
 ## Ecosystem

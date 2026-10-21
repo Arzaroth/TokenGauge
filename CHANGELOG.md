@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Claude reads extra usage: spend past the plan against its monthly cap shows
+  as an on-demand limit. It stays while Anthropic reports it disabled because
+  the credits or the cap ran out, and goes when you switched it off. An
+  Enterprise seat sold by spend, whose only limit is that cap, no longer fails
+  with "no usage windows". Only a dollar cap is drawn.
+- A Cursor Enterprise or Business member whose usage summary reads zero is
+  shown against the per-member budget their team sets, read from the team
+  dashboard. Only a member of a single team is read this way.
+
+### Changed
+
+- A pace that runs ahead early in a window, in its first 15% with at least half
+  the allowance left, is tinted as a warning at most rather than critical. The
+  badge is unchanged.
+- Grok paces its pool over the period the CLI's own billing names, weekly or
+  monthly, instead of always a week. If that lookup fails, the week stays.
+- A Codex spend cap reported beside the rate windows is its own "Spend limit"
+  row, rather than being dropped.
+
+### Fixed
+
+- The Omarchy widget drew no colours on Qt 6.12, which adds a QtQuick `Color`
+  type that shadows the shell's palette.
+- Kimi accounts that report ratio pools (`limit_5h`, `limit_7d`,
+  `limit_month_total`) instead of the usual usage block no longer stay stale.
+  The pools fill the 5-hour and weekly gauges, and the month total gets a
+  "Monthly total" row.
+- A Kimi login made by the older CLI under `~/.kimi` is read when
+  `~/.kimi-code` holds none.
+- One malformed entry in Claude's or z.ai's limits list no longer fails the
+  whole fetch; only that entry is skipped.
+- Cursor on macOS: the `cursor-agent` login is found at `~/.cursor/auth.json`
+  and in the Keychain, where the CLI normally keeps it, and `--doctor` names
+  the source that answered.
+- Cursor requests send the browser headers Vercel's firewall expects, which
+  refused them with a 403 despite a valid session. A Cursor 403 now says the
+  session may have ended or the edge blocked it, rather than "check your plan".
+- A window that reset after the snapshot was written reads as empty, with no
+  reset time, instead of keeping its old percentage and "Resets now". This
+  matters for a stored credential that is not asked again and for a fetch that
+  keeps failing, whose dead figures fed the combined plans header.
+- A transcript folder that exists but cannot be read (a permission error, a
+  volume that came up unreadable) no longer lets the spend history be rebuilt
+  from the folders that could be read, which dropped every day only it held.
+  The history is kept as it was, the sync status says why, and the one-time
+  backfill runs again once the folder can be read.
+- A request whose prompt runs past a model's long-context threshold (Sonnet 4.5
+  and the grok-4 line past 200k, gpt-5.4 onwards past 272k) is rated at
+  LiteLLM's long-context price rather than the base price. Only single Claude
+  messages and Codex responses are tiered; turns of several requests and
+  history buckets stay at the base price.
+
+### Security
+
+- rustls is updated to 0.23.46 for RUSTSEC-2026-0285 and RUSTSEC-2026-0346
+  through RUSTSEC-2026-0349.
+
 ## [0.47.0] - 2026-10-21
 
 ### Added

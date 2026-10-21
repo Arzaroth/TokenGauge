@@ -47,7 +47,10 @@ with no frontend code:
   headline badge, the detail as suffix and tooltip, from `SyncNote`) that leads
   with a transport failure, an unreadable peer (foreign `key_id`, future schema)
   or a stale peer as `warn` / `critical`, because a total that is quietly too low
-  is worse than one visibly missing. A device whose `coversFromHour` starts after
+  is worse than one visibly missing. A transcript root that exists but cannot
+  be read is reported there too, and leaves this device's record as it was
+  rather than replacing it with nothing
+  ([../architecture/sync.md](../architecture/sync.md#the-fleet-store-is-the-durable-record)). A device whose `coversFromHour` starts after
   the period gets a dim `partial` badge in `tokens_by_device`.
 - A transport failure never blanks totals; it ages them: `warn` past three pull
   intervals, `critical` past 24 hours. Session and burn rows get their own `warn`
@@ -64,5 +67,6 @@ opencode Go and Cursor have no per-call events and cannot sync yet.
 ## Sources
 
 - `crates/tokengauge-core/src/sync/report.rs`, `crates/tokengauge-core/src/panel.rs` (`tokens_by_device`, the Sync row)
+- `crates/tokengauge-core/src/sync/run.rs` (`refresh`, `unreadable_error`), `crates/tokengauge-core/src/cost/mod.rs` (`Roots::unreadable`)
 - `crates/tokengauge-waybar/src/sync_cli.rs`, `crates/tokengauge-tui/src/sync_view.rs`, `crates/tokengauge-core/src/launch.rs`
 - `crates/tokengauge-core/src/sync/config.rs` (`[sync]`, `[sync.providers]`, `[sync.dir]`, `[sync.s3]`)

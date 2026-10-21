@@ -15,6 +15,10 @@ rated against LiteLLM's prices. Mechanism (readers, traps, pricing, ccusage):
   ([fleet-sync.md](fleet-sync.md)).
 - OpenRouter's figures are its own billing numbers (`ReportedCost`), not a
   transcript estimate.
+- A Claude message or Codex response whose prompt ran past the model's
+  long-context threshold is rated at LiteLLM's long-context price; turns of
+  several requests (Kimi, Grok, `codex exec`) and synced buckets stay at base
+  ([../architecture/cost.md](../architecture/cost.md#pricing)).
 
 ## Config
 
@@ -28,6 +32,9 @@ timeout).
   per-credential (decision 0003).
 - A provider with no reader (GLM from z.ai's CLI, OpenRouter, opencode, Cursor)
   relies on ccusage or the vendor, and cannot sync.
+- History and the per-device split are rated per bucket, never at a
+  long-context tier, so on a long-context day they read a little under the
+  COST row, never over it.
 - Cost by project is a `TODO.md` idea: readers walk cwd-keyed trees but
   `UsageEvent` carries no project.
 

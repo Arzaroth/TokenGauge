@@ -429,15 +429,22 @@ pub struct PriceOverride {
 }
 
 impl PriceOverride {
-    /// This override laid over the price in effect today.
+    /// This override laid over the price in effect today. A tier is dropped
+    /// once any base price moves: today's tier beside a past month's base
+    /// would mix two price lists, and the archive carries no tiers of its own.
     fn apply(&self, base: ModelPrice) -> ModelPrice {
+        let moved = self.input.is_some()
+            || self.output.is_some()
+            || self.cache_write_5m.is_some()
+            || self.cache_write_1h.is_some()
+            || self.cache_read.is_some();
         ModelPrice {
             input: self.input.unwrap_or(base.input),
             output: self.output.unwrap_or(base.output),
             cache_write_5m: self.cache_write_5m.unwrap_or(base.cache_write_5m),
             cache_write_1h: self.cache_write_1h.unwrap_or(base.cache_write_1h),
             cache_read: self.cache_read.unwrap_or(base.cache_read),
-            long_context: base.long_context,
+            long_context: if moved { None } else { base.long_context },
         }
     }
 }
@@ -1038,6 +1045,20 @@ mod tests {
         assert!((price.cost_of_request(&past) - expected).abs() < 1e-9);
         // An aggregate is never tiered, however large.
         assert!(price.cost(&past) < price.cost_of_request(&past));
+    }
+
+    #[test]
+    fn an_override_that_moves_a_price_drops_todays_tier() {
+        let today: ModelPrice = serde_json::from_str(SONNET_TIERED).unwrap();
+        let moved = PriceOverride {
+            input: Some(1e-06),
+            ..PriceOverride::default()
+        };
+        assert!(moved.apply(today).long_context.is_none());
+        assert_eq!(
+            PriceOverride::default().apply(today).long_context,
+            today.long_context
+        );
     }
 
     #[test]

@@ -1,0 +1,109 @@
+# The .deb and .rpm, built by scripts/package.sh from inside a staged release
+# archive: ARCH (amd64, arm64) and VERSION come from the environment.
+name: tokengauge
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: Marc-Etienne Barrut <lekva+github@arzaroth.com>
+homepage: https://github.com/Arzaroth/TokenGauge
+license: MIT OR WTFPL
+description: |
+  Token usage, costs and limits for AI coding assistants.
+  Limits for Claude, Codex, Kimi, Grok, GLM, OpenRouter, opencode Go and
+  Cursor, and costs read from the transcripts the CLIs write, drawn in
+  Waybar, a KDE Plasma widget, a GNOME Shell extension and a TUI from one
+  binary and its daemon.
+recommends:
+  - ca-certificates
+suggests:
+  - waybar
+  - libnotify-bin
+
+overrides:
+  deb:
+    depends:
+      - libc6
+      - libgcc-s1
+  rpm:
+    depends:
+      - glibc
+      - libgcc
+
+rpm:
+  group: Applications/System
+  compression: zstd
+deb:
+  compression: xz
+
+contents:
+  - src: ./archive/tokengauge
+    dst: /usr/bin/tokengauge
+    file_info:
+      mode: 0755
+  - src: ./archive/tokengauge-tui
+    dst: /usr/bin/tokengauge-tui
+    file_info:
+      mode: 0755
+  # The name before 0.23.0, which a waybar config, a unit or a frontend
+  # setting written then still runs.
+  - src: tokengauge
+    dst: /usr/bin/tokengauge-waybar
+    type: symlink
+  - src: ./tokengauge-daemon.service
+    dst: /usr/lib/systemd/user/tokengauge-daemon.service
+    file_info:
+      mode: 0644
+  - src: ./archive/frontends/plasma/org.tokengauge.plasmoid/
+    dst: /usr/share/plasma/plasmoids/org.tokengauge.plasmoid
+    type: tree
+  - src: ./archive/frontends/gnome/tokengauge@arzaroth.github.io/
+    dst: /usr/share/gnome-shell/extensions/tokengauge@arzaroth.github.io
+    type: tree
+  - src: ./archive/waybar-snippet.jsonc
+    dst: /usr/share/doc/tokengauge/waybar-snippet.jsonc
+    file_info:
+      mode: 0644
+  - src: ./archive/README.md
+    dst: /usr/share/doc/tokengauge/README.md
+    file_info:
+      mode: 0644
+  - src: ./archive/CHANGELOG.md
+    dst: /usr/share/doc/tokengauge/CHANGELOG.md
+    file_info:
+      mode: 0644
+  - src: ./archive/THIRD-PARTY.md
+    dst: /usr/share/doc/tokengauge/THIRD-PARTY.md
+    file_info:
+      mode: 0644
+  - src: ./archive/LICENSE
+    dst: /usr/share/doc/tokengauge/copyright
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: ./archive/LICENSE-MIT
+    dst: /usr/share/doc/tokengauge/LICENSE-MIT
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: ./archive/LICENSE-WTFPL
+    dst: /usr/share/doc/tokengauge/LICENSE-WTFPL
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: ./archive/LICENSE
+    dst: /usr/share/licenses/tokengauge/LICENSE
+    packager: rpm
+    file_info:
+      mode: 0644
+  - src: ./archive/LICENSE-MIT
+    dst: /usr/share/licenses/tokengauge/LICENSE-MIT
+    packager: rpm
+    file_info:
+      mode: 0644
+  - src: ./archive/LICENSE-WTFPL
+    dst: /usr/share/licenses/tokengauge/LICENSE-WTFPL
+    packager: rpm
+    file_info:
+      mode: 0644

@@ -38,6 +38,10 @@ fn derived(cache_file: &Path) -> Vec<(&'static str, PathBuf)> {
             "backfill marker",
             statefiles::backfill_marker_path(cache_file),
         ),
+        (
+            "backfill retry",
+            statefiles::backfill_retry_path(cache_file),
+        ),
         ("price table", pricing::price_cache_path(cache_file)),
         ("fleet store", sync::store::store_path(cache_file)),
         ("fleet store lock", sync::store::lock_path(cache_file)),
@@ -149,6 +153,7 @@ fn the_names_on_disk_are_the_names_users_already_have() {
             "tokengauge-update.json",
             "tokengauge-notify-state.json",
             "tokengauge-backfilled",
+            "tokengauge-backfill-retry",
             "tokengauge-prices.json",
             "tokengauge-fleet.json",
             "tokengauge-fleet.lock",

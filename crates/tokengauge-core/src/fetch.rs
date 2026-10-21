@@ -444,7 +444,7 @@ fn native_costs(
     // Once, before the first fetch leaves the store holding a fortnight: read
     // back as far as the store can hold, so the first history chart is worth
     // opening instead of a week of bars on an empty year.
-    if !crate::statefiles::backfill_done(&config.cache_file) {
+    if crate::statefiles::backfill_due(&config.cache_file, chrono::Utc::now()) {
         sync::backfill(config, today);
     }
 

@@ -152,18 +152,8 @@ pub struct BackfillOutcome {
 /// last autumn on the chart the first time it draws one.
 ///
 /// Slow by construction - see [`crate::cost::read_history`] - so it is called
-/// behind [`crate::statefiles::backfill_done`] and never on a poll.
+/// behind [`crate::statefiles::backfill_due`] and never on a poll.
 pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome {
-    // Checked before the deep read, which is the expensive half: while any
-    // transcript directory cannot be read, nothing is read and the marker is
-    // left off, so the next fetch asks again for the price of a directory walk.
-    if let Some(error) = gaps_error(&crate::cost::Roots::discover().unreadable()) {
-        return BackfillOutcome {
-            events: 0,
-            since: today,
-            error: Some(error),
-        };
-    }
     let crate::cost::TranscriptRead {
         events,
         since,
@@ -175,8 +165,9 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
 
     let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, mut error) = store::load(&config.cache_file);
-    // A gap that opened during the read: what was read is merged, which loses
-    // nothing, and the marker stays off so the backfill runs again whole.
+    // A read with gaps: what was read is merged, which loses nothing, and the
+    // marker stays off so the backfill runs again whole - an hour on, not on
+    // the next fetch, so a gap that lasts costs one deep read an hour.
     let gap = gaps_error(&gaps);
     match &gap {
         None => store.backfill_local(&device, window_hour(since), &events, now),
@@ -192,7 +183,9 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
     // spent. A read with gaps is not the work landing either.
     match store::save(&config.cache_file, &store) {
         Ok(()) if gap.is_none() => crate::statefiles::mark_backfilled(&config.cache_file),
-        Ok(()) => {}
+        Ok(()) => {
+            crate::statefiles::defer_backfill(&config.cache_file, now + chrono::Duration::hours(1))
+        }
         Err(e) => {
             error.get_or_insert(format!("{e:#}"));
         }

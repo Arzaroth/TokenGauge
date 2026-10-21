@@ -259,7 +259,7 @@ pub fn read_window(today: NaiveDate) -> TranscriptRead {
 /// ever reads back to the start of the month, which would leave a new store
 /// holding a fortnight no matter how much history the CLIs actually kept.
 ///
-/// Run once, behind [`crate::statefiles::backfill_done`]. Never on a poll.
+/// Run once, behind [`crate::statefiles::backfill_due`]. Never on a poll.
 pub fn read_history(today: NaiveDate) -> TranscriptRead {
     let since = today
         .checked_sub_days(Days::new(crate::sync::STORE_RETENTION_DAYS as u64))
@@ -338,31 +338,6 @@ impl Roots {
         out.extend(self.codex.iter().cloned());
         out.extend(self.kimi.iter().cloned());
         out.extend(self.grok.iter().cloned());
-        out
-    }
-
-    /// Directories under the roots that are there and could not be read. A
-    /// read skips them as if empty: `jsonl_files` passes over a directory it
-    /// cannot open. Walked to the bottom, since a locked project or session
-    /// folder costs its files as surely as a locked root. A root that does not
-    /// exist is a CLI never used, and reads as empty truthfully.
-    pub fn unreadable(&self) -> Vec<PathBuf> {
-        let mut out = Vec::new();
-        let mut stack = self.all();
-        while let Some(dir) = stack.pop() {
-            match std::fs::read_dir(&dir) {
-                Ok(entries) => stack.extend(
-                    entries
-                        .flatten()
-                        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-                        .map(|entry| entry.path()),
-                ),
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => out.push(dir),
-                Err(_) => {}
-            }
-        }
-        out.sort();
-        out.dedup();
         out
     }
 }
@@ -748,22 +723,19 @@ mod tests {
         if std::fs::read_dir(&locked).is_ok() {
             return;
         }
+        let since = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
         let roots = Roots {
             claude: vec![locked.clone(), base.join("missing")],
-            codex: vec![base.clone()],
             ..Roots::default()
         };
-        assert_eq!(roots.unreadable(), vec![locked.clone()]);
+        assert_eq!(read_checked(&roots, since).gaps, vec![locked.clone()]);
         // Below a readable root counts as much as a root: its files are
         // skipped the same way.
         let nested = Roots {
             codex: vec![base.clone()],
             ..Roots::default()
         };
-        assert_eq!(nested.unreadable(), vec![locked.clone()]);
-        // The read itself reports it, from its own walk.
-        let read = read_checked(&nested, NaiveDate::from_ymd_opt(2020, 1, 1).unwrap());
-        assert_eq!(read.gaps, vec![locked.clone()]);
+        assert_eq!(read_checked(&nested, since).gaps, vec![locked.clone()]);
     }
 
     /// Two machines on different builds have to produce the same day

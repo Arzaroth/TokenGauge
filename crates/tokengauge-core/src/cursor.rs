@@ -5,11 +5,15 @@
 //! session cookie rather than a key - and the raw material for that cookie is
 //! already on disk, put there by Cursor itself.
 //!
-//! **Two sources, in this order:**
+//! **The sources, in this order:**
 //!
-//! 1. `~/.config/cursor/auth.json` - plain JSON, written by the `cursor-agent`
-//!    CLI. Read first because it costs nothing: a file and a JSON parse.
-//! 2. `.../Cursor/User/globalStorage/state.vscdb` - the IDE's own SQLite
+//! 1. `~/.config/cursor/auth.json` (`~/.cursor/auth.json` on macOS) - plain
+//!    JSON, written by the `cursor-agent` CLI. Read first because it costs
+//!    nothing: a file and a JSON parse.
+//! 2. On macOS, the Keychain items `cursor-access-token` /
+//!    `cursor-refresh-token` under `cursor-user`, where the CLI normally keeps
+//!    its login instead of the file.
+//! 3. `.../Cursor/User/globalStorage/state.vscdb` - the IDE's own SQLite
 //!    state, under the key `cursorAuth/accessToken`. **Not read here.** It
 //!    holds the same token, but reaching it means a SQLite dependency, and
 //!    every dependency in this crate is justified in a comment as adding no
@@ -25,7 +29,7 @@
 //! percentages over one billing cycle, and an on-demand cap that is a
 //! [`CreditLimit`] rather than a window.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
@@ -55,15 +59,46 @@ fn env_clean(name: &str) -> Option<String> {
 }
 
 /// Where the `cursor-agent` CLI keeps its login. Cursor's own convention, not
-/// ours - the same directory the CLI writes its config into.
+/// ours, and only Linux and Windows follow the config-directory one: on macOS
+/// it is `~/.cursor`, not `~/Library/Application Support`.
 pub(crate) fn agent_auth_path() -> PathBuf {
     if let Some(dir) = env_clean("CURSOR_CONFIG_DIR") {
         return PathBuf::from(dir).join("auth.json");
     }
-    dirs::config_dir()
-        .unwrap_or_default()
-        .join("cursor")
-        .join("auth.json")
+    agent_auth_path_in(
+        &dirs::home_dir().unwrap_or_default(),
+        &dirs::config_dir().unwrap_or_default(),
+        cfg!(target_os = "macos"),
+    )
+}
+
+fn agent_auth_path_in(home: &Path, config: &Path, macos: bool) -> PathBuf {
+    if macos {
+        home.join(".cursor").join("auth.json")
+    } else {
+        config.join("cursor").join("auth.json")
+    }
+}
+
+/// On macOS the CLI normally keeps its login in the Keychain and writes no
+/// file at all.
+#[cfg(target_os = "macos")]
+fn keychain_login() -> Option<AgentAuth> {
+    let read = |service: &str| {
+        keyring::Entry::new(service, "cursor-user")
+            .ok()?
+            .get_password()
+            .ok()
+    };
+    Some(AgentAuth {
+        access_token: Some(read("cursor-access-token")?),
+        refresh_token: read("cursor-refresh-token"),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keychain_login() -> Option<AgentAuth> {
+    None
 }
 
 /// cursor-agent writes camelCase: `{"accessToken", "refreshToken", "apiKey"}`.
@@ -75,27 +110,43 @@ struct AgentAuth {
     refresh_token: Option<String>,
 }
 
-/// The session token: the environment first, then the file the CLI wrote.
+/// The session token and where it came from: the environment first, then the
+/// file the CLI wrote, then the Keychain.
 ///
 /// A present file says nothing about whether it holds a token - the lesson
 /// `claude.rs` records twice over - so an empty or tokenless file reads as
-/// "not signed in" rather than being handed on as a credential.
-pub(crate) fn access_token() -> Result<String> {
-    if let Some(token) = TOKEN_ENVS.iter().find_map(|name| env_clean(name)) {
-        return Ok(token);
+/// "not signed in" rather than being handed on as a credential, and does not
+/// shadow a Keychain login behind it.
+pub(crate) fn access_token() -> Result<(String, String)> {
+    if let Some((name, token)) = TOKEN_ENVS
+        .iter()
+        .find_map(|name| Some((name, env_clean(name)?)))
+    {
+        return Ok((token, format!("{name} set")));
     }
     let path = agent_auth_path();
-    let raw = std::fs::read_to_string(&path).map_err(|_| {
-        anyhow!("Cursor not signed in - run `cursor-agent` and log in, or set CURSOR_ACCESS_TOKEN")
-    })?;
-    let auth: AgentAuth = serde_json::from_str(&raw)
-        .with_context(|| format!("Cursor auth file was invalid: {}", path.display()))?;
-    auth.access_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("Cursor auth file holds no token - run `cursor-agent` to log in"))
+    let from_file = std::fs::read_to_string(&path).ok().map(|raw| {
+        serde_json::from_str::<AgentAuth>(&raw)
+            .with_context(|| format!("Cursor auth file was invalid: {}", path.display()))
+    });
+    if let Some(token) = from_file
+        .as_ref()
+        .and_then(|auth| clean(auth.as_ref().ok()?.access_token.clone()))
+    {
+        return Ok((token, path.display().to_string()));
+    }
+    if let Some(token) = keychain_login().and_then(|auth| clean(auth.access_token)) {
+        return Ok((token, "macOS Keychain".to_string()));
+    }
+    match from_file {
+        None => Err(anyhow!(
+            "Cursor not signed in - run `cursor-agent` and log in, or set CURSOR_ACCESS_TOKEN"
+        )),
+        Some(Err(e)) => Err(e),
+        Some(Ok(_)) => Err(anyhow!(
+            "Cursor auth file holds no token - run `cursor-agent` to log in"
+        )),
+    }
 }
 
 /// The user id in the token's `sub` claim, which reads `issuer|userId`.
@@ -326,7 +377,7 @@ fn to_payload(body: UsageSummary, now: DateTime<Utc>) -> Result<ProviderPayload>
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
-    let token = access_token()?;
+    let (token, _) = access_token()?;
     Ok(vec![usage_for(
         &token,
         timeout,
@@ -396,6 +447,8 @@ pub(crate) fn live_login() -> LiveLogin {
             .ok()
             .and_then(|raw| serde_json::from_str::<AgentAuth>(&raw).ok())
             .map(agent_tokens)
+            .filter(|tokens| tokens.access.is_some())
+            .or_else(|| keychain_login().map(agent_tokens))
             .unwrap_or_default(),
     };
     LiveLogin {
@@ -724,6 +777,22 @@ mod tests {
         assert_eq!(
             summary_url(Some(origin)).unwrap(),
             "https://proxy.test/api/usage-summary"
+        );
+    }
+
+    /// The CLI writes `~/.cursor/auth.json` on macOS; the config directory
+    /// there is `~/Library/Application Support`, where nothing is.
+    #[test]
+    fn the_cli_login_is_where_each_os_puts_it() {
+        let home = Path::new("/home/u");
+        let config = Path::new("/cfg");
+        assert_eq!(
+            agent_auth_path_in(home, config, true),
+            Path::new("/home/u/.cursor/auth.json")
+        );
+        assert_eq!(
+            agent_auth_path_in(home, config, false),
+            Path::new("/cfg/cursor/auth.json")
         );
     }
 }

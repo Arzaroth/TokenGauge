@@ -580,9 +580,9 @@ fn cursor_auth() -> AuthStatus {
         };
     }
     match crate::cursor::access_token() {
-        Ok(_) => AuthStatus {
+        Ok((_, source)) => AuthStatus {
             ok: true,
-            detail: crate::cursor::agent_auth_path().display().to_string(),
+            detail: source,
             hint: "",
         },
         Err(e) => AuthStatus {

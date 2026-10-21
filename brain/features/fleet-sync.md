@@ -48,8 +48,8 @@ with no frontend code:
   with a transport failure, an unreadable peer (foreign `key_id`, future schema)
   or a stale peer as `warn` / `critical`, because a total that is quietly too low
   is worse than one visibly missing. A transcript root that exists but cannot
-  be read is reported there too, and leaves this device's record as it was
-  rather than replacing it with nothing
+  be read is reported there too, and leaves that provider's record on this
+  device as it was
   ([../architecture/sync.md](../architecture/sync.md#the-fleet-store-is-the-durable-record)). A device whose `coversFromHour` starts after
   the period gets a dim `partial` badge in `tokens_by_device`.
 - A transport failure never blanks totals; it ages them: `warn` past three pull

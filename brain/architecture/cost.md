@@ -28,10 +28,11 @@ read behind the backfill (see [../features/spend-history.md](../features/spend-h
 never runs on a poll.
 
 `Roots::unreadable` lists the roots that exist and cannot be read (any
-`read_dir` error but `NotFound`). `jsonl_files` reads such a root as no files,
-and the fleet store, replacing a provider from the oldest event the other
-roots still found, would drop every day only it held, so the sync layer keeps
-this device's record instead ([sync.md](sync.md#the-fleet-store-is-the-durable-record)). A root that
+`read_dir` error but `NotFound`), each with the provider its reader files
+under. `jsonl_files` reads such a root as no files, and the fleet store,
+replacing a provider from the oldest event the other roots still found, would
+drop every day only it held, so the sync layer holds that provider's record
+instead ([sync.md](sync.md#the-fleet-store-is-the-durable-record)). A root that
 does not exist is a CLI never used and reads as empty.
 
 `ProviderMeta.natively_read` marks the providers with a reader (codex, claude,

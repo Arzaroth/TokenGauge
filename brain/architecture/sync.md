@@ -80,17 +80,19 @@ maintained on every fetch whether or not sync is on (the gate is in
   `tokengauge-fleet.lock` (`store::lock`) from load to save. The lock blocks
   while another writer holds it (the CLI says it is waiting); a filesystem
   that cannot lock at all leaves every writer unlocked alike.
-- **An unreadable transcript root skips that replace.** A root that exists but
-  cannot be read (`cost::Roots::unreadable`, passed to `sync::refresh` as
-  `unreadable`) reads as no events. With another root of the same provider
-  still readable, the replace would start at that root's oldest event and drop
-  every day only the unreadable one held. So this device's record is kept as
-  it was and the sync status carries the error, and the report counts that kept
-  record in place of the partial read (`SyncOutcome.local_held`: `events` then
-  carries this device's stored buckets, and `native_costs` drops its own read,
-  so nothing counts twice). `sync::backfill` returns the
-  same error without writing its marker, so it runs again once the tree can
-  be read.
+- **An unreadable transcript root holds its provider.** A root that exists but
+  cannot be read (`cost::Roots::unreadable`, each root with the provider its
+  reader files under, passed to `sync::refresh` as `unreadable`) reads as no
+  events. With another root of the same provider still readable, the replace
+  would start at that root's oldest event and drop every day only the
+  unreadable one held. So that provider is held: its events are left out of
+  the read, the per-provider replace leaves its buckets as they were, and the
+  report counts its stored record instead (`SyncOutcome.held`: `events`
+  carries those buckets and `native_costs` drops its own read of them, so
+  nothing counts twice). Every other provider is read and stored as usual,
+  and the sync status carries the error. `sync::backfill` holds the same
+  providers and still writes its marker, so its deep read never repeats on a
+  poll; `--backfill` reruns it once the root can be read.
 - Separate file from the snapshot on purpose: the snapshot is rewritten wholesale
   on every fetch; the store must not be.
 - **Store retention and wire retention differ.** The store keeps

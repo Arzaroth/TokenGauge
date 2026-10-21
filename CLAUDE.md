@@ -438,8 +438,9 @@ Three invariants are easy to regress:
 
 - **`HOURLY_RETENTION_DAYS` (35) must stay above the widest re-read (31) and at
   or above `WIRE_RETENTION_DAYS`.** `upsert_local` replaces buckets from `from`
-  on, so a rolled-up bucket at or after that mark would be landed beside rather
-  than replaced and the day would count twice. Both bounds are
+  on at the earliest (per provider, from its oldest event in the read), so a
+  rolled-up bucket at or after that mark would be landed beside rather than
+  replaced and the day would count twice. Both bounds are
   `const _: () = assert!(...)` beside the constant, not tests.
 - **A rolled-up day bucket sits at midday UTC.** At midnight `Hour::date_at`
   reads it as the previous date for every reader west of the meridian.

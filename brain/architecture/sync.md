@@ -67,12 +67,13 @@ contributions are both inputs, which makes self and peer one code path. It is
 maintained on every fetch whether or not sync is on (the gate is in
 `fetch.rs::native_costs`); sync gates only the cycle.
 
-- A transcript re-read **replaces** every self bucket from the read window's start
-  on (`FleetStore::upsert_local`) and leaves older ones untouched, so a poll never
-  double-counts. The deep re-read (`FleetStore::backfill_local`) replaces each
-  provider only from the oldest event its transcripts still hold, and moves a
-  floor that lands inside a rolled-up day to the next day: a day no transcript
-  mentions is unknown, not zero, and may hold rotated-away or adopted history.
+- A transcript re-read **replaces** self buckets provider by provider, from that
+  provider's oldest event in the read window (`FleetStore::upsert_local`), and
+  leaves older ones untouched, so a poll never double-counts. The deep re-read
+  (`FleetStore::backfill_local`) does the same from its 400-day reach. A floor
+  that lands inside a rolled-up day moves to the next day. A day no transcript
+  mentions is unknown, not zero, and may hold rotated-away or adopted history,
+  so `synthetic_events` counts the local buckets the read does not cover.
 - **One writer at a time.** Every writer loads the whole store and saves it
   back, so `refresh`, `backfill`, `forget` and `adopt` hold
   `tokengauge-fleet.lock` (`store::lock`) from load to save. The lock blocks
@@ -230,8 +231,10 @@ on the old entry would delete days that exist nowhere else. `--sync-adopt
 3. **Publish wide**: the local contribution with `STORE_RETENTION_DAYS` rather
    than `retention_days`, day buckets included, so peers receive the history and
    not only this machine. A failed publish deletes nothing.
-4. **Delete** the old object, then save. A failed delete is an error and leaves
-   the store unsaved; running the command again finishes it.
+4. **Save, then delete** the old object, so the only other copy never goes
+   first. A failed delete is an error; every later cycle deletes the leftover
+   object of a device this machine adopted (unless it has written since), so
+   the next one finishes the job.
 
 With `[sync] enabled = false` only the fold runs: a key and a transport left in
 the config are not used.

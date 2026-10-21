@@ -403,6 +403,29 @@ pub fn test_round_trip(config: &TokenGaugeConfig) -> Result<Vec<String>> {
 pub fn forget(config: &TokenGaugeConfig, wanted: &str) -> Result<String> {
     let (mut store, _) = store::load(&config.cache_file);
     let local = crate::device_identity(&config.cache_file).machine_id;
+    let id = resolve_device(&store, &local, wanted)?;
+
+    let label = store
+        .devices
+        .get(&id)
+        .map(|slice| slice.device.display().to_string())
+        .unwrap_or_else(|| id.clone());
+
+    // A delete that failed used to be swallowed, reporting success while the
+    // object stayed in storage and the device rejoined on the next cycle.
+    if let Some(key) = crypto::load_key(&config.cache_file)? {
+        let transport = transport::open(&config.sync)?;
+        let name = key.object_name(&id);
+        transport.delete(&name)?;
+        store.objects.remove(&name);
+    }
+    store.devices.remove(&id);
+    store::save(&config.cache_file, &store)?;
+    Ok(label)
+}
+
+/// The one non-local device `wanted` names, by id, label or hostname.
+fn resolve_device(store: &FleetStore, local: &str, wanted: &str) -> Result<String> {
     let matched: Vec<String> = store
         .devices
         .iter()
@@ -434,24 +457,7 @@ pub fn forget(config: &TokenGaugeConfig, wanted: &str) -> Result<String> {
         *id != local,
         "that is this machine; turn sync off in the config instead"
     );
-
-    let label = store
-        .devices
-        .get(id)
-        .map(|slice| slice.device.display().to_string())
-        .unwrap_or_else(|| id.clone());
-
-    // A delete that failed used to be swallowed, reporting success while the
-    // object stayed in storage and the device rejoined on the next cycle.
-    if let Some(key) = crypto::load_key(&config.cache_file)? {
-        let transport = transport::open(&config.sync)?;
-        let name = key.object_name(id);
-        transport.delete(&name)?;
-        store.objects.remove(&name);
-    }
-    store.devices.remove(id);
-    store::save(&config.cache_file, &store)?;
-    Ok(label)
+    Ok(id.clone())
 }
 
 #[cfg(test)]

@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/master/scripts/install.sh | bash
+#        ... | bash -s -- [--placement=left|right] [--no-daemon] [--no-tray] [--version vX.Y.Z]
+#
+# Installs a GitHub release (the latest unless --version names one), checked
+# against the SHA256SUMS published beside it.
 set -euo pipefail
 
 REPO="${TOKENGAUGE_REPO:-Arzaroth/TokenGauge}"
@@ -44,6 +49,66 @@ cleanup() {
 }
 trap cleanup EXIT
 
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+# Downloads the release archive for this machine, checked against the
+# release's SHA256SUMS, and unpacks it into $TMP_DIR. TOKENGAUGE_DOWNLOAD_BASE
+# points it at a directory of assets instead, which is how the release
+# workflow runs this script before anything is published.
+fetch_release() {
+  local base="${TOKENGAUGE_DOWNLOAD_BASE:-}" tag="$VERSION" latest pattern archive expected actual
+
+  if [[ -z "$tag" && -z "$base" ]]; then
+    # The redirect names the tag, without the API's 60 requests an hour.
+    latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")
+    tag="${latest##*/}"
+    if [[ "$tag" != v* ]]; then
+      fail "Failed to find latest release for $REPO"
+      exit 1
+    fi
+  fi
+  case "$base" in
+    "") base="https://github.com/$REPO/releases/download/$tag" ;;
+    /*) base="file://$base" ;;
+  esac
+
+  if ! curl -fsSL "$base/SHA256SUMS" -o "$TMP_DIR/SHA256SUMS"; then
+    fail "No SHA256SUMS in $base: releases before 0.47.0 do not publish one"
+    exit 1
+  fi
+  pattern="tokengauge-${tag:-v[0-9][^ ]*}-$asset_os-$asset_arch\.tar\.gz"
+  archive=$(sed -n "s/^[0-9a-f]*  \($pattern\)$/\1/p" "$TMP_DIR/SHA256SUMS")
+  if [[ -z "$archive" ]]; then
+    fail "No $asset_os-$asset_arch archive in $base"
+    exit 1
+  fi
+  if [[ $(wc -l <<<"$archive") -ne 1 ]]; then
+    fail "Several $asset_os-$asset_arch archives in $base: pick one with --version"
+    exit 1
+  fi
+
+  info "Downloading $archive"
+  curl -fsSL "$base/$archive" -o "$TMP_DIR/$archive"
+  expected=$(grep "  $archive\$" "$TMP_DIR/SHA256SUMS" | cut -d' ' -f1)
+  actual=$(sha256 "$TMP_DIR/$archive")
+  if [[ -z "$expected" || "$expected" != "$actual" ]]; then
+    fail "$archive does not match its SHA256SUMS entry"
+    exit 1
+  fi
+
+  tar -xzf "$TMP_DIR/$archive" -C "$TMP_DIR"
+  if ! "$TMP_DIR/tokengauge" --version >/dev/null 2>&1; then
+    fail "The downloaded tokengauge does not run on this system"
+    exit 1
+  fi
+}
+
 # Everything runs from here, called on the last line, so a download cut short
 # by the pipe runs nothing at all. Not indented: the heredocs below are
 # written out as they stand.
@@ -52,8 +117,18 @@ main() {
 PLACEMENT_OVERRIDE="${TOKENGAUGE_PLACEMENT:-}"
 INSTALL_DAEMON=true
 INSTALL_TRAY=true
+VERSION=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --version=*) VERSION="${1#*=}"; VERSION="v${VERSION#v}" ;;
+    --version)
+      if [[ $# -lt 2 ]]; then
+        fail "--version requires a tag (vX.Y.Z)"
+        exit 1
+      fi
+      VERSION="v${2#v}"
+      shift
+      ;;
     --placement=*) PLACEMENT_OVERRIDE="${1#*=}" ;;
     --placement)
       if [[ $# -lt 2 ]]; then
@@ -79,20 +154,6 @@ esac
 
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
 
-get_latest_tag() {
-  local repo="$1"
-  local api_json
-  info "Fetching latest release for $repo"
-  api_json=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest")
-
-  if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$api_json" | jq -r '.tag_name // empty'
-  else
-    # macOS before 15 ships no jq, and this is the only field needed.
-    printf '%s' "$api_json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1
-  fi
-}
-
 case "$(uname -s)" in
   Linux) asset_os="linux"; IS_MACOS=false ;;
   Darwin) asset_os="macos"; IS_MACOS=true ;;
@@ -106,19 +167,7 @@ case "$arch" in
   *) echo "Unsupported arch: $arch" >&2; exit 1 ;;
 esac
 
-latest=$(get_latest_tag "$REPO" | tail -n 1)
-if [[ -z "$latest" ]]; then
-  fail "Failed to find latest release for $REPO"
-  exit 1
-fi
-
-asset="tokengauge-$latest-$asset_os-$asset_arch.tar.gz"
-url="https://github.com/$REPO/releases/download/$latest/$asset"
-
-info "Downloading TokenGauge $latest"
-curl -fL "$url" -o "$TMP_DIR/$asset"
-
-tar -xzf "$TMP_DIR/$asset" -C "$TMP_DIR"
+fetch_release
 
 install -m 0755 "$TMP_DIR/tokengauge" "$INSTALL_DIR/tokengauge"
 # The binary was called tokengauge-waybar before 0.23.0. Keep the old name

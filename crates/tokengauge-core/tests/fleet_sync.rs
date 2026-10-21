@@ -960,3 +960,28 @@ fn an_adopted_day_inside_the_read_window_survives_a_refresh() {
         );
     }
 }
+
+/// An adoption whose delete failed leaves the retired object behind; the next
+/// cycle has to finish the job rather than count the device again.
+#[test]
+fn a_retired_object_left_behind_is_deleted_by_the_next_cycle() {
+    let (root, config, key) = adopt_fixture("adopt-leftover");
+    let leftover = root.join("shared/v1").join(key.object_name(OLD_ID));
+    let bytes = std::fs::read(&leftover).expect("retired object");
+
+    sync::adopt(&config, OLD_ID, || {}).expect("adopted");
+    std::fs::write(&leftover, bytes).expect("the delete never happened");
+
+    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let outcome = sync::refresh(&config, &[event(0, 10, 1)], since);
+    assert!(
+        !leftover.exists(),
+        "the cycle deletes what the adoption could not"
+    );
+    assert_eq!(outcome.status.devices.len(), 1);
+    assert_eq!(
+        outcome.events.iter().map(|e| e.tokens.output).sum::<u64>(),
+        500,
+        "and the retired history is counted once"
+    );
+}

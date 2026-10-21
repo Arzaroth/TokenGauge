@@ -62,16 +62,16 @@ The installer detects `systemd --user`, drops in a `tokengauge-daemon.service`, 
 
 The same command installs on macOS, where it sets up the menu bar instead of Waybar. See [macOS](#macos).
 
-The installer downloads the latest release and refuses an archive that does not match the release's `SHA256SUMS`. `bash -s -- --version v0.48.0` installs a given release instead (0.48.0 is the first to publish the checksums).
+The installer downloads the latest release and refuses an archive that does not match the release's `SHA256SUMS`. `bash -s -- --version v0.49.0` installs a given release instead (0.49.0 is the first to publish the checksums).
 
 ### Packages
 
 Every release also carries a `.deb`, an `.rpm` and an Arch `tokengauge-bin` package for x86_64 and aarch64, built from the same archive `--update` installs. They run on Debian 12, Ubuntu 22.04, Fedora and Arch, and later releases of each:
 
 ```bash
-sudo apt install ./tokengauge_0.48.0_amd64.deb        # Debian, Ubuntu
-sudo dnf install ./tokengauge-0.48.0-1.x86_64.rpm     # Fedora
-sudo pacman -U tokengauge-bin-0.48.0-1-x86_64.pkg.tar.zst
+sudo apt install ./tokengauge_0.49.0_amd64.deb        # Debian, Ubuntu
+sudo dnf install ./tokengauge-0.49.0-1.x86_64.rpm     # Fedora
+sudo pacman -U tokengauge-bin-0.49.0-1-x86_64.pkg.tar.zst
 systemctl --user enable --now tokengauge-daemon.service
 ```
 

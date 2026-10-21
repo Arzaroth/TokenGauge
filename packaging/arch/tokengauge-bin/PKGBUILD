@@ -5,7 +5,7 @@
 # sha256sums filled in, and the packages it builds from it.
 
 pkgname=tokengauge-bin
-pkgver=0.47.0
+pkgver=0.48.0
 pkgrel=1
 pkgdesc="Token usage, costs and limits for AI coding assistants in Waybar, KDE Plasma, GNOME Shell and a TUI (release binary)"
 arch=('x86_64' 'aarch64')

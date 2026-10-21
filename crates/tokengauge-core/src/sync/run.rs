@@ -11,6 +11,7 @@ use crate::TokenGaugeConfig;
 use crate::cost::UsageEvent;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
+use std::path::PathBuf;
 
 /// What a cycle produced.
 pub struct SyncOutcome {
@@ -33,11 +34,14 @@ pub struct SyncOutcome {
 ///
 /// Never fails: a transport that is down leaves the durable store in place and
 /// the failure in the status, because blanking the totals would be a lie in the
-/// other direction.
+/// other direction. A transcript root that could not be read is the same lie
+/// one level down - its events are missing, not zero - so with any of
+/// `unreadable` the store keeps this device's record as it was.
 pub fn refresh(
     config: &TokenGaugeConfig,
     local_events: &[UsageEvent],
     since: NaiveDate,
+    unreadable: &[PathBuf],
 ) -> SyncOutcome {
     let mut status = SyncStatus {
         enabled: config.sync.enabled,
@@ -54,7 +58,12 @@ pub fn refresh(
     let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, store_error) = store::load(&config.cache_file);
     status.error = store_error;
-    store.upsert_local(&device, from, local_events, now.timestamp_millis());
+    match unreadable_error(unreadable) {
+        None => store.upsert_local(&device, from, local_events, now.timestamp_millis()),
+        Some(e) => {
+            status.error.get_or_insert(e);
+        }
+    }
 
     if config.sync.enabled
         && let Err(e) = cycle(config, &device, &mut store, now, &mut status)
@@ -130,6 +139,14 @@ pub struct BackfillOutcome {
 /// behind [`crate::statefiles::backfill_done`] and never on a poll.
 pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome {
     let (events, since) = crate::cost::read_history(today);
+    // Unmarked, so a later fetch tries again once the tree can be read.
+    if let Some(error) = unreadable_error(&crate::cost::Roots::discover().unreadable()) {
+        return BackfillOutcome {
+            events: 0,
+            since,
+            error: Some(error),
+        };
+    }
     let now = Utc::now();
     let identity = crate::device_identity(&config.cache_file);
     let device = DeviceRecord::new(&identity, &config.sync.label);
@@ -157,6 +174,14 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
         since,
         error,
     }
+}
+
+fn unreadable_error(unreadable: &[PathBuf]) -> Option<String> {
+    let first = unreadable.first()?;
+    Some(format!(
+        "transcripts under {} could not be read; this machine's history is kept as it was",
+        first.display()
+    ))
 }
 
 fn cycle(

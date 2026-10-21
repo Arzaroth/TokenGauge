@@ -117,7 +117,7 @@ fn a_fleet_of_two_meets_through_a_folder() {
 
     let local = vec![event(2, 100, 1), event(30, 200, 2)];
 
-    let outcome = sync::refresh(&config, &local, since);
+    let outcome = sync::refresh(&config, &local, since, &[]);
     let (peers, status) = (outcome.events, outcome.status);
     assert_eq!(status.error, None, "first cycle should not error");
     assert!(status.published, "a first contribution is always new");
@@ -125,14 +125,14 @@ fn a_fleet_of_two_meets_through_a_folder() {
     assert_eq!(objects(&root).len(), 1, "this machine published one object");
     assert_eq!(status.devices.len(), 1);
 
-    let status = sync::refresh(&config, &local, since).status;
+    let status = sync::refresh(&config, &local, since, &[]).status;
     assert!(
         !status.published,
         "unchanged data must not churn the storage"
     );
 
     publish_peer(&root, &key, 4242);
-    let outcome = sync::refresh(&config, &local, since);
+    let outcome = sync::refresh(&config, &local, since, &[]);
     let (peers, status) = (outcome.events, outcome.status);
     assert_eq!(status.error, None);
     assert_eq!(status.devices.len(), 2, "the peer joined the fleet");
@@ -159,15 +159,15 @@ fn a_new_target_gets_this_machine_even_when_the_data_has_not_changed() {
     sync::store_key(&config.cache_file, &key, true).expect("key");
     let local = vec![event(2, 100, 1)];
 
-    assert!(sync::refresh(&config, &local, since).status.published);
+    assert!(sync::refresh(&config, &local, since, &[]).status.published);
     assert!(
-        !sync::refresh(&config, &local, since).status.published,
+        !sync::refresh(&config, &local, since, &[]).status.published,
         "unchanged data to the same place must not churn"
     );
 
     let moved = root.join("moved");
     config.sync.dir.path = moved.clone();
-    let status = sync::refresh(&config, &local, since).status;
+    let status = sync::refresh(&config, &local, since, &[]).status;
     assert!(status.published, "a new folder has to receive this machine");
     assert_eq!(objects_in(&moved).len(), 1);
 
@@ -175,7 +175,7 @@ fn a_new_target_gets_this_machine_even_when_the_data_has_not_changed() {
     // different one and has to be written even though the tokens are identical.
     let rekeyed = FleetKey::generate();
     sync::store_key(&config.cache_file, &rekeyed, true).expect("re-key");
-    let status = sync::refresh(&config, &local, since).status;
+    let status = sync::refresh(&config, &local, since, &[]).status;
     assert!(status.published, "a re-keyed fleet writes a new object");
     assert_eq!(
         objects_in(&moved),
@@ -200,7 +200,7 @@ fn re_keying_leaves_the_old_fleet_behind_but_keeps_this_machine() {
     let local = vec![event(2, 100, 1)];
 
     publish_peer(&root, &key, 4242);
-    let outcome = sync::refresh(&config, &local, since);
+    let outcome = sync::refresh(&config, &local, since, &[]);
     assert_eq!(outcome.status.devices.len(), 2, "the peer joined");
     assert_eq!(
         outcome.events.iter().map(|e| e.tokens.output).sum::<u64>(),
@@ -208,7 +208,7 @@ fn re_keying_leaves_the_old_fleet_behind_but_keeps_this_machine() {
     );
 
     sync::store_key(&config.cache_file, &FleetKey::generate(), true).expect("re-key");
-    let outcome = sync::refresh(&config, &local, since);
+    let outcome = sync::refresh(&config, &local, since, &[]);
 
     assert_eq!(outcome.status.dropped, vec!["laptop".to_string()]);
     assert_eq!(
@@ -243,7 +243,7 @@ fn an_object_for_another_fleet_is_named_and_not_retried() {
     sync::store_key(&config.cache_file, &mine, true).expect("key");
     publish_peer(&root, &FleetKey::generate(), 999);
 
-    let outcome = sync::refresh(&config, &[event(1, 10, 1)], since);
+    let outcome = sync::refresh(&config, &[event(1, 10, 1)], since, &[]);
     let (peers, status) = (outcome.events, outcome.status);
     assert!(
         peers.is_empty(),
@@ -257,7 +257,7 @@ fn an_object_for_another_fleet_is_named_and_not_retried() {
     );
 
     // Unchanged on the next cycle: no re-download, but the warning stands.
-    let status = sync::refresh(&config, &[event(1, 10, 1)], since).status;
+    let status = sync::refresh(&config, &[event(1, 10, 1)], since, &[]).status;
     assert_eq!(
         status.skipped.len(),
         1,
@@ -286,7 +286,7 @@ fn one_unusable_object_does_not_cost_the_other_peers_their_cycle() {
     )
     .expect("write junk");
 
-    let outcome = sync::refresh(&config, &[event(1, 10, 1)], since);
+    let outcome = sync::refresh(&config, &[event(1, 10, 1)], since, &[]);
 
     assert_eq!(outcome.status.error, None, "the cycle must not abort");
     assert_eq!(
@@ -315,7 +315,7 @@ fn forget_matches_a_machine_the_way_a_person_names_it() {
     let key = FleetKey::generate();
     sync::store_key(&config.cache_file, &key, true).expect("key");
     publish_peer(&root, &key, 500);
-    sync::refresh(&config, &[event(1, 10, 1)], since);
+    sync::refresh(&config, &[event(1, 10, 1)], since, &[]);
 
     assert!(
         sync::forget(&config, "nobody", || {}).is_err(),
@@ -335,7 +335,7 @@ fn forget_matches_a_machine_the_way_a_person_names_it() {
         "the peer's object must go, or it rejoins next cycle"
     );
 
-    let outcome = sync::refresh(&config, &[event(1, 10, 1)], since);
+    let outcome = sync::refresh(&config, &[event(1, 10, 1)], since, &[]);
     assert_eq!(outcome.status.devices.len(), 1);
     assert!(outcome.events.is_empty());
 }
@@ -349,7 +349,7 @@ fn absorbing_the_same_contribution_twice_does_not_double_it() {
     sync::store_key(&config.cache_file, &key, true).expect("key");
     publish_peer(&root, &key, 700);
 
-    let first = sync::refresh(&config, &[], since);
+    let first = sync::refresh(&config, &[], since, &[]);
     assert_eq!(
         first.events.iter().map(|e| e.tokens.output).sum::<u64>(),
         700
@@ -359,7 +359,7 @@ fn absorbing_the_same_contribution_twice_does_not_double_it() {
     // replace what we hold, never add to it. This is the failure class the
     // whole feature exists to prevent.
     publish_peer(&root, &key, 700);
-    let again = sync::refresh(&config, &[], since);
+    let again = sync::refresh(&config, &[], since, &[]);
     assert_eq!(
         again.events.iter().map(|e| e.tokens.output).sum::<u64>(),
         700,
@@ -380,7 +380,7 @@ fn sync_that_is_off_keeps_the_store_and_touches_no_transport() {
         .with_timezone(&chrono::Local)
         .date_naive();
 
-    let outcome = sync::refresh(&config, &[event(1, 10, 1)], since);
+    let outcome = sync::refresh(&config, &[event(1, 10, 1)], since, &[]);
     assert!(
         outcome.events.is_empty(),
         "there are no peers to take events from"
@@ -415,7 +415,7 @@ fn a_missing_fleet_key_is_an_error_the_user_can_act_on() {
     let config = config(&root);
     let since = Utc::now().with_timezone(&chrono::Local).date_naive();
 
-    let status = sync::refresh(&config, &[event(1, 10, 1)], since).status;
+    let status = sync::refresh(&config, &[event(1, 10, 1)], since, &[]).status;
     let error = status.error.expect("a fleet with no key cannot sync");
     assert!(error.contains("--sync-init"), "{error}");
 }
@@ -455,7 +455,7 @@ fn a_peers_buckets_reach_the_panel_rows() {
     // month and drops out of the by_device split, and then neither machine
     // appears.
     let local = vec![event(0, 1000, 1)];
-    let outcome = sync::refresh(&config, &local, since);
+    let outcome = sync::refresh(&config, &local, since, &[]);
 
     let mut events = local.clone();
     events.extend(outcome.events);
@@ -539,7 +539,7 @@ fn a_provider_this_build_cannot_rate_is_reported_not_swallowed() {
     )
     .expect("write");
 
-    let outcome = sync::refresh(&config, &[], since);
+    let outcome = sync::refresh(&config, &[], since, &[]);
 
     assert!(
         outcome.events.is_empty(),
@@ -633,7 +633,7 @@ fn adopting_a_reinstalled_machine_keeps_its_history_and_leaves_the_fleet() {
     sync::store_key(&config.cache_file, &key, true).expect("key");
     let local = sync::local_device_id(&config);
 
-    let outcome = sync::refresh(&config, &[event(0, 10, 1)], since);
+    let outcome = sync::refresh(&config, &[event(0, 10, 1)], since, &[]);
     let hostname = outcome.status.devices[0].hostname.clone();
     publish_device(
         &root,
@@ -644,7 +644,7 @@ fn adopting_a_reinstalled_machine_keeps_its_history_and_leaves_the_fleet() {
         &[],
     );
     assert_eq!(
-        sync::refresh(&config, &[event(0, 10, 1)], since)
+        sync::refresh(&config, &[event(0, 10, 1)], since, &[])
             .status
             .devices
             .len(),
@@ -680,7 +680,7 @@ fn adopting_a_reinstalled_machine_keeps_its_history_and_leaves_the_fleet() {
         "peers receive the history past the wire retention, once"
     );
 
-    let outcome = sync::refresh(&config, &[event(0, 10, 1)], since);
+    let outcome = sync::refresh(&config, &[event(0, 10, 1)], since, &[]);
     assert_eq!(outcome.status.error, None);
     assert_eq!(outcome.status.devices.len(), 1);
     assert_eq!(
@@ -725,7 +725,10 @@ fn a_peer_folds_a_device_another_machine_adopted() {
         &[event(0, 10, 11)],
         &[],
     );
-    assert_eq!(sync::refresh(&config, &[], since).status.devices.len(), 3);
+    assert_eq!(
+        sync::refresh(&config, &[], since, &[]).status.devices.len(),
+        3
+    );
 
     // The other machine adopted while this one was away: its wide publish has
     // already been replaced by a regular one, and only the marker is left.
@@ -739,7 +742,7 @@ fn a_peer_folds_a_device_another_machine_adopted() {
     );
     remove_object(&root, &key, OLD_ID);
 
-    let outcome = sync::refresh(&config, &[], since);
+    let outcome = sync::refresh(&config, &[], since, &[]);
     assert_eq!(outcome.status.error, None);
     let ids: Vec<&str> = outcome
         .status
@@ -769,8 +772,12 @@ fn a_peer_whose_object_is_gone_leaves_this_machine_too() {
     let key = FleetKey::generate();
     sync::store_key(&config.cache_file, &key, true).expect("key");
     let local = vec![event(0, 10, 1)];
-    let devices =
-        |config: &TokenGaugeConfig| sync::refresh(config, &local, since).status.devices.len();
+    let devices = |config: &TokenGaugeConfig| {
+        sync::refresh(config, &local, since, &[])
+            .status
+            .devices
+            .len()
+    };
 
     publish_peer(&root, &key, 500);
     publish_device(
@@ -810,17 +817,20 @@ fn a_listing_without_our_own_object_drops_nobody() {
 
     publish_peer(&root, &key, 500);
     assert_eq!(
-        sync::refresh(&config, &local, since).status.devices.len(),
+        sync::refresh(&config, &local, since, &[])
+            .status
+            .devices
+            .len(),
         2
     );
 
     remove_object(&root, &key, PEER_ID);
     remove_object(&root, &key, &sync::local_device_id(&config));
-    let status = sync::refresh(&config, &local, since).status;
+    let status = sync::refresh(&config, &local, since, &[]).status;
     assert!(!status.published, "nothing changed, so nothing republished");
     assert_eq!(status.devices.len(), 2);
 
-    let status = sync::refresh(&config, &local, since).status;
+    let status = sync::refresh(&config, &local, since, &[]).status;
     assert!(
         status.published,
         "our missing object is put back, or peers would drop this machine"
@@ -838,7 +848,7 @@ fn a_folder_that_lost_every_peer_at_once_drops_nobody() {
 
     publish_peer(&root, &key, 500);
     assert_eq!(
-        sync::refresh(&config, &[event(0, 10, 1)], since)
+        sync::refresh(&config, &[event(0, 10, 1)], since, &[])
             .status
             .devices
             .len(),
@@ -848,7 +858,7 @@ fn a_folder_that_lost_every_peer_at_once_drops_nobody() {
     // The share is unmounted: the mount point is empty, and this cycle's
     // publish writes into it, so the listing holds our object and nothing else.
     std::fs::remove_dir_all(root.join("shared")).expect("unmount");
-    let status = sync::refresh(&config, &[event(0, 20, 2)], since).status;
+    let status = sync::refresh(&config, &[event(0, 20, 2)], since, &[]).status;
     assert!(status.published);
     assert_eq!(status.devices.len(), 2, "{:?}", status.devices);
 }
@@ -860,7 +870,7 @@ fn adopt_fixture(name: &str) -> (PathBuf, TokenGaugeConfig, FleetKey) {
     let since = Utc::now().with_timezone(&chrono::Local).date_naive();
     let key = FleetKey::generate();
     sync::store_key(&config.cache_file, &key, true).expect("key");
-    sync::refresh(&config, &[event(0, 10, 1)], since);
+    sync::refresh(&config, &[event(0, 10, 1)], since, &[]);
     publish_device(
         &root,
         &key,
@@ -869,7 +879,7 @@ fn adopt_fixture(name: &str) -> (PathBuf, TokenGaugeConfig, FleetKey) {
         &[event(40 * 24, 500, 9)],
         &[],
     );
-    sync::refresh(&config, &[event(0, 10, 1)], since);
+    sync::refresh(&config, &[event(0, 10, 1)], since, &[]);
     (root, config, key)
 }
 
@@ -937,7 +947,7 @@ fn an_adopted_day_inside_the_read_window_survives_a_refresh() {
     sync::store_key(&config.cache_file, &key, true).expect("key");
     let local = vec![event(0, 10, 1)];
 
-    sync::refresh(&config, &local, since);
+    sync::refresh(&config, &local, since, &[]);
     publish_device(
         &root,
         &key,
@@ -946,13 +956,13 @@ fn an_adopted_day_inside_the_read_window_survives_a_refresh() {
         &[event(5 * 24, 300, 9)],
         &[],
     );
-    sync::refresh(&config, &local, since);
+    sync::refresh(&config, &local, since, &[]);
 
     let adoption = sync::adopt(&config, OLD_ID, || {}).expect("adopted");
     assert_eq!(adoption.buckets, 1);
 
     for _ in 0..2 {
-        let outcome = sync::refresh(&config, &local, since);
+        let outcome = sync::refresh(&config, &local, since, &[]);
         assert_eq!(
             outcome.events.iter().map(|e| e.tokens.output).sum::<u64>(),
             300,
@@ -973,7 +983,7 @@ fn a_retired_object_left_behind_is_deleted_by_the_next_cycle() {
     std::fs::write(&leftover, bytes).expect("the delete never happened");
 
     let since = Utc::now().with_timezone(&chrono::Local).date_naive();
-    let outcome = sync::refresh(&config, &[event(0, 10, 1)], since);
+    let outcome = sync::refresh(&config, &[event(0, 10, 1)], since, &[]);
     assert!(
         !leftover.exists(),
         "the cycle deletes what the adoption could not"
@@ -983,5 +993,50 @@ fn a_retired_object_left_behind_is_deleted_by_the_next_cycle() {
         outcome.events.iter().map(|e| e.tokens.output).sum::<u64>(),
         500,
         "and the retired history is counted once"
+    );
+}
+
+/// CodexBar #4617: a transcript root that is there and cannot be read reads
+/// as no events. With another root of the same provider still readable, the
+/// read starts at that root's oldest event and the store replaced everything
+/// after it with what the readable root alone held.
+#[test]
+fn an_unreadable_transcript_root_keeps_the_history_it_had() {
+    let root = scratch("unreadable");
+    let config = TokenGaugeConfig {
+        cache_file: root.join("tokengauge-usage.json"),
+        ..TokenGaugeConfig::default()
+    };
+    let since = (Utc::now() - Duration::days(7))
+        .with_timezone(&chrono::Local)
+        .date_naive();
+    let output = |store: &sync::FleetStore| -> u64 {
+        store
+            .devices
+            .values()
+            .flat_map(|slice| &slice.buckets)
+            .map(|bucket| bucket.tokens.output)
+            .sum()
+    };
+
+    // Two roots: the readable one holds the oldest event, the other the rest.
+    let readable = event(40, 1, 1);
+    let both = [readable.clone(), event(30, 100, 2), event(2, 100, 3)];
+    assert_eq!(
+        output(&sync::refresh(&config, &both, since, &[]).store),
+        201
+    );
+
+    let unreadable = vec![root.join("projects")];
+    let blind = sync::refresh(&config, &[readable], since, &unreadable);
+    assert_eq!(output(&blind.store), 201, "the month must survive the gap");
+    assert!(
+        blind
+            .status
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("could not be read")),
+        "{:?}",
+        blind.status.error
     );
 }

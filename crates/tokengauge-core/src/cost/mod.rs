@@ -313,6 +313,19 @@ impl Roots {
         out.extend(self.grok.iter().cloned());
         out
     }
+
+    /// Roots that are there and could not be read. A read of them comes back
+    /// empty, which the fleet store would take as a month of nothing and
+    /// replace its own record with. A root that does not exist is a CLI never
+    /// used, and reads as empty truthfully.
+    pub fn unreadable(&self) -> Vec<PathBuf> {
+        self.all()
+            .into_iter()
+            .filter(|root| {
+                std::fs::read_dir(root).is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound)
+            })
+            .collect()
+    }
 }
 
 /// Read every transcript shape from explicit roots, oldest window bound first.
@@ -616,6 +629,29 @@ pub fn transcript_roots() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_root_that_is_there_and_cannot_be_read_is_unreadable() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = crate::statefiles::tests::cache_test_dir("unreadable-root");
+        let locked = base.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root reads anything, so the check means nothing there.
+        if std::fs::read_dir(&locked).is_ok() {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        let roots = Roots {
+            claude: vec![locked.clone(), base.join("missing")],
+            codex: vec![base.clone()],
+            ..Roots::default()
+        };
+        assert_eq!(roots.unreadable(), vec![locked.clone()]);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(&base).ok();
+    }
 
     /// Two machines on different builds have to produce the same day
     /// fingerprint, or the double-counting check goes quietly dead. A literal

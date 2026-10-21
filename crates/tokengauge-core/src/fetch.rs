@@ -449,7 +449,8 @@ fn native_costs(
     }
 
     let (mut events, since) = cost::read_window(today);
-    let outcome = sync::refresh(config, &events, since);
+    let unreadable = cost::Roots::discover().unreadable();
+    let outcome = sync::refresh(config, &events, since, &unreadable);
     events.extend(outcome.events);
 
     let (mut report, prices) = cost::rate_with_prices(&events, &config.cache_file, timeout, today);

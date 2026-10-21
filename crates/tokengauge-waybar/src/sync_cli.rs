@@ -105,13 +105,13 @@ fn test(config: &TokenGaugeConfig) -> Result<()> {
 }
 
 fn forget(config: &TokenGaugeConfig, device: &str) -> Result<()> {
-    let label = tokengauge_core::sync::forget(config, device)?;
+    let label = tokengauge_core::sync::forget(config, device, waiting)?;
     eprintln!("Dropped {label} from the fleet.");
     Ok(())
 }
 
 fn adopt(config: &TokenGaugeConfig, device: &str) -> Result<()> {
-    let adoption = tokengauge_core::sync::adopt(config, device)?;
+    let adoption = tokengauge_core::sync::adopt(config, device, waiting)?;
     let name = adoption.device.display();
     let id = &adoption.device.id;
     match adoption.range {
@@ -130,6 +130,10 @@ fn adopt(config: &TokenGaugeConfig, device: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn waiting() {
+    eprintln!("Waiting for the sync cycle in progress to finish...");
 }
 
 fn setup(config: &TokenGaugeConfig, config_path: &Path) -> Result<()> {

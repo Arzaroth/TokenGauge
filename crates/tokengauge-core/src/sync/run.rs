@@ -49,8 +49,9 @@ pub fn refresh(
     let identity = crate::device_identity(&config.cache_file);
     let device = DeviceRecord::new(&identity, &config.sync.label);
 
-    // Unlocked beats undrawn: a lock that cannot be taken costs only the race.
-    let _lock = store::lock(&config.cache_file).ok();
+    // Unlocked beats undrawn: a filesystem that cannot lock costs only the
+    // race, and costs it to every writer alike.
+    let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, store_error) = store::load(&config.cache_file);
     status.error = store_error;
     store.upsert_local(&device, from, local_events, now.timestamp_millis());
@@ -133,7 +134,7 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
     let identity = crate::device_identity(&config.cache_file);
     let device = DeviceRecord::new(&identity, &config.sync.label);
 
-    let _lock = store::lock(&config.cache_file).ok();
+    let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, mut error) = store::load(&config.cache_file);
     store.backfill_local(&device, window_hour(since), &events, now);
     store.compact(now, i64::from(config.sync.retention_days));
@@ -425,8 +426,8 @@ pub fn test_round_trip(config: &TokenGaugeConfig) -> Result<Vec<String>> {
 /// Drop a device from the fleet: delete its object and forget its buckets.
 ///
 /// Matched on device id or label, because nobody remembers a machine id.
-pub fn forget(config: &TokenGaugeConfig, wanted: &str) -> Result<String> {
-    let _lock = store::lock(&config.cache_file)?;
+pub fn forget(config: &TokenGaugeConfig, wanted: &str, waiting: impl FnOnce()) -> Result<String> {
+    let _lock = store::lock(&config.cache_file, waiting).ok();
     let (mut store, _) = store::load(&config.cache_file);
     let local = crate::device_identity(&config.cache_file).machine_id;
     let id = resolve_device(&store, &local, wanted)?;
@@ -458,8 +459,8 @@ pub fn forget(config: &TokenGaugeConfig, wanted: &str) -> Result<String> {
 /// store holds rather than the wire retention, so peers receive the history
 /// too. Only once that publish lands is the retired object deleted; a delete
 /// that fails is an error, and running the command again finishes the job.
-pub fn adopt(config: &TokenGaugeConfig, wanted: &str) -> Result<Adoption> {
-    let _lock = store::lock(&config.cache_file)?;
+pub fn adopt(config: &TokenGaugeConfig, wanted: &str, waiting: impl FnOnce()) -> Result<Adoption> {
+    let _lock = store::lock(&config.cache_file, waiting).ok();
     let (mut store, error) = store::load(&config.cache_file);
     if let Some(error) = error {
         anyhow::bail!("{error}");
@@ -474,7 +475,14 @@ pub fn adopt(config: &TokenGaugeConfig, wanted: &str) -> Result<Adoption> {
         .adopt(&id, &local, Utc::now().timestamp_millis())
         .context("the device could not be adopted")?;
 
-    if let Some(key) = crypto::load_key(&config.cache_file)? {
+    // With sync off the fold is local: a key and a transport left in the
+    // config are not an invitation to upload the whole store.
+    let key = if config.sync.enabled {
+        crypto::load_key(&config.cache_file)?
+    } else {
+        None
+    };
+    if let Some(key) = key {
         let transport = transport::open(&config.sync)?;
         let now = Utc::now();
         let own_name = key.object_name(&local);

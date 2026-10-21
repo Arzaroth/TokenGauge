@@ -317,13 +317,19 @@ fn forget_matches_a_machine_the_way_a_person_names_it() {
     publish_peer(&root, &key, 500);
     sync::refresh(&config, &[event(1, 10, 1)], since);
 
-    assert!(sync::forget(&config, "nobody").is_err(), "unknown name");
+    assert!(
+        sync::forget(&config, "nobody", || {}).is_err(),
+        "unknown name"
+    );
     let local = sync::local_device_id(&config);
-    let refused = sync::forget(&config, &local).expect_err("this machine");
+    let refused = sync::forget(&config, &local, || {}).expect_err("this machine");
     assert!(format!("{refused}").contains("this machine"), "{refused}");
 
     // label, id and hostname all name the same device to a person.
-    assert_eq!(sync::forget(&config, "laptop").expect("by label"), "laptop");
+    assert_eq!(
+        sync::forget(&config, "laptop", || {}).expect("by label"),
+        "laptop"
+    );
     assert!(
         !objects(&root).contains(&key.object_name(PEER_ID)),
         "the peer's object must go, or it rejoins next cycle"
@@ -645,7 +651,7 @@ fn adopting_a_reinstalled_machine_keeps_its_history_and_leaves_the_fleet() {
         2
     );
 
-    let ambiguous = sync::adopt(&config, &hostname).expect_err("both share the hostname");
+    let ambiguous = sync::adopt(&config, &hostname, || {}).expect_err("both share the hostname");
     assert!(
         format!("{ambiguous}").contains("more than one"),
         "{ambiguous}"
@@ -654,9 +660,9 @@ fn adopting_a_reinstalled_machine_keeps_its_history_and_leaves_the_fleet() {
         format!("{ambiguous}").contains(OLD_ID),
         "the ids are what tells the two apart: {ambiguous}"
     );
-    assert!(sync::adopt(&config, &local).is_err(), "this machine");
+    assert!(sync::adopt(&config, &local, || {}).is_err(), "this machine");
 
-    let adoption = sync::adopt(&config, OLD_ID).expect("adopted by id");
+    let adoption = sync::adopt(&config, OLD_ID, || {}).expect("adopted by id");
     assert_eq!(adoption.device.id, OLD_ID);
     assert_eq!(
         adoption.buckets, 1,

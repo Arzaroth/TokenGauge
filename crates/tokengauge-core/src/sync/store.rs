@@ -62,12 +62,14 @@ pub fn lock_path(cache_file: &Path) -> PathBuf {
 }
 
 /// Hold the store for one load-to-save, released when the handle drops.
+/// `waiting` runs first when another writer holds it, so a command that has to
+/// wait out a daemon cycle on a slow transport can say so rather than hang.
 ///
 /// Every writer reads the whole store, changes it and writes the whole store
 /// back, so two at once lose the first one's change: an adoption saved while
 /// the daemon was mid-cycle came back undone, with the retired object already
 /// deleted.
-pub fn lock(cache_file: &Path) -> Result<std::fs::File> {
+pub fn lock(cache_file: &Path, waiting: impl FnOnce()) -> Result<std::fs::File> {
     let path = lock_path(cache_file);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -79,8 +81,17 @@ pub fn lock(cache_file: &Path) -> Result<std::fs::File> {
         .write(true)
         .open(&path)
         .with_context(|| format!("could not open {}", path.display()))?;
-    file.lock()
-        .with_context(|| format!("could not lock {}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            waiting();
+            file.lock()
+                .with_context(|| format!("could not lock {}", path.display()))?;
+        }
+        Err(std::fs::TryLockError::Error(e)) => {
+            return Err(e).with_context(|| format!("could not lock {}", path.display()));
+        }
+    }
     Ok(file)
 }
 

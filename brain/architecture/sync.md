@@ -80,19 +80,22 @@ maintained on every fetch whether or not sync is on (the gate is in
   `tokengauge-fleet.lock` (`store::lock`) from load to save. The lock blocks
   while another writer holds it (the CLI says it is waiting); a filesystem
   that cannot lock at all leaves every writer unlocked alike.
-- **An unreadable transcript root holds its provider.** A root that exists but
-  cannot be read (`cost::Roots::unreadable`, each root with the provider its
-  reader files under, passed to `sync::refresh` as `unreadable`) reads as no
-  events. With another root of the same provider still readable, the replace
-  would start at that root's oldest event and drop every day only the
-  unreadable one held. So that provider is held: its events are left out of
-  the read, the per-provider replace leaves its buckets as they were, and the
-  report counts its stored record instead (`SyncOutcome.held`: `events`
-  carries those buckets and `native_costs` drops its own read of them, so
-  nothing counts twice). Every other provider is read and stored as usual,
-  and the sync status carries the error. `sync::backfill` holds the same
-  providers and still writes its marker, so its deep read never repeats on a
-  poll; `--backfill` reruns it once the root can be read.
+- **A short read is held.** A directory under the transcript roots that
+  exists and cannot be read (`cost::Roots::unreadable`, which walks the whole
+  tree, passed to `sync::refresh` as `unreadable`) is skipped by the readers as
+  if empty, and the replace would then drop every day only it held. Which
+  provider a directory feeds cannot be known from outside it (the Claude
+  reader files GLM and Kimi calls too), so in a cycle with anything unreadable
+  every provider whose read in the window comes in under this device's record
+  (`FleetStore::local_totals`) is held: its events are left out of the read,
+  the per-provider replace leaves its buckets as they were, and the report
+  counts its stored record instead (`SyncOutcome.held`: `events` carries
+  those buckets and `native_costs` drops its own read of them, so nothing
+  counts twice). Every other provider, including any with nothing on record
+  yet, is read and stored as usual, and the sync status carries the error.
+  `sync::backfill` checks before its deep read and, with anything unreadable,
+  reads and writes nothing and leaves its marker off, so the next fetch asks
+  again for the price of a directory walk.
 - Separate file from the snapshot on purpose: the snapshot is rewritten wholesale
   on every fetch; the store must not be.
 - **Store retention and wire retention differ.** The store keeps

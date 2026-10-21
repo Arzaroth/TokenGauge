@@ -63,7 +63,7 @@ struct QuotaResponse {
     #[serde(default)]
     data: Option<QuotaData>,
     /// Legacy shape put the limits at the top level.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::provider::lenient_opt_list")]
     limits: Option<Vec<Limit>>,
 }
 
@@ -79,7 +79,7 @@ struct QuotaData {
     plan_name: Option<String>,
     #[serde(default)]
     level: Option<Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::provider::lenient_opt_list")]
     limits: Option<Vec<Limit>>,
 }
 
@@ -403,6 +403,23 @@ mod tests {
         assert_eq!(tertiary.used_percent, Some(30));
         assert_eq!(tertiary.window_minutes, Some(300));
         assert_eq!(usage.login_method.as_deref(), Some("GLM Coding Plan"));
+    }
+
+    #[test]
+    fn a_malformed_limit_costs_only_itself() {
+        let body = resp(
+            r#"{
+                "code": 0,
+                "data": {
+                    "limits": [
+                        {"type": 3, "percentage": 99, "resetAt": 1893456000},
+                        {"type": "TOKENS_LIMIT", "percentage": 30, "unit": 3, "number": 5}
+                    ]
+                }
+            }"#,
+        );
+        let usage = to_payload(body, Utc::now()).unwrap().usage.unwrap();
+        assert_eq!(usage.tertiary.unwrap().used_percent, Some(30));
     }
 
     /// Plans weigh by their weekly credits, so a Max and a Lite are 14 to 1.

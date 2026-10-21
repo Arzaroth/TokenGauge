@@ -442,7 +442,7 @@ struct UsageResponse {
     seven_day_oauth_apps: Option<Win>,
     seven_day_opus: Option<Win>,
     seven_day_sonnet: Option<Win>,
-    #[serde(default, deserialize_with = "crate::provider::null_as_default")]
+    #[serde(default, deserialize_with = "crate::provider::lenient_list")]
     limits: Vec<Limit>,
     /// Routine aliases + unknown `seven_day_*` keys land here.
     #[serde(flatten)]
@@ -929,6 +929,33 @@ mod tests {
         assert!(body.limits.is_empty());
         let usage = to_payload(body, None, Utc::now()).unwrap().usage.unwrap();
         assert_eq!(usage.primary.unwrap().used_percent, Some(5));
+    }
+
+    /// CodexBar #4614: one entry of another shape failed the whole response,
+    /// and the row went stale over a limit it could have skipped.
+    #[test]
+    fn a_malformed_limit_costs_only_itself() {
+        let body = resp(
+            r#"{
+            "five_hour": {"utilization": 5.0, "resets_at": "2026-07-15T12:09:59Z"},
+            "limits": [
+              {"group":"weekly","kind":"weekly_scoped","percent":"82",
+               "resets_at":1784195999},
+              {"group":"weekly","kind":"weekly_scoped","percent":40.0,
+               "resets_at":"2026-07-16T09:59:59Z",
+               "scope":{"model":{"id":null,"display_name":"Fable"}}}
+            ]
+        }"#,
+        );
+        assert_eq!(body.limits.len(), 1);
+        let usage = to_payload(body, None, Utc::now()).unwrap().usage.unwrap();
+        assert_eq!(usage.primary.unwrap().used_percent, Some(5));
+        assert_eq!(usage.extra_rate_windows.len(), 1);
+    }
+
+    #[test]
+    fn a_limits_field_that_is_not_a_list_is_still_drift() {
+        assert!(serde_json::from_str::<UsageResponse>(r#"{"limits": "none"}"#).is_err());
     }
 
     /// The same trap in the credentials file. A hollow `scopes` must not cost

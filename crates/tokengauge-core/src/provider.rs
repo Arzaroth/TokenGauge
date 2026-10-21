@@ -121,6 +121,35 @@ where
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+/// A list whose entries are read one at a time, so a sibling of another shape
+/// costs only itself and not the response around it. `null` reads as empty;
+/// a non-list is still refused, as in [`null_as_default`].
+pub(crate) fn lenient_list<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Ok(lenient_opt_list(deserializer)?.unwrap_or_default())
+}
+
+/// [`lenient_list`] where an absent or `null` list stays distinct from an
+/// empty one.
+pub(crate) fn lenient_opt_list<'de, D, T>(deserializer: D) -> Result<Option<Vec<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    use serde::Deserialize;
+    Ok(
+        Option::<Vec<Value>>::deserialize(deserializer)?.map(|entries| {
+            entries
+                .into_iter()
+                .filter_map(|entry| serde_json::from_value(entry).ok())
+                .collect()
+        }),
+    )
+}
+
 /// A number out of a loosely-typed body, whether it arrived as a number or as
 /// a string.
 ///

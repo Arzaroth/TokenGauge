@@ -85,6 +85,8 @@ pub struct DeviceSlice {
 pub struct Adoption {
     pub device: DeviceRecord,
     pub buckets: usize,
+    /// Buckets the adopting device already held its own figures for.
+    pub left_out: usize,
     /// The UTC dates of the oldest and newest bucket moved, when any was.
     pub range: Option<(NaiveDate, NaiveDate)>,
 }
@@ -353,17 +355,20 @@ impl FleetStore {
     /// Fold a retired device's history into `into_id` and drop the retired
     /// slice.
     ///
-    /// Only what predates `into_id`'s own coverage moves: inside that window
-    /// its buckets are authoritative, and a retired copy of the same day would
-    /// count it twice. A rolled-up day straddling the edge stays behind with
-    /// the retired slice, because it can no longer be split at the hour.
+    /// Only what predates `into_id`'s oldest bucket moves: from there on its
+    /// own buckets are authoritative, and a retired copy of the same day would
+    /// count it twice. The edge is the data, not `covers_from`, which records
+    /// how far back a read *looked*: after a backfill it sits 400 days back
+    /// and would leave nothing to move. A rolled-up day straddling the edge
+    /// is left out with the overlap, because it can no longer be split at the
+    /// hour.
     pub fn adopt(&mut self, retired_id: &str, into_id: &str) -> Option<Adoption> {
         if retired_id == into_id || !self.devices.contains_key(into_id) {
             return None;
         }
         let retired = self.devices.remove(retired_id)?;
         let into = self.devices.get_mut(into_id)?;
-        let edge = into.covers_from;
+        let edge = into.buckets.iter().map(bucket_start).min();
         let older = |bucket: &Bucket| {
             edge.is_none_or(|edge| match bucket.granularity {
                 Granularity::Hour => bucket.hour < edge,
@@ -371,7 +376,8 @@ impl FleetStore {
             })
         };
 
-        let moved: Vec<Bucket> = retired.buckets.into_iter().filter(older).collect();
+        let (moved, left_out): (Vec<Bucket>, Vec<Bucket>) =
+            retired.buckets.into_iter().partition(older);
         let range = moved
             .iter()
             .map(|bucket| bucket.hour.utc_date())
@@ -401,6 +407,7 @@ impl FleetStore {
         Some(Adoption {
             device: retired.device,
             buckets: count,
+            left_out: left_out.len(),
             range,
         })
     }
@@ -898,6 +905,14 @@ impl FleetStore {
     }
 }
 
+/// The first hour a bucket spans.
+fn bucket_start(bucket: &Bucket) -> Hour {
+    match bucket.granularity {
+        Granularity::Hour => bucket.hour,
+        Granularity::Day => day_start(Some(bucket.hour.utc_date())),
+    }
+}
+
 /// The first hour of a UTC date.
 fn day_start(date: Option<NaiveDate>) -> Hour {
     let midnight = date
@@ -1094,8 +1109,12 @@ mod tests {
             2,
         );
 
+        // What a backfill leaves behind: coverage reaching far past the data.
+        store.devices.get_mut("new").expect("new slice").covers_from = Some(hour("2025-08-01T00"));
+
         let adoption = store.adopt("old", "new").expect("adopted");
         assert_eq!(adoption.buckets, 3);
+        assert_eq!(adoption.left_out, 3);
         assert_eq!(
             adoption.range,
             Some((
@@ -1110,7 +1129,7 @@ mod tests {
             "the new device's own window wins, and the straddling day stays out"
         );
         let new = &store.devices["new"];
-        assert_eq!(new.covers_from, Some(hour("2025-09-15T00")));
+        assert_eq!(new.covers_from, Some(hour("2025-08-01T00")));
         assert_eq!(new.adopted, vec!["old".to_string()]);
         let days: Vec<String> = new.days.iter().map(|d| d.date.to_string()).collect();
         assert_eq!(days, ["2026-09-29", "2026-09-30", "2026-10-12"]);

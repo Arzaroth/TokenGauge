@@ -123,6 +123,12 @@ fn adopt(config: &TokenGaugeConfig, device: &str) -> Result<()> {
             "Adopted {name} ({id}): it held nothing older than this machine's own history, and was dropped from the fleet."
         ),
     }
+    if adoption.left_out > 0 {
+        eprintln!(
+            "Left out {} bucket(s) from inside this machine's own history.",
+            adoption.left_out
+        );
+    }
     Ok(())
 }
 

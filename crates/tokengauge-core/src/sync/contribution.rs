@@ -135,7 +135,27 @@ pub struct Contribution {
     /// contribution, so a peer that was offline when the adoption happened
     /// still folds its own copy of them in.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub adopted: Vec<String>,
+    pub adopted: Vec<Adopted>,
+}
+
+/// One device another took over, and when.
+///
+/// The instant is what keeps a mistake recoverable: a device that publishes
+/// again after it was adopted - the wrong id picked, or the old id restored
+/// from a backup - is live, and folding it away on every cycle would erase
+/// its usage on every peer for good.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Adopted {
+    pub id: String,
+    pub at_ms: i64,
+}
+
+/// One entry per id, the latest adoption winning.
+pub(super) fn merge_adopted(into: &mut Vec<Adopted>, more: impl IntoIterator<Item = Adopted>) {
+    into.extend(more);
+    into.sort_by(|a, b| a.id.cmp(&b.id).then(b.at_ms.cmp(&a.at_ms)));
+    into.dedup_by(|later, kept| later.id == kept.id);
 }
 
 /// Fold events into `(hour, provider, model)` buckets, sorted so the serialised
@@ -226,8 +246,9 @@ pub fn content_hash(contribution: &Contribution) -> u64 {
     }
     // Only when present, so a device that adopted nothing hashes as before
     // and does not republish on upgrade.
-    for id in &contribution.adopted {
-        feed(&mut buf, id.as_bytes());
+    for adopted in &contribution.adopted {
+        feed(&mut buf, adopted.id.as_bytes());
+        feed(&mut buf, &adopted.at_ms.to_le_bytes());
     }
     digest_u64(&[&buf])
 }

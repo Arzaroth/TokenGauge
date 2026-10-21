@@ -20,7 +20,7 @@ pub mod store;
 pub mod transport;
 
 pub use contribution::{
-    Bucket, BucketKey, Contribution, DayDigest, DeviceRecord, Granularity, SCHEMA_VERSION,
+    Adopted, Bucket, BucketKey, Contribution, DayDigest, DeviceRecord, Granularity, SCHEMA_VERSION,
     WIRE_RETENTION_DAYS, bucketize, content_hash, day_digests, syncable,
 };
 pub use crypto::{FleetKey, OpenError, key_path, load_key, store_key};

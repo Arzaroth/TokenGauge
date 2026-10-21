@@ -11,8 +11,9 @@ use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::contribution::{
-    Bucket, Contribution, DayDigest, DeviceRecord, Granularity, SCHEMA_VERSION,
-    WIRE_RETENTION_DAYS, bucketize, day_digests, intern_provider, sort_key, syncable,
+    Adopted, Bucket, Contribution, DayDigest, DeviceRecord, Granularity, SCHEMA_VERSION,
+    WIRE_RETENTION_DAYS, bucketize, day_digests, intern_provider, merge_adopted, sort_key,
+    syncable,
 };
 use super::hour::Hour;
 use crate::cost::pricing::{PriceArchive, PriceTable, month_key};
@@ -77,7 +78,7 @@ pub struct DeviceSlice {
     pub days: Vec<DayDigest>,
     /// Devices whose history this one took over with [`FleetStore::adopt`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub adopted: Vec<String>,
+    pub adopted: Vec<Adopted>,
 }
 
 /// What [`FleetStore::adopt`] moved from the retired device.
@@ -362,7 +363,7 @@ impl FleetStore {
     /// and would leave nothing to move. A rolled-up day straddling the edge
     /// is left out with the overlap, because it can no longer be split at the
     /// hour.
-    pub fn adopt(&mut self, retired_id: &str, into_id: &str) -> Option<Adoption> {
+    pub fn adopt(&mut self, retired_id: &str, into_id: &str, now_ms: i64) -> Option<Adoption> {
         if retired_id == into_id || !self.devices.contains_key(into_id) {
             return None;
         }
@@ -399,10 +400,14 @@ impl FleetStore {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
-        into.adopted.push(retired_id.to_string());
-        into.adopted.extend(retired.adopted);
-        into.adopted.sort();
-        into.adopted.dedup();
+        merge_adopted(
+            &mut into.adopted,
+            std::iter::once(Adopted {
+                id: retired_id.to_string(),
+                at_ms: now_ms,
+            })
+            .chain(retired.adopted),
+        );
 
         Some(Adoption {
             device: retired.device,
@@ -437,18 +442,17 @@ impl FleetStore {
         slice.days.extend(contribution.days.iter().cloned());
         slice.days.sort_by_key(|day| day.date);
 
-        slice.adopted.extend(contribution.adopted.iter().cloned());
-        slice.adopted.sort();
-        slice.adopted.dedup();
+        merge_adopted(&mut slice.adopted, contribution.adopted.iter().cloned());
     }
 
     /// Carry out every adoption a device has announced, on our own copy of the
     /// retired device. Run on every cycle rather than once on receipt: a
     /// retired object that lingers in a lagging folder is absorbed again, and
     /// has to be folded away again. A peer naming this machine as retired is
-    /// never obeyed.
+    /// never obeyed, and neither is one naming a device that has written since
+    /// the adoption: that device is live.
     pub fn settle_adoptions(&mut self, local_id: &str) {
-        let claims: Vec<(String, String)> = self
+        let claims: Vec<(Adopted, String)> = self
             .devices
             .iter()
             .flat_map(|(into, slice)| {
@@ -459,8 +463,12 @@ impl FleetStore {
             })
             .collect();
         for (retired, into) in claims {
-            if retired != local_id {
-                self.adopt(&retired, &into);
+            let stale = self
+                .devices
+                .get(&retired.id)
+                .is_some_and(|slice| slice.updated_at_ms <= retired.at_ms);
+            if retired.id != local_id && stale {
+                self.adopt(&retired.id, &into, retired.at_ms);
             }
         }
     }
@@ -1112,7 +1120,7 @@ mod tests {
         // What a backfill leaves behind: coverage reaching far past the data.
         store.devices.get_mut("new").expect("new slice").covers_from = Some(hour("2025-08-01T00"));
 
-        let adoption = store.adopt("old", "new").expect("adopted");
+        let adoption = store.adopt("old", "new", 3).expect("adopted");
         assert_eq!(adoption.buckets, 3);
         assert_eq!(adoption.left_out, 3);
         assert_eq!(
@@ -1130,7 +1138,13 @@ mod tests {
         );
         let new = &store.devices["new"];
         assert_eq!(new.covers_from, Some(hour("2025-08-01T00")));
-        assert_eq!(new.adopted, vec!["old".to_string()]);
+        assert_eq!(
+            new.adopted,
+            vec![Adopted {
+                id: "old".into(),
+                at_ms: 3
+            }]
+        );
         let days: Vec<String> = new.days.iter().map(|d| d.date.to_string()).collect();
         assert_eq!(days, ["2026-09-29", "2026-09-30", "2026-10-12"]);
         assert_eq!(
@@ -1139,8 +1153,11 @@ mod tests {
             "the new device's digest for a shared day is the one kept"
         );
 
-        assert!(store.adopt("old", "new").is_none(), "nothing left to adopt");
-        assert!(store.adopt("new", "new").is_none());
+        assert!(
+            store.adopt("old", "new", 4).is_none(),
+            "nothing left to adopt"
+        );
+        assert!(store.adopt("new", "new", 4).is_none());
 
         let now = hour("2026-10-21T12").start();
         store.compact(now, WIRE_RETENTION_DAYS);
@@ -1154,6 +1171,36 @@ mod tests {
             16 + 1 + 2 + 64 + 128,
             "compacting an adopted slice moves tokens, it does not lose them"
         );
+    }
+
+    #[test]
+    fn an_adoption_is_settled_only_on_a_device_silent_since() {
+        let mut store = FleetStore::new();
+        for (id, at) in [("old", "2026-01-10T09"), ("new", "2026-03-10T09")] {
+            store.upsert_local(
+                &device(id),
+                hour(at),
+                &[event("claude", "opus", hour(at), 5, None)],
+                10,
+            );
+        }
+        store.devices.get_mut("new").expect("new").adopted = vec![Adopted {
+            id: "old".into(),
+            at_ms: 9,
+        }];
+        store.settle_adoptions("local");
+        assert!(
+            store.devices.contains_key("old"),
+            "old wrote after the adoption, so it is live and stays"
+        );
+
+        store.devices.get_mut("new").expect("new").adopted[0].at_ms = 10;
+        store.settle_adoptions("old");
+        assert!(store.devices.contains_key("old"), "never fold this machine");
+
+        store.settle_adoptions("local");
+        assert!(!store.devices.contains_key("old"));
+        assert_eq!(tokens_for(&store, "new"), 10);
     }
 
     #[test]

@@ -465,7 +465,7 @@ pub fn adopt(config: &TokenGaugeConfig, wanted: &str) -> Result<Adoption> {
         "this machine has recorded nothing yet; let one fetch run first"
     );
     let adoption = store
-        .adopt(&id, &local)
+        .adopt(&id, &local, Utc::now().timestamp_millis())
         .context("the device could not be adopted")?;
 
     if let Some(key) = crypto::load_key(&config.cache_file)? {

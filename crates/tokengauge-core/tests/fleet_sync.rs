@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use chrono::{Duration, Utc};
 use tokengauge_core::cost::{TokenCounts, UsageEvent};
 use tokengauge_core::sync::{self, FleetKey, SCHEMA_VERSION};
-use tokengauge_core::sync::{Contribution, DeviceRecord, Hour, bucketize};
+use tokengauge_core::sync::{Adopted, Contribution, DeviceRecord, Hour, bucketize};
 use tokengauge_core::{SyncConfig, SyncDirConfig, TokenGaugeConfig};
 
 const PEER_ID: &str = "0000feedfacecafe";
@@ -576,7 +576,13 @@ fn publish_device(
         providers: vec!["claude".into()],
         buckets: bucketize(events),
         days: Vec::new(),
-        adopted: adopted.iter().map(|id| id.to_string()).collect(),
+        adopted: adopted
+            .iter()
+            .map(|id| Adopted {
+                id: id.to_string(),
+                at_ms: Utc::now().timestamp_millis(),
+            })
+            .collect(),
     };
     let body = serde_json::to_vec(&contribution).expect("serialise");
     let dir = root.join("shared").join("v1");
@@ -597,6 +603,14 @@ fn published(root: &Path, key: &FleetKey, id: &str) -> Contribution {
     let name = key.object_name(id);
     let sealed = std::fs::read(root.join("shared").join("v1").join(&name)).expect("object");
     serde_json::from_slice(&key.open(&name, &sealed).expect("open")).expect("parse")
+}
+
+fn adopted_ids(contribution: &Contribution) -> Vec<&str> {
+    contribution
+        .adopted
+        .iter()
+        .map(|adopted| adopted.id.as_str())
+        .collect()
 }
 
 fn remove_object(root: &Path, key: &FleetKey, id: &str) {
@@ -652,7 +666,7 @@ fn adopting_a_reinstalled_machine_keeps_its_history_and_leaves_the_fleet() {
     assert!(!objects(&root).contains(&key.object_name(OLD_ID)));
 
     let wide = published(&root, &key, &local);
-    assert_eq!(wide.adopted, vec![OLD_ID.to_string()]);
+    assert_eq!(adopted_ids(&wide), [OLD_ID]);
     assert_eq!(
         wide.buckets.iter().map(|b| b.tokens.output).sum::<u64>(),
         510,
@@ -669,8 +683,8 @@ fn adopting_a_reinstalled_machine_keeps_its_history_and_leaves_the_fleet() {
     );
     let narrow = published(&root, &key, &local);
     assert_eq!(
-        narrow.adopted,
-        vec![OLD_ID.to_string()],
+        adopted_ids(&narrow),
+        [OLD_ID],
         "the marker stays, for peers that missed the wide publish"
     );
     assert_eq!(

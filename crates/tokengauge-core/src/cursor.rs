@@ -22,8 +22,9 @@
 //!
 //! Either way the token is a JWT whose `sub` claim is `<issuer>|<userId>`, and
 //! the cookie the dashboard sends is `userId%3A%3Atoken` - a literal,
-//! pre-encoded `::`. The endpoint also gates on browser-shaped headers, so
-//! `Origin`, `Referer` and a `User-Agent` go with it.
+//! pre-encoded `::`. The endpoint also sits behind a firewall that gates on
+//! browser-shaped headers, so `Origin`, `Referer`, a `User-Agent` and the
+//! client hints a browser sends beside it go with it.
 //!
 //! What comes back is unusually well-suited to the panel: three ready
 //! percentages over one billing cycle, and an on-demand cap that is a
@@ -51,6 +52,49 @@ const TOKEN_ENVS: &[&str] = &["CURSOR_ACCESS_TOKEN", "CURSOR_SESSION_TOKEN"];
 /// value, not a disguise: this *is* the dashboard's call, made by the user's
 /// own machine with the user's own session.
 const BROWSER_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
+
+/// The rest of what that browser sends. The endpoint sits behind Vercel's
+/// firewall, which negotiates client hints and refuses a client that sends a
+/// user agent and nothing else beside it, with a 403 and a valid cookie.
+const BROWSER_HEADERS: &[(&str, &str)] = &[
+    ("user-agent", BROWSER_UA),
+    ("accept", "application/json, text/plain, */*"),
+    ("accept-language", "en-US,en;q=0.9"),
+    (
+        "sec-ch-ua",
+        "\"Chromium\";v=\"140\", \"Not=A?Brand\";v=\"24\", \"Google Chrome\";v=\"140\"",
+    ),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", "\"Linux\""),
+    ("sec-fetch-dest", "empty"),
+    ("sec-fetch-mode", "cors"),
+    ("sec-fetch-site", "same-origin"),
+];
+
+fn dashboard_request(
+    request: reqwest::blocking::RequestBuilder,
+    origin: &str,
+    cookie: &str,
+) -> reqwest::blocking::RequestBuilder {
+    BROWSER_HEADERS.iter().fold(
+        request
+            .header("cookie", format!("WorkosCursorSessionToken={cookie}"))
+            .header("origin", origin)
+            .header("referer", format!("{origin}/dashboard")),
+        |request, (name, value)| request.header(*name, *value),
+    )
+}
+
+/// The firewall's refusal and a dead session are both a 403 here, so the
+/// shared "check your plan" reading would be wrong either way.
+fn check_cursor_status(status: reqwest::StatusCode, unauthorized_hint: &str) -> Result<()> {
+    if status == reqwest::StatusCode::FORBIDDEN {
+        return Err(anyhow!(
+            "Cursor refused the request - the session may have ended, or cursor.com's edge blocked it; {unauthorized_hint} if it persists"
+        ));
+    }
+    check_status(status, "Cursor", unauthorized_hint)
+}
 
 fn env_clean(name: &str) -> Option<String> {
     let value = std::env::var(name).ok()?;
@@ -398,17 +442,11 @@ fn usage_for(
     let url = summary_url(Some(origin))?;
     let client = http_client(timeout)?;
 
-    let resp = client
-        .get(&url)
-        .header("cookie", format!("WorkosCursorSessionToken={cookie}"))
-        .header("origin", origin)
-        .header("referer", format!("{origin}/dashboard"))
-        .header("user-agent", BROWSER_UA)
-        .header("accept", "application/json")
+    let resp = dashboard_request(client.get(&url), origin, &cookie)
         .send()
         .context("Cursor usage request failed")?;
 
-    check_status(resp.status(), "Cursor", unauthorized_hint)?;
+    check_cursor_status(resp.status(), unauthorized_hint)?;
 
     let text = resp.text().context("Cursor usage read failed")?;
     if text.trim().is_empty() {
@@ -794,5 +832,34 @@ mod tests {
             agent_auth_path_in(home, config, false),
             Path::new("/cfg/cursor/auth.json")
         );
+    }
+
+    /// A 403 from the edge is not a plan that lacks access, and the hint has
+    /// to say so.
+    #[test]
+    fn a_refusal_is_not_read_as_a_plan_problem() {
+        let err = check_cursor_status(reqwest::StatusCode::FORBIDDEN, "sign in again")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("edge"), "{err}");
+        assert!(!err.contains("plan"), "{err}");
+        assert!(check_cursor_status(reqwest::StatusCode::OK, "").is_ok());
+    }
+
+    /// Vercel's firewall reads the client hints as one set: a user agent and
+    /// a platform hint that disagree is the fingerprint it refuses.
+    #[test]
+    fn the_client_hints_describe_the_user_agent_they_ride_with() {
+        let header = |name: &str| {
+            BROWSER_HEADERS
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| *v)
+                .unwrap()
+        };
+        assert!(header("user-agent").contains("Linux"));
+        assert_eq!(header("sec-ch-ua-platform"), "\"Linux\"");
+        assert!(header("user-agent").contains("Chrome/140"));
+        assert!(header("sec-ch-ua").contains("v=\"140\""));
     }
 }

@@ -923,3 +923,40 @@ fn an_adoption_that_cannot_publish_deletes_nothing() {
         "the store is not saved over an adoption that did not land"
     );
 }
+
+/// A reinstall after the 1st leaves the start of the month to the old entry:
+/// the new machine reads the whole month and finds nothing there.
+#[test]
+fn an_adopted_day_inside_the_read_window_survives_a_refresh() {
+    let root = scratch("adopt-in-window");
+    let config = config(&root);
+    let since = (Utc::now() - Duration::days(10))
+        .with_timezone(&chrono::Local)
+        .date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+    let local = vec![event(0, 10, 1)];
+
+    sync::refresh(&config, &local, since);
+    publish_device(
+        &root,
+        &key,
+        record(OLD_ID, "box"),
+        60,
+        &[event(5 * 24, 300, 9)],
+        &[],
+    );
+    sync::refresh(&config, &local, since);
+
+    let adoption = sync::adopt(&config, OLD_ID, || {}).expect("adopted");
+    assert_eq!(adoption.buckets, 1);
+
+    for _ in 0..2 {
+        let outcome = sync::refresh(&config, &local, since);
+        assert_eq!(
+            outcome.events.iter().map(|e| e.tokens.output).sum::<u64>(),
+            300,
+            "the adopted day is counted, and kept, though the read window covers it"
+        );
+    }
+}

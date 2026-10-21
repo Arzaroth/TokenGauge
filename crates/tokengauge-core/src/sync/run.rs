@@ -130,7 +130,7 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
     let device = DeviceRecord::new(&identity, &config.sync.label);
 
     let (mut store, mut error) = store::load(&config.cache_file);
-    store.upsert_local(&device, window_hour(since), &events, now.timestamp_millis());
+    store.backfill_local(&device, window_hour(since), &events, now);
     store.compact(now, i64::from(config.sync.retention_days));
     store.prune(now);
     // The marker records that the work *landed*, not that it was attempted. A

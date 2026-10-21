@@ -309,6 +309,31 @@ impl FleetStore {
         slice.days.sort_by_key(|day| day.date);
     }
 
+    /// The deep re-read: [`Self::upsert_local`] from the oldest event the
+    /// transcripts still hold, with coverage reaching back to `reach`.
+    ///
+    /// Not from `reach` itself. A day no transcript mentions is unknown, not
+    /// zero - its file was rotated away, or it was adopted from a machine this
+    /// one replaced - and replacing from `reach` would erase every such day
+    /// with nothing.
+    pub fn backfill_local(
+        &mut self,
+        device: &DeviceRecord,
+        reach: Hour,
+        events: &[UsageEvent],
+        now: DateTime<Utc>,
+    ) {
+        let replace_from = events
+            .iter()
+            .map(|event| Hour::containing(event.at))
+            .min()
+            .map_or(Hour::containing(now), |first| first.max(reach));
+        self.upsert_local(device, replace_from, events, now.timestamp_millis());
+        if let Some(slice) = self.devices.get_mut(&device.id) {
+            slice.covers_from = slice.covers_from.map(|covers| covers.min(reach));
+        }
+    }
+
     /// Take a peer's contribution. Its covered range replaces what we hold;
     /// anything older we already have survives, because the wire is capped
     /// tighter than the store.
@@ -846,6 +871,38 @@ mod tests {
             "July survived, August replaced"
         );
         assert_eq!(store.devices["a"].covers_from, Some(hour("2026-07-01T00")));
+    }
+
+    #[test]
+    fn a_backfill_replaces_only_what_the_transcripts_still_hold() {
+        let mut store = FleetStore::new();
+        store.upsert_local(
+            &device("a"),
+            hour("2026-03-01T00"),
+            &[
+                event("claude", "opus", hour("2026-03-10T09"), 100, Some(1)),
+                event("claude", "opus", hour("2026-08-20T09"), 40, Some(2)),
+            ],
+            1,
+        );
+        let now = hour("2026-08-25T12").start();
+        let reach = hour("2025-08-01T00");
+
+        store.backfill_local(
+            &device("a"),
+            reach,
+            &[event("claude", "opus", hour("2026-08-20T09"), 55, Some(2))],
+            now,
+        );
+        assert_eq!(
+            tokens_for(&store, "a"),
+            155,
+            "March has no transcript left, so it survives; August is re-read"
+        );
+        assert_eq!(store.devices["a"].covers_from, Some(reach));
+
+        store.backfill_local(&device("a"), reach, &[], now);
+        assert_eq!(tokens_for(&store, "a"), 155, "finding nothing erases nothing");
     }
 
     #[test]

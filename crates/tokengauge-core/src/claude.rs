@@ -27,8 +27,8 @@ use serde_json::{Map, Value};
 use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::check_status;
 use crate::{
-    BankedResets, CredentialState, ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow,
-    http_client, pct_u8, slug,
+    BankedResets, CredentialState, CreditLimit, CreditLimitKind, Credits, ExtraRateWindow,
+    ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8, slug,
 };
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
@@ -444,6 +444,9 @@ struct UsageResponse {
     seven_day_sonnet: Option<Win>,
     #[serde(default, deserialize_with = "crate::provider::lenient_list")]
     limits: Vec<Limit>,
+    /// Read loosely, so a billing block that changed shape costs only itself.
+    #[serde(default)]
+    extra_usage: Option<Value>,
     /// Routine aliases + unknown `seven_day_*` keys land here.
     #[serde(flatten)]
     rest: Map<String, Value>,
@@ -778,6 +781,49 @@ fn scoped_weekly_windows(limits: &[Limit]) -> Vec<ExtraRateWindow> {
     out
 }
 
+/// Extra usage: spend past the plan, in the currency's minor units, against a
+/// monthly cap. On an Enterprise seat sold by spend it is the only limit there
+/// is.
+///
+/// Kept while the API reports it disabled because it ran out - that is when
+/// it matters most (ai-usagebar #456) - and dropped when the user turned it
+/// off. An uncapped balance is not a cap, and a currency other than dollars
+/// would print under the wrong sign, so neither is drawn.
+fn extra_usage_cap(block: &Value) -> Option<CreditLimit> {
+    let flag = |key: &str| block.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let ran_out = flag("spend_limit_reached")
+        || matches!(
+            block.get("disabled_reason").and_then(Value::as_str),
+            Some("out_of_credits" | "monthly_limit_reached" | "spend_limit_reached")
+        );
+    if flag("user_disabled") || !(flag("is_enabled") || ran_out) {
+        return None;
+    }
+    if block
+        .get("currency")
+        .and_then(Value::as_str)
+        .is_some_and(|c| !c.eq_ignore_ascii_case("USD"))
+    {
+        return None;
+    }
+    let places = match block.get("decimal_places") {
+        None | Some(Value::Null) => 2,
+        Some(v) => v.as_u64().filter(|p| *p <= 6)? as i32,
+    };
+    let minor = |key: &str| {
+        crate::provider::json_num(block.get(key)?)
+            .filter(|v| *v >= 0.0)
+            .map(|v| v / 10f64.powi(places))
+    };
+    let limit = minor("monthly_limit").filter(|l| *l > 0.0)?;
+    Some(CreditLimit {
+        kind: CreditLimitKind::OnDemand,
+        used: minor("used_credits")?,
+        limit,
+        resets: Some("monthly".to_string()),
+    })
+}
+
 fn to_payload(
     resp: UsageResponse,
     plan: Option<String>,
@@ -821,12 +867,16 @@ fn to_payload(
     extra_rate_windows.extend(routines_window(&resp.rest));
     extra_rate_windows.extend(scoped_weekly_windows(&resp.limits));
 
+    let spend_cap = resp.extra_usage.as_ref().and_then(extra_usage_cap);
+
     // An all-empty snapshot must be an error so the stale-cache fallback keeps
-    // the last-good number instead of rendering a blank row.
+    // the last-good number instead of rendering a blank row. A seat whose only
+    // limit is a monthly spend cap is not empty.
     if primary.is_none()
         && secondary.is_none()
         && tertiary.is_none()
         && extra_rate_windows.is_empty()
+        && spend_cap.is_none()
     {
         return Err(anyhow!("Claude returned no usage windows"));
     }
@@ -846,7 +896,10 @@ fn to_payload(
             extra_rate_windows,
             banked_resets: banked_resets(&resp.rest),
         }),
-        credits: None,
+        credits: spend_cap.map(|limit| Credits {
+            remaining: None,
+            limit: Some(limit),
+        }),
         error: None,
         stale: false,
         credential: Default::default(),
@@ -951,6 +1004,53 @@ mod tests {
         let usage = to_payload(body, None, Utc::now()).unwrap().usage.unwrap();
         assert_eq!(usage.primary.unwrap().used_percent, Some(5));
         assert_eq!(usage.extra_rate_windows.len(), 1);
+    }
+
+    /// CodexBar #4480: an Enterprise seat sold by spend has no window at all,
+    /// and read as "no usage windows" on every fetch.
+    #[test]
+    fn a_seat_whose_only_limit_is_spend_reads_as_its_cap() {
+        let body = resp(
+            r#"{"five_hour": null, "seven_day": null,
+                "extra_usage": {"is_enabled": true, "monthly_limit": 50000,
+                                "used_credits": 12345.0, "currency": "USD"}}"#,
+        );
+        let payload = to_payload(body, None, Utc::now()).unwrap();
+        let cap = payload.credits.unwrap().limit.unwrap();
+        assert!(matches!(cap.kind, CreditLimitKind::OnDemand));
+        assert_eq!(cap.limit, 500.0);
+        assert_eq!(cap.used, 123.45);
+        assert_eq!(cap.resets.as_deref(), Some("monthly"));
+    }
+
+    #[test]
+    fn extra_usage_is_drawn_only_when_it_is_a_dollar_cap_in_play() {
+        let cap = |json: &str| extra_usage_cap(&serde_json::from_str(json).unwrap());
+        // Ran out: reported disabled, and exactly when it matters.
+        assert!(
+            cap(
+                r#"{"is_enabled": false, "disabled_reason": "out_of_credits",
+                    "monthly_limit": 5000, "used_credits": 5000}"#
+            )
+            .is_some()
+        );
+        // Switched off by the user, uncapped, or in another currency.
+        for none in [
+            r#"{"is_enabled": false, "user_disabled": true, "spend_limit_reached": true,
+                "monthly_limit": 5000, "used_credits": 5000}"#,
+            r#"{"is_enabled": false, "monthly_limit": 5000, "used_credits": 10}"#,
+            r#"{"is_enabled": true, "monthly_limit": null, "used_credits": 10}"#,
+            r#"{"is_enabled": true, "monthly_limit": 5000, "used_credits": 10, "currency": "BRL"}"#,
+            r#"{"is_enabled": true, "monthly_limit": 5000}"#,
+        ] {
+            assert!(cap(none).is_none(), "{none}");
+        }
+        let yen = cap(
+            r#"{"is_enabled": true, "monthly_limit": 5000, "used_credits": 10,
+                "currency": "USD", "decimal_places": 0}"#,
+        )
+        .unwrap();
+        assert_eq!(yen.limit, 5000.0);
     }
 
     #[test]

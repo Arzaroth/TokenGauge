@@ -27,11 +27,14 @@ read behind the backfill (see [../features/spend-history.md](../features/spend-h
 `jsonl_files` leans on an mtime filter that a deep read defeats, so the deep read
 never runs on a poll.
 
-`Roots::unreadable` walks the roots and lists every directory that exists and
-cannot be read (any `read_dir` error but `NotFound`). `jsonl_files` skips such
-a directory as if empty, and the fleet store, replacing a provider from the
-oldest event the read still found, would drop every day only it held, so the
-sync layer holds each provider whose read falls short of its record ([sync.md](sync.md#the-fleet-store-is-the-durable-record)). A root that
+A read reports what it could not open (`TranscriptRead.gaps`, from
+`read_window`, `read_history` and `read_checked`): `jsonl_files` pushes a
+directory, entry or file type it cannot read (any error but `NotFound`), and
+each reader's `read_file` a file it cannot open. Skipped, those read as empty,
+and the fleet store, replacing a provider from the oldest event the read
+still found, would drop every day only they held, so the sync layer merges a
+read with gaps instead of replacing with it. `Roots::unreadable` is the same
+check as a bare directory walk, which the backfill runs before its deep read ([sync.md](sync.md#the-fleet-store-is-the-durable-record)). A root that
 does not exist is a CLI never used and reads as empty.
 
 `ProviderMeta.natively_read` marks the providers with a reader (codex, claude,

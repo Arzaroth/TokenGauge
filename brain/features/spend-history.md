@@ -63,9 +63,10 @@ fortnight. `cost::read_history` reads as far back as the store holds and
 `sync::backfill` upserts it once, behind `tokengauge-backfilled`, before the first
 fetch and never on a poll (it defeats `jsonl_files`'s mtime filter). The marker is
 written even when nothing was found. While a transcript directory exists and
-cannot be read (`cost::Roots::unreadable`) it reads and writes nothing and
-leaves the marker off, and every fetch's re-read holds each provider whose
-read falls short of the record
+cannot be read (`cost::Roots::unreadable`) it reads nothing and leaves the
+marker off; a gap that opens during the read is merged and the marker left
+off too. Every fetch's re-read with a gap is merged into the record rather
+than replacing it
 ([../architecture/sync.md](../architecture/sync.md#the-fleet-store-is-the-durable-record)).
 `--backfill` forces it again, e.g. after restoring transcripts. It replaces each
 provider only from the oldest event its transcripts still hold, so the days

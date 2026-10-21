@@ -50,14 +50,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reset time, instead of keeping its old percentage and "Resets now". This
   matters for a stored credential that is not asked again and for a fetch that
   keeps failing, whose dead figures fed the combined plans header.
-- A transcript folder that exists but cannot be read (a permission error, a
-  volume that came up unreadable) no longer lets the spend history be rebuilt
-  from the folders that could be read, which dropped every day only it held.
-  Any provider whose read comes in short of the history already recorded keeps
-  that history, and the spend figures count it in place of the partial read;
-  the rest are read as usual, and the sync status says why. A locked folder
-  deeper in the tree counts the same as a locked root, and the one-time
-  backfill waits until the whole tree can be read.
+- A transcript folder or file that exists but cannot be read (a permission
+  error, a volume that came up unreadable) no longer costs the spend history
+  the days only it held. Readable folders are still read and their new usage
+  still counted, but merged into the recorded history hour by hour rather
+  than replacing it, so an hour the read could not reach keeps its figure, and
+  the sync status says why. The one-time backfill waits until the whole tree
+  can be read.
 - A request whose prompt runs past a model's long-context threshold (Sonnet 4.5
   and the grok-4 line past 200k, gpt-5.4 onwards past 272k) is rated at
   LiteLLM's long-context price rather than the base price. Only single Claude

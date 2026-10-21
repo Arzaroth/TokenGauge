@@ -80,22 +80,22 @@ maintained on every fetch whether or not sync is on (the gate is in
   `tokengauge-fleet.lock` (`store::lock`) from load to save. The lock blocks
   while another writer holds it (the CLI says it is waiting); a filesystem
   that cannot lock at all leaves every writer unlocked alike.
-- **A short read is held.** A directory under the transcript roots that
-  exists and cannot be read (`cost::Roots::unreadable`, which walks the whole
-  tree, passed to `sync::refresh` as `unreadable`) is skipped by the readers as
-  if empty, and the replace would then drop every day only it held. Which
-  provider a directory feeds cannot be known from outside it (the Claude
-  reader files GLM and Kimi calls too), so in a cycle with anything unreadable
-  every provider whose read in the window comes in under this device's record
-  (`FleetStore::local_totals`) is held: its events are left out of the read,
-  the per-provider replace leaves its buckets as they were, and the report
-  counts its stored record instead (`SyncOutcome.held`: `events` carries
-  those buckets and `native_costs` drops its own read of them, so nothing
-  counts twice). Every other provider, including any with nothing on record
-  yet, is read and stored as usual, and the sync status carries the error.
-  `sync::backfill` checks before its deep read and, with anything unreadable,
-  reads and writes nothing and leaves its marker off, so the next fetch asks
-  again for the price of a directory walk.
+- **A read with gaps is merged, not replacing.** The readers report what they
+  could not open from their own walk (`cost::TranscriptRead.gaps`: a directory,
+  entry or file that exists and cannot be read; `jsonl_files` and each reader's
+  `read_file` push to it), and `sync::refresh` takes them as `gaps`. Skipped,
+  such a path reads as nothing in it, and the replace would drop every day only
+  it held, which a comparison of totals cannot see once new usage covers for
+  it. So a read with any gap replaces nothing: `FleetStore::merge_local` folds
+  it in per hour, provider and model as the larger of record and read
+  (transcripts only grow, so the larger is never the stale one). A missing hour
+  keeps its record, new usage still lands, and the report counts this device
+  from the record (`SyncOutcome.held`: `events` carries its buckets and
+  `native_costs` drops its own read of them, so nothing counts twice). The sync
+  status carries the error. `sync::backfill` checks for unreadable directories
+  first (`cost::Roots::unreadable`, a directory walk) and reads nothing while
+  any remain; a gap that opens during its read is merged and the marker left
+  off, so it runs again whole.
 - Separate file from the snapshot on purpose: the snapshot is rewritten wholesale
   on every fetch; the store must not be.
 - **Store retention and wire retention differ.** The store keeps

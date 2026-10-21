@@ -266,6 +266,7 @@ fn cycle(
     }
 
     store.settle_adoptions(&device.id);
+    delete_adopted_leftovers(store, &device.id, &listed, &key, transport.as_ref());
     // A listing without this machine's own object is not one to delete peers
     // on the strength of: whatever hid ours may have hidden theirs. Ours is
     // put back on the next cycle, or peers would drop this machine while it
@@ -280,6 +281,33 @@ fn cycle(
 
     store.last_pull_ms = Some(now.timestamp_millis());
     Ok(())
+}
+
+/// Delete the object of every device this machine adopted that is still in
+/// storage: an adoption whose delete failed, finished here. A device that has
+/// written since its adoption is live and was kept by `settle_adoptions`, so
+/// its object is left alone.
+fn delete_adopted_leftovers(
+    store: &mut FleetStore,
+    local_id: &str,
+    listed: &BTreeSet<String>,
+    key: &crypto::FleetKey,
+    transport: &dyn transport::Transport,
+) {
+    let adopted: Vec<String> = store
+        .devices
+        .get(local_id)
+        .map(|slice| slice.adopted.iter().map(|a| a.id.clone()).collect())
+        .unwrap_or_default();
+    for id in adopted {
+        let name = key.object_name(&id);
+        if !store.devices.contains_key(&id)
+            && listed.contains(&name)
+            && transport.delete(&name).is_ok()
+        {
+            store.objects.remove(&name);
+        }
+    }
 }
 
 fn syncing_providers(config: &TokenGaugeConfig) -> Vec<String> {
@@ -513,10 +541,13 @@ pub fn adopt(config: &TokenGaugeConfig, wanted: &str, waiting: impl FnOnce()) ->
             store.published_name = Some(own_name);
             store.last_publish_ms = Some(now.timestamp_millis());
         }
+        // Saved before the delete, so the only other copy never goes first. A
+        // delete that fails here is retried by every cycle after.
+        store::save(&config.cache_file, &store)?;
         let name = key.object_name(&id);
         transport.delete(&name).with_context(|| {
             format!(
-                "published the adopted history, but could not delete {}'s object; run this again",
+                "adopted {} and saved it, but could not delete its object; the next sync cycle retries",
                 adoption.device.display()
             )
         })?;

@@ -69,13 +69,15 @@ maintained on every fetch whether or not sync is on (the gate is in
 
 - A transcript re-read **replaces** every self bucket from the read window's start
   on (`FleetStore::upsert_local`) and leaves older ones untouched, so a poll never
-  double-counts. The deep re-read (`FleetStore::backfill_local`) replaces only
-  from the oldest event it found: a day no transcript mentions is unknown, not
-  zero, and may hold rotated-away or adopted history.
+  double-counts. The deep re-read (`FleetStore::backfill_local`) replaces each
+  provider only from the oldest event its transcripts still hold, and moves a
+  floor that lands inside a rolled-up day to the next day: a day no transcript
+  mentions is unknown, not zero, and may hold rotated-away or adopted history.
 - **One writer at a time.** Every writer loads the whole store and saves it
   back, so `refresh`, `backfill`, `forget` and `adopt` hold
-  `tokengauge-fleet.lock` (`store::lock`) from load to save. `refresh` carries on
-  unlocked when the lock cannot be taken.
+  `tokengauge-fleet.lock` (`store::lock`) from load to save. The lock blocks
+  while another writer holds it (the CLI says it is waiting); a filesystem
+  that cannot lock at all leaves every writer unlocked alike.
 - Separate file from the snapshot on purpose: the snapshot is rewritten wholesale
   on every fetch; the store must not be.
 - **Store retention and wire retention differ.** The store keeps
@@ -116,7 +118,7 @@ Plaintext payload, before compression and encryption:
       "i": 812, "o": 3122, "cw5": 15300, "cw1h": 0, "cr": 981233 }
   ],
   "days": [ { "d": "2026-08-25", "n": 812, "x": "5a1e9f3c00b47d21" } ],
-  "adopted": ["dd8008fc..."]
+  "adopted": [ { "id": "dd8008fc...", "atMs": 1792512000000 } ]
 }
 ```
 
@@ -128,7 +130,8 @@ Plaintext payload, before compression and encryption:
   not keep stable across releases.
 - `writtenAtMs` drives freshness display, never merge order: nothing needs
   ordering.
-- `adopted` lists the devices this one took over with `--sync-adopt`, omitted
+- `adopted` lists the devices this one took over with `--sync-adopt`, each with
+  the instant it did, omitted
   when empty (so the content hash of a device that adopted nothing is
   unchanged). Carried on every contribution, not only the first.
 - Size: a heavy week is about 900 buckets, ~90 KB of JSON; 35 days stays under
@@ -213,33 +216,49 @@ new device cannot rebuild the old history (`window_start`), so `--sync-forget`
 on the old entry would delete days that exist nowhere else. `--sync-adopt
 <device>` (`sync::adopt`, decision 0005) keeps one device with all of it:
 
-1. **Resolve** the device like `--sync-forget` (id, label or hostname), refusing
-   this machine and an ambiguous name. The two entries share a hostname, so the
-   error lists ids.
+1. **Resolve** the device like `--sync-forget` (label, hostname, id, or an id
+   prefix of six digits or more), refusing this machine and an ambiguous name.
+   The two entries share a hostname, so the error lists ids.
 2. **Fold** (`FleetStore::adopt`): buckets and day digests strictly before the
-   local slice's `covers_from` move over; inside that window the local data is
-   authoritative. A rolled-up day straddling the edge stays behind. The local
-   `covers_from` drops to the old one's and the slice records the id in
-   `adopted`. Granularity is kept; `compact` and `prune` are idempotent over the
-   result.
+   local slice's **oldest bucket** move over; from there the local data is
+   authoritative. Not `covers_from`, which records how far a read looked and
+   sits 400 days back after a backfill. Buckets at or after the edge, and a
+   rolled-up day straddling it, are left out and counted (`Adoption.left_out`).
+   The local `covers_from` takes the earlier of the two, and the slice records
+   the id and the instant in `adopted`. Granularity is kept; `compact` and
+   `prune` are idempotent over the result.
 3. **Publish wide**: the local contribution with `STORE_RETENTION_DAYS` rather
    than `retention_days`, day buckets included, so peers receive the history and
    not only this machine. A failed publish deletes nothing.
 4. **Delete** the old object, then save. A failed delete is an error and leaves
    the store unsaved; running the command again finishes it.
 
+With `[sync] enabled = false` only the fold runs: a key and a transport left in
+the config are not used.
+
 The next regular cycle publishes at the usual retention, and a peer's `absorb`
 keeps everything older than that contribution's `coversFromHour`.
 
 **Peers.** A peer that missed the wide publish still holds its own copy of the
 old device. Every cycle folds each device a slice's `adopted` names into that
-slice by the same rule, so its copy moves rather than counting twice; a peer
-naming this machine is never obeyed. Separately, a peer whose object this
-target **used to list** and no longer does is dropped (`drop_vanished`), which
-also makes `--sync-forget` reach the other machines. Two guards: `objects` is
-started over when the transport target changes (`list_target`), so a new folder
-lacking a peer that has not moved yet drops nobody; and a listing without this
-machine's own object drops nobody.
+slice by the same rule (`settle_adoptions`), so its copy moves rather than
+counting twice. Never this machine, and never a device that has written since
+the adoption's instant: that one is live (a wrong id, or an old id restored
+from a backup), and folding it away every cycle could not be undone.
+
+Separately, a peer whose object this target **used to list** and no longer
+does is dropped (`drop_vanished`), which also makes `--sync-forget` reach the
+other machines. Guards, each against losing peer history past the wire
+retention:
+
+- `objects` starts over when the transport target changes (`list_target`), so
+  a new folder lacking a peer that has not moved yet drops nobody.
+- A listing without this machine's own object drops nobody, and the object is
+  put back on the next cycle (`published_hash` is cleared), or peers would drop
+  an idle machine.
+- Nobody is dropped when every known peer is gone at once: an unmounted share
+  lists only the object this cycle just wrote.
+- A `dir` entry that cannot be stat'ed is still listed.
 
 ## Hazards
 

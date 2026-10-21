@@ -454,11 +454,13 @@ The first fetch runs a one-time deep read (`cost::read_history`) behind
 `tokengauge-backfilled`, because a fetch's window reaches back only to the start
 of the month and the feature would otherwise ship empty for a year. It defeats
 the mtime filter `jsonl_files` leans on, so it must never run on a poll. It
-replaces the local slice only from the oldest event it found, never from its
-400-day reach: replacing from the reach erased every day whose transcript had
-been rotated away, and would erase a `--sync-adopt`ed history the same way.
+replaces each provider only from the oldest event that provider's transcripts
+still hold, never from its 400-day reach and never from the oldest event
+overall: either erased every day whose transcript had been rotated away (one
+provider keeping sessions forever says nothing about another deleting them),
+and would erase a `--sync-adopt`ed history the same way.
 
-Three fleet-store rules came in with `--sync-adopt` (decision 0005,
+Four fleet-store rules came in with `--sync-adopt` (decision 0005,
 `brain/architecture/sync.md`):
 
 - **Every writer holds `store::lock` from load to save.** The store is read and
@@ -466,12 +468,19 @@ Three fleet-store rules came in with `--sync-adopt` (decision 0005,
   back undone with the retired object already deleted, and the next cycle would
   drop the retired slice for good.
 - **A peer is dropped for a vanished object only when this target listed it
-  before and the listing holds our own object.** A new folder or bucket lacks
-  every peer that has not moved yet; dropping on that loses their history past
-  the wire retention. `list_target` is what starts `objects` over.
-- **`adopted` rides on every contribution, not only the wide one.** A peer that
-  was offline for the wide publish folds its own copy on the marker; without it,
-  that peer would drop the retired slice as vanished and keep 35 days of it.
+  before, the listing holds our own object, and some other known peer is still
+  listed.** A new folder or bucket lacks every peer that has not moved yet, and
+  a cycle that publishes into an unmounted share lists only its own fresh
+  object; dropping on either loses peer history past the wire retention.
+  `list_target` is what starts `objects` over.
+- **The adoption edge is the adopter's oldest bucket, never `covers_from`.**
+  A backfill sets `covers_from` 400 days back, and the first review of this
+  feature caught it moving nothing and deleting the retired history.
+- **`adopted` rides on every contribution, not only the wide one, and carries
+  its instant.** A peer that was offline for the wide publish folds its own copy
+  on the marker; without it, that peer would drop the retired slice as vanished
+  and keep 35 days of it. A device that writes after the instant is live and is
+  not folded.
 
 Design notes in `brain/features/spend-history.md`, vocabulary in
 `brain/glossary.md`.

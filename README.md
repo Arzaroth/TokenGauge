@@ -303,7 +303,7 @@ take part.
 tokengauge --sync-status          # what the last cycle did; --json for the raw object
 tokengauge --sync-test            # write a probe, read it back, remove it
 tokengauge --sync-forget laptop   # drop a machine you no longer use
-tokengauge --sync-adopt dd8008fc  # keep a reinstalled machine's old history, then drop its old entry
+tokengauge --sync-adopt dd8008fc  # keep a reinstalled machine's old history (id prefix from --sync-status --json)
 ```
 
 The COST section also carries a **Sync** row that leads with problems: a

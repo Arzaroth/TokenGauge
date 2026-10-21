@@ -21,7 +21,7 @@ own:
 | `tokengauge-refreshing` | the refresh sentinel (a fetch is in flight) |
 | `tokengauge-notify-state.json` | which notification thresholds already fired |
 | `tokengauge-prices.json`, `tokengauge-prices-missed.json` | the fetched price table and the unpriced set ([cost.md](cost.md)) |
-| `tokengauge-fleet.json`, `tokengauge-backfilled` | the fleet store and the backfill marker ([sync.md](sync.md)) |
+| `tokengauge-fleet.json`, `tokengauge-fleet.lock`, `tokengauge-backfilled` | the fleet store, its writer lock and the backfill marker ([sync.md](sync.md)) |
 | `tokengauge-device-id`, `tokengauge-sync-key` | device identity and fleet key |
 | `tokengauge-update.json` (`update_status_path`) | the cached update check ([distribution.md](distribution.md)) |
 | `tokengauge-waybar-state.json` | the selected provider and waybar scroll state (keeps its old name) |

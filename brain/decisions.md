@@ -66,11 +66,12 @@ See [architecture/sync.md](architecture/sync.md#envelope-and-key).
 Status: shipped.
 
 **Decision.** `--sync-adopt <device>` folds the retired device's days that
-predate this machine's coverage into this machine's slice, publishes once with
-the whole store, deletes the retired object, and names the retired id in an
-`adopted` list carried on every later contribution. Peers fold their own copy by
-the same rule on every cycle, and drop a peer whose object vanished from a
-target they listed it on before.
+predate this machine's oldest bucket into this machine's slice, publishes once
+with the whole store, deletes the retired object, and names the retired id with
+the instant in an `adopted` list carried on every later contribution. Peers
+fold their own copy by the same rule on every cycle, unless the retired device
+has written since, and drop a peer whose object vanished from a target they
+listed it on before, unless every known peer vanished at once.
 
 **Why.** A reinstall changes the device id, and the retired entry holds history
 no transcript can rebuild. Two entries for one machine double-count every day
@@ -85,6 +86,11 @@ whose digests differ.
   wherever the digests differ.
 - *Merging inside the local window too*: the local device read those days from
   its own transcripts; a second copy can only double them.
+- *`covers_from` as the edge*: it is how far a read looked, and a backfill on
+  the reinstalled machine's first fetch sets it 400 days back, leaving nothing
+  to move.
+- *Bare ids in `adopted`*: an adoption that only grows cannot be undone, and a
+  live device adopted by mistake would vanish from every peer.
 
 **Consequences.** A peer on an older build ignores `adopted` and double-counts
 until it updates or the retired slice ages out. A sync tool that propagates the

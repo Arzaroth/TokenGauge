@@ -1,7 +1,8 @@
 //! Native Kimi Code usage fetcher (kimi.com/code).
 //!
 //! Read-only: TokenGauge reads the Kimi Code CLI's own credential file
-//! (`~/.kimi-code/credentials/kimi-code.json`, honoring `KIMI_CODE_HOME`) or a
+//! (`~/.kimi-code/credentials/kimi-code.json`, honoring `KIMI_CODE_HOME`, or
+//! the older CLI's `~/.kimi` when that is the only login) or a
 //! `KIMI_CODE_API_KEY` env override, then calls the Kimi Code usage endpoint. It
 //! never refreshes or rewrites that file - the `kimi` CLI owns refresh. On
 //! an expired token we surface an error and let the stale-cache fallback keep
@@ -60,17 +61,31 @@ fn cleaned(raw: Option<String>) -> Option<String> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-/// Home of the Kimi Code CLI state (`~/.kimi-code`, or `KIMI_CODE_HOME`).
+/// Home of the Kimi Code CLI state: `KIMI_CODE_HOME`, else `~/.kimi-code`, or
+/// `~/.kimi` when only the older CLI has logged in.
 pub(crate) fn code_home() -> PathBuf {
     if let Some(dir) = cleaned(std::env::var(HOME_ENV).ok()) {
         return PathBuf::from(dir);
     }
-    dirs::home_dir().unwrap_or_default().join(".kimi-code")
+    code_home_in(&dirs::home_dir().unwrap_or_default())
+}
+
+fn code_home_in(home: &Path) -> PathBuf {
+    let current = home.join(".kimi-code");
+    let legacy = home.join(".kimi");
+    if !credentials_in(&current).is_file() && credentials_in(&legacy).is_file() {
+        return legacy;
+    }
+    current
+}
+
+fn credentials_in(home: &Path) -> PathBuf {
+    home.join("credentials").join("kimi-code.json")
 }
 
 /// Path to the credential file `--doctor` reports.
 pub(crate) fn credentials_path() -> PathBuf {
-    code_home().join("credentials").join("kimi-code.json")
+    credentials_in(&code_home())
 }
 
 fn read_credential(path: &Path) -> Option<CredentialFile> {
@@ -903,6 +918,23 @@ mod tests {
         // fallback keeps last-good rather than rendering a blank row.
         let body = resp(r#"{"usage": {"limit": "0", "used": "0"}}"#);
         assert!(to_payload(body, "code-api", "API Key", Utc::now()).is_err());
+    }
+
+    #[test]
+    fn the_older_cli_home_is_read_only_when_it_alone_holds_a_login() {
+        let home = crate::statefiles::tests::cache_test_dir("kimi-home");
+        let current = home.join(".kimi-code");
+        let legacy = home.join(".kimi");
+        assert_eq!(code_home_in(&home), current);
+
+        std::fs::create_dir_all(legacy.join("credentials")).unwrap();
+        std::fs::write(credentials_in(&legacy), "{}").unwrap();
+        assert_eq!(code_home_in(&home), legacy);
+
+        std::fs::create_dir_all(current.join("credentials")).unwrap();
+        std::fs::write(credentials_in(&current), "{}").unwrap();
+        assert_eq!(code_home_in(&home), current);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     fn usage_of(json: &str) -> UsageSnapshot {

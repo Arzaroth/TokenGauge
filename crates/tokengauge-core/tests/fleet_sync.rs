@@ -761,35 +761,35 @@ fn a_peer_whose_object_is_gone_leaves_this_machine_too() {
     let since = Utc::now().with_timezone(&chrono::Local).date_naive();
     let key = FleetKey::generate();
     sync::store_key(&config.cache_file, &key, true).expect("key");
-    let local = vec![event(1, 10, 1)];
+    let local = vec![event(0, 10, 1)];
+    let devices =
+        |config: &TokenGaugeConfig| sync::refresh(config, &local, since).status.devices.len();
 
     publish_peer(&root, &key, 500);
-    assert_eq!(
-        sync::refresh(&config, &local, since).status.devices.len(),
-        2
+    publish_device(
+        &root,
+        &key,
+        record(NEW_ID, "desk"),
+        2,
+        &[event(0, 5, 3)],
+        &[],
     );
+    assert_eq!(devices(&config), 3);
 
     let shared = config.sync.dir.path.clone();
     config.sync.dir.path = root.join("moved");
     for _ in 0..2 {
         assert_eq!(
-            sync::refresh(&config, &local, since).status.devices.len(),
-            2,
-            "a new folder without the peer means it has not moved yet"
+            devices(&config),
+            3,
+            "a new folder without the peers means they have not moved yet"
         );
     }
 
     config.sync.dir.path = shared;
-    assert_eq!(
-        sync::refresh(&config, &local, since).status.devices.len(),
-        2
-    );
+    assert_eq!(devices(&config), 3);
     remove_object(&root, &key, PEER_ID);
-    assert_eq!(
-        sync::refresh(&config, &local, since).status.devices.len(),
-        1,
-        "forgotten elsewhere, so dropped here"
-    );
+    assert_eq!(devices(&config), 2, "forgotten elsewhere, so dropped here");
 }
 
 #[test]
@@ -812,4 +812,36 @@ fn a_listing_without_our_own_object_drops_nobody() {
     let status = sync::refresh(&config, &local, since).status;
     assert!(!status.published, "nothing changed, so nothing republished");
     assert_eq!(status.devices.len(), 2);
+
+    let status = sync::refresh(&config, &local, since).status;
+    assert!(
+        status.published,
+        "our missing object is put back, or peers would drop this machine"
+    );
+    assert_eq!(status.devices.len(), 2);
+}
+
+#[test]
+fn a_folder_that_lost_every_peer_at_once_drops_nobody() {
+    let root = scratch("unmounted");
+    let config = config(&root);
+    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+
+    publish_peer(&root, &key, 500);
+    assert_eq!(
+        sync::refresh(&config, &[event(0, 10, 1)], since)
+            .status
+            .devices
+            .len(),
+        2
+    );
+
+    // The share is unmounted: the mount point is empty, and this cycle's
+    // publish writes into it, so the listing holds our object and nothing else.
+    std::fs::remove_dir_all(root.join("shared")).expect("unmount");
+    let status = sync::refresh(&config, &[event(0, 20, 2)], since).status;
+    assert!(status.published);
+    assert_eq!(status.devices.len(), 2, "{:?}", status.devices);
 }

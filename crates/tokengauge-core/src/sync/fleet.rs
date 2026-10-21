@@ -527,6 +527,11 @@ impl FleetStore {
     /// Drop every peer whose object the target used to list and no longer
     /// does: it was forgotten or adopted on another machine, and a slice kept
     /// past that would count its days beside whoever took them over.
+    ///
+    /// Nobody is dropped when every known peer is gone at once. That is what
+    /// an unmounted share or a reset folder looks like - the listing holds
+    /// only the object this cycle just wrote - and a peer re-absorbed after it
+    /// comes back keeps only the wire retention.
     pub fn drop_vanished(
         &mut self,
         local_id: &str,
@@ -539,6 +544,9 @@ impl FleetStore {
             .filter(|name| !listed.contains(*name))
             .cloned()
             .collect();
+        if gone.len() == self.objects.len() {
+            return Vec::new();
+        }
         self.objects.retain(|name, _| !gone.contains(name));
         let dropped: Vec<String> = self
             .devices

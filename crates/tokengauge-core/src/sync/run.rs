@@ -266,8 +266,14 @@ fn cycle(
 
     store.settle_adoptions(&device.id);
     // A listing without this machine's own object is not one to delete peers
-    // on the strength of: whatever hid ours may have hidden theirs.
-    if same_target && listed.contains(&own_name) {
+    // on the strength of: whatever hid ours may have hidden theirs. Ours is
+    // put back on the next cycle, or peers would drop this machine while it
+    // idles with nothing new to publish.
+    let own_listed = listed.contains(&own_name);
+    if !own_listed {
+        store.published_hash = None;
+    }
+    if same_target && own_listed {
         store.drop_vanished(&device.id, &listed, |id| key.object_name(id));
     }
 

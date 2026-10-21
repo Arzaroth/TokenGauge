@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use chrono::{Duration, Utc};
 use tokengauge_core::cost::{TokenCounts, UsageEvent};
 use tokengauge_core::sync::{self, FleetKey, SCHEMA_VERSION};
-use tokengauge_core::sync::{Contribution, DeviceRecord, Hour, bucketize};
+use tokengauge_core::sync::{Adopted, Contribution, DeviceRecord, Hour, bucketize};
 use tokengauge_core::{SyncConfig, SyncDirConfig, TokenGaugeConfig};
 
 const PEER_ID: &str = "0000feedfacecafe";
@@ -94,6 +94,7 @@ fn publish_peer(root: &Path, key: &FleetKey, tokens: u64) {
         // month - which is what made this fixture flake overnight into Sep 1.
         buckets: bucketize(&[event(0, tokens, 0xfeed)]),
         days: Vec::new(),
+        adopted: Vec::new(),
     };
 
     let name = key.object_name(PEER_ID);
@@ -316,13 +317,19 @@ fn forget_matches_a_machine_the_way_a_person_names_it() {
     publish_peer(&root, &key, 500);
     sync::refresh(&config, &[event(1, 10, 1)], since);
 
-    assert!(sync::forget(&config, "nobody").is_err(), "unknown name");
+    assert!(
+        sync::forget(&config, "nobody", || {}).is_err(),
+        "unknown name"
+    );
     let local = sync::local_device_id(&config);
-    let refused = sync::forget(&config, &local).expect_err("this machine");
+    let refused = sync::forget(&config, &local, || {}).expect_err("this machine");
     assert!(format!("{refused}").contains("this machine"), "{refused}");
 
     // label, id and hostname all name the same device to a person.
-    assert_eq!(sync::forget(&config, "laptop").expect("by label"), "laptop");
+    assert_eq!(
+        sync::forget(&config, "laptop", || {}).expect("by label"),
+        "laptop"
+    );
     assert!(
         !objects(&root).contains(&key.object_name(PEER_ID)),
         "the peer's object must go, or it rejoins next cycle"
@@ -520,6 +527,7 @@ fn a_provider_this_build_cannot_rate_is_reported_not_swallowed() {
         providers: vec!["quasar".into()],
         buckets: bucket,
         days: Vec::new(),
+        adopted: Vec::new(),
     };
     let name = key.object_name(PEER_ID);
     let dir = root.join("shared").join("v1");
@@ -549,5 +557,431 @@ fn a_provider_this_build_cannot_rate_is_reported_not_swallowed() {
             .any(|p| p.contains("quasar") && p.contains("Update TokenGauge")),
         "the gap has to be visible: {:?}",
         report.problems
+    );
+}
+
+const OLD_ID: &str = "01d1e00000000000";
+const NEW_ID: &str = "000000000000000e";
+
+/// A contribution from any device, written straight into the folder.
+fn publish_device(
+    root: &Path,
+    key: &FleetKey,
+    device: DeviceRecord,
+    covers_days: i64,
+    events: &[UsageEvent],
+    adopted: &[&str],
+) {
+    let name = key.object_name(&device.id);
+    let contribution = Contribution {
+        schema_version: SCHEMA_VERSION,
+        device,
+        written_at_ms: Utc::now().timestamp_millis(),
+        tz_offset_minutes: 0,
+        covers_from: Hour::containing(Utc::now()).minus_days(covers_days),
+        providers: vec!["claude".into()],
+        buckets: bucketize(events),
+        days: Vec::new(),
+        adopted: adopted
+            .iter()
+            .map(|id| Adopted {
+                id: id.to_string(),
+                at_ms: Utc::now().timestamp_millis(),
+            })
+            .collect(),
+    };
+    let body = serde_json::to_vec(&contribution).expect("serialise");
+    let dir = root.join("shared").join("v1");
+    std::fs::create_dir_all(&dir).expect("shared dir");
+    std::fs::write(dir.join(&name), key.seal(&name, &body).expect("seal")).expect("write");
+}
+
+fn record(id: &str, hostname: &str) -> DeviceRecord {
+    DeviceRecord {
+        id: id.into(),
+        hostname: hostname.into(),
+        label: String::new(),
+        os: "linux".into(),
+    }
+}
+
+fn published(root: &Path, key: &FleetKey, id: &str) -> Contribution {
+    let name = key.object_name(id);
+    let sealed = std::fs::read(root.join("shared").join("v1").join(&name)).expect("object");
+    serde_json::from_slice(&key.open(&name, &sealed).expect("open")).expect("parse")
+}
+
+fn adopted_ids(contribution: &Contribution) -> Vec<&str> {
+    contribution
+        .adopted
+        .iter()
+        .map(|adopted| adopted.id.as_str())
+        .collect()
+}
+
+fn remove_object(root: &Path, key: &FleetKey, id: &str) {
+    std::fs::remove_file(root.join("shared").join("v1").join(key.object_name(id)))
+        .expect("remove object");
+}
+
+#[test]
+fn adopting_a_reinstalled_machine_keeps_its_history_and_leaves_the_fleet() {
+    let root = scratch("adopt");
+    let config = config(&root);
+    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+    let local = sync::local_device_id(&config);
+
+    let outcome = sync::refresh(&config, &[event(0, 10, 1)], since);
+    let hostname = outcome.status.devices[0].hostname.clone();
+    publish_device(
+        &root,
+        &key,
+        record(OLD_ID, &hostname),
+        60,
+        &[event(40 * 24, 500, 9), event(0, 7, 10)],
+        &[],
+    );
+    assert_eq!(
+        sync::refresh(&config, &[event(0, 10, 1)], since)
+            .status
+            .devices
+            .len(),
+        2
+    );
+
+    let ambiguous = sync::adopt(&config, &hostname, || {}).expect_err("both share the hostname");
+    assert!(
+        format!("{ambiguous}").contains("more than one"),
+        "{ambiguous}"
+    );
+    assert!(
+        format!("{ambiguous}").contains(OLD_ID),
+        "the ids are what tells the two apart: {ambiguous}"
+    );
+    let refused = sync::adopt(&config, &local, || {}).expect_err("this machine");
+    assert!(format!("{refused}").contains("old entry"), "{refused}");
+
+    let adoption = sync::adopt(&config, &OLD_ID[..8], || {}).expect("adopted by an id prefix");
+    assert_eq!(adoption.device.id, OLD_ID);
+    assert_eq!(
+        adoption.buckets, 1,
+        "the hour inside this machine's window stays its own"
+    );
+    assert!(adoption.range.is_some());
+    assert!(!objects(&root).contains(&key.object_name(OLD_ID)));
+
+    let wide = published(&root, &key, &local);
+    assert_eq!(adopted_ids(&wide), [OLD_ID]);
+    assert_eq!(
+        wide.buckets.iter().map(|b| b.tokens.output).sum::<u64>(),
+        510,
+        "peers receive the history past the wire retention, once"
+    );
+
+    let outcome = sync::refresh(&config, &[event(0, 10, 1)], since);
+    assert_eq!(outcome.status.error, None);
+    assert_eq!(outcome.status.devices.len(), 1);
+    assert_eq!(
+        outcome.events.iter().map(|e| e.tokens.output).sum::<u64>(),
+        500,
+        "the adopted day survives a refresh and still counts"
+    );
+    let narrow = published(&root, &key, &local);
+    assert_eq!(
+        adopted_ids(&narrow),
+        [OLD_ID],
+        "the marker stays, for peers that missed the wide publish"
+    );
+    assert_eq!(
+        narrow.buckets.iter().map(|b| b.tokens.output).sum::<u64>(),
+        10,
+        "the regular contribution is back to the wire retention"
+    );
+}
+
+#[test]
+fn a_peer_folds_a_device_another_machine_adopted() {
+    let root = scratch("adopted-elsewhere");
+    let config = config(&root);
+    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+
+    publish_device(
+        &root,
+        &key,
+        record(OLD_ID, "box"),
+        60,
+        &[event(40 * 24, 500, 9)],
+        &[],
+    );
+    publish_device(
+        &root,
+        &key,
+        record(NEW_ID, "box"),
+        2,
+        &[event(0, 10, 11)],
+        &[],
+    );
+    assert_eq!(sync::refresh(&config, &[], since).status.devices.len(), 3);
+
+    // The other machine adopted while this one was away: its wide publish has
+    // already been replaced by a regular one, and only the marker is left.
+    publish_device(
+        &root,
+        &key,
+        record(NEW_ID, "box"),
+        2,
+        &[event(0, 10, 11)],
+        &[OLD_ID],
+    );
+    remove_object(&root, &key, OLD_ID);
+
+    let outcome = sync::refresh(&config, &[], since);
+    assert_eq!(outcome.status.error, None);
+    let ids: Vec<&str> = outcome
+        .status
+        .devices
+        .iter()
+        .map(|d| d.device_id.as_str())
+        .collect();
+    assert!(!ids.contains(&OLD_ID), "{ids:?}");
+    let adopter: u64 = outcome.store.devices[NEW_ID]
+        .buckets
+        .iter()
+        .map(|b| b.tokens.total())
+        .sum();
+    assert_eq!(adopter, 510, "our own copy of the old history moved over");
+    assert_eq!(
+        outcome.events.iter().map(|e| e.tokens.output).sum::<u64>(),
+        510,
+        "and is counted once"
+    );
+}
+
+#[test]
+fn a_peer_whose_object_is_gone_leaves_this_machine_too() {
+    let root = scratch("vanished");
+    let mut config = config(&root);
+    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+    let local = vec![event(0, 10, 1)];
+    let devices =
+        |config: &TokenGaugeConfig| sync::refresh(config, &local, since).status.devices.len();
+
+    publish_peer(&root, &key, 500);
+    publish_device(
+        &root,
+        &key,
+        record(NEW_ID, "desk"),
+        2,
+        &[event(0, 5, 3)],
+        &[],
+    );
+    assert_eq!(devices(&config), 3);
+
+    let shared = config.sync.dir.path.clone();
+    config.sync.dir.path = root.join("moved");
+    for _ in 0..2 {
+        assert_eq!(
+            devices(&config),
+            3,
+            "a new folder without the peers means they have not moved yet"
+        );
+    }
+
+    config.sync.dir.path = shared;
+    assert_eq!(devices(&config), 3);
+    remove_object(&root, &key, PEER_ID);
+    assert_eq!(devices(&config), 2, "forgotten elsewhere, so dropped here");
+}
+
+#[test]
+fn a_listing_without_our_own_object_drops_nobody() {
+    let root = scratch("vanished-guard");
+    let config = config(&root);
+    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+    let local = vec![event(1, 10, 1)];
+
+    publish_peer(&root, &key, 500);
+    assert_eq!(
+        sync::refresh(&config, &local, since).status.devices.len(),
+        2
+    );
+
+    remove_object(&root, &key, PEER_ID);
+    remove_object(&root, &key, &sync::local_device_id(&config));
+    let status = sync::refresh(&config, &local, since).status;
+    assert!(!status.published, "nothing changed, so nothing republished");
+    assert_eq!(status.devices.len(), 2);
+
+    let status = sync::refresh(&config, &local, since).status;
+    assert!(
+        status.published,
+        "our missing object is put back, or peers would drop this machine"
+    );
+    assert_eq!(status.devices.len(), 2);
+}
+
+#[test]
+fn a_folder_that_lost_every_peer_at_once_drops_nobody() {
+    let root = scratch("unmounted");
+    let config = config(&root);
+    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+
+    publish_peer(&root, &key, 500);
+    assert_eq!(
+        sync::refresh(&config, &[event(0, 10, 1)], since)
+            .status
+            .devices
+            .len(),
+        2
+    );
+
+    // The share is unmounted: the mount point is empty, and this cycle's
+    // publish writes into it, so the listing holds our object and nothing else.
+    std::fs::remove_dir_all(root.join("shared")).expect("unmount");
+    let status = sync::refresh(&config, &[event(0, 20, 2)], since).status;
+    assert!(status.published);
+    assert_eq!(status.devices.len(), 2, "{:?}", status.devices);
+}
+
+/// Two machines, one of them the old entry, with the old one absorbed.
+fn adopt_fixture(name: &str) -> (PathBuf, TokenGaugeConfig, FleetKey) {
+    let root = scratch(name);
+    let config = config(&root);
+    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+    sync::refresh(&config, &[event(0, 10, 1)], since);
+    publish_device(
+        &root,
+        &key,
+        record(OLD_ID, "box"),
+        60,
+        &[event(40 * 24, 500, 9)],
+        &[],
+    );
+    sync::refresh(&config, &[event(0, 10, 1)], since);
+    (root, config, key)
+}
+
+fn store_devices(config: &TokenGaugeConfig) -> Vec<String> {
+    let (store, _) = sync::store::load(&config.cache_file);
+    store.devices.keys().cloned().collect()
+}
+
+#[test]
+fn with_sync_off_an_adoption_stays_on_this_machine() {
+    let (root, mut config, key) = adopt_fixture("adopt-offline");
+    config.sync.enabled = false;
+    let before = std::fs::read(
+        root.join("shared/v1")
+            .join(key.object_name(&sync::local_device_id(&config))),
+    )
+    .expect("own object");
+
+    let adoption = sync::adopt(&config, OLD_ID, || {}).expect("adopted locally");
+    assert_eq!(adoption.buckets, 1);
+    assert!(!store_devices(&config).contains(&OLD_ID.to_string()));
+    assert!(
+        objects(&root).contains(&key.object_name(OLD_ID)),
+        "a disabled transport is not touched"
+    );
+    assert_eq!(
+        std::fs::read(
+            root.join("shared/v1")
+                .join(key.object_name(&sync::local_device_id(&config)))
+        )
+        .expect("own object"),
+        before,
+        "nothing uploaded"
+    );
+}
+
+#[test]
+fn an_adoption_that_cannot_publish_deletes_nothing() {
+    let (root, config, _) = adopt_fixture("adopt-unpublished");
+    let shared = root.join("shared");
+    std::fs::remove_dir_all(&shared).expect("clear");
+    std::fs::write(&shared, b"not a folder").expect("block the transport");
+
+    let failed = sync::adopt(&config, OLD_ID, || {}).expect_err("the publish fails");
+    assert!(
+        format!("{failed:#}").contains("nothing was deleted"),
+        "{failed:#}"
+    );
+    assert!(
+        store_devices(&config).contains(&OLD_ID.to_string()),
+        "the store is not saved over an adoption that did not land"
+    );
+}
+
+/// A reinstall after the 1st leaves the start of the month to the old entry:
+/// the new machine reads the whole month and finds nothing there.
+#[test]
+fn an_adopted_day_inside_the_read_window_survives_a_refresh() {
+    let root = scratch("adopt-in-window");
+    let config = config(&root);
+    let since = (Utc::now() - Duration::days(10))
+        .with_timezone(&chrono::Local)
+        .date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+    let local = vec![event(0, 10, 1)];
+
+    sync::refresh(&config, &local, since);
+    publish_device(
+        &root,
+        &key,
+        record(OLD_ID, "box"),
+        60,
+        &[event(5 * 24, 300, 9)],
+        &[],
+    );
+    sync::refresh(&config, &local, since);
+
+    let adoption = sync::adopt(&config, OLD_ID, || {}).expect("adopted");
+    assert_eq!(adoption.buckets, 1);
+
+    for _ in 0..2 {
+        let outcome = sync::refresh(&config, &local, since);
+        assert_eq!(
+            outcome.events.iter().map(|e| e.tokens.output).sum::<u64>(),
+            300,
+            "the adopted day is counted, and kept, though the read window covers it"
+        );
+    }
+}
+
+/// An adoption whose delete failed leaves the retired object behind; the next
+/// cycle has to finish the job rather than count the device again.
+#[test]
+fn a_retired_object_left_behind_is_deleted_by_the_next_cycle() {
+    let (root, config, key) = adopt_fixture("adopt-leftover");
+    let leftover = root.join("shared/v1").join(key.object_name(OLD_ID));
+    let bytes = std::fs::read(&leftover).expect("retired object");
+
+    sync::adopt(&config, OLD_ID, || {}).expect("adopted");
+    std::fs::write(&leftover, bytes).expect("the delete never happened");
+
+    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let outcome = sync::refresh(&config, &[event(0, 10, 1)], since);
+    assert!(
+        !leftover.exists(),
+        "the cycle deletes what the adoption could not"
+    );
+    assert_eq!(outcome.status.devices.len(), 1);
+    assert_eq!(
+        outcome.events.iter().map(|e| e.tokens.output).sum::<u64>(),
+        500,
+        "and the retired history is counted once"
     );
 }

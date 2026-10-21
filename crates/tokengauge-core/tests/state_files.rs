@@ -40,6 +40,7 @@ fn derived(cache_file: &Path) -> Vec<(&'static str, PathBuf)> {
         ),
         ("price table", pricing::price_cache_path(cache_file)),
         ("fleet store", sync::store::store_path(cache_file)),
+        ("fleet store lock", sync::store::lock_path(cache_file)),
         ("fleet key", sync::crypto::key_path(cache_file)),
     ]
 }
@@ -150,6 +151,7 @@ fn the_names_on_disk_are_the_names_users_already_have() {
             "tokengauge-backfilled",
             "tokengauge-prices.json",
             "tokengauge-fleet.json",
+            "tokengauge-fleet.lock",
             "tokengauge-sync-key",
         ]
     );

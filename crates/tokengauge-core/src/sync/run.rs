@@ -1,7 +1,9 @@
 //! One sync cycle: publish what changed, take what the peers published, merge.
 
+use std::collections::BTreeSet;
+
 use super::contribution::{Contribution, DeviceRecord, content_hash};
-use super::fleet::{FleetStore, ObjectState};
+use super::fleet::{Adoption, FleetStore, ObjectState, STORE_RETENTION_DAYS};
 use super::hour::Hour;
 use super::report::{DeviceStatus, OverlapNote, SkippedObject, SyncStatus};
 use super::{SCHEMA_VERSION, crypto, store, transport};
@@ -47,6 +49,9 @@ pub fn refresh(
     let identity = crate::device_identity(&config.cache_file);
     let device = DeviceRecord::new(&identity, &config.sync.label);
 
+    // Unlocked beats undrawn: a filesystem that cannot lock costs only the
+    // race, and costs it to every writer alike.
+    let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, store_error) = store::load(&config.cache_file);
     status.error = store_error;
     store.upsert_local(&device, from, local_events, now.timestamp_millis());
@@ -93,7 +98,7 @@ pub fn refresh(
     status.unreadable_providers = store.unreadable_providers(&device.id);
 
     SyncOutcome {
-        events: store.synthetic_events(&device.id, from),
+        events: store.synthetic_events(&device.id, from, local_events),
         status,
         store,
     }
@@ -129,8 +134,9 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
     let identity = crate::device_identity(&config.cache_file);
     let device = DeviceRecord::new(&identity, &config.sync.label);
 
+    let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, mut error) = store::load(&config.cache_file);
-    store.upsert_local(&device, window_hour(since), &events, now.timestamp_millis());
+    store.backfill_local(&device, window_hour(since), &events, now);
     store.compact(now, i64::from(config.sync.retention_days));
     store.prune(now);
     // The marker records that the work *landed*, not that it was attempted. A
@@ -179,10 +185,7 @@ fn cycle(
         let _ = transport.delete(&previous);
     }
 
-    let providers = config
-        .sync
-        .providers
-        .resolve(&config.providers.enabled_providers());
+    let providers = syncing_providers(config);
     let own_name = key.object_name(&device.id);
 
     if let Some(contribution) = store.contribution(
@@ -203,7 +206,10 @@ fn cycle(
         }
     }
 
-    for entry in transport.list()? {
+    let same_target = store.list_target(&transport.describe());
+    let entries = transport.list()?;
+    let listed: BTreeSet<String> = entries.iter().map(|entry| entry.name.clone()).collect();
+    for entry in entries {
         if entry.name == own_name {
             continue;
         }
@@ -259,8 +265,56 @@ fn cycle(
         );
     }
 
+    store.settle_adoptions(&device.id);
+    delete_adopted_leftovers(store, &device.id, &listed, &key, transport.as_ref());
+    // A listing without this machine's own object is not one to delete peers
+    // on the strength of: whatever hid ours may have hidden theirs. Ours is
+    // put back on the next cycle, or peers would drop this machine while it
+    // idles with nothing new to publish.
+    let own_listed = listed.contains(&own_name);
+    if !own_listed {
+        store.published_hash = None;
+    }
+    if same_target && own_listed {
+        store.drop_vanished(&device.id, &listed, |id| key.object_name(id));
+    }
+
     store.last_pull_ms = Some(now.timestamp_millis());
     Ok(())
+}
+
+/// Delete the object of every device this machine adopted that is still in
+/// storage: an adoption whose delete failed, finished here. A device that has
+/// written since its adoption is live and was kept by `settle_adoptions`, so
+/// its object is left alone.
+fn delete_adopted_leftovers(
+    store: &mut FleetStore,
+    local_id: &str,
+    listed: &BTreeSet<String>,
+    key: &crypto::FleetKey,
+    transport: &dyn transport::Transport,
+) {
+    let adopted: Vec<String> = store
+        .devices
+        .get(local_id)
+        .map(|slice| slice.adopted.iter().map(|a| a.id.clone()).collect())
+        .unwrap_or_default();
+    for id in adopted {
+        let name = key.object_name(&id);
+        if !store.devices.contains_key(&id)
+            && listed.contains(&name)
+            && transport.delete(&name).is_ok()
+        {
+            store.objects.remove(&name);
+        }
+    }
+}
+
+fn syncing_providers(config: &TokenGaugeConfig) -> Vec<String> {
+    config
+        .sync
+        .providers
+        .resolve(&config.providers.enabled_providers())
 }
 
 /// The contribution's content bound to **where** it goes.
@@ -400,14 +454,122 @@ pub fn test_round_trip(config: &TokenGaugeConfig) -> Result<Vec<String>> {
 /// Drop a device from the fleet: delete its object and forget its buckets.
 ///
 /// Matched on device id or label, because nobody remembers a machine id.
-pub fn forget(config: &TokenGaugeConfig, wanted: &str) -> Result<String> {
+pub fn forget(config: &TokenGaugeConfig, wanted: &str, waiting: impl FnOnce()) -> Result<String> {
+    let _lock = store::lock(&config.cache_file, waiting).ok();
     let (mut store, _) = store::load(&config.cache_file);
     let local = crate::device_identity(&config.cache_file).machine_id;
+    let id = resolve_device(&store, wanted)?;
+    anyhow::ensure!(
+        id != local,
+        "that is this machine; turn sync off in the config instead"
+    );
+
+    let label = store
+        .devices
+        .get(&id)
+        .map(|slice| slice.device.display().to_string())
+        .unwrap_or_else(|| id.clone());
+
+    // A delete that failed used to be swallowed, reporting success while the
+    // object stayed in storage and the device rejoined on the next cycle.
+    if let Some(key) = crypto::load_key(&config.cache_file)? {
+        let transport = transport::open(&config.sync)?;
+        let name = key.object_name(&id);
+        transport.delete(&name)?;
+        store.objects.remove(&name);
+    }
+    store.devices.remove(&id);
+    store::save(&config.cache_file, &store)?;
+    Ok(label)
+}
+
+/// Take over a retired device's history - the same machine before a reinstall
+/// gave it a new machine id - and drop it from the fleet.
+///
+/// Its days predating this machine's coverage move into this machine's slice
+/// (see [`FleetStore::adopt`]), which is then published with everything the
+/// store holds rather than the wire retention, so peers receive the history
+/// too. Only once that publish lands is the retired object deleted; a delete
+/// that fails is an error, and running the command again finishes the job.
+pub fn adopt(config: &TokenGaugeConfig, wanted: &str, waiting: impl FnOnce()) -> Result<Adoption> {
+    let _lock = store::lock(&config.cache_file, waiting).ok();
+    let (mut store, error) = store::load(&config.cache_file);
+    if let Some(error) = error {
+        anyhow::bail!("{error}");
+    }
+    let local = crate::device_identity(&config.cache_file).machine_id;
+    let id = resolve_device(&store, wanted)?;
+    anyhow::ensure!(
+        id != local,
+        "that is this machine; name the old entry it replaced"
+    );
+    anyhow::ensure!(
+        store.devices.contains_key(&local),
+        "this machine has recorded nothing yet; let one fetch run first"
+    );
+    let adoption = store
+        .adopt(&id, &local, Utc::now().timestamp_millis())
+        .context("the device could not be adopted")?;
+
+    // With sync off the fold is local: a key and a transport left in the
+    // config are not an invitation to upload the whole store.
+    let key = if config.sync.enabled {
+        crypto::load_key(&config.cache_file)?
+    } else {
+        None
+    };
+    if let Some(key) = key {
+        let transport = transport::open(&config.sync)?;
+        let now = Utc::now();
+        let own_name = key.object_name(&local);
+        if let Some(contribution) = store.contribution(
+            &local,
+            now,
+            &syncing_providers(config),
+            STORE_RETENTION_DAYS,
+        ) {
+            let body =
+                serde_json::to_vec(&contribution).context("could not serialise a contribution")?;
+            transport
+                .put(&own_name, &key.seal(&own_name, &body)?)
+                .context("could not publish the adopted history; nothing was deleted")?;
+            store.published_hash = Some(publish_stamp(
+                &contribution,
+                &transport.describe(),
+                &own_name,
+            ));
+            store.published_name = Some(own_name);
+            store.last_publish_ms = Some(now.timestamp_millis());
+        }
+        // Saved before the delete, so the only other copy never goes first. A
+        // delete that fails here is retried by every cycle after.
+        store::save(&config.cache_file, &store)?;
+        let name = key.object_name(&id);
+        transport.delete(&name).with_context(|| {
+            format!(
+                "adopted {} and saved it, but could not delete its object; the next sync cycle retries",
+                adoption.device.display()
+            )
+        })?;
+        store.objects.remove(&name);
+    }
+    store::save(&config.cache_file, &store)?;
+    Ok(adoption)
+}
+
+/// The one device `wanted` names: by label, hostname, id, or a prefix of the
+/// id at least six digits long, since a whole one is 32.
+fn resolve_device(store: &FleetStore, wanted: &str) -> Result<String> {
+    let prefix = (wanted.len() >= 6 && wanted.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| wanted.to_ascii_lowercase());
     let matched: Vec<String> = store
         .devices
         .iter()
         .filter(|(id, slice)| {
             id.eq_ignore_ascii_case(wanted)
+                || prefix
+                    .as_ref()
+                    .is_some_and(|prefix| id.starts_with(prefix.as_str()))
                 || slice.device.display().eq_ignore_ascii_case(wanted)
                 || slice.device.hostname.eq_ignore_ascii_case(wanted)
         })
@@ -424,34 +586,13 @@ pub fn forget(config: &TokenGaugeConfig, wanted: &str) -> Result<String> {
             },
             store
                 .devices
-                .values()
-                .map(|slice| slice.device.display().to_string())
+                .iter()
+                .map(|(id, slice)| format!("{} ({id})", slice.device.display()))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
     };
-    anyhow::ensure!(
-        *id != local,
-        "that is this machine; turn sync off in the config instead"
-    );
-
-    let label = store
-        .devices
-        .get(id)
-        .map(|slice| slice.device.display().to_string())
-        .unwrap_or_else(|| id.clone());
-
-    // A delete that failed used to be swallowed, reporting success while the
-    // object stayed in storage and the device rejoined on the next cycle.
-    if let Some(key) = crypto::load_key(&config.cache_file)? {
-        let transport = transport::open(&config.sync)?;
-        let name = key.object_name(id);
-        transport.delete(&name)?;
-        store.objects.remove(&name);
-    }
-    store.devices.remove(id);
-    store::save(&config.cache_file, &store)?;
-    Ok(label)
+    Ok(id.clone())
 }
 
 #[cfg(test)]
@@ -480,6 +621,7 @@ mod tests {
                 tokens: Default::default(),
             }],
             days: Vec::new(),
+            adopted: Vec::new(),
         }
     }
 

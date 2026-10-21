@@ -297,3 +297,11 @@ one product rather than five.
   service while `.claude.json` follows the config dir, so `live_account` and
   `live_seat_tier` can describe a login other than the token sent. Find how
   Claude Code names the service under a config dir and read the same one.
+- **`--sync-adopt` and `--sync-forget` leave the snapshot as it was.** Only the
+  fleet store is saved, so every frontend keeps the dropped device's row until
+  the next fetch, up to `refresh_secs`. Ask the daemon for a refetch, or rebuild
+  the costs in-process, before returning.
+- **An adoption's wide publish lasts one cycle.** The next regular publish
+  replaces it, so a peer that slept through that cycle gets only the wire
+  retention plus its own copy of the retired device. Keep publishing the
+  adopted range until every known peer has written since the adoption.

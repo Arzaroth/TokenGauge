@@ -134,6 +134,16 @@ pub struct Args {
     /// forgets its buckets.
     #[arg(long, value_name = "DEVICE")]
     sync_forget: Option<String>,
+    /// Fold a retired device's history into this machine's, then drop it from
+    /// the fleet: the same machine before a reinstall gave it a new id. By
+    /// label, hostname or id (or its first six digits or more); the id when the
+    /// old entry shares the hostname.
+    #[arg(
+        long,
+        value_name = "DEVICE",
+        conflicts_with_all = ["sync_init", "sync_join", "sync_status", "sync_test", "sync_forget", "sync_setup"]
+    )]
+    sync_adopt: Option<String>,
     /// Open the TUI on its sync screen, in a terminal.
     #[arg(long)]
     sync_setup: bool,

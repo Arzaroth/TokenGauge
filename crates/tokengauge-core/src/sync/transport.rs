@@ -92,7 +92,16 @@ impl Transport for DirTransport {
             if !is_object_name(&name) {
                 continue;
             }
-            let Ok(meta) = entry.metadata() else { continue };
+            // Listed even when it cannot be stat'ed, with a version nothing
+            // matches: a peer missing from the listing reads as one that left.
+            let Ok(meta) = entry.metadata() else {
+                found.push(PeerEntry {
+                    name,
+                    version: String::new(),
+                    size: 0,
+                });
+                continue;
+            };
             if !meta.is_file() {
                 continue;
             }

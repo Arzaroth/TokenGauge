@@ -245,7 +245,7 @@ pub fn findings(status: &SyncStatus, refresh_secs: u64, now_ms: i64) -> Vec<Find
             "a machine has gone quiet",
             Tone::Dim,
             format!("{} has not published recently", device.label),
-            "Its past days still count; --sync-forget drops it.",
+            "Its past days still count; --sync-forget drops it, or --sync-adopt folds it into this machine.",
         ));
     }
     if out.is_empty() {

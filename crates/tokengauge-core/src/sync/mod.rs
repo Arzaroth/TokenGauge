@@ -20,13 +20,13 @@ pub mod store;
 pub mod transport;
 
 pub use contribution::{
-    Bucket, BucketKey, Contribution, DayDigest, DeviceRecord, Granularity, SCHEMA_VERSION,
+    Adopted, Bucket, BucketKey, Contribution, DayDigest, DeviceRecord, Granularity, SCHEMA_VERSION,
     WIRE_RETENTION_DAYS, bucketize, content_hash, day_digests, syncable,
 };
 pub use crypto::{FleetKey, OpenError, key_path, load_key, store_key};
 pub use fleet::{
-    DeviceCost, DeviceSlice, ExportRow, FleetStore, HOURLY_RETENTION_DAYS, KeyChange, ObjectState,
-    Overlap, STORE_RETENTION_DAYS, Step,
+    Adoption, DeviceCost, DeviceSlice, ExportRow, FleetStore, HOURLY_RETENTION_DAYS, KeyChange,
+    ObjectState, Overlap, STORE_RETENTION_DAYS, Step,
 };
 pub use hour::Hour;
 pub use report::{
@@ -34,6 +34,7 @@ pub use report::{
     describe, findings, note,
 };
 pub use run::{
-    BackfillOutcome, SyncOutcome, backfill, forget, local_device_id, refresh, test_round_trip,
+    BackfillOutcome, SyncOutcome, adopt, backfill, forget, local_device_id, refresh,
+    test_round_trip,
 };
 pub use transport::{PeerEntry, Transport};

@@ -319,18 +319,25 @@ impl Roots {
         out
     }
 
-    /// Roots that are there and could not be read. A read of them comes back
-    /// empty, and the fleet store, replacing each provider from the oldest
-    /// event the other roots still found, would drop every day only they held.
-    /// A root that does not exist is a CLI never used, and reads as empty
-    /// truthfully.
-    pub fn unreadable(&self) -> Vec<PathBuf> {
-        self.all()
-            .into_iter()
-            .filter(|root| {
-                std::fs::read_dir(root).is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound)
-            })
-            .collect()
+    /// Roots that are there and could not be read, each with the provider its
+    /// reader files events under. A read of them comes back empty, and the
+    /// fleet store, replacing each provider from the oldest event the other
+    /// roots still found, would drop every day only they held. A root that
+    /// does not exist is a CLI never used, and reads as empty truthfully.
+    pub fn unreadable(&self) -> Vec<(&'static str, PathBuf)> {
+        [
+            ("claude", &self.claude),
+            ("codex", &self.codex),
+            ("kimi", &self.kimi),
+            ("grok", &self.grok),
+        ]
+        .into_iter()
+        .flat_map(|(provider, roots)| roots.iter().map(move |root| (provider, root)))
+        .filter(|(_, root)| {
+            std::fs::read_dir(root).is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound)
+        })
+        .map(|(provider, root)| (provider, root.clone()))
+        .collect()
     }
 }
 
@@ -693,7 +700,7 @@ mod tests {
             codex: vec![base.clone()],
             ..Roots::default()
         };
-        assert_eq!(roots.unreadable(), vec![locked.clone()]);
+        assert_eq!(roots.unreadable(), vec![("claude", locked.clone())]);
     }
 
     /// Two machines on different builds have to produce the same day

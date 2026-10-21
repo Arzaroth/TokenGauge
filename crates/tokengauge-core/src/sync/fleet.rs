@@ -674,9 +674,9 @@ impl FleetStore {
         events
     }
 
-    /// This device's own record, as events. What the report counts for this
-    /// machine when its read could not be trusted, in place of that read.
-    pub fn held_events(&self, local_id: &str) -> Vec<UsageEvent> {
+    /// This device's own record for `providers`, as events. What the report
+    /// counts for a provider whose read could not be trusted, in place of it.
+    pub fn held_events(&self, local_id: &str, providers: &[&str]) -> Vec<UsageEvent> {
         let offset = *chrono::Local::now().offset();
         self.devices
             .get(local_id)
@@ -684,6 +684,7 @@ impl FleetStore {
                 slice
                     .buckets
                     .iter()
+                    .filter(|bucket| providers.contains(&bucket.provider.as_str()))
                     .filter_map(|bucket| bucket_event(bucket, offset))
                     .collect()
             })
@@ -931,12 +932,11 @@ impl FleetStore {
 /// re-read starts to speak for that provider.
 fn bucket_event(bucket: &Bucket, offset: FixedOffset) -> Option<UsageEvent> {
     let provider = intern_provider(&bucket.provider)?;
-    let at = bucket.hour.start();
     Some(UsageEvent {
         provider,
         model: bucket.model.clone(),
-        date: at.with_timezone(&offset).date_naive(),
-        at,
+        date: bucket.hour.start().with_timezone(&offset).date_naive(),
+        at: bucket.hour.start(),
         tokens: bucket.tokens,
         key: None,
         one_request: false,

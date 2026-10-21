@@ -21,10 +21,10 @@ pub struct SyncOutcome {
     /// The merged store, so per-device totals can be taken against the same
     /// price table the report was rated with.
     pub store: FleetStore,
-    /// The caller's read was not trusted - a transcript root could not be
-    /// read - so `events` carries this device's stored record in its place,
-    /// and the report is built from `events` alone.
-    pub local_held: bool,
+    /// Providers whose read was not trusted - a transcript root of theirs
+    /// could not be read. `events` carries this device's stored record for
+    /// them, and the caller drops its own read of them.
+    pub held: Vec<&'static str>,
 }
 
 /// Keep the durable store current, and - when sync is on - run a cycle and
@@ -45,7 +45,7 @@ pub fn refresh(
     config: &TokenGaugeConfig,
     local_events: &[UsageEvent],
     since: NaiveDate,
-    unreadable: &[PathBuf],
+    unreadable: &[(&'static str, PathBuf)],
 ) -> SyncOutcome {
     let mut status = SyncStatus {
         enabled: config.sync.enabled,
@@ -62,16 +62,18 @@ pub fn refresh(
     let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, store_error) = store::load(&config.cache_file);
     status.error = store_error;
-    let local_held = match unreadable_error(unreadable) {
-        None => {
-            store.upsert_local(&device, from, local_events, now.timestamp_millis());
-            false
-        }
-        Some(e) => {
-            status.error.get_or_insert(e);
-            true
-        }
-    };
+    let held = held_providers(unreadable);
+    if let Some(e) = unreadable_error(unreadable) {
+        status.error.get_or_insert(e);
+    }
+    // A held provider is left out of the read, so the replace, which works
+    // provider by provider, leaves its buckets as they were.
+    let read: Vec<UsageEvent> = local_events
+        .iter()
+        .filter(|event| !held.contains(&event.provider))
+        .cloned()
+        .collect();
+    store.upsert_local(&device, from, &read, now.timestamp_millis());
 
     if config.sync.enabled
         && let Err(e) = cycle(config, &device, &mut store, now, &mut status)
@@ -89,14 +91,10 @@ pub fn refresh(
 
     if !config.sync.enabled {
         return SyncOutcome {
-            events: if local_held {
-                store.held_events(&device.id)
-            } else {
-                Vec::new()
-            },
+            events: store.held_events(&device.id, &held),
             status,
             store,
-            local_held,
+            held,
         };
     }
 
@@ -120,14 +118,10 @@ pub fn refresh(
     status.unreadable_providers = store.unreadable_providers(&device.id);
 
     SyncOutcome {
-        events: store.synthetic_events(
-            &device.id,
-            from,
-            if local_held { &[] } else { local_events },
-        ),
+        events: store.synthetic_events(&device.id, from, &read),
         status,
         store,
-        local_held,
+        held,
     }
 }
 
@@ -156,21 +150,23 @@ pub struct BackfillOutcome {
 /// Slow by construction - see [`crate::cost::read_history`] - so it is called
 /// behind [`crate::statefiles::backfill_done`] and never on a poll.
 pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome {
-    let (events, since) = crate::cost::read_history(today);
-    // Unmarked, so a later fetch tries again once the tree can be read.
-    if let Some(error) = unreadable_error(&crate::cost::Roots::discover().unreadable()) {
-        return BackfillOutcome {
-            events: 0,
-            since,
-            error: Some(error),
-        };
-    }
+    let (mut events, since) = crate::cost::read_history(today);
+    // A provider whose root could not be read keeps what the store holds for
+    // it. The rest is backfilled and the marker written as usual: the deep
+    // read must not repeat on every poll while a root stays unreadable, and
+    // `--backfill` runs it again once it can be read.
+    let unreadable = crate::cost::Roots::discover().unreadable();
+    let held = held_providers(&unreadable);
+    events.retain(|event| !held.contains(&event.provider));
     let now = Utc::now();
     let identity = crate::device_identity(&config.cache_file);
     let device = DeviceRecord::new(&identity, &config.sync.label);
 
     let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, mut error) = store::load(&config.cache_file);
+    if let Some(e) = unreadable_error(&unreadable) {
+        error.get_or_insert(e);
+    }
     store.backfill_local(&device, window_hour(since), &events, now);
     store.compact(now, i64::from(config.sync.retention_days));
     store.prune(now);
@@ -194,10 +190,17 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
     }
 }
 
-fn unreadable_error(unreadable: &[PathBuf]) -> Option<String> {
-    let first = unreadable.first()?;
+fn held_providers(unreadable: &[(&'static str, PathBuf)]) -> Vec<&'static str> {
+    let mut held: Vec<&'static str> = unreadable.iter().map(|(provider, _)| *provider).collect();
+    held.sort_unstable();
+    held.dedup();
+    held
+}
+
+fn unreadable_error(unreadable: &[(&'static str, PathBuf)]) -> Option<String> {
+    let (_, first) = unreadable.first()?;
     Some(format!(
-        "transcripts under {} could not be read; this machine's history is kept as it was",
+        "transcripts under {} could not be read; this machine's history for them is kept as it was",
         first.display()
     ))
 }

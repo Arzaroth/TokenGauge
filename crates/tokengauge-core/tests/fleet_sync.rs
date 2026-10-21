@@ -1028,11 +1028,11 @@ fn an_unreadable_transcript_root_keeps_the_history_it_had() {
         201
     );
 
-    let unreadable = vec![root.join("projects")];
+    let unreadable = vec![("claude", root.join("projects"))];
     let blind = sync::refresh(&config, &[readable], since, &unreadable);
     assert_eq!(output(&blind.store), 201, "the month must survive the gap");
     // The report counts the record it kept, in place of the partial read.
-    assert!(blind.local_held);
+    assert_eq!(blind.held, ["claude"]);
     assert_eq!(
         blind.events.iter().map(|e| e.tokens.output).sum::<u64>(),
         201,
@@ -1046,5 +1046,47 @@ fn an_unreadable_transcript_root_keeps_the_history_it_had() {
             .is_some_and(|e| e.contains("could not be read")),
         "{:?}",
         blind.status.error
+    );
+}
+
+/// A root of one provider that cannot be read holds that provider only. On a
+/// store with nothing in it yet, holding the whole read cost Claude its spend
+/// because a Kimi folder was locked.
+#[test]
+fn an_unreadable_root_holds_only_its_own_provider() {
+    let root = scratch("unreadable-other");
+    let config = TokenGaugeConfig {
+        cache_file: root.join("tokengauge-usage.json"),
+        ..TokenGaugeConfig::default()
+    };
+    let since = (Utc::now() - Duration::days(7))
+        .with_timezone(&chrono::Local)
+        .date_naive();
+
+    let mut events = vec![event(2, 100, 1)];
+    let outcome = sync::refresh(
+        &config,
+        &events,
+        since,
+        &[("kimi", root.join("kimi-sessions"))],
+    );
+    assert_eq!(outcome.held, ["kimi"]);
+    let stored: u64 = outcome
+        .store
+        .devices
+        .values()
+        .flat_map(|slice| &slice.buckets)
+        .filter(|bucket| bucket.provider == "claude")
+        .map(|bucket| bucket.tokens.output)
+        .sum();
+    assert_eq!(stored, 100, "the readable provider is still recorded");
+
+    // What native_costs does with the outcome.
+    events.retain(|e| !outcome.held.contains(&e.provider));
+    events.extend(outcome.events);
+    assert_eq!(
+        events.iter().map(|e| e.tokens.output).sum::<u64>(),
+        100,
+        "and still reported"
     );
 }

@@ -633,18 +633,18 @@ fn adopting_a_reinstalled_machine_keeps_its_history_and_leaves_the_fleet() {
     sync::store_key(&config.cache_file, &key, true).expect("key");
     let local = sync::local_device_id(&config);
 
-    let outcome = sync::refresh(&config, &[event(1, 10, 1)], since);
+    let outcome = sync::refresh(&config, &[event(0, 10, 1)], since);
     let hostname = outcome.status.devices[0].hostname.clone();
     publish_device(
         &root,
         &key,
         record(OLD_ID, &hostname),
         60,
-        &[event(40 * 24, 500, 9), event(1, 7, 10)],
+        &[event(40 * 24, 500, 9), event(0, 7, 10)],
         &[],
     );
     assert_eq!(
-        sync::refresh(&config, &[event(1, 10, 1)], since)
+        sync::refresh(&config, &[event(0, 10, 1)], since)
             .status
             .devices
             .len(),
@@ -680,7 +680,7 @@ fn adopting_a_reinstalled_machine_keeps_its_history_and_leaves_the_fleet() {
         "peers receive the history past the wire retention, once"
     );
 
-    let outcome = sync::refresh(&config, &[event(1, 10, 1)], since);
+    let outcome = sync::refresh(&config, &[event(0, 10, 1)], since);
     assert_eq!(outcome.status.error, None);
     assert_eq!(outcome.status.devices.len(), 1);
     assert_eq!(
@@ -851,4 +851,75 @@ fn a_folder_that_lost_every_peer_at_once_drops_nobody() {
     let status = sync::refresh(&config, &[event(0, 20, 2)], since).status;
     assert!(status.published);
     assert_eq!(status.devices.len(), 2, "{:?}", status.devices);
+}
+
+/// Two machines, one of them the old entry, with the old one absorbed.
+fn adopt_fixture(name: &str) -> (PathBuf, TokenGaugeConfig, FleetKey) {
+    let root = scratch(name);
+    let config = config(&root);
+    let since = Utc::now().with_timezone(&chrono::Local).date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+    sync::refresh(&config, &[event(0, 10, 1)], since);
+    publish_device(
+        &root,
+        &key,
+        record(OLD_ID, "box"),
+        60,
+        &[event(40 * 24, 500, 9)],
+        &[],
+    );
+    sync::refresh(&config, &[event(0, 10, 1)], since);
+    (root, config, key)
+}
+
+fn store_devices(config: &TokenGaugeConfig) -> Vec<String> {
+    let (store, _) = sync::store::load(&config.cache_file);
+    store.devices.keys().cloned().collect()
+}
+
+#[test]
+fn with_sync_off_an_adoption_stays_on_this_machine() {
+    let (root, mut config, key) = adopt_fixture("adopt-offline");
+    config.sync.enabled = false;
+    let before = std::fs::read(
+        root.join("shared/v1")
+            .join(key.object_name(&sync::local_device_id(&config))),
+    )
+    .expect("own object");
+
+    let adoption = sync::adopt(&config, OLD_ID, || {}).expect("adopted locally");
+    assert_eq!(adoption.buckets, 1);
+    assert!(!store_devices(&config).contains(&OLD_ID.to_string()));
+    assert!(
+        objects(&root).contains(&key.object_name(OLD_ID)),
+        "a disabled transport is not touched"
+    );
+    assert_eq!(
+        std::fs::read(
+            root.join("shared/v1")
+                .join(key.object_name(&sync::local_device_id(&config)))
+        )
+        .expect("own object"),
+        before,
+        "nothing uploaded"
+    );
+}
+
+#[test]
+fn an_adoption_that_cannot_publish_deletes_nothing() {
+    let (root, config, _) = adopt_fixture("adopt-unpublished");
+    let shared = root.join("shared");
+    std::fs::remove_dir_all(&shared).expect("clear");
+    std::fs::write(&shared, b"not a folder").expect("block the transport");
+
+    let failed = sync::adopt(&config, OLD_ID, || {}).expect_err("the publish fails");
+    assert!(
+        format!("{failed:#}").contains("nothing was deleted"),
+        "{failed:#}"
+    );
+    assert!(
+        store_devices(&config).contains(&OLD_ID.to_string()),
+        "the store is not saved over an adoption that did not land"
+    );
 }

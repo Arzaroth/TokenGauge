@@ -44,6 +44,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Everything runs from here, called on the last line, so a download cut short
+# by the pipe runs nothing at all. Not indented: the heredocs below are
+# written out as they stand.
+main() {
+
 PLACEMENT_OVERRIDE="${TOKENGAUGE_PLACEMENT:-}"
 INSTALL_DAEMON=true
 INSTALL_TRAY=true
@@ -415,3 +420,6 @@ else
   echo "  ghostty -e tokengauge-tui"
   echo "  alacritty -e tokengauge-tui"
 fi
+}
+
+main "$@"

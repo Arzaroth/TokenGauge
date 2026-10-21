@@ -1,0 +1,58 @@
+# Maintainer: Marc-Etienne Barrut <lekva+github@arzaroth.com>
+#
+# Builds TokenGauge from the release's source tarball. The release workflow
+# attaches a copy of this file with pkgver and sha256sums filled in; the copy
+# in the repository keeps SKIP, since it lives inside the tarball it would
+# have to checksum.
+
+pkgname=tokengauge
+pkgver=0.46.0
+pkgrel=1
+pkgdesc="Token usage, costs and limits for AI coding assistants in Waybar, KDE Plasma, GNOME Shell and a TUI"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Arzaroth/TokenGauge"
+license=('MIT OR WTFPL')
+depends=('gcc-libs' 'glibc')
+makedepends=('cargo' 'nodejs' 'pnpm' 'glib2')
+optdepends=('waybar: the bar module'
+  'libnotify: limit and update notifications')
+conflicts=('tokengauge-bin')
+options=('!lto' '!debug')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "TokenGauge-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+  pnpm install --frozen-lockfile
+}
+
+build() {
+  cd "TokenGauge-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p tokengauge-waybar -p tokengauge-tui
+  scripts/build.sh
+}
+
+check() {
+  cd "TokenGauge-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo test --frozen -p tokengauge-core --lib
+}
+
+package() {
+  cd "TokenGauge-$pkgver"
+  install -Dm755 target/release/tokengauge "$pkgdir/usr/bin/tokengauge"
+  install -Dm755 target/release/tokengauge-tui "$pkgdir/usr/bin/tokengauge-tui"
+  ln -s tokengauge "$pkgdir/usr/bin/tokengauge-waybar"
+  install -d "$pkgdir/usr/lib/systemd/user"
+  sed 's|^ExecStart=%h/\.local/bin/tokengauge |ExecStart=/usr/bin/tokengauge |' \
+    scripts/tokengauge-daemon.service >"$pkgdir/usr/lib/systemd/user/tokengauge-daemon.service"
+  install -d "$pkgdir/usr/share/plasma/plasmoids" "$pkgdir/usr/share/gnome-shell/extensions"
+  cp -r --no-preserve=ownership build/frontends/plasma/org.tokengauge.plasmoid "$pkgdir/usr/share/plasma/plasmoids/"
+  cp -r --no-preserve=ownership build/frontends/gnome/tokengauge@arzaroth.github.io "$pkgdir/usr/share/gnome-shell/extensions/"
+  glib-compile-schemas "$pkgdir/usr/share/gnome-shell/extensions/tokengauge@arzaroth.github.io/schemas"
+  install -Dm644 scripts/waybar-snippet.jsonc "$pkgdir/usr/share/doc/$pkgname/waybar-snippet.jsonc"
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" LICENSE LICENSE-MIT LICENSE-WTFPL THIRD-PARTY.md
+}

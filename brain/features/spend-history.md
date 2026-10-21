@@ -60,7 +60,8 @@ fortnight. `cost::read_history` reads as far back as the store holds and
 `sync::backfill` upserts it once, behind `tokengauge-backfilled`, before the first
 fetch and never on a poll (it defeats `jsonl_files`'s mtime filter). The marker is
 written even when nothing was found. `--backfill` forces it again, e.g. after
-restoring transcripts.
+restoring transcripts. It replaces only from the oldest event it found, so the
+days before that (rotated away, or adopted with `--sync-adopt`) survive.
 
 ## What the screens draw
 

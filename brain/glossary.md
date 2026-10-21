@@ -124,6 +124,11 @@ commits; the **Avoid** list names the synonyms that blur it.
   XChaCha20-Poly1305 ciphertext. Its `key_id` lets a file under another key be
   skipped by name.
 - **Transport** - where contributions live: `dir` (a synced folder) or `s3`.
+- **Adopt** - fold a retired device's history into this one and drop it from the
+  fleet (`--sync-adopt`): the same machine before a reinstall gave it a new id.
+  The adopter lists it under `adopted`, so peers fold their own copy too. See
+  [architecture/sync.md](architecture/sync.md#adopting-a-reinstalled-machine).
+  Avoid: merge, import, migrate.
 
 ## History
 

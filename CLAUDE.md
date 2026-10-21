@@ -453,7 +453,25 @@ Three invariants are easy to regress:
 The first fetch runs a one-time deep read (`cost::read_history`) behind
 `tokengauge-backfilled`, because a fetch's window reaches back only to the start
 of the month and the feature would otherwise ship empty for a year. It defeats
-the mtime filter `jsonl_files` leans on, so it must never run on a poll.
+the mtime filter `jsonl_files` leans on, so it must never run on a poll. It
+replaces the local slice only from the oldest event it found, never from its
+400-day reach: replacing from the reach erased every day whose transcript had
+been rotated away, and would erase a `--sync-adopt`ed history the same way.
+
+Three fleet-store rules came in with `--sync-adopt` (decision 0005,
+`brain/architecture/sync.md`):
+
+- **Every writer holds `store::lock` from load to save.** The store is read and
+  written whole, so an adoption saved while the daemon was mid-cycle would come
+  back undone with the retired object already deleted, and the next cycle would
+  drop the retired slice for good.
+- **A peer is dropped for a vanished object only when this target listed it
+  before and the listing holds our own object.** A new folder or bucket lacks
+  every peer that has not moved yet; dropping on that loses their history past
+  the wire retention. `list_target` is what starts `objects` over.
+- **`adopted` rides on every contribution, not only the wide one.** A peer that
+  was offline for the wide publish folds its own copy on the marker; without it,
+  that peer would drop the retired slice as vanished and keep 35 days of it.
 
 Design notes in `brain/features/spend-history.md`, vocabulary in
 `brain/glossary.md`.
@@ -669,7 +687,7 @@ is the procedure.
   cross-cutting subsystem -> add or update a `brain/architecture/*.md` and its
   index rows.
 - Capture the WHY in `brain/decisions.md` (a decision with real alternatives gets
-  the next `NNNN` number; ADRs 0001-0004 live there) and new or renamed terms in
+  the next `NNNN` number; ADRs 0001-0005 live there) and new or renamed terms in
   `brain/glossary.md`, with an `Avoid:` list, as they happen.
 - A new rule a future change could break, with the incident that taught it, goes
   in the matching section of this file; the brain doc links to it rather than

@@ -41,7 +41,9 @@ Key `(utc_hour, provider, model)`, value a `TokenCounts` (the five fields of
 - **Granularity is a field.** A bucket carries `g: "hour"`; history rolls buckets
   older than `HOURLY_RETENTION_DAYS` (35) up to `g: "day"` locally (see
   [../features/spend-history.md](../features/spend-history.md)), but day buckets
-  are never sent: the rollup floor sits at or above `WIRE_RETENTION_DAYS`. A
+  are not sent on a regular cycle: the rollup floor sits at or above
+  `WIRE_RETENTION_DAYS`. The one exception is an adoption's wide publish (see
+  [Adopting a reinstalled machine](#adopting-a-reinstalled-machine)). A
   ccusage-sourced provider has no per-call events, so it cannot produce hour
   buckets and does not sync: its `[sync.providers]` entry is accepted and
   ignored, it grows no `tokens_by_device` section, and `--doctor` names it. A
@@ -67,7 +69,13 @@ maintained on every fetch whether or not sync is on (the gate is in
 
 - A transcript re-read **replaces** every self bucket from the read window's start
   on (`FleetStore::upsert_local`) and leaves older ones untouched, so a poll never
-  double-counts.
+  double-counts. The deep re-read (`FleetStore::backfill_local`) replaces only
+  from the oldest event it found: a day no transcript mentions is unknown, not
+  zero, and may hold rotated-away or adopted history.
+- **One writer at a time.** Every writer loads the whole store and saves it
+  back, so `refresh`, `backfill`, `forget` and `adopt` hold
+  `tokengauge-fleet.lock` (`store::lock`) from load to save. `refresh` carries on
+  unlocked when the lock cannot be taken.
 - Separate file from the snapshot on purpose: the snapshot is rewritten wholesale
   on every fetch; the store must not be.
 - **Store retention and wire retention differ.** The store keeps
@@ -107,7 +115,8 @@ Plaintext payload, before compression and encryption:
     { "h": "2026-08-25T14", "p": "claude", "m": "claude-opus-5", "g": "hour",
       "i": 812, "o": 3122, "cw5": 15300, "cw1h": 0, "cr": 981233 }
   ],
-  "days": [ { "d": "2026-08-25", "n": 812, "x": "5a1e9f3c00b47d21" } ]
+  "days": [ { "d": "2026-08-25", "n": 812, "x": "5a1e9f3c00b47d21" } ],
+  "adopted": ["dd8008fc..."]
 }
 ```
 
@@ -119,6 +128,9 @@ Plaintext payload, before compression and encryption:
   not keep stable across releases.
 - `writtenAtMs` drives freshness display, never merge order: nothing needs
   ordering.
+- `adopted` lists the devices this one took over with `--sync-adopt`, omitted
+  when empty (so the content hash of a device that adopted nothing is
+  unchanged). Carried on every contribution, not only the first.
 - Size: a heavy week is about 900 buckets, ~90 KB of JSON; 35 days stays under
   half a megabyte before gzip.
 
@@ -178,7 +190,9 @@ Each cycle that rebuilds costs, before `write_cache_full`:
 
 1. Bucket local events; publish only if the content hash changed, so an idle
    machine writes nothing.
-2. Pull peers conditionally and merge them into the store.
+2. Pull peers conditionally and merge them into the store, then fold every
+   device a peer's `adopted` names (`settle_adoptions`) and drop the peers
+   whose object vanished (`drop_vanished`, below).
 3. Feed the store into `build_report` as synthetic events beside local ones.
 
 The merged `CostInfo` lands in the snapshot where the local one did, so every
@@ -190,6 +204,42 @@ Failure is never fatal: a transport error keeps the last merged peer set,
 surfaces in `--doctor`, the `sync` object on `--json` and the COST section's
 `Sync` row, and the panel renders. The local peer cache means a cold start with
 the network down still shows the fleet.
+
+## Adopting a reinstalled machine
+
+A reinstall writes a new `/etc/machine-id`, so the same machine joins the fleet
+as a new device and its old entry freezes beside it with the same hostname. The
+new device cannot rebuild the old history (`window_start`), so `--sync-forget`
+on the old entry would delete days that exist nowhere else. `--sync-adopt
+<device>` (`sync::adopt`, decision 0005) keeps one device with all of it:
+
+1. **Resolve** the device like `--sync-forget` (id, label or hostname), refusing
+   this machine and an ambiguous name. The two entries share a hostname, so the
+   error lists ids.
+2. **Fold** (`FleetStore::adopt`): buckets and day digests strictly before the
+   local slice's `covers_from` move over; inside that window the local data is
+   authoritative. A rolled-up day straddling the edge stays behind. The local
+   `covers_from` drops to the old one's and the slice records the id in
+   `adopted`. Granularity is kept; `compact` and `prune` are idempotent over the
+   result.
+3. **Publish wide**: the local contribution with `STORE_RETENTION_DAYS` rather
+   than `retention_days`, day buckets included, so peers receive the history and
+   not only this machine. A failed publish deletes nothing.
+4. **Delete** the old object, then save. A failed delete is an error and leaves
+   the store unsaved; running the command again finishes it.
+
+The next regular cycle publishes at the usual retention, and a peer's `absorb`
+keeps everything older than that contribution's `coversFromHour`.
+
+**Peers.** A peer that missed the wide publish still holds its own copy of the
+old device. Every cycle folds each device a slice's `adopted` names into that
+slice by the same rule, so its copy moves rather than counting twice; a peer
+naming this machine is never obeyed. Separately, a peer whose object this
+target **used to list** and no longer does is dropped (`drop_vanished`), which
+also makes `--sync-forget` reach the other machines. Two guards: `objects` is
+started over when the transport target changes (`list_target`), so a new folder
+lacking a peer that has not moved yet drops nobody; and a listing without this
+machine's own object drops nobody.
 
 ## Hazards
 
@@ -208,7 +258,9 @@ the network down still shows the fleet.
    old key is deleted. The real cost is peer history older than `retention_days`.
 6. **A retired machine** is reported quiet after `peer_max_age_days`, keeps its
    historical days, and leaves the by-device rows once it has no tokens in the
-   period. `--sync-forget` deletes its object.
+   period. `--sync-forget` deletes its object; every peer then drops it.
+   **The same machine after a reinstall** is a new id: `--sync-adopt` folds the
+   old entry's history into it instead.
 7. **A cloned machine id** (VM template) shows as one id under two hostnames;
    `--doctor` warns. Cure: regenerate `/etc/machine-id`
    (`systemd-machine-id-setup`) or delete `tokengauge-device-id` beside the
@@ -237,7 +289,7 @@ against a fake transport (`crates/tokengauge-core/tests/fleet_sync.rs`).
 
 ## Sources
 
-- `crates/tokengauge-core/src/sync/{mod,contribution,fleet,hour,crypto,transport,s3,run,report,store,config}.rs`
+- `crates/tokengauge-core/src/sync/{mod,contribution,fleet,hour,crypto,transport,s3,run,report,store,config}.rs` (`adopt`, `settle_adoptions`, `drop_vanished`, `store::lock`)
 - `crates/tokengauge-core/src/fetch.rs` (`native_costs`), `crates/tokengauge-core/src/cost/mod.rs` (`window_start`, `dedup_key`)
 - `crates/tokengauge-core/src/device.rs`, `crates/tokengauge-core/src/doctor.rs`
 - `crates/tokengauge-waybar/src/sync_cli.rs`, `crates/tokengauge-tui/src/sync_view.rs`

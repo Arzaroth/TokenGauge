@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `--sync-adopt <device>` keeps a reinstalled machine's history. A reinstall
+  gives the machine a new id, so the fleet saw a second device with the same
+  hostname, and `--sync-forget` on the old one deleted history no transcript
+  could rebuild. Adopting moves the old entry's days from before this
+  machine's own records into this machine, publishes them so the other
+  machines get them too, and then removes the old entry. The other machines
+  fold their own copy in as well, so no day is counted twice.
+
+### Fixed
+
+- A device dropped with `--sync-forget` now leaves every machine in the fleet,
+  not only the one the command ran on.
+- `--backfill` no longer erases days whose transcripts have been rotated away.
+- `--sync-forget`, `--backfill` and a daemon cycle no longer undo each other's
+  changes to the fleet store when they run at the same time.
+- When a device name matches several devices, the error lists their ids.
+
 ## [0.46.0] - 2026-10-20
 
 ### Added

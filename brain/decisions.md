@@ -61,6 +61,36 @@ would give real revocation costs a flow larger than the feature.
 
 See [architecture/sync.md](architecture/sync.md#envelope-and-key).
 
+### 0005 Adopting a reinstalled machine
+
+Status: shipped.
+
+**Decision.** `--sync-adopt <device>` folds the retired device's days that
+predate this machine's coverage into this machine's slice, publishes once with
+the whole store, deletes the retired object, and names the retired id in an
+`adopted` list carried on every later contribution. Peers fold their own copy by
+the same rule on every cycle, and drop a peer whose object vanished from a
+target they listed it on before.
+
+**Why.** A reinstall changes the device id, and the retired entry holds history
+no transcript can rebuild. Two entries for one machine double-count every day
+whose digests differ.
+
+**Rejected.**
+- *Pruning vanished devices alone*: a peer that missed the wide publish (a
+  laptop closed for a day) would drop its copy before receiving the history,
+  and keep only the wire retention.
+- *Always publishing the whole store*: doubles every upload to cover a one-off.
+- *Keeping the retired object*: its days keep counting beside the adopted copy
+  wherever the digests differ.
+- *Merging inside the local window too*: the local device read those days from
+  its own transcripts; a second copy can only double them.
+
+**Consequences.** A peer on an older build ignores `adopted` and double-counts
+until it updates or the retired slice ages out. A sync tool that propagates the
+delete before the new object can still cost a peer its copy past the wire
+retention. See [architecture/sync.md](architecture/sync.md#adopting-a-reinstalled-machine).
+
 ### Other sync decisions
 
 - **Tokens, never dollars, cross machines.** Same rule as the cost fixture:

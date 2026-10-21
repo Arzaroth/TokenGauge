@@ -15,7 +15,9 @@ fleet key, so setup is not reimplemented per desktop:
 1. **Core commands**: `--sync-init` (generate and print the key), `--sync-join -`
    (key from stdin; an argument lands in shell history and `/proc/<pid>/cmdline`),
    `--sync-force`, `--sync-status [--json]`, `--sync-test` (probe round trip),
-   `--sync-forget <device>`.
+   `--sync-forget <device>`, `--sync-adopt <device>` (fold a reinstalled
+   machine's old entry into this one, see
+   [../architecture/sync.md](../architecture/sync.md#adopting-a-reinstalled-machine)).
 2. **The TUI sync screen** (`S`, `sync_view.rs`): `e` enable, `d` folder, `x`
    switch to S3, `g` generate, `j` join, `t` test, live device list. The TUI is
    exempt from layout parity, so it hosts the multi-step flow.

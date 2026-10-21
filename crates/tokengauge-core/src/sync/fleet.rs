@@ -935,7 +935,9 @@ fn bucket_event(bucket: &Bucket, offset: FixedOffset) -> Option<UsageEvent> {
     Some(UsageEvent {
         provider,
         model: bucket.model.clone(),
-        date: bucket.hour.start().with_timezone(&offset).date_naive(),
+        // A rolled-up day sits at UTC noon and is that UTC date wherever it is
+        // read; local time would move it a day for a reader past UTC+12.
+        date: bucket_date(bucket, offset),
         at: bucket.hour.start(),
         tokens: bucket.tokens,
         key: None,
@@ -1031,6 +1033,22 @@ mod tests {
 
     fn hour(text: &str) -> Hour {
         Hour::parse(text).expect("hour stamp")
+    }
+
+    /// A rolled-up day is its UTC date for every reader. Read through local
+    /// time, Jan 31 at UTC noon is Feb 1 at UTC+14, and moves to another month.
+    #[test]
+    fn a_rolled_up_day_keeps_its_utc_date_east_of_twelve() {
+        let bucket = Bucket {
+            hour: hour("2026-01-31T12"),
+            provider: "claude".into(),
+            model: "m".into(),
+            granularity: Granularity::Day,
+            tokens: TokenCounts::default(),
+        };
+        let east = FixedOffset::east_opt(14 * 3600).unwrap();
+        let event = bucket_event(&bucket, east).unwrap();
+        assert_eq!(event.date, NaiveDate::from_ymd_opt(2026, 1, 31).unwrap());
     }
 
     fn event(

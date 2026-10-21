@@ -79,11 +79,12 @@ pub struct DeviceSlice {
     /// Devices whose history this one took over with [`FleetStore::adopt`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adopted: Vec<Adopted>,
-    /// The calls this device's own hourly buckets count, by the readers'
-    /// dedup key, so a read with gaps can add what is new without counting
-    /// again what is already in. Local only: nothing here is published.
+    /// The calls this device's own hourly buckets count, per provider and
+    /// hour, by the readers' dedup key, so a read with gaps can add what is
+    /// new without counting again what is already in. Local only: nothing
+    /// here is published.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub counted: BTreeMap<u64, Counted>,
+    pub counted: BTreeMap<String, BTreeMap<Hour, KeySet>>,
     /// Per provider, the hour from which `counted` holds every call a whole
     /// read found. Below it, or for a provider absent here, the keys say
     /// nothing either way.
@@ -91,11 +92,56 @@ pub struct DeviceSlice {
     pub counted_from: BTreeMap<String, Hour>,
 }
 
-/// One counted call: where its tokens sit.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Counted {
-    pub hour: Hour,
-    pub provider: String,
+/// The keys of the calls one hour of one provider counts, folded to 32 bits
+/// and written as one base64 blob: stored a key at a time, a heavy month of
+/// calls was forty times the rest of the store. Two calls collide only within
+/// one provider-hour, a few hundred keys in four billion.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeySet(BTreeSet<u32>);
+
+impl KeySet {
+    fn fold(key: u64) -> u32 {
+        (key ^ (key >> 32)) as u32
+    }
+
+    pub fn contains(&self, key: u64) -> bool {
+        self.0.contains(&Self::fold(key))
+    }
+
+    pub fn insert(&mut self, key: u64) {
+        self.0.insert(Self::fold(key));
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Serialize for KeySet {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let bytes: Vec<u8> = self.0.iter().flat_map(|key| key.to_le_bytes()).collect();
+        serializer.serialize_str(&crate::provider::base64_encode(&bytes))
+    }
+}
+
+impl<'de> Deserialize<'de> for KeySet {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        let bytes = crate::provider::base64_decode(&raw)
+            .ok_or_else(|| serde::de::Error::custom("counted keys are not base64"))?;
+        Ok(Self(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_le_bytes(*c))
+                .collect(),
+        ))
+    }
 }
 
 /// What [`FleetStore::adopt`] moved from the retired device.
@@ -550,7 +596,10 @@ impl FleetStore {
         let floor = Hour::containing(now).minus_days(hourly_days.max(HOURLY_RETENTION_DAYS));
         for slice in self.devices.values_mut() {
             // Keys go with the hourly buckets they describe.
-            slice.counted.retain(|_, counted| counted.hour >= floor);
+            for hours in slice.counted.values_mut() {
+                hours.retain(|hour, _| *hour >= floor);
+            }
+            slice.counted.retain(|_, hours| !hours.is_empty());
             for from in slice.counted_from.values_mut() {
                 *from = (*from).max(floor);
             }
@@ -735,16 +784,16 @@ impl FleetStore {
                 let Some(key) = event.key else {
                     continue;
                 };
-                if slice.counted.contains_key(&key) {
+                let keys = slice
+                    .counted
+                    .entry(event.provider.to_string())
+                    .or_default()
+                    .entry(hour)
+                    .or_default();
+                if keys.contains(key) {
                     continue;
                 }
-                slice.counted.insert(
-                    key,
-                    Counted {
-                        hour,
-                        provider: event.provider.to_string(),
-                    },
-                );
+                keys.insert(key);
             } else if held_days.contains(&(
                 hour.utc_date(),
                 event.provider.to_string(),
@@ -1100,11 +1149,11 @@ fn replace_read(slice: &mut DeviceSlice, floor: Hour, events: &[UsageEvent]) {
     slice.buckets.sort_by(sort_key);
 
     // A whole read: its keys are now the complete list from each floor on.
-    slice.counted.retain(|_, counted| {
-        !floors
-            .get(counted.provider.as_str())
-            .is_some_and(|first| counted.hour >= *first)
-    });
+    for (provider, first) in &floors {
+        if let Some(hours) = slice.counted.get_mut(*provider) {
+            hours.retain(|hour, _| *hour < *first);
+        }
+    }
     for event in events {
         let hour = Hour::containing(event.at);
         if let Some(key) = event.key
@@ -1112,13 +1161,13 @@ fn replace_read(slice: &mut DeviceSlice, floor: Hour, events: &[UsageEvent]) {
                 .get(event.provider)
                 .is_some_and(|first| hour >= *first)
         {
-            slice.counted.insert(
-                key,
-                Counted {
-                    hour,
-                    provider: event.provider.to_string(),
-                },
-            );
+            slice
+                .counted
+                .entry(event.provider.to_string())
+                .or_default()
+                .entry(hour)
+                .or_default()
+                .insert(key);
         }
     }
     for (provider, first) in &floors {
@@ -1254,6 +1303,20 @@ mod tests {
             total, 160,
             "the rolled-up day as it was, the empty one filled once"
         );
+    }
+
+    #[test]
+    fn counted_keys_survive_the_store_file() {
+        let mut keys = KeySet::default();
+        for key in [1u64, 0xdead_beef_0000_0001, u64::MAX, 42] {
+            keys.insert(key);
+        }
+        let json = serde_json::to_string(&keys).unwrap();
+        assert!(json.starts_with('"'), "one string, not a list: {json}");
+        let back: KeySet = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, keys);
+        assert!(back.contains(0xdead_beef_0000_0001));
+        assert!(!back.contains(7));
     }
 
     /// A rolled-up day is its UTC date for every reader. Read through local

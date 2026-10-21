@@ -126,7 +126,7 @@ Edit `~/.config/tokengauge/config.toml`:
 | `notifications.enabled` | Send desktop notifications | `true` |
 | `notifications.thresholds` | Percent thresholds to fire on | `[50, 80, 95]` |
 | `credentials.store` | remuda's credential store, read to show every stored login. Empty turns it off | `~/.local/share/remuda/credentials` (`%LOCALAPPDATA%\remuda\credentials` on Windows) |
-| `credentials.inactive_refresh_secs` | How long a credential the CLI is not signed into is carried before it is asked again | `1800` |
+| `credentials.inactive_refresh_secs` | How long a credential the CLI is not signed into is carried before it is asked again (`refresh_secs` while its 5-hour window is past 10%) | `1800` |
 | `update.check` | Daemon checks GitHub releases and notifies when a newer version exists | `true` |
 | `update.check_interval_secs` | Seconds between daemon update checks | `21600` |
 
@@ -357,7 +357,9 @@ split_bars = true
 
 The CLI's own login is asked on every refresh. A credential it is not signed
 into is asked every `inactive_refresh_secs` (30 minutes, remuda's own refresh
-period) or as soon as one of its windows resets. A stored credential whose
+period) or as soon as one of its windows resets. Once its 5-hour window is past
+10%, something else is spending from it, another machine or another tool, and
+it is asked as often as the CLI's own login. A stored credential whose
 token has expired shows as expired rather than as an error: remuda's timer
 refreshes it. Adding a credential or switching with `remuda use` refreshes the
 panel straight away.

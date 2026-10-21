@@ -154,8 +154,8 @@ keeping inactive tokens alive are the switcher's job.
   is its own group and counts in the total only when it cannot be a stored one.
 - Store security: owner-only permissions on Unix, refusing a directory or skipping
   a file that fails; no token or email reaches anything written.
-- Cadence: live every refresh, inactive every `inactive_refresh_secs` (1800) or on
-  a reset; a store change or `.last-switch.json` entry makes the snapshot stale.
+- Cadence: live every refresh, inactive every `inactive_refresh_secs` (1800, or
+  `refresh_secs` while its 5-hour window is past 10%) or on a reset; a store change or `.last-switch.json` entry makes the snapshot stale.
 - The config default does not read remuda's environment variables, which the
   daemon and a frontend can see differently.
 - The panel spec input stays one `ProviderRow`; no new `SectionKind`, so six

@@ -37,23 +37,139 @@ const PRICE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// Per-token prices in USD. Field names match LiteLLM's so the same struct
 /// parses the upstream table and our slimmed cache.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+#[serde(from = "RawPrice", into = "RawPrice")]
 pub struct ModelPrice {
-    #[serde(default, rename = "input_cost_per_token")]
     pub input: f64,
-    #[serde(default, rename = "output_cost_per_token")]
     pub output: f64,
-    #[serde(default, rename = "cache_creation_input_token_cost")]
     pub cache_write_5m: f64,
     /// A 1h cache write costs about 60% more than the 5m one, and on this
     /// machine 97.7% of cache-creation tokens are 1h writes: most of the cache
     /// bill rides on telling the two apart.
-    #[serde(default, rename = "cache_creation_input_token_cost_above_1hr")]
     pub cache_write_1h: f64,
-    #[serde(default, rename = "cache_read_input_token_cost")]
+    pub cache_read: f64,
+    /// What a request whose prompt runs past a threshold is billed instead,
+    /// for every token of it: Anthropic's past 200k, OpenAI's past 272k.
+    pub long_context: Option<LongContext>,
+}
+
+/// A long-context tier. A price left at zero is one the tier does not move.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LongContext {
+    /// Prompt tokens - input, cache reads and cache writes - past which it
+    /// applies.
+    pub above: u64,
+    pub input: f64,
+    pub output: f64,
+    pub cache_write_5m: f64,
+    pub cache_write_1h: f64,
     pub cache_read: f64,
 }
 
+/// LiteLLM's names for the five prices. A tier is the same name with
+/// `_above_<N>k_tokens` on the end.
+const PRICE_FIELDS: [&str; 5] = [
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "cache_creation_input_token_cost",
+    "cache_creation_input_token_cost_above_1hr",
+    "cache_read_input_token_cost",
+];
+
+#[derive(Deserialize, Serialize)]
+struct RawPrice {
+    #[serde(default)]
+    input_cost_per_token: f64,
+    #[serde(default)]
+    output_cost_per_token: f64,
+    #[serde(default)]
+    cache_creation_input_token_cost: f64,
+    #[serde(default)]
+    cache_creation_input_token_cost_above_1hr: f64,
+    #[serde(default)]
+    cache_read_input_token_cost: f64,
+    /// The rest of a LiteLLM entry, where the tiers are. Only they are written
+    /// back.
+    #[serde(flatten)]
+    rest: BTreeMap<String, serde_json::Value>,
+}
+
+impl From<RawPrice> for ModelPrice {
+    fn from(raw: RawPrice) -> Self {
+        Self {
+            input: raw.input_cost_per_token,
+            output: raw.output_cost_per_token,
+            cache_write_5m: raw.cache_creation_input_token_cost,
+            cache_write_1h: raw.cache_creation_input_token_cost_above_1hr,
+            cache_read: raw.cache_read_input_token_cost,
+            long_context: long_context(&raw.rest),
+        }
+    }
+}
+
+impl From<ModelPrice> for RawPrice {
+    fn from(price: ModelPrice) -> Self {
+        let mut rest = BTreeMap::new();
+        if let Some(tier) = price.long_context {
+            let prices = [
+                tier.input,
+                tier.output,
+                tier.cache_write_5m,
+                tier.cache_write_1h,
+                tier.cache_read,
+            ];
+            for (field, value) in PRICE_FIELDS.iter().zip(prices) {
+                if value > 0.0 {
+                    rest.insert(
+                        format!("{field}_above_{}k_tokens", tier.above / 1000),
+                        serde_json::Value::from(value),
+                    );
+                }
+            }
+        }
+        Self {
+            input_cost_per_token: price.input,
+            output_cost_per_token: price.output,
+            cache_creation_input_token_cost: price.cache_write_5m,
+            cache_creation_input_token_cost_above_1hr: price.cache_write_1h,
+            cache_read_input_token_cost: price.cache_read,
+            rest,
+        }
+    }
+}
+
+/// The lowest threshold that reprices input. Variants with a further suffix
+/// (`_priority`, `_batches`, `_flex`) are service tiers this build does not
+/// tell apart, and are left alone.
+fn long_context(rest: &BTreeMap<String, serde_json::Value>) -> Option<LongContext> {
+    let tier_price = |field: &str, k: u64| {
+        rest.get(&format!("{field}_above_{k}k_tokens"))
+            .and_then(serde_json::Value::as_f64)
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(0.0)
+    };
+    let above = rest
+        .keys()
+        .filter_map(|key| {
+            key.strip_prefix("input_cost_per_token_above_")?
+                .strip_suffix("k_tokens")?
+                .parse::<u64>()
+                .ok()
+        })
+        .filter(|k| tier_price(PRICE_FIELDS[0], *k) > 0.0)
+        .min()?;
+    Some(LongContext {
+        above: above * 1000,
+        input: tier_price(PRICE_FIELDS[0], above),
+        output: tier_price(PRICE_FIELDS[1], above),
+        cache_write_5m: tier_price(PRICE_FIELDS[2], above),
+        cache_write_1h: tier_price(PRICE_FIELDS[3], above),
+        cache_read: tier_price(PRICE_FIELDS[4], above),
+    })
+}
+
 impl ModelPrice {
+    /// Every token at the base price. Right for an aggregate, where whether a
+    /// tier applied is a question about each request inside it.
     pub fn cost(&self, t: &TokenCounts) -> f64 {
         // Models with no separate 1h entry bill both writes the same.
         let write_1h = if self.cache_write_1h > 0.0 {
@@ -67,6 +183,26 @@ impl ModelPrice {
             + write_1h * t.cache_write_1h as f64
             + self.cache_read * t.cache_read as f64
     }
+
+    /// One request, at the long-context tier when its prompt ran past it.
+    pub fn cost_of_request(&self, t: &TokenCounts) -> f64 {
+        let prompt = t.input + t.cache_read + t.cache_write_5m + t.cache_write_1h;
+        match self.long_context {
+            Some(tier) if prompt > tier.above => {
+                let or = |tiered: f64, base: f64| if tiered > 0.0 { tiered } else { base };
+                Self {
+                    input: or(tier.input, self.input),
+                    output: or(tier.output, self.output),
+                    cache_write_5m: or(tier.cache_write_5m, self.cache_write_5m),
+                    cache_write_1h: or(tier.cache_write_1h, self.cache_write_1h),
+                    cache_read: or(tier.cache_read, self.cache_read),
+                    long_context: None,
+                }
+                .cost(t)
+            }
+            _ => self.cost(t),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -75,9 +211,9 @@ pub struct PriceTable {
 }
 
 /// Strip a bracketed context-window suffix: `claude-opus-4-8[1m]` is the same
-/// model on a longer context. LiteLLM carries no entry for the variant and no
-/// `above_200k` tier for these models, so it is rated at the base price rather
-/// than at a premium we would have to invent.
+/// model on a longer context. LiteLLM carries no entry for the variant, so it
+/// is rated as the base model, whose long-context tier, where it has one, is
+/// what a request past it is billed - never a premium we would have to invent.
 fn base_model_name(model: &str) -> &str {
     match model.split_once('[') {
         Some((base, _)) => base.trim_end_matches('-'),
@@ -194,6 +330,16 @@ impl PriceTable {
         Self::from_json(VENDORED_PRICES).expect("vendored price table parses")
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_models<'a>(models: impl IntoIterator<Item = (&'a str, ModelPrice)>) -> Self {
+        Self {
+            models: models
+                .into_iter()
+                .map(|(name, price)| (name.to_string(), price))
+                .collect(),
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.models.len()
     }
@@ -291,6 +437,7 @@ impl PriceOverride {
             cache_write_5m: self.cache_write_5m.unwrap_or(base.cache_write_5m),
             cache_write_1h: self.cache_write_1h.unwrap_or(base.cache_write_1h),
             cache_read: self.cache_read.unwrap_or(base.cache_read),
+            long_context: base.long_context,
         }
     }
 }
@@ -824,6 +971,89 @@ mod tests {
         let _ = fs::remove_dir_all(cache_file.parent().expect("parent"));
     }
 
+    /// The shape LiteLLM gives Sonnet 4.5: every price doubles past 200k of
+    /// prompt, the 1h write included, and a priority variant sits beside it.
+    const SONNET_TIERED: &str = r#"{
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token_above_200k_tokens": 6e-06,
+        "output_cost_per_token_above_200k_tokens": 2.25e-05,
+        "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
+        "cache_read_input_token_cost_above_200k_tokens": 6e-07,
+        "input_cost_per_token_above_200k_tokens_priority": 1e-05,
+        "litellm_provider": "anthropic",
+        "max_input_tokens": 1000000
+    }"#;
+
+    #[test]
+    fn a_long_context_tier_is_read_off_the_entry() {
+        let price: ModelPrice = serde_json::from_str(SONNET_TIERED).unwrap();
+        let tier = price.long_context.unwrap();
+        assert_eq!(tier.above, 200_000);
+        assert_eq!(tier.input, 6e-06);
+        assert_eq!(tier.output, 2.25e-05);
+        assert_eq!(tier.cache_write_1h, 1.2e-05);
+        assert_eq!(tier.cache_read, 6e-07);
+        // The slim cache writes the tier back under LiteLLM's names, and
+        // nothing else of the entry.
+        let written = serde_json::to_value(price).unwrap();
+        assert!(
+            written
+                .get("input_cost_per_token_above_200k_tokens")
+                .is_some()
+        );
+        assert!(written.get("litellm_provider").is_none());
+        assert!(
+            written
+                .get("input_cost_per_token_above_200k_tokens_priority")
+                .is_none()
+        );
+        assert_eq!(
+            serde_json::from_value::<ModelPrice>(written).unwrap(),
+            price
+        );
+    }
+
+    /// CodexBar #4302: a request whose prompt ran past the threshold is billed
+    /// at the tier for every token of it, and one at the threshold is not.
+    #[test]
+    fn a_request_past_the_threshold_is_billed_at_the_tier() {
+        let price: ModelPrice = serde_json::from_str(SONNET_TIERED).unwrap();
+        let at = TokenCounts {
+            input: 1_000,
+            cache_read: 199_000,
+            output: 1_000,
+            ..Default::default()
+        };
+        assert_eq!(price.cost_of_request(&at), price.cost(&at));
+        let past = TokenCounts {
+            cache_read: 199_001,
+            ..at
+        };
+        let expected = 6e-06 * 1_000.0 + 6e-07 * 199_001.0 + 2.25e-05 * 1_000.0;
+        assert!((price.cost_of_request(&past) - expected).abs() < 1e-9);
+        // An aggregate is never tiered, however large.
+        assert!(price.cost(&past) < price.cost_of_request(&past));
+    }
+
+    #[test]
+    fn a_model_with_no_tier_bills_a_long_request_at_its_price() {
+        let price: ModelPrice = serde_json::from_str(
+            r#"{"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}"#,
+        )
+        .unwrap();
+        assert!(price.long_context.is_none());
+        let long = TokenCounts {
+            input: 900_000,
+            ..Default::default()
+        };
+        assert_eq!(price.cost_of_request(&long), price.cost(&long));
+    }
+
     #[test]
     fn cost_sums_every_token_class() {
         let p = ModelPrice {
@@ -832,6 +1062,7 @@ mod tests {
             cache_write_5m: 2.0,
             cache_write_1h: 4.0,
             cache_read: 0.5,
+            long_context: None,
         };
         let counts = TokenCounts {
             input: 1,

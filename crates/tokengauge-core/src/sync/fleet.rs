@@ -679,6 +679,7 @@ impl FleetStore {
                     at,
                     tokens: bucket.tokens,
                     key: None,
+                    one_request: false,
                 });
             }
         }
@@ -1032,6 +1033,7 @@ mod tests {
                 ..Default::default()
             },
             key,
+            one_request: false,
         }
     }
 

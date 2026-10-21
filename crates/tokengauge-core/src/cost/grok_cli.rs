@@ -267,6 +267,7 @@ fn read_file(path: &Path, since: NaiveDate, seen: &mut HashSet<u64>, events: &mu
                 at,
                 tokens,
                 key: Some(key),
+                one_request: false,
             });
         }
     }

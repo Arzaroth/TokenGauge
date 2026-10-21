@@ -197,6 +197,7 @@ fn event_from(record: &Record, since: NaiveDate) -> Option<(Option<u64>, UsageEv
             date,
             at,
             key,
+            one_request: true,
             tokens: TokenCounts {
                 input: usage.input_tokens,
                 output: usage.output_tokens,

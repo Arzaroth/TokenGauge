@@ -97,6 +97,11 @@ pub struct UsageEvent {
     /// re-reading the transcripts. `None` where a record carried no identifier
     /// to build one from.
     pub key: Option<u64>,
+    /// The tokens are one API request - a Claude message, a Codex response -
+    /// so whether its prompt ran past a long-context tier can be told. A turn
+    /// of several requests, or a peer's hourly bucket, cannot, and is rated at
+    /// the base price.
+    pub one_request: bool,
 }
 
 /// A rated event, kept only long enough to measure the current session window.
@@ -390,6 +395,7 @@ pub fn build_report(
 
     for event in events {
         let usd = match prices.get(&event.model) {
+            Some(price) if event.one_request => price.cost_of_request(&event.tokens),
             Some(price) => price.cost(&event.tokens),
             None => {
                 if event.tokens.total() > 0 {
@@ -630,6 +636,36 @@ pub fn transcript_roots() -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
+    /// Only a single request can be told to have run past a tier. A bucket of
+    /// the same tokens - a peer's hour - is rated at the base price.
+    #[test]
+    fn only_a_single_request_is_rated_at_its_long_context_tier() {
+        let price: pricing::ModelPrice = serde_json::from_str(
+            r#"{"input_cost_per_token": 1e-06, "output_cost_per_token": 1e-06,
+                "input_cost_per_token_above_200k_tokens": 2e-06}"#,
+        )
+        .unwrap();
+        let prices = pricing::PriceTable::from_models([("claude-sonnet-4-5", price)]);
+        let today = Local::now().date_naive();
+        let event = |one_request| UsageEvent {
+            provider: "claude",
+            model: "claude-sonnet-4-5".into(),
+            date: today,
+            at: Utc::now(),
+            tokens: TokenCounts {
+                input: 300_000,
+                ..Default::default()
+            },
+            key: None,
+            one_request,
+        };
+        let usd = |events: &[UsageEvent]| {
+            build_report(events, &prices, today).costs["claude"].monthly_usd
+        };
+        assert!((usd(&[event(true)]) - 0.6).abs() < 1e-9);
+        assert!((usd(&[event(false)]) - 0.3).abs() < 1e-9);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_root_that_is_there_and_cannot_be_read_is_unreadable() {
@@ -687,6 +723,7 @@ mod tests {
                 ..Default::default()
             },
             key: None,
+            one_request: false,
         }
     }
 

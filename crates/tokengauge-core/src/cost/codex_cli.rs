@@ -360,6 +360,7 @@ pub(super) fn read_file(
                 at,
                 tokens,
                 key: Some(key),
+                one_request: false,
             });
             continue;
         };
@@ -446,6 +447,7 @@ pub(super) fn read_file(
             at: timestamp,
             tokens,
             key: Some(key),
+            one_request: true,
         });
     }
 

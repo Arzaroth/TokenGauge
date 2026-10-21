@@ -52,6 +52,7 @@ fn event(hours_ago: i64, out: u64, key: u64) -> UsageEvent {
             ..Default::default()
         },
         key: Some(key),
+        one_request: false,
     }
 }
 

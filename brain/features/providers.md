@@ -36,12 +36,14 @@ Notes:
   agent with a 403; a 403 therefore reads as "session ended or edge blocked",
   never as a plan problem (`check_cursor_status`).
 - **Cursor team budget.** A team plan's summary can report its pools as zero;
-  the fetch then reads the member's budget (`/api/auth/me` for the email,
+  only then (`wants_member_budget`: every pool absent or zero) the fetch reads
+  the member's budget (`/api/auth/me` for the email,
   `/api/dashboard/teams`, `/api/dashboard/get-team-spend`) and draws it as the
   single primary window. Best effort on every count: one team only (the
   browser's team selection is not ours to read), at most 20 pages of 50 that
-  must all agree and name the member once, a 10s budget. Anything else keeps
-  the summary.
+  must all agree and name the member once, a 10s budget that every request,
+  `/api/auth/me` included, takes its timeout from. Anything else keeps the
+  summary.
 - **Claude extra usage** (`extra_usage_cap`) is an on-demand `CreditLimit`
   that resets monthly, USD only, never uncapped. It is kept while reported
   disabled because it ran out (`out_of_credits`, `monthly_limit_reached`,

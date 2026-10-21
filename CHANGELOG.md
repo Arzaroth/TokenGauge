@@ -53,13 +53,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A transcript folder that exists but cannot be read (a permission error, a
   volume that came up unreadable) no longer lets the spend history be rebuilt
   from the folders that could be read, which dropped every day only it held.
-  The history is kept as it was, the sync status says why, and the one-time
-  backfill runs again once the folder can be read.
+  The history is kept as it was, the spend figures count it in place of the
+  partial read, the sync status says why, and the one-time backfill runs again
+  once the folder can be read.
 - A request whose prompt runs past a model's long-context threshold (Sonnet 4.5
   and the grok-4 line past 200k, gpt-5.4 onwards past 272k) is rated at
   LiteLLM's long-context price rather than the base price. Only single Claude
   messages and Codex responses are tiered; turns of several requests and
-  history buckets stay at the base price.
+  history buckets stay at the base price. The price table bundled for an
+  offline machine carries no tiers yet, so until the first price download a
+  long request is still rated at the base price.
 
 ### Security
 

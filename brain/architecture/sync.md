@@ -85,7 +85,10 @@ maintained on every fetch whether or not sync is on (the gate is in
   `unreadable`) reads as no events. With another root of the same provider
   still readable, the replace would start at that root's oldest event and drop
   every day only the unreadable one held. So this device's record is kept as
-  it was and the sync status carries the error. `sync::backfill` returns the
+  it was and the sync status carries the error, and the report counts that kept
+  record in place of the partial read (`SyncOutcome.local_held`: `events` then
+  carries this device's stored buckets, and `native_costs` drops its own read,
+  so nothing counts twice). `sync::backfill` returns the
   same error without writing its marker, so it runs again once the tree can
   be read.
 - Separate file from the snapshot on purpose: the snapshot is rewritten wholesale

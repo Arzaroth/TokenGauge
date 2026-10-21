@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use super::contribution::{Contribution, DeviceRecord, content_hash};
-use super::fleet::{FleetStore, ObjectState};
+use super::fleet::{Adoption, FleetStore, ObjectState, STORE_RETENTION_DAYS};
 use super::hour::Hour;
 use super::report::{DeviceStatus, OverlapNote, SkippedObject, SyncStatus};
 use super::{SCHEMA_VERSION, crypto, store, transport};
@@ -184,10 +184,7 @@ fn cycle(
         let _ = transport.delete(&previous);
     }
 
-    let providers = config
-        .sync
-        .providers
-        .resolve(&config.providers.enabled_providers());
+    let providers = syncing_providers(config);
     let own_name = key.object_name(&device.id);
 
     if let Some(contribution) = store.contribution(
@@ -276,6 +273,13 @@ fn cycle(
 
     store.last_pull_ms = Some(now.timestamp_millis());
     Ok(())
+}
+
+fn syncing_providers(config: &TokenGaugeConfig) -> Vec<String> {
+    config
+        .sync
+        .providers
+        .resolve(&config.providers.enabled_providers())
 }
 
 /// The contribution's content bound to **where** it goes.
@@ -438,6 +442,66 @@ pub fn forget(config: &TokenGaugeConfig, wanted: &str) -> Result<String> {
     store.devices.remove(&id);
     store::save(&config.cache_file, &store)?;
     Ok(label)
+}
+
+/// Take over a retired device's history - the same machine before a reinstall
+/// gave it a new machine id - and drop it from the fleet.
+///
+/// Its days predating this machine's coverage move into this machine's slice
+/// (see [`FleetStore::adopt`]), which is then published with everything the
+/// store holds rather than the wire retention, so peers receive the history
+/// too. Only once that publish lands is the retired object deleted; a delete
+/// that fails is an error, and running the command again finishes the job.
+pub fn adopt(config: &TokenGaugeConfig, wanted: &str) -> Result<Adoption> {
+    let _lock = store::lock(&config.cache_file)?;
+    let (mut store, error) = store::load(&config.cache_file);
+    if let Some(error) = error {
+        anyhow::bail!("{error}");
+    }
+    let local = crate::device_identity(&config.cache_file).machine_id;
+    let id = resolve_device(&store, &local, wanted)?;
+    anyhow::ensure!(
+        store.devices.contains_key(&local),
+        "this machine has recorded nothing yet; let one fetch run first"
+    );
+    let adoption = store
+        .adopt(&id, &local)
+        .context("the device could not be adopted")?;
+
+    if let Some(key) = crypto::load_key(&config.cache_file)? {
+        let transport = transport::open(&config.sync)?;
+        let now = Utc::now();
+        let own_name = key.object_name(&local);
+        if let Some(contribution) = store.contribution(
+            &local,
+            now,
+            &syncing_providers(config),
+            STORE_RETENTION_DAYS,
+        ) {
+            let body =
+                serde_json::to_vec(&contribution).context("could not serialise a contribution")?;
+            transport
+                .put(&own_name, &key.seal(&own_name, &body)?)
+                .context("could not publish the adopted history; nothing was deleted")?;
+            store.published_hash = Some(publish_stamp(
+                &contribution,
+                &transport.describe(),
+                &own_name,
+            ));
+            store.published_name = Some(own_name);
+            store.last_publish_ms = Some(now.timestamp_millis());
+        }
+        let name = key.object_name(&id);
+        transport.delete(&name).with_context(|| {
+            format!(
+                "published the adopted history, but could not delete {}'s object; run this again",
+                adoption.device.display()
+            )
+        })?;
+        store.objects.remove(&name);
+    }
+    store::save(&config.cache_file, &store)?;
+    Ok(adoption)
 }
 
 /// The one non-local device `wanted` names, by id, label or hostname.

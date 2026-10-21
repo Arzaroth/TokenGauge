@@ -1,7 +1,7 @@
 //! The `--sync-*` commands and the doctor's fleet section.
 //!
 //! Split out of `main.rs`, which is the largest file in the crate and grew that
-//! way one feature at a time. The six flags also became one typed command
+//! way one feature at a time. The flags also became one typed command
 //! instead of six early returns threaded through the startup path.
 
 use std::path::Path;
@@ -17,6 +17,7 @@ pub enum SyncCommand {
     Status { json: bool },
     Test,
     Forget(String),
+    Adopt(String),
     Setup,
 }
 
@@ -41,6 +42,9 @@ pub fn from_args(args: &Args) -> Option<SyncCommand> {
     if let Some(device) = args.sync_forget.as_deref() {
         return Some(SyncCommand::Forget(device.to_string()));
     }
+    if let Some(device) = args.sync_adopt.as_deref() {
+        return Some(SyncCommand::Adopt(device.to_string()));
+    }
     if args.sync_setup {
         return Some(SyncCommand::Setup);
     }
@@ -54,6 +58,7 @@ pub fn run(command: SyncCommand, config: &TokenGaugeConfig, config_path: &Path) 
         SyncCommand::Status { json } => status(config, json),
         SyncCommand::Test => test(config),
         SyncCommand::Forget(device) => forget(config, &device),
+        SyncCommand::Adopt(device) => adopt(config, &device),
         SyncCommand::Setup => setup(config, config_path),
     }
 }
@@ -102,6 +107,22 @@ fn test(config: &TokenGaugeConfig) -> Result<()> {
 fn forget(config: &TokenGaugeConfig, device: &str) -> Result<()> {
     let label = tokengauge_core::sync::forget(config, device)?;
     eprintln!("Dropped {label} from the fleet.");
+    Ok(())
+}
+
+fn adopt(config: &TokenGaugeConfig, device: &str) -> Result<()> {
+    let adoption = tokengauge_core::sync::adopt(config, device)?;
+    let name = adoption.device.display();
+    let id = &adoption.device.id;
+    match adoption.range {
+        Some((first, last)) => eprintln!(
+            "Adopted {name} ({id}): {} bucket(s) from {first} to {last}, and dropped it from the fleet.",
+            adoption.buckets
+        ),
+        None => eprintln!(
+            "Adopted {name} ({id}): it held nothing older than this machine's own history, and was dropped from the fleet."
+        ),
+    }
     Ok(())
 }
 

@@ -583,13 +583,73 @@ jobs:
           pattern: tokengauge-*
           merge-multiple: true
 
+      # Signing starts the day packaging/tokengauge.asc is committed, and from
+      # then on a release without the key behind it refuses to publish. A pull
+      # request never sees the secret, so its rehearsal stays unsigned.
+      - name: Signing key
+        id: key
+        env:
+          KEY: ${{ env.PUBLISH == 'true' && secrets.TOKENGAUGE_GPG_KEY || '' }}
+          PASSPHRASE: ${{ env.PUBLISH == 'true' && secrets.TOKENGAUGE_GPG_PASSPHRASE || '' }}
+        run: |
+          fpr=""
+          if [[ -f packaging/tokengauge.asc ]]; then
+            fpr="$(gpg --show-keys --with-colons packaging/tokengauge.asc | awk -F: '/^fpr/ { print $10; exit }')"
+          fi
+          if [[ -z "$KEY" ]]; then
+            if [[ -n "$fpr" && "$PUBLISH" == true ]]; then
+              echo "::error::packaging/tokengauge.asc is committed, so a release needs the TOKENGAUGE_GPG_KEY secret"
+              exit 1
+            fi
+            echo "No signing key in this run: the packages stay unsigned"
+            exit 0
+          fi
+          if [[ -z "$fpr" ]]; then
+            echo "::error::TOKENGAUGE_GPG_KEY is set but packaging/tokengauge.asc, its public half, is not committed"
+            exit 1
+          fi
+          printf '%s' "$PASSPHRASE" >"$RUNNER_TEMP/passphrase"
+          printf '%s\n' "$KEY" | gpg --batch --import
+          if ! gpg --list-secret-keys --with-colons | awk -F: '/^fpr/ { print $10 }' | grep -qx "$fpr"; then
+            echo "::error::TOKENGAUGE_GPG_KEY is not the key packaging/tokengauge.asc publishes ($fpr)"
+            exit 1
+          fi
+          sudo apt-get install -qq -y rpm >/dev/null
+          echo "fpr=$fpr" >>"$GITHUB_OUTPUT"
+
+      - name: Sign the packages
+        if: steps.key.outputs.fpr
+        env:
+          FPR: ${{ steps.key.outputs.fpr }}
+        run: |
+          cd dist
+          rpmsign --addsign \
+            --define "__gpg $(command -v gpg)" \
+            --define "_gpg_name $FPR" \
+            --define "_gpg_sign_cmd_extra_args --batch --pinentry-mode loopback --passphrase-file $RUNNER_TEMP/passphrase" \
+            -- *.rpm
+          for pkg in *.pkg.tar.zst; do
+            gpg --batch --yes --pinentry-mode loopback --passphrase-file "$RUNNER_TEMP/passphrase" \
+              --local-user "$FPR" --detach-sign --no-armor --output "$pkg.sig" "$pkg"
+          done
+          cp ../packaging/tokengauge.asc tokengauge-release-key.asc
+
       # What scripts/install.sh checks a download against before installing
-      # it, taken once every asset is in.
+      # it, taken once every asset is in and signed.
       - name: SHA256SUMS
         run: |
           cd dist
           sha256sum -- * >SHA256SUMS
           cat SHA256SUMS
+
+      - name: Sign SHA256SUMS
+        if: steps.key.outputs.fpr
+        env:
+          FPR: ${{ steps.key.outputs.fpr }}
+        run: |
+          gpg --batch --yes --pinentry-mode loopback --passphrase-file "$RUNNER_TEMP/passphrase" \
+            --local-user "$FPR" --armor --detach-sign --output dist/SHA256SUMS.asc dist/SHA256SUMS
+          rm -f "$RUNNER_TEMP/passphrase"
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -632,6 +692,30 @@ jobs:
       - name: The checksums
         run: cd dist && sha256sum -c SHA256SUMS
 
+      - name: The signatures
+        if: hashFiles('dist/SHA256SUMS.asc') != ''
+        env:
+          PKG: ${{ matrix.pkg }}
+          RPM: ${{ matrix.rpm }}
+        run: |
+          GNUPGHOME=$(mktemp -d)
+          export GNUPGHOME
+          gpg --batch --import packaging/tokengauge.asc
+          gpg --batch --verify dist/SHA256SUMS.asc dist/SHA256SUMS
+          docker run --rm -e RPM -v "$PWD/dist:/d:ro" fedora:latest sh -ec '
+            rpm --import /d/tokengauge-release-key.asc
+            rpm -K /d/tokengauge-*."$RPM".rpm | tee /dev/stderr | grep -q "signatures OK"'
+          if [[ -n $PKG ]]; then
+            fpr=$(gpg --show-keys --with-colons packaging/tokengauge.asc | awk -F: '/^fpr/ { print $10; exit }')
+            docker run --rm -e PKG -e FPR="$fpr" -v "$PWD/dist:/d:ro" archlinux:latest sh -ec '
+              pacman-key --init >/dev/null 2>&1
+              pacman-key --add /d/tokengauge-release-key.asc >/dev/null
+              pacman-key --lsign-key "$FPR" >/dev/null
+              for pkg in /d/tokengauge-bin-*-"$PKG".pkg.tar.zst; do
+                pacman-key --verify "$pkg.sig" "$pkg"
+              done'
+          fi
+
       - name: The .deb on Debian 12 and Ubuntu 22.04
         env:
           DEB: ${{ matrix.deb }}
@@ -661,8 +745,17 @@ jobs:
         env:
           PKG: ${{ matrix.pkg }}
         run: |
-          docker run --rm -e PKG -v "$PWD/dist:/d:ro" -v "$PWD/scripts:/s:ro" archlinux:latest sh -ec '
+          fpr=""
+          if [[ -f dist/tokengauge-release-key.asc ]]; then
+            fpr=$(gpg --show-keys --with-colons dist/tokengauge-release-key.asc | awk -F: '/^fpr/ { print $10; exit }')
+          fi
+          docker run --rm -e PKG -e FPR="$fpr" -v "$PWD/dist:/d:ro" -v "$PWD/scripts:/s:ro" archlinux:latest sh -ec '
             sed -i "/^NoExtract/d" /etc/pacman.conf
+            if [ -n "$FPR" ]; then
+              pacman-key --init >/dev/null 2>&1
+              pacman-key --add /d/tokengauge-release-key.asc >/dev/null
+              pacman-key --lsign-key "$FPR" >/dev/null
+            fi
             pacman -U --noconfirm /d/tokengauge-bin-*-"$PKG".pkg.tar.zst >/dev/null
             pacman -Qkk tokengauge-bin
             sh /s/check-package.sh'
@@ -728,4 +821,6 @@ jobs:
             dist/*.deb
             dist/*.rpm
             dist/*.pkg.tar.zst
+            dist/*.sig
+            dist/*.asc
             dist/SHA256SUMS

@@ -824,28 +824,39 @@ fn to_payload(
     let mut primary = np.map(win_to_usage);
     let secondary = ns.map(win_to_usage);
 
-    // Synthesize a primary window from individual_limit when there is no
-    // rate-limit primary (enterprise/credit plans). The top-level limit is
-    // preferred, then the nested one, then the workspace-wide pool a team, EDU
-    // or enterprise account reports under spend_control.
-    if primary.is_none() {
-        primary = resp
-            .individual_limit
-            .as_ref()
-            .and_then(individual_to_window)
-            .or_else(|| {
-                resp.rate_limit
-                    .as_ref()
-                    .and_then(|r| r.individual_limit.as_ref())
-                    .and_then(individual_to_window)
-            })
-            .or_else(|| {
-                resp.spend_control
-                    .as_ref()
-                    .and_then(|s| s.individual_limit.as_ref())
-                    .and_then(individual_to_window)
-            });
-    }
+    // The spend cap: the top-level limit is preferred, then the nested one,
+    // then the workspace-wide pool a team, EDU or enterprise account reports
+    // under spend_control. With no rate-limit primary (enterprise/credit
+    // plans) it is the primary; beside rate windows, as a Business seat has
+    // both, it is a row of its own rather than lost.
+    let spend_limit = resp
+        .individual_limit
+        .as_ref()
+        .and_then(individual_to_window)
+        .or_else(|| {
+            resp.rate_limit
+                .as_ref()
+                .and_then(|r| r.individual_limit.as_ref())
+                .and_then(individual_to_window)
+        })
+        .or_else(|| {
+            resp.spend_control
+                .as_ref()
+                .and_then(|s| s.individual_limit.as_ref())
+                .and_then(individual_to_window)
+        });
+    let spend_row = match primary {
+        None => {
+            primary = spend_limit;
+            None
+        }
+        Some(_) => spend_limit.map(|window| ExtraRateWindow {
+            id: Some("codex-spend-limit".to_string()),
+            title: Some("Spend limit".to_string()),
+            window: Some(window),
+            placeholder: false,
+        }),
+    };
 
     let credits = resp
         .credits
@@ -858,7 +869,7 @@ fn to_payload(
             limit: None,
         });
 
-    let mut extra_rate_windows = Vec::new();
+    let mut extra_rate_windows: Vec<ExtraRateWindow> = spend_row.into_iter().collect();
     for w in monthly {
         push_unique(
             &mut extra_rate_windows,
@@ -1302,6 +1313,31 @@ mod tests {
             .usage
             .unwrap();
         assert_eq!(usage.primary.unwrap().used_percent, Some(25));
+    }
+
+    /// Omarchy f41da937: a Business seat has rate windows and a spend cap,
+    /// and the cap used to be read only when the windows were missing.
+    #[test]
+    fn a_spend_cap_beside_rate_windows_is_its_own_row() {
+        let body: UsageResponse = serde_json::from_str(
+            r#"{"plan_type":"business",
+                "rate_limit":{"primary_window":{"used_percent":12,"reset_at":1786646643,"limit_window_seconds":18000},
+                              "secondary_window":{"used_percent":30,"reset_at":1786999999,"limit_window_seconds":604800}},
+                "spend_control":{"individual_limit":{"limit":"100","used":"40","resets_at":1789000000}}}"#,
+        )
+        .unwrap();
+        let usage = to_payload(body, Utc::now(), "oauth", None)
+            .unwrap()
+            .usage
+            .unwrap();
+        assert_eq!(usage.primary.unwrap().used_percent, Some(12));
+        assert_eq!(usage.secondary.unwrap().used_percent, Some(30));
+        let spend = &usage.extra_rate_windows[0];
+        assert_eq!(spend.id.as_deref(), Some("codex-spend-limit"));
+        assert_eq!(spend.title.as_deref(), Some("Spend limit"));
+        let window = spend.window.as_ref().unwrap();
+        assert_eq!(window.used_percent, Some(40));
+        assert!(window.resets_at.is_some());
     }
 
     #[test]

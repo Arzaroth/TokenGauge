@@ -1385,6 +1385,56 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&store);
     }
 
+    /// A 5-hour window filling while the CLI is signed in elsewhere is another
+    /// machine spending from it: asked as often as the live login, not left to
+    /// reach 100% inside one 30-minute carry. A weekly window says nothing
+    /// about now, and a few percent is a stray request.
+    #[test]
+    fn an_inactive_credential_in_use_is_asked_as_often_as_the_live_login() {
+        let (store, mut config) = store_with_every_kind("in-use");
+        config.refresh_secs = 600;
+        let now = Utc::now();
+        let asked = |minutes: u32, used: u8| {
+            let mut payload = ProviderPayload::live(
+                "claude",
+                "carried",
+                crate::UsageSnapshot {
+                    primary: Some(crate::UsageWindow {
+                        used_percent: Some(used),
+                        reset_description: None,
+                        resets_at: Some((now + chrono::Duration::hours(2)).to_rfc3339()),
+                        window_minutes: Some(minutes),
+                    }),
+                    ..crate::UsageSnapshot::at(now - chrono::Duration::minutes(15))
+                },
+            );
+            payload.credential.name = Some("perso".into());
+            payload.credential.active = Some(false);
+            payload.credential.account_digest = Some(hex_sha256(b"u-perso")[..16].to_string());
+            payload
+        };
+        let source = |config: &TokenGaugeConfig, previous: ProviderPayload| {
+            let (payloads, _) = fetch_provider("claude", &FAKE, config, &[previous], live_payload);
+            named(&payloads, "perso").source.clone()
+        };
+
+        assert_eq!(source(&config, asked(300, 40)).as_deref(), Some("fetched"));
+        assert_eq!(source(&config, asked(300, 10)).as_deref(), Some("carried"));
+        assert_eq!(
+            source(&config, asked(10080, 90)).as_deref(),
+            Some("carried")
+        );
+
+        // Never asked more often than inactive_refresh_secs says, either.
+        config.credentials.inactive_refresh_secs = 300;
+        config.refresh_secs = 3600;
+        assert_eq!(
+            source(&config, asked(10080, 90)).as_deref(),
+            Some("fetched")
+        );
+        let _ = std::fs::remove_dir_all(&store);
+    }
+
     /// The token cannot tell a premium Team seat from a standard one, so the
     /// profile the sidecar recorded decides, expired or not: a user tier
     /// naming a multiplier, else a seat tier naming the seat. One that names

@@ -303,6 +303,26 @@ impl UsageSummary {
             .as_deref()
             .is_some_and(|t| t.eq_ignore_ascii_case("team"))
     }
+
+    /// A team plan whose pools say nothing: every one absent or zero. A
+    /// summary that reports usage is the better reading, and is kept.
+    fn wants_member_budget(&self) -> bool {
+        let pools = self
+            .individual_usage
+            .as_ref()
+            .or(self.team_usage.as_ref())
+            .and_then(|usage| usage.plan.as_ref());
+        self.is_team_plan()
+            && pools.is_none_or(|plan| {
+                [
+                    plan.total_percent_used,
+                    plan.auto_percent_used,
+                    plan.api_percent_used,
+                ]
+                .iter()
+                .all(|pool| pool.is_none_or(|v| v == 0.0))
+            })
+    }
 }
 
 /// One member's spend against the budget the team gave them.
@@ -606,7 +626,7 @@ fn usage_for(
         serde_json::from_str(&text).context("Cursor usage JSON was invalid")?;
 
     let budget = body
-        .is_team_plan()
+        .wants_member_budget()
         .then(|| team_budget(&client, origin, &cookie))
         .flatten();
     to_payload(body, budget, now)
@@ -617,24 +637,24 @@ fn usage_for(
 /// and nothing about the other members outlives the lookup.
 fn team_budget(client: &reqwest::blocking::Client, origin: &str, cookie: &str) -> Option<Budget> {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    let post = |endpoint: &str, body: Value| -> Option<reqwest::blocking::Response> {
-        if std::time::Instant::now() >= deadline {
-            return None;
-        }
-        let resp = dashboard_request(
-            client.post(format!("{origin}/api/dashboard/{endpoint}")),
-            origin,
-            cookie,
-        )
-        .json(&body)
-        .send()
-        .ok()?;
+    // Each request gets what is left of the budget, not the client's own
+    // timeout, so the lookup as a whole cannot outrun it.
+    let send = |request: reqwest::blocking::RequestBuilder| {
+        let left = deadline.checked_duration_since(std::time::Instant::now())?;
+        let resp = dashboard_request(request, origin, cookie)
+            .timeout(left)
+            .send()
+            .ok()?;
         resp.status().is_success().then_some(resp)
     };
-    let me: Value = dashboard_request(client.get(format!("{origin}/api/auth/me")), origin, cookie)
-        .send()
-        .ok()
-        .filter(|r| r.status().is_success())?
+    let post = |endpoint: &str, body: Value| {
+        send(
+            client
+                .post(format!("{origin}/api/dashboard/{endpoint}"))
+                .json(&body),
+        )
+    };
+    let me: Value = send(client.get(format!("{origin}/api/auth/me")))?
         .json()
         .ok()?;
     let email = me.get("email")?.as_str()?.to_string();
@@ -1221,5 +1241,27 @@ mod tests {
         assert_eq!(primary.used_percent, Some(50));
         assert_eq!(primary.resets_at.as_deref(), Some("2026-10-01T00:00:00Z"));
         assert!(usage.secondary.is_none() && usage.tertiary.is_none());
+    }
+
+    /// The budget replaces the pools, so it is asked for only when they say
+    /// nothing: a summary that reports usage keeps its three rows and costs
+    /// no dashboard requests.
+    #[test]
+    fn the_member_budget_is_wanted_only_when_the_pools_say_nothing() {
+        let wants = |json: &str| {
+            serde_json::from_str::<UsageSummary>(json)
+                .unwrap()
+                .wants_member_budget()
+        };
+        assert!(wants(
+            r#"{"membershipType":"enterprise","teamUsage":{"plan":{"totalPercentUsed":0,"autoPercentUsed":0}}}"#
+        ));
+        assert!(wants(r#"{"membershipType":"business","teamUsage":{}}"#));
+        assert!(!wants(
+            r#"{"membershipType":"enterprise","teamUsage":{"plan":{"totalPercentUsed":0,"autoPercentUsed":12}}}"#
+        ));
+        assert!(!wants(
+            r#"{"membershipType":"pro","individualUsage":{"plan":{"totalPercentUsed":0}}}"#
+        ));
     }
 }

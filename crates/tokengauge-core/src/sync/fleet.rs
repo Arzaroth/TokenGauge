@@ -674,6 +674,21 @@ impl FleetStore {
         events
     }
 
+    /// Tokens this device's record holds per provider from `from` on.
+    pub fn local_totals(&self, local_id: &str, from: Hour) -> BTreeMap<String, u64> {
+        let mut totals = BTreeMap::new();
+        for bucket in self
+            .devices
+            .get(local_id)
+            .into_iter()
+            .flat_map(|slice| &slice.buckets)
+            .filter(|bucket| bucket.hour >= from)
+        {
+            *totals.entry(bucket.provider.clone()).or_default() += bucket.tokens.total();
+        }
+        totals
+    }
+
     /// This device's own record for `providers`, as events. What the report
     /// counts for a provider whose read could not be trusted, in place of it.
     pub fn held_events(&self, local_id: &str, providers: &[&str]) -> Vec<UsageEvent> {

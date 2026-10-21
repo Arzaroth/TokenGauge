@@ -1,8 +1,8 @@
 //! One sync cycle: publish what changed, take what the peers published, merge.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use super::contribution::{Contribution, DeviceRecord, content_hash};
+use super::contribution::{Contribution, DeviceRecord, content_hash, intern_provider};
 use super::fleet::{Adoption, FleetStore, ObjectState, STORE_RETENTION_DAYS};
 use super::hour::Hour;
 use super::report::{DeviceStatus, OverlapNote, SkippedObject, SyncStatus};
@@ -45,7 +45,7 @@ pub fn refresh(
     config: &TokenGaugeConfig,
     local_events: &[UsageEvent],
     since: NaiveDate,
-    unreadable: &[(&'static str, PathBuf)],
+    unreadable: &[PathBuf],
 ) -> SyncOutcome {
     let mut status = SyncStatus {
         enabled: config.sync.enabled,
@@ -62,7 +62,11 @@ pub fn refresh(
     let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, store_error) = store::load(&config.cache_file);
     status.error = store_error;
-    let held = held_providers(unreadable);
+    let held = if unreadable.is_empty() {
+        Vec::new()
+    } else {
+        held_providers(&store, &device.id, from, local_events)
+    };
     if let Some(e) = unreadable_error(unreadable) {
         status.error.get_or_insert(e);
     }
@@ -150,23 +154,24 @@ pub struct BackfillOutcome {
 /// Slow by construction - see [`crate::cost::read_history`] - so it is called
 /// behind [`crate::statefiles::backfill_done`] and never on a poll.
 pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome {
-    let (mut events, since) = crate::cost::read_history(today);
-    // A provider whose root could not be read keeps what the store holds for
-    // it. The rest is backfilled and the marker written as usual: the deep
-    // read must not repeat on every poll while a root stays unreadable, and
-    // `--backfill` runs it again once it can be read.
-    let unreadable = crate::cost::Roots::discover().unreadable();
-    let held = held_providers(&unreadable);
-    events.retain(|event| !held.contains(&event.provider));
+    // Checked before the deep read, which is the expensive half: while any
+    // transcript directory cannot be read, nothing is read or written and the
+    // marker is left off, so the next fetch asks again for the price of a
+    // directory walk, and the backfill runs once the tree reads whole.
+    if let Some(error) = unreadable_error(&crate::cost::Roots::discover().unreadable()) {
+        return BackfillOutcome {
+            events: 0,
+            since: today,
+            error: Some(error),
+        };
+    }
+    let (events, since) = crate::cost::read_history(today);
     let now = Utc::now();
     let identity = crate::device_identity(&config.cache_file);
     let device = DeviceRecord::new(&identity, &config.sync.label);
 
     let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, mut error) = store::load(&config.cache_file);
-    if let Some(e) = unreadable_error(&unreadable) {
-        error.get_or_insert(e);
-    }
     store.backfill_local(&device, window_hour(since), &events, now);
     store.compact(now, i64::from(config.sync.retention_days));
     store.prune(now);
@@ -190,17 +195,36 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
     }
 }
 
-fn held_providers(unreadable: &[(&'static str, PathBuf)]) -> Vec<&'static str> {
-    let mut held: Vec<&'static str> = unreadable.iter().map(|(provider, _)| *provider).collect();
-    held.sort_unstable();
-    held.dedup();
-    held
+/// With part of the tree unreadable, the providers whose read found less in
+/// the window than this device's record already holds. Which provider a
+/// directory feeds is not knowable from outside it - the Claude reader files
+/// GLM and Kimi calls too - so the comparison decides: a read short of the
+/// record is missing something, and the record stands in for it.
+fn held_providers(
+    store: &FleetStore,
+    device_id: &str,
+    from: Hour,
+    local_events: &[UsageEvent],
+) -> Vec<&'static str> {
+    let mut read: BTreeMap<&str, u64> = BTreeMap::new();
+    for event in local_events
+        .iter()
+        .filter(|e| Hour::containing(e.at) >= from)
+    {
+        *read.entry(event.provider).or_default() += event.tokens.total();
+    }
+    store
+        .local_totals(device_id, from)
+        .into_iter()
+        .filter(|(provider, stored)| read.get(provider.as_str()).copied().unwrap_or(0) < *stored)
+        .filter_map(|(provider, _)| intern_provider(&provider))
+        .collect()
 }
 
-fn unreadable_error(unreadable: &[(&'static str, PathBuf)]) -> Option<String> {
-    let (_, first) = unreadable.first()?;
+fn unreadable_error(unreadable: &[PathBuf]) -> Option<String> {
+    let first = unreadable.first()?;
     Some(format!(
-        "transcripts under {} could not be read; this machine's history for them is kept as it was",
+        "transcripts under {} could not be read; history the read came up short of is kept as it was",
         first.display()
     ))
 }

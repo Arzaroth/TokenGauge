@@ -319,25 +319,29 @@ impl Roots {
         out
     }
 
-    /// Roots that are there and could not be read, each with the provider its
-    /// reader files events under. A read of them comes back empty, and the
-    /// fleet store, replacing each provider from the oldest event the other
-    /// roots still found, would drop every day only they held. A root that
-    /// does not exist is a CLI never used, and reads as empty truthfully.
-    pub fn unreadable(&self) -> Vec<(&'static str, PathBuf)> {
-        [
-            ("claude", &self.claude),
-            ("codex", &self.codex),
-            ("kimi", &self.kimi),
-            ("grok", &self.grok),
-        ]
-        .into_iter()
-        .flat_map(|(provider, roots)| roots.iter().map(move |root| (provider, root)))
-        .filter(|(_, root)| {
-            std::fs::read_dir(root).is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound)
-        })
-        .map(|(provider, root)| (provider, root.clone()))
-        .collect()
+    /// Directories under the roots that are there and could not be read. A
+    /// read skips them as if empty: `jsonl_files` passes over a directory it
+    /// cannot open. Walked to the bottom, since a locked project or session
+    /// folder costs its files as surely as a locked root. A root that does not
+    /// exist is a CLI never used, and reads as empty truthfully.
+    pub fn unreadable(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let mut stack = self.all();
+        while let Some(dir) = stack.pop() {
+            match std::fs::read_dir(&dir) {
+                Ok(entries) => stack.extend(
+                    entries
+                        .flatten()
+                        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                        .map(|entry| entry.path()),
+                ),
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => out.push(dir),
+                Err(_) => {}
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
     }
 }
 
@@ -700,7 +704,14 @@ mod tests {
             codex: vec![base.clone()],
             ..Roots::default()
         };
-        assert_eq!(roots.unreadable(), vec![("claude", locked.clone())]);
+        assert_eq!(roots.unreadable(), vec![locked.clone()]);
+        // Below a readable root counts as much as a root: its files are
+        // skipped the same way.
+        let nested = Roots {
+            codex: vec![base.clone()],
+            ..Roots::default()
+        };
+        assert_eq!(nested.unreadable(), vec![locked.clone()]);
     }
 
     /// Two machines on different builds have to produce the same day

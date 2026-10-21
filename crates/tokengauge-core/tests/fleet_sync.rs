@@ -1028,7 +1028,7 @@ fn an_unreadable_transcript_root_keeps_the_history_it_had() {
         201
     );
 
-    let unreadable = vec![("claude", root.join("projects"))];
+    let unreadable = vec![root.join("projects")];
     let blind = sync::refresh(&config, &[readable], since, &unreadable);
     assert_eq!(output(&blind.store), 201, "the month must survive the gap");
     // The report counts the record it kept, in place of the partial read.
@@ -1064,13 +1064,11 @@ fn an_unreadable_root_holds_only_its_own_provider() {
         .date_naive();
 
     let mut events = vec![event(2, 100, 1)];
-    let outcome = sync::refresh(
-        &config,
-        &events,
-        since,
-        &[("kimi", root.join("kimi-sessions"))],
+    let outcome = sync::refresh(&config, &events, since, &[root.join("kimi-sessions")]);
+    assert!(
+        outcome.held.is_empty(),
+        "nothing on record for any provider yet"
     );
-    assert_eq!(outcome.held, ["kimi"]);
     let stored: u64 = outcome
         .store
         .devices
@@ -1088,5 +1086,56 @@ fn an_unreadable_root_holds_only_its_own_provider() {
         events.iter().map(|e| e.tokens.output).sum::<u64>(),
         100,
         "and still reported"
+    );
+}
+
+/// A directory feeds more than one provider: the Claude reader files GLM
+/// calls too. With one Claude root locked, a partial GLM read came in short
+/// of the record and replaced it. The comparison holds every provider whose
+/// read falls short, whichever reader filed it.
+#[test]
+fn a_short_read_of_any_provider_is_held() {
+    let root = scratch("unreadable-glm");
+    let config = TokenGaugeConfig {
+        cache_file: root.join("tokengauge-usage.json"),
+        ..TokenGaugeConfig::default()
+    };
+    let since = (Utc::now() - Duration::days(7))
+        .with_timezone(&chrono::Local)
+        .date_naive();
+    let glm = |hours_ago, out, key| UsageEvent {
+        provider: "glm",
+        model: "glm-4.6".into(),
+        ..event(hours_ago, out, key)
+    };
+    let output = |store: &sync::FleetStore, provider: &str| -> u64 {
+        store
+            .devices
+            .values()
+            .flat_map(|slice| &slice.buckets)
+            .filter(|bucket| bucket.provider == provider)
+            .map(|bucket| bucket.tokens.output)
+            .sum()
+    };
+
+    let whole = [
+        event(30, 100, 1),
+        glm(40, 10, 2),
+        glm(20, 50, 3),
+        event(5, 300, 4),
+    ];
+    let first = sync::refresh(&config, &whole, since, &[]);
+    assert_eq!(output(&first.store, "glm"), 60);
+
+    // Half the tree locked: one Claude call and one GLM call still read.
+    let partial = [event(5, 300, 4), glm(40, 10, 2)];
+    let blind = sync::refresh(&config, &partial, since, &[root.join("projects")]);
+    assert_eq!(blind.held, ["claude", "glm"]);
+    assert_eq!(output(&blind.store, "glm"), 60, "GLM's record stands");
+    assert_eq!(output(&blind.store, "claude"), 400);
+    assert_eq!(
+        blind.events.iter().map(|e| e.tokens.output).sum::<u64>(),
+        460,
+        "and the report counts the record for both"
     );
 }

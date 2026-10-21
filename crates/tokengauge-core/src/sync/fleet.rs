@@ -674,19 +674,51 @@ impl FleetStore {
         events
     }
 
-    /// Tokens this device's record holds per provider from `from` on.
-    pub fn local_totals(&self, local_id: &str, from: Hour) -> BTreeMap<String, u64> {
-        let mut totals = BTreeMap::new();
-        for bucket in self
+    /// Fold a read with gaps in: per hour, provider and model, the larger of
+    /// what the record holds and what the read found. Nothing is replaced, so
+    /// an hour the read could not reach keeps its record, and new usage still
+    /// lands; neither is counted twice. Transcripts only ever grow, so the
+    /// larger figure is never the stale one.
+    pub fn merge_local(
+        &mut self,
+        device: &DeviceRecord,
+        from: Hour,
+        events: &[UsageEvent],
+        now_ms: i64,
+    ) {
+        let slice = self.devices.entry(device.id.clone()).or_default();
+        slice.device = device.clone();
+        slice.updated_at_ms = now_ms;
+        slice.covers_from = Some(slice.covers_from.map_or(from, |covers| covers.min(from)));
+        for read in bucketize(events).into_iter().filter(|b| b.hour >= from) {
+            match slice.buckets.iter_mut().find(|held| {
+                held.hour == read.hour
+                    && held.provider == read.provider
+                    && held.model == read.model
+                    && held.granularity == read.granularity
+            }) {
+                Some(held) if read.tokens.total() > held.tokens.total() => {
+                    held.tokens = read.tokens
+                }
+                Some(_) => {}
+                None => slice.buckets.push(read),
+            }
+        }
+        slice.buckets.sort_by(sort_key);
+    }
+
+    /// Every provider this device's record carries.
+    pub fn local_providers(&self, local_id: &str) -> Vec<&'static str> {
+        let mut providers: Vec<&'static str> = self
             .devices
             .get(local_id)
             .into_iter()
             .flat_map(|slice| &slice.buckets)
-            .filter(|bucket| bucket.hour >= from)
-        {
-            *totals.entry(bucket.provider.clone()).or_default() += bucket.tokens.total();
-        }
-        totals
+            .filter_map(|bucket| intern_provider(&bucket.provider))
+            .collect();
+        providers.sort_unstable();
+        providers.dedup();
+        providers
     }
 
     /// This device's own record for `providers`, as events. What the report
@@ -1048,6 +1080,46 @@ mod tests {
 
     fn hour(text: &str) -> Hour {
         Hour::parse(text).expect("hour stamp")
+    }
+
+    /// A merge takes the larger of record and read per hour: a missing hour
+    /// is kept, a grown one is taken, and an hour on both is not added up.
+    #[test]
+    fn a_merge_keeps_the_larger_of_record_and_read() {
+        let mut store = FleetStore::default();
+        let me = device("a");
+        let from = hour("2026-08-01T00");
+        store.upsert_local(
+            &me,
+            from,
+            &[
+                event("claude", "m", hour("2026-08-02T10"), 100, Some(1)),
+                event("claude", "m", hour("2026-08-02T11"), 100, Some(2)),
+            ],
+            1,
+        );
+        store.merge_local(
+            &me,
+            from,
+            &[
+                event("claude", "m", hour("2026-08-02T10"), 150, Some(1)),
+                event("claude", "m", hour("2026-08-02T12"), 50, Some(3)),
+            ],
+            2,
+        );
+        let hours: Vec<(String, u64)> = store.devices["a"]
+            .buckets
+            .iter()
+            .map(|b| (b.hour.to_string(), b.tokens.output))
+            .collect();
+        assert_eq!(
+            hours,
+            [
+                ("2026-08-02T10".to_string(), 150),
+                ("2026-08-02T11".to_string(), 100),
+                ("2026-08-02T12".to_string(), 50),
+            ]
+        );
     }
 
     /// A rolled-up day is its UTC date for every reader. Read through local

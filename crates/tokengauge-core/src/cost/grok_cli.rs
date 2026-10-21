@@ -140,14 +140,17 @@ pub fn read_events(
     roots: &[PathBuf],
     since: NaiveDate,
     seen: &mut HashSet<u64>,
+    gaps: &mut Vec<PathBuf>,
 ) -> Vec<UsageEvent> {
     let mut events = Vec::new();
     for root in roots {
-        for file in jsonl_files(root, since) {
+        for file in jsonl_files(root, since, gaps) {
             if file.file_name().and_then(|n| n.to_str()) != Some("updates.jsonl") {
                 continue;
             }
-            read_file(&file, since, seen, &mut events);
+            if !read_file(&file, since, seen, &mut events) {
+                gaps.push(file.clone());
+            }
         }
     }
     events
@@ -168,9 +171,14 @@ fn session_meta(path: &Path) -> (Option<String>, Option<String>) {
     )
 }
 
-fn read_file(path: &Path, since: NaiveDate, seen: &mut HashSet<u64>, events: &mut Vec<UsageEvent>) {
+fn read_file(
+    path: &Path,
+    since: NaiveDate,
+    seen: &mut HashSet<u64>,
+    events: &mut Vec<UsageEvent>,
+) -> bool {
     let Ok(raw) = std::fs::read_to_string(path) else {
-        return;
+        return false;
     };
     let (summary_session, default_model) = session_meta(path);
     let dir_session = path
@@ -271,6 +279,7 @@ fn read_file(path: &Path, since: NaiveDate, seen: &mut HashSet<u64>, events: &mu
             });
         }
     }
+    true
 }
 
 /// One row per model the turn used, or the turn's own totals under the model
@@ -331,7 +340,12 @@ mod tests {
             std::fs::write(session.join("summary.json"), summary).expect("write");
         }
         let mut seen = HashSet::new();
-        let events = read_events(&[root.join("sessions")], day(2020, 1, 1), &mut seen);
+        let events = read_events(
+            &[root.join("sessions")],
+            day(2020, 1, 1),
+            &mut seen,
+            &mut Vec::new(),
+        );
         let _ = std::fs::remove_dir_all(&root);
         events
     }

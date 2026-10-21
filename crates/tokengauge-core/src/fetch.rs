@@ -448,9 +448,12 @@ fn native_costs(
         sync::backfill(config, today);
     }
 
-    let (mut events, since) = cost::read_window(today);
-    let unreadable = cost::Roots::discover().unreadable();
-    let outcome = sync::refresh(config, &events, since, &unreadable);
+    let cost::TranscriptRead {
+        mut events,
+        since,
+        gaps,
+    } = cost::read_window(today);
+    let outcome = sync::refresh(config, &events, since, &gaps);
     events.retain(|event| !outcome.held.contains(&event.provider));
     events.extend(outcome.events);
 

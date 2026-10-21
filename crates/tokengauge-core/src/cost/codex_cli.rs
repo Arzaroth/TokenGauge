@@ -252,6 +252,7 @@ pub fn read_events(
     roots: &[PathBuf],
     since: NaiveDate,
     seen: &mut HashSet<u64>,
+    gaps: &mut Vec<PathBuf>,
 ) -> Vec<UsageEvent> {
     let mut events = Vec::new();
     // Running totals per session, not per file: a session continued into a
@@ -262,8 +263,10 @@ pub fn read_events(
     // and the earlier file is always read first.
     let mut totals: HashMap<String, Cumulative> = HashMap::new();
     for root in roots {
-        for file in jsonl_files(root, since) {
-            read_file(&file, since, seen, &mut totals, &mut events);
+        for file in jsonl_files(root, since, gaps) {
+            if !read_file(&file, since, seen, &mut totals, &mut events) {
+                gaps.push(file.clone());
+            }
         }
     }
     events
@@ -275,9 +278,9 @@ pub(super) fn read_file(
     seen: &mut HashSet<u64>,
     totals: &mut HashMap<String, Cumulative>,
     events: &mut Vec<UsageEvent>,
-) {
+) -> bool {
     let Ok(contents) = std::fs::read_to_string(path) else {
-        return;
+        return false;
     };
 
     // `events` is the accumulator shared by every file in the read, so the
@@ -478,6 +481,7 @@ pub(super) fn read_file(
             event.provider = provider;
         }
     }
+    true
 }
 
 #[cfg(test)]

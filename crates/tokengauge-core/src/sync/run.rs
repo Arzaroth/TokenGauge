@@ -1,8 +1,8 @@
 //! One sync cycle: publish what changed, take what the peers published, merge.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use super::contribution::{Contribution, DeviceRecord, content_hash, intern_provider};
+use super::contribution::{Contribution, DeviceRecord, content_hash};
 use super::fleet::{Adoption, FleetStore, ObjectState, STORE_RETENTION_DAYS};
 use super::hour::Hour;
 use super::report::{DeviceStatus, OverlapNote, SkippedObject, SyncStatus};
@@ -38,14 +38,16 @@ pub struct SyncOutcome {
 ///
 /// Never fails: a transport that is down leaves the durable store in place and
 /// the failure in the status, because blanking the totals would be a lie in the
-/// other direction. A transcript root that could not be read is the same lie
-/// one level down - its events are missing, not zero - so with any of
-/// `unreadable` the store keeps this device's record as it was.
+/// other direction. A read with `gaps` - transcripts that are there and could
+/// not be read - is the same lie one level down: its missing events are not
+/// zero. So it replaces nothing: it is merged into the record hour by hour
+/// (`FleetStore::merge_local`), and the report counts this device from the
+/// record, which then holds both what was kept and what was new.
 pub fn refresh(
     config: &TokenGaugeConfig,
     local_events: &[UsageEvent],
     since: NaiveDate,
-    unreadable: &[PathBuf],
+    gaps: &[PathBuf],
 ) -> SyncOutcome {
     let mut status = SyncStatus {
         enabled: config.sync.enabled,
@@ -62,22 +64,20 @@ pub fn refresh(
     let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, store_error) = store::load(&config.cache_file);
     status.error = store_error;
-    let held = if unreadable.is_empty() {
-        Vec::new()
-    } else {
-        held_providers(&store, &device.id, from, local_events)
+    let held = match gaps_error(gaps) {
+        None => {
+            store.upsert_local(&device, from, local_events, now.timestamp_millis());
+            Vec::new()
+        }
+        Some(e) => {
+            status.error.get_or_insert(e);
+            store.merge_local(&device, from, local_events, now.timestamp_millis());
+            store.local_providers(&device.id)
+        }
     };
-    if let Some(e) = unreadable_error(unreadable) {
-        status.error.get_or_insert(e);
-    }
-    // A held provider is left out of the read, so the replace, which works
-    // provider by provider, leaves its buckets as they were.
-    let read: Vec<UsageEvent> = local_events
-        .iter()
-        .filter(|event| !held.contains(&event.provider))
-        .cloned()
-        .collect();
-    store.upsert_local(&device, from, &read, now.timestamp_millis());
+    // The read the report keeps beside the store's events: none of it once
+    // the record stands in for this device.
+    let read: &[UsageEvent] = if held.is_empty() { local_events } else { &[] };
 
     if config.sync.enabled
         && let Err(e) = cycle(config, &device, &mut store, now, &mut status)
@@ -122,7 +122,7 @@ pub fn refresh(
     status.unreadable_providers = store.unreadable_providers(&device.id);
 
     SyncOutcome {
-        events: store.synthetic_events(&device.id, from, &read),
+        events: store.synthetic_events(&device.id, from, read),
         status,
         store,
         held,
@@ -155,24 +155,33 @@ pub struct BackfillOutcome {
 /// behind [`crate::statefiles::backfill_done`] and never on a poll.
 pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome {
     // Checked before the deep read, which is the expensive half: while any
-    // transcript directory cannot be read, nothing is read or written and the
-    // marker is left off, so the next fetch asks again for the price of a
-    // directory walk, and the backfill runs once the tree reads whole.
-    if let Some(error) = unreadable_error(&crate::cost::Roots::discover().unreadable()) {
+    // transcript directory cannot be read, nothing is read and the marker is
+    // left off, so the next fetch asks again for the price of a directory walk.
+    if let Some(error) = gaps_error(&crate::cost::Roots::discover().unreadable()) {
         return BackfillOutcome {
             events: 0,
             since: today,
             error: Some(error),
         };
     }
-    let (events, since) = crate::cost::read_history(today);
+    let crate::cost::TranscriptRead {
+        events,
+        since,
+        gaps,
+    } = crate::cost::read_history(today);
     let now = Utc::now();
     let identity = crate::device_identity(&config.cache_file);
     let device = DeviceRecord::new(&identity, &config.sync.label);
 
     let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, mut error) = store::load(&config.cache_file);
-    store.backfill_local(&device, window_hour(since), &events, now);
+    // A gap that opened during the read: what was read is merged, which loses
+    // nothing, and the marker stays off so the backfill runs again whole.
+    let gap = gaps_error(&gaps);
+    match &gap {
+        None => store.backfill_local(&device, window_hour(since), &events, now),
+        Some(_) => store.merge_local(&device, window_hour(since), &events, now.timestamp_millis()),
+    }
     store.compact(now, i64::from(config.sync.retention_days));
     store.prune(now);
     // The marker records that the work *landed*, not that it was attempted. A
@@ -180,12 +189,16 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
     // not re-walk the tree on every fetch forever - but a store that would not
     // save has kept none of it, and marking there would leave history
     // permanently empty with the one expensive read that could fill it already
-    // spent.
+    // spent. A read with gaps is not the work landing either.
     match store::save(&config.cache_file, &store) {
-        Ok(()) => crate::statefiles::mark_backfilled(&config.cache_file),
+        Ok(()) if gap.is_none() => crate::statefiles::mark_backfilled(&config.cache_file),
+        Ok(()) => {}
         Err(e) => {
             error.get_or_insert(format!("{e:#}"));
         }
+    }
+    if let Some(e) = gap {
+        error.get_or_insert(e);
     }
 
     BackfillOutcome {
@@ -195,36 +208,10 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
     }
 }
 
-/// With part of the tree unreadable, the providers whose read found less in
-/// the window than this device's record already holds. Which provider a
-/// directory feeds is not knowable from outside it - the Claude reader files
-/// GLM and Kimi calls too - so the comparison decides: a read short of the
-/// record is missing something, and the record stands in for it.
-fn held_providers(
-    store: &FleetStore,
-    device_id: &str,
-    from: Hour,
-    local_events: &[UsageEvent],
-) -> Vec<&'static str> {
-    let mut read: BTreeMap<&str, u64> = BTreeMap::new();
-    for event in local_events
-        .iter()
-        .filter(|e| Hour::containing(e.at) >= from)
-    {
-        *read.entry(event.provider).or_default() += event.tokens.total();
-    }
-    store
-        .local_totals(device_id, from)
-        .into_iter()
-        .filter(|(provider, stored)| read.get(provider.as_str()).copied().unwrap_or(0) < *stored)
-        .filter_map(|(provider, _)| intern_provider(&provider))
-        .collect()
-}
-
-fn unreadable_error(unreadable: &[PathBuf]) -> Option<String> {
-    let first = unreadable.first()?;
+fn gaps_error(gaps: &[PathBuf]) -> Option<String> {
+    let first = gaps.first()?;
     Some(format!(
-        "transcripts under {} could not be read; history the read came up short of is kept as it was",
+        "transcripts under {} could not be read; this machine's history is merged, not replaced, until they can",
         first.display()
     ))
 }

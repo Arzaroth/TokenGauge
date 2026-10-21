@@ -154,14 +154,17 @@ pub fn read_events(
     roots: &[PathBuf],
     since: NaiveDate,
     seen: &mut HashSet<u64>,
+    gaps: &mut Vec<PathBuf>,
 ) -> Vec<UsageEvent> {
     let mut events = Vec::new();
     for root in roots {
-        for file in jsonl_files(root, since) {
+        for file in jsonl_files(root, since, gaps) {
             if !is_wire_file(root, &file) {
                 continue;
             }
-            read_file(root, &file, since, seen, &mut events);
+            if !read_file(root, &file, since, seen, &mut events) {
+                gaps.push(file.clone());
+            }
         }
     }
     events
@@ -173,9 +176,9 @@ fn read_file(
     since: NaiveDate,
     seen: &mut HashSet<u64>,
     events: &mut Vec<UsageEvent>,
-) {
+) -> bool {
     let Ok(raw) = std::fs::read_to_string(path) else {
-        return;
+        return false;
     };
     let session = path
         .parent()
@@ -307,6 +310,7 @@ fn read_file(
             one_request: false,
         });
     }
+    true
 }
 
 #[cfg(test)]
@@ -332,7 +336,12 @@ mod tests {
     /// Read the home and take it back down again.
     fn read(home: &Path) -> Vec<UsageEvent> {
         let mut seen = HashSet::new();
-        let events = read_events(&[home.join("sessions")], day(2020, 1, 1), &mut seen);
+        let events = read_events(
+            &[home.join("sessions")],
+            day(2020, 1, 1),
+            &mut seen,
+            &mut Vec::new(),
+        );
         let _ = std::fs::remove_dir_all(home);
         events
     }

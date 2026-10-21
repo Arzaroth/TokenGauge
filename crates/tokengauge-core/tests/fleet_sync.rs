@@ -1049,11 +1049,11 @@ fn an_unreadable_transcript_root_keeps_the_history_it_had() {
     );
 }
 
-/// A root of one provider that cannot be read holds that provider only. On a
-/// store with nothing in it yet, holding the whole read cost Claude its spend
-/// because a Kimi folder was locked.
+/// A read with gaps still records what it found. On a store with nothing in
+/// it yet, holding the whole read cost Claude its spend because a Kimi folder
+/// was locked.
 #[test]
-fn an_unreadable_root_holds_only_its_own_provider() {
+fn a_read_with_gaps_still_records_what_it_found() {
     let root = scratch("unreadable-other");
     let config = TokenGaugeConfig {
         cache_file: root.join("tokengauge-usage.json"),
@@ -1065,9 +1065,10 @@ fn an_unreadable_root_holds_only_its_own_provider() {
 
     let mut events = vec![event(2, 100, 1)];
     let outcome = sync::refresh(&config, &events, since, &[root.join("kimi-sessions")]);
-    assert!(
-        outcome.held.is_empty(),
-        "nothing on record for any provider yet"
+    assert_eq!(
+        outcome.held,
+        ["claude"],
+        "the record stands in for this device"
     );
     let stored: u64 = outcome
         .store
@@ -1137,5 +1138,41 @@ fn a_short_read_of_any_provider_is_held() {
         blind.events.iter().map(|e| e.tokens.output).sum::<u64>(),
         460,
         "and the report counts the record for both"
+    );
+}
+
+/// Totals cannot tell a complete read from one whose new usage covers for a
+/// missing hour: here 300 either way. The merge keeps the missing hour and
+/// takes the new one, so nothing is lost and nothing counted twice.
+#[test]
+fn new_usage_does_not_cover_for_a_missing_hour() {
+    let root = scratch("unreadable-offset");
+    let config = TokenGaugeConfig {
+        cache_file: root.join("tokengauge-usage.json"),
+        ..TokenGaugeConfig::default()
+    };
+    let since = (Utc::now() - Duration::days(7))
+        .with_timezone(&chrono::Local)
+        .date_naive();
+    let output = |store: &sync::FleetStore| -> u64 {
+        store
+            .devices
+            .values()
+            .flat_map(|slice| &slice.buckets)
+            .map(|bucket| bucket.tokens.output)
+            .sum()
+    };
+
+    sync::refresh(&config, &[event(30, 100, 1), event(20, 100, 2)], since, &[]);
+    let partial = [event(30, 100, 1), event(1, 100, 3)];
+    let blind = sync::refresh(&config, &partial, since, &[root.join("projects")]);
+    assert_eq!(
+        output(&blind.store),
+        300,
+        "the missing hour stays, the new one lands"
+    );
+    assert_eq!(
+        blind.events.iter().map(|e| e.tokens.output).sum::<u64>(),
+        300
     );
 }

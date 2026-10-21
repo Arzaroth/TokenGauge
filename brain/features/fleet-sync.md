@@ -67,6 +67,6 @@ opencode Go and Cursor have no per-call events and cannot sync yet.
 ## Sources
 
 - `crates/tokengauge-core/src/sync/report.rs`, `crates/tokengauge-core/src/panel.rs` (`tokens_by_device`, the Sync row)
-- `crates/tokengauge-core/src/sync/run.rs` (`refresh`, `gaps_error`), `crates/tokengauge-core/src/cost/mod.rs` (`Roots::unreadable`)
+- `crates/tokengauge-core/src/sync/run.rs` (`refresh`, `gaps_error`), `crates/tokengauge-core/src/cost/mod.rs` (`TranscriptRead`)
 - `crates/tokengauge-waybar/src/sync_cli.rs`, `crates/tokengauge-tui/src/sync_view.rs`, `crates/tokengauge-core/src/launch.rs`
 - `crates/tokengauge-core/src/sync/config.rs` (`[sync]`, `[sync.providers]`, `[sync.dir]`, `[sync.s3]`)

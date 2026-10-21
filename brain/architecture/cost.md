@@ -33,8 +33,7 @@ directory, entry or file type it cannot read (any error but `NotFound`), and
 each reader's `read_file` a file it cannot open. Skipped, those read as empty,
 and the fleet store, replacing a provider from the oldest event the read
 still found, would drop every day only they held, so the sync layer merges a
-read with gaps instead of replacing with it. `Roots::unreadable` is the same
-check as a bare directory walk, which the backfill runs before its deep read ([sync.md](sync.md#the-fleet-store-is-the-durable-record)). A root that
+read with gaps instead of replacing with it ([sync.md](sync.md#the-fleet-store-is-the-durable-record)). A root that
 does not exist is a CLI never used and reads as empty.
 
 `ProviderMeta.natively_read` marks the providers with a reader (codex, claude,
@@ -113,7 +112,7 @@ refuses a fixture that stopped covering the traps.
 
 ## Sources
 
-- `crates/tokengauge-core/src/cost/{mod,pricing,claude_code,codex_cli,kimi_cli,grok_cli}.rs` (`Roots::unreadable`, `UsageEvent.one_request`, `ModelPrice::cost_of_request`)
+- `crates/tokengauge-core/src/cost/{mod,pricing,claude_code,codex_cli,kimi_cli,grok_cli}.rs` (`TranscriptRead`, `UsageEvent.one_request`, `ModelPrice::cost_of_request`)
 - `crates/tokengauge-core/src/cost/prices.json`, `crates/tokengauge-core/src/cost/price-archive.json`
 - `crates/tokengauge-core/src/ccusage.rs`, `crates/tokengauge-core/src/providers.rs` (`natively_read`)
 - `crates/tokengauge-core/tests/cost_fixture.rs`, `crates/tokengauge-core/tests/fixtures/`

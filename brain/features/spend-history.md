@@ -62,11 +62,12 @@ A fetch reads back only to the start of the month, so a new store would hold a
 fortnight. `cost::read_history` reads as far back as the store holds and
 `sync::backfill` upserts it once, behind `tokengauge-backfilled`, before the first
 fetch and never on a poll (it defeats `jsonl_files`'s mtime filter). The marker is
-written even when nothing was found. While a transcript directory exists and
-cannot be read (`cost::Roots::unreadable`) it reads nothing and leaves the
-marker off; a gap that opens during the read is merged and the marker left
-off too. Every fetch's re-read with a gap is merged into the record rather
-than replacing it
+written even when nothing was found, but not after a read with gaps
+(`TranscriptRead.gaps`: transcripts that exist and cannot be read): that read
+is merged into the record and the next attempt deferred an hour
+(`tokengauge-backfill-retry`), so the backfill completes once the tree reads
+whole. Every fetch's re-read with a gap is merged into the record the same way
+rather than replacing it
 ([../architecture/sync.md](../architecture/sync.md#the-fleet-store-is-the-durable-record)).
 `--backfill` forces it again, e.g. after restoring transcripts. It replaces each
 provider only from the oldest event its transcripts still hold, so the days
@@ -112,5 +113,5 @@ annotating the past, budgets and forecasts, exports beyond the raw rows.
 
 - `crates/tokengauge-core/src/history.rs` (`history_panel`, `covers`)
 - `crates/tokengauge-core/src/sync/fleet.rs` (retention constants, rollup, `upsert_local`), `crates/tokengauge-core/src/sync/hour.rs`, `crates/tokengauge-core/src/sync/run.rs` (`backfill`)
-- `crates/tokengauge-core/src/cost/mod.rs` (`read_history`, `Roots::unreadable`), `crates/tokengauge-core/src/cost/pricing.rs`, `crates/tokengauge-core/src/cost/price-archive.json`, `scripts/make-prices.py`
+- `crates/tokengauge-core/src/cost/mod.rs` (`read_history`, `TranscriptRead`), `crates/tokengauge-core/src/cost/pricing.rs`, `crates/tokengauge-core/src/cost/price-archive.json`, `scripts/make-prices.py`
 - `crates/tokengauge-tui/src/history_view.rs`, `crates/tokengauge-tray/src/main.rs` (`draw_history_chart`), `crates/tokengauge-waybar/src/export.rs`

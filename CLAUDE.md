@@ -472,6 +472,15 @@ overall: either erased every day whose transcript had been rotated away (one
 provider keeping sessions forever says nothing about another deleting them),
 and would erase a `--sync-adopt`ed history the same way.
 
+**A read with gaps never replaces.** A transcript directory or file that exists
+and cannot be read reads as nothing in it, so the readers report it
+(`TranscriptRead.gaps`, from their own walk) and such a read is merged into the
+store hour by hour, the larger of record and read, never used to replace it.
+A comparison of totals was tried first and cannot work: new usage covers for a
+missing hour. The backfill merges a read with gaps the same way and leaves its
+marker off, retrying behind `tokengauge-backfill-retry` an hour later rather
+than on the next fetch.
+
 Four fleet-store rules came in with `--sync-adopt` (decision 0005,
 `brain/architecture/sync.md`):
 

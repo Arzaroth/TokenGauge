@@ -92,10 +92,11 @@ maintained on every fetch whether or not sync is on (the gate is in
   keeps its record, new usage still lands, and the report counts this device
   from the record (`SyncOutcome.held`: `events` carries its buckets and
   `native_costs` drops its own read of them, so nothing counts twice). The sync
-  status carries the error. `sync::backfill` checks for unreadable directories
-  first (`cost::Roots::unreadable`, a directory walk) and reads nothing while
-  any remain; a gap that opens during its read is merged and the marker left
-  off, so it runs again whole.
+  status carries the error. `sync::backfill` merges a deep read with gaps the
+  same way and leaves its marker off, deferring the next attempt an hour
+  (`tokengauge-backfill-retry`, `statefiles::backfill_due`), so a lasting gap
+  costs one deep read an hour and the backfill completes once the tree reads
+  whole.
 - Separate file from the snapshot on purpose: the snapshot is rewritten wholesale
   on every fetch; the store must not be.
 - **Store retention and wire retention differ.** The store keeps
@@ -329,7 +330,7 @@ against a fake transport (`crates/tokengauge-core/tests/fleet_sync.rs`).
 ## Sources
 
 - `crates/tokengauge-core/src/sync/{mod,contribution,fleet,hour,crypto,transport,s3,run,report,store,config}.rs` (`adopt`, `settle_adoptions`, `drop_vanished`, `store::lock`)
-- `crates/tokengauge-core/src/fetch.rs` (`native_costs`), `crates/tokengauge-core/src/cost/mod.rs` (`window_start`, `dedup_key`, `Roots::unreadable`)
+- `crates/tokengauge-core/src/fetch.rs` (`native_costs`), `crates/tokengauge-core/src/cost/mod.rs` (`window_start`, `dedup_key`, `read_checked`, `TranscriptRead`)
 - `crates/tokengauge-core/src/device.rs`, `crates/tokengauge-core/src/doctor.rs`
 - `crates/tokengauge-waybar/src/sync_cli.rs`, `crates/tokengauge-tui/src/sync_view.rs`
 - `crates/tokengauge-core/tests/fleet_sync.rs`

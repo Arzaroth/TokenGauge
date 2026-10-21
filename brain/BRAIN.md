@@ -32,7 +32,7 @@ use the indexes.
 | [stack.md](stack.md) | Rust edition and MSRV, crates and key dependencies, TypeScript/QML, pnpm. |
 | [operations.md](operations.md) | The gate, generators, install and daemon, releases, upstream watching. |
 | [glossary.md](glossary.md) | Domain and technical terms, with the synonyms to avoid. |
-| [decisions.md](decisions.md) | The non-obvious decisions and their rationale, incl. the former ADRs 0001-0004. |
+| [decisions.md](decisions.md) | The non-obvious decisions and their rationale, incl. the ADRs 0001-0005. |
 
 ## Architecture (the how) - [architecture/index.md](architecture/index.md)
 

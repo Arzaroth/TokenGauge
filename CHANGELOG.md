@@ -7,12 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Every release carries a `.deb`, an `.rpm` and an Arch `tokengauge-bin`
+  package for x86_64 and aarch64, made from the same archive `--update`
+  installs, plus the PKGBUILDs for an AUR helper. Each is installed on a
+  clean Debian 12, Ubuntu 22.04, Fedora and Arch before the release is
+  published. The Omarchy widget stays out of them, since Omarchy loads
+  third-party widgets only from `~/.config/omarchy/plugins`.
+- `SHA256SUMS` beside the release assets. `install.sh` checks the archive
+  against it before installing anything, and takes `--version vX.Y.Z` to
+  install a given release.
+- The packages and `SHA256SUMS` are signed once the project's release key is
+  published (`SHA256SUMS.asc`, `tokengauge-release-key.asc`).
+
 ### Changed
 
 - A stored login the CLI is not signed into is asked as often as the live one
   once its 5-hour window is past 10%. That is another machine or tool spending
   from it, and the 30-minute wait between asks let it go from half used to
   exhausted with the panel still showing the old figure.
+- A binary a package manager installed is told to upgrade through it: the
+  Plasma, GNOME and Omarchy update banners name the package manager instead of
+  offering an Update button `--update` would refuse, and so does the daemon's
+  notification.
+- `install.sh` finds the latest release without the GitHub API's hourly rate
+  limit, and runs nothing until the whole script has arrived.
 
 ## [0.48.0] - 2026-10-21
 

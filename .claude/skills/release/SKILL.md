@@ -123,7 +123,10 @@ the Co-Authored-By trailer. Look at `git log -1 --format=%B v<last>` for the ton
 The tag push triggers `.github/workflows/release.yml`: Linux x86_64 and aarch64
 archives (binaries + compiled frontend payloads), the Windows zip and MSI, the
 macOS aarch64 and x86_64 archives (binaries + tray, no desktop payloads) and
-the universal `TokenGauge.app` DMG, then the `release` job publishes. The
+the universal `TokenGauge.app` DMG, the `.deb`, `.rpm` and Arch packages made
+from the Linux archives, then `checksums` signs and writes `SHA256SUMS`,
+`verify` installs every package on a clean distribution, and `publish`
+publishes. The
 macOS job signs everything with the Developer ID from the repository secrets
 and notarizes it; a rejected notarization fails the job and prints Apple's
 log rather than publishing unsigned files.
@@ -141,9 +144,12 @@ tag.
 
 ## Done when
 
-The tag is on origin, the GitHub release exists with all seven assets (the
+The tag is on origin, the GitHub release exists with all its assets (the
 `linux-*` and `macos-*` tarballs, the `macos-universal` DMG, the
-`windows-x86_64` zip and the `win64` MSI),
+`windows-x86_64` zip and the `win64` MSI, the two `.deb`s, two `.rpm`s, two
+`tokengauge-bin` packages, the `pkgbuild.tar.gz` and `SHA256SUMS`, plus
+`SHA256SUMS.asc`, the `.sig`s and `tokengauge-release-key.asc` once
+`packaging/tokengauge.asc` is committed),
 and its body opens with the changelog section (GitHub's generated "What's
 Changed" follows it; that is expected). Report the version, the release URL
 and the one-line theme. Remove the master worktree only if this run

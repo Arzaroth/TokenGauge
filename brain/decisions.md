@@ -276,5 +276,30 @@ See [features/remuda-page.md](features/remuda-page.md).
   MSI install upgrades through `msiexec`: a stray binary elsewhere is how a July
   build survived twenty releases. The MSI is named `win64` so old updaters'
   substring match cannot pick it.
+- **Packages are made from the release archive** (0005 below).
 - **No upstream-polling timer in the product**: a monthly omarchy check shipped in
   0.17.0 and was removed in the same branch; it stays the `upstream-check` skill.
+
+### 0005 Packages are made from the release archive
+
+**Decision.** The `.deb`, the `.rpm` and `tokengauge-bin` repackage the per-arch
+`linux-<arch>` archive: its binaries, its built payloads and its unit, installed
+under `/usr`. The Omarchy widget is left out, and a packaged binary is never
+replaced by `--update`. The source `tokengauge` PKGBUILD ships beside them, built
+once in CI to prove it.
+
+**Why.** The archive is what `--update` installs, so a package cannot carry
+different bytes. TailGauge made the same call (its decision 0007). Omarchy reads
+third-party plugins from the user's config and nowhere else, and a package must
+not write into a home.
+
+**Rejected.**
+- *Build each package from source in its distribution*: a toolchain per
+  distribution in CI, and packages whose bytes differ from the archive's.
+- *A static musl binary, as TailGauge ships*: TailGauge needed it because its
+  native build asked for glibc 2.38. TokenGauge's `cross` build already runs on
+  Debian 12 and Ubuntu 22.04, and musl's allocator is slow on the transcript
+  parsing the daemon does all day.
+- *Install the schema XML into `/usr/share/glib-2.0/schemas` and let the
+  distribution compile it*: the shell reads an extension's own `schemas/` first
+  and fails when it holds no compiled blob.

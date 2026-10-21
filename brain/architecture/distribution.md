@@ -104,7 +104,7 @@ rehearsal: everything a tag builds and checks, unsigned, published nowhere
 and runs `scripts/check-package.sh`, runs `install.sh` against the assets), and
 `publish`, which needs `verify` and runs only from a tag.
 
-Signing is on once `packaging/tokengauge.asc` is committed: from then on a tag
+Signing is on because `packaging/tokengauge.asc` is committed (from 0.49.0): a tag
 without `TOKENGAUGE_GPG_KEY` / `TOKENGAUGE_GPG_PASSPHRASE` refuses to publish. It
 signs the `.rpm`s (`rpmsign`), each Arch package (`.sig`) and `SHA256SUMS`
 (`SHA256SUMS.asc`), and publishes the public key as `tokengauge-release-key.asc`.

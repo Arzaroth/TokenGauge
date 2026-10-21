@@ -18,8 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SHA256SUMS` beside the release assets. `install.sh` checks the archive
   against it before installing anything, and takes `--version vX.Y.Z` to
   install a given release.
-- The packages and `SHA256SUMS` are signed once the project's release key is
-  published (`SHA256SUMS.asc`, `tokengauge-release-key.asc`).
+- The `.rpm`s, the Arch packages and `SHA256SUMS` are signed with the
+  project's release key, `8B50428BFB8B6A9303EA8FEF0F78D1DAEC502262`, published
+  beside them as `tokengauge-release-key.asc` (`SHA256SUMS.asc` signs the
+  checksums).
 
 ### Changed
 

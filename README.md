@@ -79,7 +79,7 @@ A package puts the binaries in `/usr/bin`, the daemon's user unit in `/usr/lib/s
 
 A packaged binary upgrades through its package manager: `--update` refuses it, and the panel's banner says so instead of offering to install.
 
-Once the project's release key is published, the `.rpm`s and the Arch packages are signed and `SHA256SUMS.asc` signs the checksums, so any download can be checked against `tokengauge-release-key.asc`:
+From 0.49.0 the `.rpm`s and the Arch packages are signed and `SHA256SUMS.asc` signs the checksums, so any download can be checked against `tokengauge-release-key.asc`, whose fingerprint is `8B50428BFB8B6A9303EA8FEF0F78D1DAEC502262`:
 
 ```bash
 gpg --import tokengauge-release-key.asc && gpg --verify SHA256SUMS.asc SHA256SUMS && sha256sum -c --ignore-missing SHA256SUMS

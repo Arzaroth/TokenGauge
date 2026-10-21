@@ -544,6 +544,27 @@ pub(crate) fn maybe_refresh(config: &TokenGaugeConfig) -> Result<RefreshSnapshot
 mod tests {
 
     #[test]
+    fn an_available_update_says_who_installs_it() {
+        let status = tokengauge_core::UpdateStatus {
+            current: "0.1.0".into(),
+            latest: Some("0.2.0".into()),
+            available: true,
+            ..Default::default()
+        };
+        let update = update_json(Some(status.clone()));
+        // A test binary under target/ belongs to no package manager.
+        assert_eq!(update["upgraded_by"], "");
+        assert_eq!(update["latest"], "0.2.0");
+
+        let current = update_json(Some(tokengauge_core::UpdateStatus {
+            available: false,
+            ..status
+        }));
+        assert!(current.get("upgraded_by").is_none());
+        assert!(update_json(None).is_null());
+    }
+
+    #[test]
     fn only_the_plan_in_use_notifies_and_each_plan_keeps_its_own_thresholds() {
         let mut payload: ProviderPayload =
             serde_json::from_str(r#"{"provider":"claude","source":"oauth"}"#).unwrap();

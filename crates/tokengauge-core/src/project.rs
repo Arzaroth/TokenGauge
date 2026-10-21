@@ -188,4 +188,31 @@ mod tests {
             "a 0.22.x updater upgrades by the old name and would find nothing"
         );
     }
+
+    /// `install.sh` refuses an archive SHA256SUMS does not list, so the sums
+    /// are taken in the job that publishes, once every build job has handed
+    /// its assets over, and uploaded with them.
+    #[test]
+    fn the_release_publishes_the_checksums_of_every_asset() {
+        let workflow = release_workflow();
+        let release = workflow
+            .split("\n  release:\n")
+            .nth(1)
+            .expect("no release job");
+        let sums = release
+            .find("sha256sum -- * >SHA256SUMS")
+            .expect("the release takes no checksums");
+        let downloaded = release
+            .find("actions/download-artifact")
+            .expect("the release job downloads no assets");
+        assert!(
+            downloaded < sums,
+            "the checksums are taken before the assets are in"
+        );
+        let uploaded = release.split("files: |").nth(1).expect("no files block");
+        assert!(
+            uploaded.contains("dist/SHA256SUMS"),
+            "SHA256SUMS is not uploaded"
+        );
+    }
 }

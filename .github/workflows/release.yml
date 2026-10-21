@@ -406,6 +406,14 @@ jobs:
           pattern: tokengauge-*
           merge-multiple: true
 
+      # What scripts/install.sh checks a download against before installing
+      # it, taken once every asset is in.
+      - name: SHA256SUMS
+        run: |
+          cd dist
+          sha256sum -- * >SHA256SUMS
+          cat SHA256SUMS
+
       - name: Extract release notes from CHANGELOG
         env:
           REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
@@ -431,3 +439,4 @@ jobs:
             dist/*.zip
             dist/*.msi
             dist/*.dmg
+            dist/SHA256SUMS

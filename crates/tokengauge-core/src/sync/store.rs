@@ -57,6 +57,33 @@ pub fn load(cache_file: &Path) -> (FleetStore, Option<String>) {
     }
 }
 
+pub fn lock_path(cache_file: &Path) -> PathBuf {
+    store_path(cache_file).with_extension("lock")
+}
+
+/// Hold the store for one load-to-save, released when the handle drops.
+///
+/// Every writer reads the whole store, changes it and writes the whole store
+/// back, so two at once lose the first one's change: an adoption saved while
+/// the daemon was mid-cycle came back undone, with the retired object already
+/// deleted.
+pub fn lock(cache_file: &Path) -> Result<std::fs::File> {
+    let path = lock_path(cache_file);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("could not create {}", parent.display()))?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("could not open {}", path.display()))?;
+    file.lock()
+        .with_context(|| format!("could not lock {}", path.display()))?;
+    Ok(file)
+}
+
 pub fn save(cache_file: &Path, store: &FleetStore) -> Result<()> {
     let path = store_path(cache_file);
     let bytes = serde_json::to_vec(store).context("could not serialise the fleet store")?;

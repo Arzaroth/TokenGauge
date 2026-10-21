@@ -49,6 +49,8 @@ pub fn refresh(
     let identity = crate::device_identity(&config.cache_file);
     let device = DeviceRecord::new(&identity, &config.sync.label);
 
+    // Unlocked beats undrawn: a lock that cannot be taken costs only the race.
+    let _lock = store::lock(&config.cache_file).ok();
     let (mut store, store_error) = store::load(&config.cache_file);
     status.error = store_error;
     store.upsert_local(&device, from, local_events, now.timestamp_millis());
@@ -131,6 +133,7 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
     let identity = crate::device_identity(&config.cache_file);
     let device = DeviceRecord::new(&identity, &config.sync.label);
 
+    let _lock = store::lock(&config.cache_file).ok();
     let (mut store, mut error) = store::load(&config.cache_file);
     store.backfill_local(&device, window_hour(since), &events, now);
     store.compact(now, i64::from(config.sync.retention_days));
@@ -413,6 +416,7 @@ pub fn test_round_trip(config: &TokenGaugeConfig) -> Result<Vec<String>> {
 ///
 /// Matched on device id or label, because nobody remembers a machine id.
 pub fn forget(config: &TokenGaugeConfig, wanted: &str) -> Result<String> {
+    let _lock = store::lock(&config.cache_file)?;
     let (mut store, _) = store::load(&config.cache_file);
     let local = crate::device_identity(&config.cache_file).machine_id;
     let id = resolve_device(&store, &local, wanted)?;

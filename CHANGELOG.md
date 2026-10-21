@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-10-22
+
 ### Added
 
 - Every release carries a `.deb`, an `.rpm` and an Arch `tokengauge-bin`

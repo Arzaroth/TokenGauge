@@ -36,6 +36,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::{check_status, jwt_claims};
@@ -281,6 +282,138 @@ struct UsageSummary {
     individual_usage: Option<Usage>,
     #[serde(rename = "teamUsage", default)]
     team_usage: Option<Usage>,
+    #[serde(rename = "limitType", default)]
+    limit_type: Option<String>,
+}
+
+impl UsageSummary {
+    /// An Enterprise or Business member's allowance is a budget the team sets,
+    /// and the summary can report it as zero.
+    fn is_team_plan(&self) -> bool {
+        let membership = self
+            .membership_type
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        matches!(
+            membership.as_str(),
+            "enterprise" | "business" | "team" | "teams"
+        ) || self
+            .limit_type
+            .as_deref()
+            .is_some_and(|t| t.eq_ignore_ascii_case("team"))
+    }
+}
+
+/// One member's spend against the budget the team gave them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Budget {
+    used_usd: f64,
+    limit_usd: f64,
+}
+
+#[derive(Deserialize)]
+struct Teams {
+    teams: Vec<Team>,
+}
+
+#[derive(Deserialize)]
+struct Team {
+    id: i64,
+}
+
+impl Teams {
+    /// The browser's team selection is a cookie this session does not carry,
+    /// so only an account in exactly one team can be read without guessing.
+    fn sole_id(&self) -> Option<i64> {
+        match self.teams.as_slice() {
+            [team] if team.id > 0 => Some(team.id),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct SpendPage {
+    #[serde(rename = "teamMemberSpend")]
+    members: Vec<Member>,
+    #[serde(rename = "totalPages", default)]
+    total_pages: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct Member {
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(rename = "overallSpendCents", default)]
+    overall_spend_cents: Option<Value>,
+    #[serde(rename = "effectivePerUserLimitDollars", default)]
+    effective_limit_dollars: Option<Value>,
+    #[serde(rename = "monthlyLimitDollars", default)]
+    monthly_limit_dollars: Option<Value>,
+}
+
+impl Member {
+    /// An explicit effective limit of zero is unlimited, never a reason to fall
+    /// back on the nominal monthly one; a figure of the wrong type is no
+    /// figure.
+    fn budget(&self) -> Option<Budget> {
+        let number = |v: &Value| v.as_f64().filter(|n| n.is_finite());
+        let used = number(self.overall_spend_cents.as_ref()?).filter(|u| *u >= 0.0)?;
+        let limit = match self.effective_limit_dollars.as_ref() {
+            Some(Value::Null) | None => number(self.monthly_limit_dollars.as_ref()?)?,
+            Some(v) => number(v)?,
+        };
+        (limit > 0.0).then_some(Budget {
+            used_usd: used / 100.0,
+            limit_usd: limit,
+        })
+    }
+}
+
+const TEAM_PAGE_SIZE: usize = 50;
+const TEAM_MAX_PAGES: u32 = 20;
+
+/// The member whose email this is, over every page or not at all. A page set
+/// that contradicts itself, stops short, or names the member twice says
+/// nothing reliable, and the summary stands.
+fn member_budget(email: &str, mut page: impl FnMut(u32) -> Option<SpendPage>) -> Option<Budget> {
+    let email = email.trim();
+    if email.is_empty() {
+        return None;
+    }
+    let mut expected = None;
+    let mut found = None;
+    for number in 1..=TEAM_MAX_PAGES {
+        let spend = page(number)?;
+        let total = spend
+            .total_pages
+            .filter(|t| (1..=TEAM_MAX_PAGES).contains(t))?;
+        if expected.is_some_and(|e| e != total)
+            || spend.members.is_empty()
+            || spend.members.len() > TEAM_PAGE_SIZE
+            || (number != total && spend.members.len() != TEAM_PAGE_SIZE)
+        {
+            return None;
+        }
+        expected = Some(total);
+        for member in &spend.members {
+            if member
+                .email
+                .as_deref()
+                .is_some_and(|e| e.trim().eq_ignore_ascii_case(email))
+            {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(member.budget()?);
+            }
+        }
+        if number == total {
+            return found;
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -332,7 +465,11 @@ fn window(value: Option<f64>, resets_at: Option<&str>) -> Option<UsageWindow> {
     })
 }
 
-fn to_payload(body: UsageSummary, now: DateTime<Utc>) -> Result<ProviderPayload> {
+fn to_payload(
+    body: UsageSummary,
+    budget: Option<Budget>,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
     // A team seat reports its usage under `teamUsage` and an individual under
     // `individualUsage`; nobody has both, and which one answered is not
     // something the panel needs to say.
@@ -355,9 +492,22 @@ fn to_payload(body: UsageSummary, now: DateTime<Utc>) -> Result<ProviderPayload>
 
     // The headline leads, then the two pools it is made of. All three share one
     // billing cycle, so they share one reset.
-    let primary = window(plan.total_percent_used, resets);
-    let secondary = window(plan.auto_percent_used, resets);
-    let tertiary = window(plan.api_percent_used, resets);
+    // A member's budget replaces the pools the summary reported as zero.
+    let (primary, secondary, tertiary) = match budget {
+        Some(b) => (
+            window(
+                Some((b.used_usd / b.limit_usd * 100.0).clamp(0.0, 100.0)),
+                resets,
+            ),
+            None,
+            None,
+        ),
+        None => (
+            window(plan.total_percent_used, resets),
+            window(plan.auto_percent_used, resets),
+            window(plan.api_percent_used, resets),
+        ),
+    };
 
     // An unlimited plan has no allowance to be a fraction of, so it reports no
     // percentage - saying so beats drawing an empty bar.
@@ -455,7 +605,57 @@ fn usage_for(
     let body: UsageSummary =
         serde_json::from_str(&text).context("Cursor usage JSON was invalid")?;
 
-    to_payload(body, now)
+    let budget = body
+        .is_team_plan()
+        .then(|| team_budget(&client, origin, &cookie))
+        .flatten();
+    to_payload(body, budget, now)
+}
+
+/// The signed-in member's budget, from the endpoints the team dashboard
+/// calls. Optional on every count: any failure leaves the summary standing,
+/// and nothing about the other members outlives the lookup.
+fn team_budget(client: &reqwest::blocking::Client, origin: &str, cookie: &str) -> Option<Budget> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let post = |endpoint: &str, body: Value| -> Option<reqwest::blocking::Response> {
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        let resp = dashboard_request(
+            client.post(format!("{origin}/api/dashboard/{endpoint}")),
+            origin,
+            cookie,
+        )
+        .json(&body)
+        .send()
+        .ok()?;
+        resp.status().is_success().then_some(resp)
+    };
+    let me: Value = dashboard_request(client.get(format!("{origin}/api/auth/me")), origin, cookie)
+        .send()
+        .ok()
+        .filter(|r| r.status().is_success())?
+        .json()
+        .ok()?;
+    let email = me.get("email")?.as_str()?.to_string();
+    let team = post("teams", serde_json::json!({}))?
+        .json::<Teams>()
+        .ok()?
+        .sole_id()?;
+    member_budget(&email, |page| {
+        post(
+            "get-team-spend",
+            serde_json::json!({
+                "teamId": team,
+                "page": page,
+                "pageSize": TEAM_PAGE_SIZE,
+                "sortBy": "name",
+                "sortDirection": "asc",
+            }),
+        )?
+        .json()
+        .ok()
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -555,7 +755,11 @@ mod tests {
     }
 
     fn parse(raw: &str) -> Result<ProviderPayload> {
-        to_payload(serde_json::from_str(raw).expect("fixture parses"), at())
+        to_payload(
+            serde_json::from_str(raw).expect("fixture parses"),
+            None,
+            at(),
+        )
     }
 
     const FULL: &str = r#"{
@@ -861,5 +1065,161 @@ mod tests {
         assert_eq!(header("sec-ch-ua-platform"), "\"Linux\"");
         assert!(header("user-agent").contains("Chrome/140"));
         assert!(header("sec-ch-ua").contains("v=\"140\""));
+    }
+
+    fn member(json: &str) -> Member {
+        serde_json::from_str(json).unwrap()
+    }
+
+    /// Upstream's table (CodexBar #3646): absent, zero, unlimited and
+    /// mistyped figures each mean something different.
+    #[test]
+    fn a_member_budget_is_read_only_off_figures_that_are_there() {
+        let used = |json: &str| member(json).budget().map(|b| b.used_usd);
+        assert_eq!(
+            used(r#"{"overallSpendCents":1312,"effectivePerUserLimitDollars":150}"#),
+            Some(13.12)
+        );
+        assert_eq!(
+            used(r#"{"overallSpendCents":0,"monthlyLimitDollars":150}"#),
+            Some(0.0)
+        );
+        assert_eq!(
+            used(
+                r#"{"overallSpendCents":1312,"effectivePerUserLimitDollars":null,"monthlyLimitDollars":150}"#
+            ),
+            Some(13.12)
+        );
+        for none in [
+            r#"{"monthlyLimitDollars":150}"#,
+            r#"{"overallSpendCents":1312,"effectivePerUserLimitDollars":0,"monthlyLimitDollars":150}"#,
+            r#"{"overallSpendCents":1312,"effectivePerUserLimitDollars":-1,"monthlyLimitDollars":150}"#,
+            r#"{"overallSpendCents":-1,"monthlyLimitDollars":150}"#,
+            r#"{"overallSpendCents":1312,"effectivePerUserLimitDollars":"invalid","monthlyLimitDollars":150}"#,
+        ] {
+            assert_eq!(used(none), None, "{none}");
+        }
+    }
+
+    #[test]
+    fn only_a_single_team_is_read_without_the_browsers_selection() {
+        let sole = |json: &str| serde_json::from_str::<Teams>(json).unwrap().sole_id();
+        assert_eq!(sole(r#"{"teams":[{"id":22}]}"#), Some(22));
+        assert_eq!(sole(r#"{"teams":[]}"#), None);
+        assert_eq!(sole(r#"{"teams":[{"id":11},{"id":22}]}"#), None);
+        assert_eq!(sole(r#"{"teams":[{"id":-1}]}"#), None);
+    }
+
+    fn spend_page(total: u32, members: &[(&str, u32)]) -> SpendPage {
+        SpendPage {
+            members: members
+                .iter()
+                .map(|(email, cents)| Member {
+                    email: Some(email.to_string()),
+                    overall_spend_cents: Some(Value::from(*cents)),
+                    effective_limit_dollars: Some(Value::from(150)),
+                    monthly_limit_dollars: None,
+                })
+                .collect(),
+            total_pages: Some(total),
+        }
+    }
+
+    fn full_page(total: u32) -> SpendPage {
+        spend_page(total, &[("other@example.test", 1); TEAM_PAGE_SIZE])
+    }
+
+    #[test]
+    fn a_member_is_published_only_once_every_page_agrees() {
+        let mut asked = 0;
+        let budget = member_budget(" Me@Example.test ", |n| {
+            asked += 1;
+            Some(match n {
+                1 => {
+                    let mut page = full_page(2);
+                    page.members[0].email = Some("me@example.test".into());
+                    page.members[0].overall_spend_cents = Some(Value::from(1312));
+                    page
+                }
+                _ => spend_page(2, &[("last@example.test", 1)]),
+            })
+        });
+        assert_eq!(asked, 2);
+        assert_eq!(
+            budget,
+            Some(Budget {
+                used_usd: 13.12,
+                limit_usd: 150.0
+            })
+        );
+
+        // The same member twice is two answers, which is none.
+        let twice = member_budget("me@example.test", |_| {
+            Some(spend_page(
+                1,
+                &[("me@example.test", 100), ("me@example.test", 200)],
+            ))
+        });
+        assert_eq!(twice, None);
+    }
+
+    #[test]
+    fn a_page_set_that_contradicts_itself_publishes_nobody() {
+        let me = &[("me@example.test", 100)];
+        // Page count changes between pages.
+        assert_eq!(
+            member_budget("me@example.test", |n| Some(if n == 1 {
+                full_page(2)
+            } else {
+                spend_page(3, me)
+            })),
+            None
+        );
+        // A short page before the last.
+        assert_eq!(
+            member_budget("me@example.test", |n| Some(if n == 1 {
+                spend_page(2, me)
+            } else {
+                spend_page(2, &[("x@example.test", 1)])
+            })),
+            None
+        );
+        // No page count at all, or a page that failed.
+        assert_eq!(
+            member_budget("me@example.test", |_| Some(SpendPage {
+                members: vec![],
+                total_pages: None
+            })),
+            None
+        );
+        assert_eq!(member_budget("me@example.test", |_| None), None);
+        assert_eq!(member_budget("", |_| Some(spend_page(1, me))), None);
+    }
+
+    /// The summary reports a team member's pools as zero; the budget is the
+    /// figure, and the pools it would have drawn beside it are dropped.
+    #[test]
+    fn a_member_budget_replaces_the_zero_summary() {
+        let body: UsageSummary = serde_json::from_str(
+            r#"{"membershipType":"enterprise","billingCycleEnd":"2026-10-01T00:00:00Z",
+                "teamUsage":{"plan":{"totalPercentUsed":0,"autoPercentUsed":0,"apiPercentUsed":0}}}"#,
+        )
+        .unwrap();
+        assert!(body.is_team_plan());
+        let usage = to_payload(
+            body,
+            Some(Budget {
+                used_usd: 75.0,
+                limit_usd: 150.0,
+            }),
+            at(),
+        )
+        .unwrap()
+        .usage
+        .unwrap();
+        let primary = usage.primary.unwrap();
+        assert_eq!(primary.used_percent, Some(50));
+        assert_eq!(primary.resets_at.as_deref(), Some("2026-10-01T00:00:00Z"));
+        assert!(usage.secondary.is_none() && usage.tertiary.is_none());
     }
 }

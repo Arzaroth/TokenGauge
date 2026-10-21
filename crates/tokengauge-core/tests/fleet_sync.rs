@@ -94,6 +94,7 @@ fn publish_peer(root: &Path, key: &FleetKey, tokens: u64) {
         // month - which is what made this fixture flake overnight into Sep 1.
         buckets: bucketize(&[event(0, tokens, 0xfeed)]),
         days: Vec::new(),
+        adopted: Vec::new(),
     };
 
     let name = key.object_name(PEER_ID);
@@ -520,6 +521,7 @@ fn a_provider_this_build_cannot_rate_is_reported_not_swallowed() {
         providers: vec!["quasar".into()],
         buckets: bucket,
         days: Vec::new(),
+        adopted: Vec::new(),
     };
     let name = key.object_name(PEER_ID);
     let dir = root.join("shared").join("v1");

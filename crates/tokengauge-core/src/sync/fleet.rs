@@ -178,6 +178,7 @@ impl Default for FleetStore {
             key_id: None,
             retired_key_ids: Vec::new(),
             published_name: None,
+            objects_target: None,
         }
     }
 }
@@ -219,6 +220,9 @@ pub struct FleetStore {
     /// its own unreadable litter out of a shared folder.
     #[serde(default)]
     pub published_name: Option<String>,
+    /// The transport `objects` was listed from. See [`FleetStore::drop_vanished`].
+    #[serde(default)]
+    pub objects_target: Option<String>,
 }
 
 /// What changing the fleet key cost.
@@ -425,6 +429,74 @@ impl FleetStore {
         slice.days.retain(|day| day.date < from_date);
         slice.days.extend(contribution.days.iter().cloned());
         slice.days.sort_by_key(|day| day.date);
+
+        slice.adopted.extend(contribution.adopted.iter().cloned());
+        slice.adopted.sort();
+        slice.adopted.dedup();
+    }
+
+    /// Carry out every adoption a device has announced, on our own copy of the
+    /// retired device. Run on every cycle rather than once on receipt: a
+    /// retired object that lingers in a lagging folder is absorbed again, and
+    /// has to be folded away again. A peer naming this machine as retired is
+    /// never obeyed.
+    pub fn settle_adoptions(&mut self, local_id: &str) {
+        let claims: Vec<(String, String)> = self
+            .devices
+            .iter()
+            .flat_map(|(into, slice)| {
+                slice
+                    .adopted
+                    .iter()
+                    .map(move |retired| (retired.clone(), into.clone()))
+            })
+            .collect();
+        for (retired, into) in claims {
+            if retired != local_id {
+                self.adopt(&retired, &into);
+            }
+        }
+    }
+
+    /// Record which transport `objects` is about to be listed from, and
+    /// whether it is the one it was listed from last time. A different one
+    /// starts `objects` over, so [`Self::drop_vanished`] never reads a peer
+    /// that has not moved to a new folder or bucket yet as one that left.
+    pub fn list_target(&mut self, target: &str) -> bool {
+        if self.objects_target.as_deref() == Some(target) {
+            return true;
+        }
+        self.objects.clear();
+        self.objects_target = Some(target.to_string());
+        false
+    }
+
+    /// Drop every peer whose object the target used to list and no longer
+    /// does: it was forgotten or adopted on another machine, and a slice kept
+    /// past that would count its days beside whoever took them over.
+    pub fn drop_vanished(
+        &mut self,
+        local_id: &str,
+        listed: &BTreeSet<String>,
+        object_name: impl Fn(&str) -> String,
+    ) -> Vec<String> {
+        let gone: BTreeSet<String> = self
+            .objects
+            .keys()
+            .filter(|name| !listed.contains(*name))
+            .cloned()
+            .collect();
+        self.objects.retain(|name, _| !gone.contains(name));
+        let dropped: Vec<String> = self
+            .devices
+            .keys()
+            .filter(|id| *id != local_id && gone.contains(&object_name(id)))
+            .cloned()
+            .collect();
+        for id in &dropped {
+            self.devices.remove(id);
+        }
+        dropped
     }
 
     pub fn prune(&mut self, now: DateTime<Utc>) {
@@ -513,6 +585,7 @@ impl FleetStore {
                 .filter(|day| day.date >= floor_date)
                 .cloned()
                 .collect(),
+            adopted: slice.adopted.clone(),
         })
     }
 
@@ -1083,6 +1156,7 @@ mod tests {
             providers: vec!["claude".into()],
             buckets: bucketize(&[event("claude", "opus", hour("2026-08-09T09"), 10, Some(4))]),
             days: Vec::new(),
+            adopted: Vec::new(),
         });
 
         assert_eq!(

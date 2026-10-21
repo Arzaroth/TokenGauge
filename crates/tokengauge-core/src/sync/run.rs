@@ -1,5 +1,7 @@
 //! One sync cycle: publish what changed, take what the peers published, merge.
 
+use std::collections::BTreeSet;
+
 use super::contribution::{Contribution, DeviceRecord, content_hash};
 use super::fleet::{FleetStore, ObjectState};
 use super::hour::Hour;
@@ -203,7 +205,10 @@ fn cycle(
         }
     }
 
-    for entry in transport.list()? {
+    let same_target = store.list_target(&transport.describe());
+    let entries = transport.list()?;
+    let listed: BTreeSet<String> = entries.iter().map(|entry| entry.name.clone()).collect();
+    for entry in entries {
         if entry.name == own_name {
             continue;
         }
@@ -257,6 +262,13 @@ fn cycle(
                 reason,
             },
         );
+    }
+
+    store.settle_adoptions(&device.id);
+    // A listing without this machine's own object is not one to delete peers
+    // on the strength of: whatever hid ours may have hidden theirs.
+    if same_target && listed.contains(&own_name) {
+        store.drop_vanished(&device.id, &listed, |id| key.object_name(id));
     }
 
     store.last_pull_ms = Some(now.timestamp_millis());
@@ -486,6 +498,7 @@ mod tests {
                 tokens: Default::default(),
             }],
             days: Vec::new(),
+            adopted: Vec::new(),
         }
     }
 

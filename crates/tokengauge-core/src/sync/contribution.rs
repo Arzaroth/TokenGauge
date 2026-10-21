@@ -131,6 +131,11 @@ pub struct Contribution {
     pub buckets: Vec<Bucket>,
     #[serde(default)]
     pub days: Vec<DayDigest>,
+    /// Devices this one took over with `--sync-adopt`. Carried on every
+    /// contribution, so a peer that was offline when the adoption happened
+    /// still folds its own copy of them in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adopted: Vec<String>,
 }
 
 /// Fold events into `(hour, provider, model)` buckets, sorted so the serialised
@@ -218,6 +223,11 @@ pub fn content_hash(contribution: &Contribution) -> u64 {
         feed(&mut buf, day.date.to_string().as_bytes());
         feed(&mut buf, &day.events.to_le_bytes());
         feed(&mut buf, day.digest.as_bytes());
+    }
+    // Only when present, so a device that adopted nothing hashes as before
+    // and does not republish on upgrade.
+    for id in &contribution.adopted {
+        feed(&mut buf, id.as_bytes());
     }
     digest_u64(&[&buf])
 }

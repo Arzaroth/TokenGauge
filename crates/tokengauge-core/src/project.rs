@@ -189,27 +189,38 @@ mod tests {
         );
     }
 
+    /// One job of the release workflow, from its name to the next job's.
+    fn job(workflow: &str, name: &str) -> String {
+        let (_, rest) = workflow
+            .split_once(&format!("\n  {name}:\n"))
+            .unwrap_or_else(|| panic!("no {name} job"));
+        rest.lines()
+            .take_while(|line| {
+                line.is_empty() || line.starts_with("   ") || line.starts_with("  #")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// `install.sh` refuses an archive SHA256SUMS does not list, so the sums
-    /// are taken in the job that publishes, once every build job has handed
-    /// its assets over, and uploaded with them.
+    /// are taken once every build job has handed its assets over, and
+    /// published with them.
     #[test]
     fn the_release_publishes_the_checksums_of_every_asset() {
         let workflow = release_workflow();
-        let release = workflow
-            .split("\n  release:\n")
-            .nth(1)
-            .expect("no release job");
-        let sums = release
+        let checksums = job(&workflow, "checksums");
+        let sums = checksums
             .find("sha256sum -- * >SHA256SUMS")
             .expect("the release takes no checksums");
-        let downloaded = release
+        let downloaded = checksums
             .find("actions/download-artifact")
-            .expect("the release job downloads no assets");
+            .expect("the checksums job downloads no assets");
         assert!(
             downloaded < sums,
             "the checksums are taken before the assets are in"
         );
-        let uploaded = release.split("files: |").nth(1).expect("no files block");
+        let uploaded = job(&workflow, "publish");
+        let uploaded = uploaded.split("files: |").nth(1).expect("no files block");
         assert!(
             uploaded.contains("dist/SHA256SUMS"),
             "SHA256SUMS is not uploaded"

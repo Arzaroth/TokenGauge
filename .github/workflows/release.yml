@@ -566,28 +566,15 @@ jobs:
           path: out/*
           if-no-files-found: error
 
-  release:
+  checksums:
     runs-on: ubuntu-latest
     needs: [build-x86_64, build-aarch64, build-windows, build-macos, linux-packages, arch-packages]
-    permissions:
-      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ env.REF }}
           persist-credentials: false
-
-      # The tag being released, or on a pull request the one the workspace
-      # version would be tagged as.
-      - name: The tag
-        shell: bash
-        run: |
-          if [[ $PUBLISH == true ]]; then
-            echo "REF_NAME=${REF#refs/tags/}" >>"$GITHUB_ENV"
-          else
-            echo "REF_NAME=v$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/tokengauge-waybar/Cargo.toml | head -1)" >>"$GITHUB_ENV"
-          fi
 
       - name: Download artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -604,6 +591,117 @@ jobs:
           sha256sum -- * >SHA256SUMS
           cat SHA256SUMS
 
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release
+          path: dist/*
+          if-no-files-found: error
+
+  # Every package installed on a distribution that has never seen this tree,
+  # before anything is published: the oldest glibc anyone is likely to run it
+  # on, and each package manager's own idea of what a package should hold.
+  verify:
+    needs: checksums
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs-on: ubuntu-latest
+            deb: amd64
+            rpm: x86_64
+            pkg: x86_64
+          # No archlinux image for arm64.
+          - runs-on: ubuntu-24.04-arm
+            deb: arm64
+            rpm: aarch64
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.REF }}
+          persist-credentials: false
+
+      - name: Download
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release
+          path: dist
+
+      - name: The checksums
+        run: cd dist && sha256sum -c SHA256SUMS
+
+      - name: The .deb on Debian 12 and Ubuntu 22.04
+        env:
+          DEB: ${{ matrix.deb }}
+        run: |
+          for image in debian:12 ubuntu:22.04; do
+            docker run --rm -e DEB -v "$PWD/dist:/d:ro" -v "$PWD/scripts:/s:ro" "$image" sh -ec '
+              apt-get update -qq >/dev/null
+              apt-get install -qq -y /d/tokengauge_*_"$DEB".deb >/dev/null
+              sh /s/check-package.sh
+              apt-get remove -qq -y tokengauge >/dev/null
+              test ! -e /usr/share/plasma/plasmoids/org.tokengauge.plasmoid'
+          done
+
+      - name: The .rpm on Fedora
+        env:
+          RPM: ${{ matrix.rpm }}
+        run: |
+          docker run --rm -e RPM -v "$PWD/dist:/d:ro" -v "$PWD/scripts:/s:ro" fedora:latest sh -ec '
+            rpm -i /d/tokengauge-*."$RPM".rpm
+            rpm -V tokengauge
+            sh /s/check-package.sh
+            rpm -e tokengauge
+            test ! -e /usr/share/plasma/plasmoids/org.tokengauge.plasmoid'
+
+      - name: The Arch package
+        if: matrix.pkg
+        env:
+          PKG: ${{ matrix.pkg }}
+        run: |
+          docker run --rm -e PKG -v "$PWD/dist:/d:ro" -v "$PWD/scripts:/s:ro" archlinux:latest sh -ec '
+            sed -i "/^NoExtract/d" /etc/pacman.conf
+            pacman -U --noconfirm /d/tokengauge-bin-*-"$PKG".pkg.tar.zst >/dev/null
+            pacman -Qkk tokengauge-bin
+            sh /s/check-package.sh'
+
+      - name: install.sh
+        run: |
+          home=$(mktemp -d)
+          env -u XDG_CONFIG_HOME HOME="$home" TOKENGAUGE_DOWNLOAD_BASE="$PWD/dist" bash -s -- --no-daemon <scripts/install.sh
+          "$home/.local/bin/tokengauge" --version
+
+  publish:
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.REF }}
+          persist-credentials: false
+
+      # The tag being released.
+      - name: The tag
+        shell: bash
+        run: |
+          if [[ $PUBLISH == true ]]; then
+            echo "REF_NAME=${REF#refs/tags/}" >>"$GITHUB_ENV"
+          else
+            echo "REF_NAME=v$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/tokengauge-waybar/Cargo.toml | head -1)" >>"$GITHUB_ENV"
+          fi
+
+      - name: Download
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release
+          path: dist
+
       - name: Extract release notes from CHANGELOG
         run: |
           VERSION="${REF_NAME#v}"
@@ -617,7 +715,6 @@ jobs:
           fi
 
       - name: Publish GitHub release
-        if: env.PUBLISH == 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ env.REF_NAME }}

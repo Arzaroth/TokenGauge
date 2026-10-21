@@ -328,13 +328,16 @@ impl FleetStore {
         slice.days.sort_by_key(|day| day.date);
     }
 
-    /// The deep re-read: [`Self::upsert_local`] from the oldest event the
-    /// transcripts still hold, with coverage reaching back to `reach`.
+    /// The deep re-read: each provider's buckets are replaced from the oldest
+    /// event its transcripts still hold, and coverage reaches back to `reach`.
     ///
-    /// Not from `reach` itself. A day no transcript mentions is unknown, not
-    /// zero - its file was rotated away, or it was adopted from a machine this
-    /// one replaced - and replacing from `reach` would erase every such day
-    /// with nothing.
+    /// Not from `reach`, and not from the oldest event overall. A day no
+    /// transcript mentions is unknown, not zero - its file was rotated away,
+    /// or it was adopted from a machine this one replaced - and one provider
+    /// that keeps its sessions forever says nothing about another that
+    /// deletes them after a month. A floor inside a rolled-up day moves to the
+    /// next one: that day was built while its transcripts were all there, and
+    /// re-read hours landed beside it would count the rest of it twice.
     pub fn backfill_local(
         &mut self,
         device: &DeviceRecord,
@@ -342,15 +345,50 @@ impl FleetStore {
         events: &[UsageEvent],
         now: DateTime<Utc>,
     ) {
-        let replace_from = events
-            .iter()
-            .map(|event| Hour::containing(event.at))
-            .min()
-            .map_or(Hour::containing(now), |first| first.max(reach));
-        self.upsert_local(device, replace_from, events, now.timestamp_millis());
-        if let Some(slice) = self.devices.get_mut(&device.id) {
-            slice.covers_from = slice.covers_from.map(|covers| covers.min(reach));
+        let slice = self.devices.entry(device.id.clone()).or_default();
+        slice.device = device.clone();
+        slice.updated_at_ms = now.timestamp_millis();
+        slice.covers_from = Some(slice.covers_from.map_or(reach, |covers| covers.min(reach)));
+
+        let mut floors: BTreeMap<&str, Hour> = BTreeMap::new();
+        for event in events {
+            let at = Hour::containing(event.at).max(reach);
+            floors
+                .entry(event.provider)
+                .and_modify(|floor| *floor = (*floor).min(at))
+                .or_insert(at);
         }
+        for (provider, floor) in floors.iter_mut() {
+            let date = floor.utc_date();
+            let rolled_up = slice.buckets.iter().any(|bucket| {
+                bucket.granularity == Granularity::Day
+                    && bucket.hour.utc_date() == date
+                    && bucket.provider == *provider
+            });
+            if rolled_up && *floor > day_start(Some(date)) {
+                *floor = day_start(date.succ_opt());
+            }
+        }
+        let replaced = |bucket: &Bucket| {
+            floors
+                .get(bucket.provider.as_str())
+                .is_some_and(|floor| bucket.hour >= *floor)
+        };
+
+        slice.buckets.retain(|bucket| !replaced(bucket));
+        slice.buckets.extend(
+            bucketize(events)
+                .into_iter()
+                .filter(|bucket| replaced(bucket)),
+        );
+        slice.buckets.sort_by(sort_key);
+
+        let fresh = day_digests(events);
+        slice
+            .days
+            .retain(|day| !fresh.iter().any(|new| new.date == day.date));
+        slice.days.extend(fresh);
+        slice.days.sort_by_key(|day| day.date);
     }
 
     /// Fold a retired device's history into `into_id` and drop the retired
@@ -1062,21 +1100,71 @@ mod tests {
         store.backfill_local(
             &device("a"),
             reach,
-            &[event("claude", "opus", hour("2026-08-20T09"), 55, Some(2))],
+            &[
+                event("claude", "opus", hour("2026-08-20T09"), 55, Some(2)),
+                event("codex", "gpt", hour("2026-02-01T09"), 1, Some(3)),
+            ],
             now,
         );
         assert_eq!(
             tokens_for(&store, "a"),
-            155,
-            "March has no transcript left, so it survives; August is re-read"
+            156,
+            "March has no Claude transcript left, so it survives a Codex one older still"
         );
         assert_eq!(store.devices["a"].covers_from, Some(reach));
 
+        let recent = Bucket {
+            hour: hour("2026-08-25T12"),
+            ..store.devices["a"].buckets[0].clone()
+        };
+        store
+            .devices
+            .get_mut("a")
+            .expect("slice")
+            .buckets
+            .push(recent);
+        let before = tokens_for(&store, "a");
         store.backfill_local(&device("a"), reach, &[], now);
         assert_eq!(
             tokens_for(&store, "a"),
-            155,
-            "finding nothing erases nothing"
+            before,
+            "finding nothing erases nothing, not even this hour's"
+        );
+    }
+
+    #[test]
+    fn a_backfill_never_lands_beside_a_rolled_up_day() {
+        let mut store = FleetStore::new();
+        store.upsert_local(&device("a"), hour("2026-03-01T00"), &[], 1);
+        store
+            .devices
+            .get_mut("a")
+            .expect("slice")
+            .buckets
+            .push(Bucket {
+                hour: Hour::midday("2026-03-10".parse().expect("date")),
+                provider: "claude".into(),
+                model: "opus".into(),
+                granularity: Granularity::Day,
+                tokens: TokenCounts {
+                    output: 1000,
+                    ..Default::default()
+                },
+            });
+
+        store.backfill_local(
+            &device("a"),
+            hour("2025-08-01T00"),
+            &[
+                event("claude", "opus", hour("2026-03-10T15"), 7, Some(1)),
+                event("claude", "opus", hour("2026-03-11T09"), 20, Some(2)),
+            ],
+            hour("2026-08-25T12").start(),
+        );
+        assert_eq!(
+            tokens_for(&store, "a"),
+            1020,
+            "the day stands whole and the re-read starts the day after"
         );
     }
 

@@ -73,6 +73,10 @@ struct Payload {
 struct TokenInfo {
     #[serde(default)]
     total_token_usage: Cumulative,
+    /// The response this reading closed. Never summed (trap 2); it only says
+    /// whether a delta is that one response or several.
+    #[serde(default)]
+    last_token_usage: Option<Cumulative>,
 }
 
 /// Running totals for the session. `reasoning_output_tokens` is a subset of
@@ -413,6 +417,18 @@ pub(super) fn read_file(
             continue;
         }
         let tokens = cumulative.since(previous);
+        // A delta spans several responses when a reading in between was
+        // skipped; only one that is exactly the last response can be tiered.
+        let one_request = info.last_token_usage.is_some_and(|last| {
+            last.input_tokens
+                == cumulative
+                    .input_tokens
+                    .saturating_sub(previous.input_tokens)
+                && last.output_tokens
+                    == cumulative
+                        .output_tokens
+                        .saturating_sub(previous.output_tokens)
+        });
         *previous = cumulative;
         if tokens.total() == 0 {
             continue;
@@ -447,7 +463,7 @@ pub(super) fn read_file(
             at: timestamp,
             tokens,
             key: Some(key),
-            one_request: true,
+            one_request,
         });
     }
 
@@ -505,6 +521,32 @@ mod tests {
     }
 
     const CONTEXT: &str = r#"{"timestamp":"2026-05-11T06:17:00.967Z","type":"turn_context","payload":{"model":"gpt-5.5"}}"#;
+
+    fn reading(ts: &str, total: (u64, u64), last: (u64, u64)) -> String {
+        format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{},"output_tokens":{}}},"last_token_usage":{{"input_tokens":{},"output_tokens":{}}}}}}}}}"#,
+            total.0, total.1, last.0, last.1
+        )
+    }
+
+    /// A delta is one response only when it is exactly the response the
+    /// reading closed. Across a skipped reading it is two, and a long-context
+    /// tier applied to the pair would bill both at the premium.
+    #[test]
+    fn a_delta_is_one_request_only_when_it_is_the_last_response() {
+        let lines = [
+            CONTEXT,
+            &reading("2026-05-11T06:18:00.000Z", (1_000, 100), (1_000, 100)),
+            &reading("2026-05-11T06:19:00.000Z", (3_000, 300), (2_000, 200)),
+            // Moved backwards: skipped, and not latched.
+            &reading("2026-05-11T06:20:00.000Z", (2_000, 200), (500, 50)),
+            &reading("2026-05-11T06:21:00.000Z", (7_000, 700), (1_000, 100)),
+        ]
+        .join("\n");
+        let events = read(&lines);
+        let one: Vec<bool> = events.iter().map(|e| e.one_request).collect();
+        assert_eq!(one, [true, true, false]);
+    }
 
     fn ordinal_token_count(ordinal: u64, ts: &str, input: u64, output: u64) -> String {
         let row = token_count(ts, input, 0, output);

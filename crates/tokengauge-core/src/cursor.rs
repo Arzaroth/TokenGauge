@@ -5,11 +5,15 @@
 //! session cookie rather than a key - and the raw material for that cookie is
 //! already on disk, put there by Cursor itself.
 //!
-//! **Two sources, in this order:**
+//! **The sources, in this order:**
 //!
-//! 1. `~/.config/cursor/auth.json` - plain JSON, written by the `cursor-agent`
-//!    CLI. Read first because it costs nothing: a file and a JSON parse.
-//! 2. `.../Cursor/User/globalStorage/state.vscdb` - the IDE's own SQLite
+//! 1. `~/.config/cursor/auth.json` (`~/.cursor/auth.json` on macOS) - plain
+//!    JSON, written by the `cursor-agent` CLI. Read first because it costs
+//!    nothing: a file and a JSON parse.
+//! 2. On macOS, the Keychain items `cursor-access-token` /
+//!    `cursor-refresh-token` under `cursor-user`, where the CLI normally keeps
+//!    its login instead of the file.
+//! 3. `.../Cursor/User/globalStorage/state.vscdb` - the IDE's own SQLite
 //!    state, under the key `cursorAuth/accessToken`. **Not read here.** It
 //!    holds the same token, but reaching it means a SQLite dependency, and
 //!    every dependency in this crate is justified in a comment as adding no
@@ -18,19 +22,21 @@
 //!
 //! Either way the token is a JWT whose `sub` claim is `<issuer>|<userId>`, and
 //! the cookie the dashboard sends is `userId%3A%3Atoken` - a literal,
-//! pre-encoded `::`. The endpoint also gates on browser-shaped headers, so
-//! `Origin`, `Referer` and a `User-Agent` go with it.
+//! pre-encoded `::`. The endpoint also sits behind a firewall that gates on
+//! browser-shaped headers, so `Origin`, `Referer`, a `User-Agent` and the
+//! client hints a browser sends beside it go with it.
 //!
 //! What comes back is unusually well-suited to the panel: three ready
 //! percentages over one billing cycle, and an on-demand cap that is a
 //! [`CreditLimit`] rather than a window.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::{check_status, jwt_claims};
@@ -48,6 +54,49 @@ const TOKEN_ENVS: &[&str] = &["CURSOR_ACCESS_TOKEN", "CURSOR_SESSION_TOKEN"];
 /// own machine with the user's own session.
 const BROWSER_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
 
+/// The rest of what that browser sends. The endpoint sits behind Vercel's
+/// firewall, which negotiates client hints and refuses a client that sends a
+/// user agent and nothing else beside it, with a 403 and a valid cookie.
+const BROWSER_HEADERS: &[(&str, &str)] = &[
+    ("user-agent", BROWSER_UA),
+    ("accept", "application/json, text/plain, */*"),
+    ("accept-language", "en-US,en;q=0.9"),
+    (
+        "sec-ch-ua",
+        "\"Chromium\";v=\"140\", \"Not=A?Brand\";v=\"24\", \"Google Chrome\";v=\"140\"",
+    ),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", "\"Linux\""),
+    ("sec-fetch-dest", "empty"),
+    ("sec-fetch-mode", "cors"),
+    ("sec-fetch-site", "same-origin"),
+];
+
+fn dashboard_request(
+    request: reqwest::blocking::RequestBuilder,
+    origin: &str,
+    cookie: &str,
+) -> reqwest::blocking::RequestBuilder {
+    BROWSER_HEADERS.iter().fold(
+        request
+            .header("cookie", format!("WorkosCursorSessionToken={cookie}"))
+            .header("origin", origin)
+            .header("referer", format!("{origin}/dashboard")),
+        |request, (name, value)| request.header(*name, *value),
+    )
+}
+
+/// The firewall's refusal and a dead session are both a 403 here, so the
+/// shared "check your plan" reading would be wrong either way.
+fn check_cursor_status(status: reqwest::StatusCode, unauthorized_hint: &str) -> Result<()> {
+    if status == reqwest::StatusCode::FORBIDDEN {
+        return Err(anyhow!(
+            "Cursor refused the request - the session may have ended, or cursor.com's edge blocked it; {unauthorized_hint} if it persists"
+        ));
+    }
+    check_status(status, "Cursor", unauthorized_hint)
+}
+
 fn env_clean(name: &str) -> Option<String> {
     let value = std::env::var(name).ok()?;
     let trimmed = value.trim().to_string();
@@ -55,15 +104,46 @@ fn env_clean(name: &str) -> Option<String> {
 }
 
 /// Where the `cursor-agent` CLI keeps its login. Cursor's own convention, not
-/// ours - the same directory the CLI writes its config into.
+/// ours, and only Linux and Windows follow the config-directory one: on macOS
+/// it is `~/.cursor`, not `~/Library/Application Support`.
 pub(crate) fn agent_auth_path() -> PathBuf {
     if let Some(dir) = env_clean("CURSOR_CONFIG_DIR") {
         return PathBuf::from(dir).join("auth.json");
     }
-    dirs::config_dir()
-        .unwrap_or_default()
-        .join("cursor")
-        .join("auth.json")
+    agent_auth_path_in(
+        &dirs::home_dir().unwrap_or_default(),
+        &dirs::config_dir().unwrap_or_default(),
+        cfg!(target_os = "macos"),
+    )
+}
+
+fn agent_auth_path_in(home: &Path, config: &Path, macos: bool) -> PathBuf {
+    if macos {
+        home.join(".cursor").join("auth.json")
+    } else {
+        config.join("cursor").join("auth.json")
+    }
+}
+
+/// On macOS the CLI normally keeps its login in the Keychain and writes no
+/// file at all.
+#[cfg(target_os = "macos")]
+fn keychain_login() -> Option<AgentAuth> {
+    let read = |service: &str| {
+        keyring::Entry::new(service, "cursor-user")
+            .ok()?
+            .get_password()
+            .ok()
+    };
+    Some(AgentAuth {
+        access_token: Some(read("cursor-access-token")?),
+        refresh_token: read("cursor-refresh-token"),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keychain_login() -> Option<AgentAuth> {
+    None
 }
 
 /// cursor-agent writes camelCase: `{"accessToken", "refreshToken", "apiKey"}`.
@@ -75,27 +155,43 @@ struct AgentAuth {
     refresh_token: Option<String>,
 }
 
-/// The session token: the environment first, then the file the CLI wrote.
+/// The session token and where it came from: the environment first, then the
+/// file the CLI wrote, then the Keychain.
 ///
 /// A present file says nothing about whether it holds a token - the lesson
 /// `claude.rs` records twice over - so an empty or tokenless file reads as
-/// "not signed in" rather than being handed on as a credential.
-pub(crate) fn access_token() -> Result<String> {
-    if let Some(token) = TOKEN_ENVS.iter().find_map(|name| env_clean(name)) {
-        return Ok(token);
+/// "not signed in" rather than being handed on as a credential, and does not
+/// shadow a Keychain login behind it.
+pub(crate) fn access_token() -> Result<(String, String)> {
+    if let Some((name, token)) = TOKEN_ENVS
+        .iter()
+        .find_map(|name| Some((name, env_clean(name)?)))
+    {
+        return Ok((token, format!("{name} set")));
     }
     let path = agent_auth_path();
-    let raw = std::fs::read_to_string(&path).map_err(|_| {
-        anyhow!("Cursor not signed in - run `cursor-agent` and log in, or set CURSOR_ACCESS_TOKEN")
-    })?;
-    let auth: AgentAuth = serde_json::from_str(&raw)
-        .with_context(|| format!("Cursor auth file was invalid: {}", path.display()))?;
-    auth.access_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("Cursor auth file holds no token - run `cursor-agent` to log in"))
+    let from_file = std::fs::read_to_string(&path).ok().map(|raw| {
+        serde_json::from_str::<AgentAuth>(&raw)
+            .with_context(|| format!("Cursor auth file was invalid: {}", path.display()))
+    });
+    if let Some(token) = from_file
+        .as_ref()
+        .and_then(|auth| clean(auth.as_ref().ok()?.access_token.clone()))
+    {
+        return Ok((token, path.display().to_string()));
+    }
+    if let Some(token) = keychain_login().and_then(|auth| clean(auth.access_token)) {
+        return Ok((token, "macOS Keychain".to_string()));
+    }
+    match from_file {
+        None => Err(anyhow!(
+            "Cursor not signed in - run `cursor-agent` and log in, or set CURSOR_ACCESS_TOKEN"
+        )),
+        Some(Err(e)) => Err(e),
+        Some(Ok(_)) => Err(anyhow!(
+            "Cursor auth file holds no token - run `cursor-agent` to log in"
+        )),
+    }
 }
 
 /// The user id in the token's `sub` claim, which reads `issuer|userId`.
@@ -186,6 +282,158 @@ struct UsageSummary {
     individual_usage: Option<Usage>,
     #[serde(rename = "teamUsage", default)]
     team_usage: Option<Usage>,
+    #[serde(rename = "limitType", default)]
+    limit_type: Option<String>,
+}
+
+impl UsageSummary {
+    /// An Enterprise or Business member's allowance is a budget the team sets,
+    /// and the summary can report it as zero.
+    fn is_team_plan(&self) -> bool {
+        let membership = self
+            .membership_type
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        matches!(
+            membership.as_str(),
+            "enterprise" | "business" | "team" | "teams"
+        ) || self
+            .limit_type
+            .as_deref()
+            .is_some_and(|t| t.eq_ignore_ascii_case("team"))
+    }
+
+    /// A team plan whose pools say nothing: every one absent or zero. A
+    /// summary that reports usage is the better reading, and is kept.
+    fn wants_member_budget(&self) -> bool {
+        let pools = self
+            .individual_usage
+            .as_ref()
+            .or(self.team_usage.as_ref())
+            .and_then(|usage| usage.plan.as_ref());
+        self.is_team_plan()
+            && pools.is_none_or(|plan| {
+                [
+                    plan.total_percent_used,
+                    plan.auto_percent_used,
+                    plan.api_percent_used,
+                ]
+                .iter()
+                .all(|pool| pool.is_none_or(|v| v == 0.0))
+            })
+    }
+}
+
+/// One member's spend against the budget the team gave them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Budget {
+    used_usd: f64,
+    limit_usd: f64,
+}
+
+#[derive(Deserialize)]
+struct Teams {
+    teams: Vec<Team>,
+}
+
+#[derive(Deserialize)]
+struct Team {
+    id: i64,
+}
+
+impl Teams {
+    /// The browser's team selection is a cookie this session does not carry,
+    /// so only an account in exactly one team can be read without guessing.
+    fn sole_id(&self) -> Option<i64> {
+        match self.teams.as_slice() {
+            [team] if team.id > 0 => Some(team.id),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct SpendPage {
+    #[serde(rename = "teamMemberSpend")]
+    members: Vec<Member>,
+    #[serde(rename = "totalPages", default)]
+    total_pages: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct Member {
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(rename = "overallSpendCents", default)]
+    overall_spend_cents: Option<Value>,
+    #[serde(rename = "effectivePerUserLimitDollars", default)]
+    effective_limit_dollars: Option<Value>,
+    #[serde(rename = "monthlyLimitDollars", default)]
+    monthly_limit_dollars: Option<Value>,
+}
+
+impl Member {
+    /// An explicit effective limit of zero is unlimited, never a reason to fall
+    /// back on the nominal monthly one; a figure of the wrong type is no
+    /// figure.
+    fn budget(&self) -> Option<Budget> {
+        let number = |v: &Value| v.as_f64().filter(|n| n.is_finite());
+        let used = number(self.overall_spend_cents.as_ref()?).filter(|u| *u >= 0.0)?;
+        let limit = match self.effective_limit_dollars.as_ref() {
+            Some(Value::Null) | None => number(self.monthly_limit_dollars.as_ref()?)?,
+            Some(v) => number(v)?,
+        };
+        (limit > 0.0).then_some(Budget {
+            used_usd: used / 100.0,
+            limit_usd: limit,
+        })
+    }
+}
+
+const TEAM_PAGE_SIZE: usize = 50;
+const TEAM_MAX_PAGES: u32 = 20;
+
+/// The member whose email this is, over every page or not at all. A page set
+/// that contradicts itself, stops short, or names the member twice says
+/// nothing reliable, and the summary stands.
+fn member_budget(email: &str, mut page: impl FnMut(u32) -> Option<SpendPage>) -> Option<Budget> {
+    let email = email.trim();
+    if email.is_empty() {
+        return None;
+    }
+    let mut expected = None;
+    let mut found = None;
+    for number in 1..=TEAM_MAX_PAGES {
+        let spend = page(number)?;
+        let total = spend
+            .total_pages
+            .filter(|t| (1..=TEAM_MAX_PAGES).contains(t))?;
+        if expected.is_some_and(|e| e != total)
+            || spend.members.is_empty()
+            || spend.members.len() > TEAM_PAGE_SIZE
+            || (number != total && spend.members.len() != TEAM_PAGE_SIZE)
+        {
+            return None;
+        }
+        expected = Some(total);
+        for member in &spend.members {
+            if member
+                .email
+                .as_deref()
+                .is_some_and(|e| e.trim().eq_ignore_ascii_case(email))
+            {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(member.budget()?);
+            }
+        }
+        if number == total {
+            return found;
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -237,7 +485,11 @@ fn window(value: Option<f64>, resets_at: Option<&str>) -> Option<UsageWindow> {
     })
 }
 
-fn to_payload(body: UsageSummary, now: DateTime<Utc>) -> Result<ProviderPayload> {
+fn to_payload(
+    body: UsageSummary,
+    budget: Option<Budget>,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
     // A team seat reports its usage under `teamUsage` and an individual under
     // `individualUsage`; nobody has both, and which one answered is not
     // something the panel needs to say.
@@ -260,9 +512,22 @@ fn to_payload(body: UsageSummary, now: DateTime<Utc>) -> Result<ProviderPayload>
 
     // The headline leads, then the two pools it is made of. All three share one
     // billing cycle, so they share one reset.
-    let primary = window(plan.total_percent_used, resets);
-    let secondary = window(plan.auto_percent_used, resets);
-    let tertiary = window(plan.api_percent_used, resets);
+    // A member's budget replaces the pools the summary reported as zero.
+    let (primary, secondary, tertiary) = match budget {
+        Some(b) => (
+            window(
+                Some((b.used_usd / b.limit_usd * 100.0).clamp(0.0, 100.0)),
+                resets,
+            ),
+            None,
+            None,
+        ),
+        None => (
+            window(plan.total_percent_used, resets),
+            window(plan.auto_percent_used, resets),
+            window(plan.api_percent_used, resets),
+        ),
+    };
 
     // An unlimited plan has no allowance to be a fraction of, so it reports no
     // percentage - saying so beats drawing an empty bar.
@@ -326,7 +591,7 @@ fn to_payload(body: UsageSummary, now: DateTime<Utc>) -> Result<ProviderPayload>
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
-    let token = access_token()?;
+    let (token, _) = access_token()?;
     Ok(vec![usage_for(
         &token,
         timeout,
@@ -347,17 +612,11 @@ fn usage_for(
     let url = summary_url(Some(origin))?;
     let client = http_client(timeout)?;
 
-    let resp = client
-        .get(&url)
-        .header("cookie", format!("WorkosCursorSessionToken={cookie}"))
-        .header("origin", origin)
-        .header("referer", format!("{origin}/dashboard"))
-        .header("user-agent", BROWSER_UA)
-        .header("accept", "application/json")
+    let resp = dashboard_request(client.get(&url), origin, &cookie)
         .send()
         .context("Cursor usage request failed")?;
 
-    check_status(resp.status(), "Cursor", unauthorized_hint)?;
+    check_cursor_status(resp.status(), unauthorized_hint)?;
 
     let text = resp.text().context("Cursor usage read failed")?;
     if text.trim().is_empty() {
@@ -366,7 +625,57 @@ fn usage_for(
     let body: UsageSummary =
         serde_json::from_str(&text).context("Cursor usage JSON was invalid")?;
 
-    to_payload(body, now)
+    let budget = body
+        .wants_member_budget()
+        .then(|| team_budget(&client, origin, &cookie))
+        .flatten();
+    to_payload(body, budget, now)
+}
+
+/// The signed-in member's budget, from the endpoints the team dashboard
+/// calls. Optional on every count: any failure leaves the summary standing,
+/// and nothing about the other members outlives the lookup.
+fn team_budget(client: &reqwest::blocking::Client, origin: &str, cookie: &str) -> Option<Budget> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    // Each request gets what is left of the budget, not the client's own
+    // timeout, so the lookup as a whole cannot outrun it.
+    let send = |request: reqwest::blocking::RequestBuilder| {
+        let left = deadline.checked_duration_since(std::time::Instant::now())?;
+        let resp = dashboard_request(request, origin, cookie)
+            .timeout(left)
+            .send()
+            .ok()?;
+        resp.status().is_success().then_some(resp)
+    };
+    let post = |endpoint: &str, body: Value| {
+        send(
+            client
+                .post(format!("{origin}/api/dashboard/{endpoint}"))
+                .json(&body),
+        )
+    };
+    let me: Value = send(client.get(format!("{origin}/api/auth/me")))?
+        .json()
+        .ok()?;
+    let email = me.get("email")?.as_str()?.to_string();
+    let team = post("teams", serde_json::json!({}))?
+        .json::<Teams>()
+        .ok()?
+        .sole_id()?;
+    member_budget(&email, |page| {
+        post(
+            "get-team-spend",
+            serde_json::json!({
+                "teamId": team,
+                "page": page,
+                "pageSize": TEAM_PAGE_SIZE,
+                "sortBy": "name",
+                "sortDirection": "asc",
+            }),
+        )?
+        .json()
+        .ok()
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +705,8 @@ pub(crate) fn live_login() -> LiveLogin {
             .ok()
             .and_then(|raw| serde_json::from_str::<AgentAuth>(&raw).ok())
             .map(agent_tokens)
+            .filter(|tokens| tokens.access.is_some())
+            .or_else(|| keychain_login().map(agent_tokens))
             .unwrap_or_default(),
     };
     LiveLogin {
@@ -464,7 +775,11 @@ mod tests {
     }
 
     fn parse(raw: &str) -> Result<ProviderPayload> {
-        to_payload(serde_json::from_str(raw).expect("fixture parses"), at())
+        to_payload(
+            serde_json::from_str(raw).expect("fixture parses"),
+            None,
+            at(),
+        )
     }
 
     const FULL: &str = r#"{
@@ -725,5 +1040,228 @@ mod tests {
             summary_url(Some(origin)).unwrap(),
             "https://proxy.test/api/usage-summary"
         );
+    }
+
+    /// The CLI writes `~/.cursor/auth.json` on macOS; the config directory
+    /// there is `~/Library/Application Support`, where nothing is.
+    #[test]
+    fn the_cli_login_is_where_each_os_puts_it() {
+        let home = Path::new("/home/u");
+        let config = Path::new("/cfg");
+        assert_eq!(
+            agent_auth_path_in(home, config, true),
+            Path::new("/home/u/.cursor/auth.json")
+        );
+        assert_eq!(
+            agent_auth_path_in(home, config, false),
+            Path::new("/cfg/cursor/auth.json")
+        );
+    }
+
+    /// A 403 from the edge is not a plan that lacks access, and the hint has
+    /// to say so.
+    #[test]
+    fn a_refusal_is_not_read_as_a_plan_problem() {
+        let err = check_cursor_status(reqwest::StatusCode::FORBIDDEN, "sign in again")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("edge"), "{err}");
+        assert!(!err.contains("plan"), "{err}");
+        assert!(check_cursor_status(reqwest::StatusCode::OK, "").is_ok());
+    }
+
+    /// Vercel's firewall reads the client hints as one set: a user agent and
+    /// a platform hint that disagree is the fingerprint it refuses.
+    #[test]
+    fn the_client_hints_describe_the_user_agent_they_ride_with() {
+        let header = |name: &str| {
+            BROWSER_HEADERS
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| *v)
+                .unwrap()
+        };
+        assert!(header("user-agent").contains("Linux"));
+        assert_eq!(header("sec-ch-ua-platform"), "\"Linux\"");
+        assert!(header("user-agent").contains("Chrome/140"));
+        assert!(header("sec-ch-ua").contains("v=\"140\""));
+    }
+
+    fn member(json: &str) -> Member {
+        serde_json::from_str(json).unwrap()
+    }
+
+    /// Upstream's table (CodexBar #3646): absent, zero, unlimited and
+    /// mistyped figures each mean something different.
+    #[test]
+    fn a_member_budget_is_read_only_off_figures_that_are_there() {
+        let used = |json: &str| member(json).budget().map(|b| b.used_usd);
+        assert_eq!(
+            used(r#"{"overallSpendCents":1312,"effectivePerUserLimitDollars":150}"#),
+            Some(13.12)
+        );
+        assert_eq!(
+            used(r#"{"overallSpendCents":0,"monthlyLimitDollars":150}"#),
+            Some(0.0)
+        );
+        assert_eq!(
+            used(
+                r#"{"overallSpendCents":1312,"effectivePerUserLimitDollars":null,"monthlyLimitDollars":150}"#
+            ),
+            Some(13.12)
+        );
+        for none in [
+            r#"{"monthlyLimitDollars":150}"#,
+            r#"{"overallSpendCents":1312,"effectivePerUserLimitDollars":0,"monthlyLimitDollars":150}"#,
+            r#"{"overallSpendCents":1312,"effectivePerUserLimitDollars":-1,"monthlyLimitDollars":150}"#,
+            r#"{"overallSpendCents":-1,"monthlyLimitDollars":150}"#,
+            r#"{"overallSpendCents":1312,"effectivePerUserLimitDollars":"invalid","monthlyLimitDollars":150}"#,
+        ] {
+            assert_eq!(used(none), None, "{none}");
+        }
+    }
+
+    #[test]
+    fn only_a_single_team_is_read_without_the_browsers_selection() {
+        let sole = |json: &str| serde_json::from_str::<Teams>(json).unwrap().sole_id();
+        assert_eq!(sole(r#"{"teams":[{"id":22}]}"#), Some(22));
+        assert_eq!(sole(r#"{"teams":[]}"#), None);
+        assert_eq!(sole(r#"{"teams":[{"id":11},{"id":22}]}"#), None);
+        assert_eq!(sole(r#"{"teams":[{"id":-1}]}"#), None);
+    }
+
+    fn spend_page(total: u32, members: &[(&str, u32)]) -> SpendPage {
+        SpendPage {
+            members: members
+                .iter()
+                .map(|(email, cents)| Member {
+                    email: Some(email.to_string()),
+                    overall_spend_cents: Some(Value::from(*cents)),
+                    effective_limit_dollars: Some(Value::from(150)),
+                    monthly_limit_dollars: None,
+                })
+                .collect(),
+            total_pages: Some(total),
+        }
+    }
+
+    fn full_page(total: u32) -> SpendPage {
+        spend_page(total, &[("other@example.test", 1); TEAM_PAGE_SIZE])
+    }
+
+    #[test]
+    fn a_member_is_published_only_once_every_page_agrees() {
+        let mut asked = 0;
+        let budget = member_budget(" Me@Example.test ", |n| {
+            asked += 1;
+            Some(match n {
+                1 => {
+                    let mut page = full_page(2);
+                    page.members[0].email = Some("me@example.test".into());
+                    page.members[0].overall_spend_cents = Some(Value::from(1312));
+                    page
+                }
+                _ => spend_page(2, &[("last@example.test", 1)]),
+            })
+        });
+        assert_eq!(asked, 2);
+        assert_eq!(
+            budget,
+            Some(Budget {
+                used_usd: 13.12,
+                limit_usd: 150.0
+            })
+        );
+
+        // The same member twice is two answers, which is none.
+        let twice = member_budget("me@example.test", |_| {
+            Some(spend_page(
+                1,
+                &[("me@example.test", 100), ("me@example.test", 200)],
+            ))
+        });
+        assert_eq!(twice, None);
+    }
+
+    #[test]
+    fn a_page_set_that_contradicts_itself_publishes_nobody() {
+        let me = &[("me@example.test", 100)];
+        // Page count changes between pages.
+        assert_eq!(
+            member_budget("me@example.test", |n| Some(if n == 1 {
+                full_page(2)
+            } else {
+                spend_page(3, me)
+            })),
+            None
+        );
+        // A short page before the last.
+        assert_eq!(
+            member_budget("me@example.test", |n| Some(if n == 1 {
+                spend_page(2, me)
+            } else {
+                spend_page(2, &[("x@example.test", 1)])
+            })),
+            None
+        );
+        // No page count at all, or a page that failed.
+        assert_eq!(
+            member_budget("me@example.test", |_| Some(SpendPage {
+                members: vec![],
+                total_pages: None
+            })),
+            None
+        );
+        assert_eq!(member_budget("me@example.test", |_| None), None);
+        assert_eq!(member_budget("", |_| Some(spend_page(1, me))), None);
+    }
+
+    /// The summary reports a team member's pools as zero; the budget is the
+    /// figure, and the pools it would have drawn beside it are dropped.
+    #[test]
+    fn a_member_budget_replaces_the_zero_summary() {
+        let body: UsageSummary = serde_json::from_str(
+            r#"{"membershipType":"enterprise","billingCycleEnd":"2026-10-01T00:00:00Z",
+                "teamUsage":{"plan":{"totalPercentUsed":0,"autoPercentUsed":0,"apiPercentUsed":0}}}"#,
+        )
+        .unwrap();
+        assert!(body.is_team_plan());
+        let usage = to_payload(
+            body,
+            Some(Budget {
+                used_usd: 75.0,
+                limit_usd: 150.0,
+            }),
+            at(),
+        )
+        .unwrap()
+        .usage
+        .unwrap();
+        let primary = usage.primary.unwrap();
+        assert_eq!(primary.used_percent, Some(50));
+        assert_eq!(primary.resets_at.as_deref(), Some("2026-10-01T00:00:00Z"));
+        assert!(usage.secondary.is_none() && usage.tertiary.is_none());
+    }
+
+    /// The budget replaces the pools, so it is asked for only when they say
+    /// nothing: a summary that reports usage keeps its three rows and costs
+    /// no dashboard requests.
+    #[test]
+    fn the_member_budget_is_wanted_only_when_the_pools_say_nothing() {
+        let wants = |json: &str| {
+            serde_json::from_str::<UsageSummary>(json)
+                .unwrap()
+                .wants_member_budget()
+        };
+        assert!(wants(
+            r#"{"membershipType":"enterprise","teamUsage":{"plan":{"totalPercentUsed":0,"autoPercentUsed":0}}}"#
+        ));
+        assert!(wants(r#"{"membershipType":"business","teamUsage":{}}"#));
+        assert!(!wants(
+            r#"{"membershipType":"enterprise","teamUsage":{"plan":{"totalPercentUsed":0,"autoPercentUsed":12}}}"#
+        ));
+        assert!(!wants(
+            r#"{"membershipType":"pro","individualUsage":{"plan":{"totalPercentUsed":0}}}"#
+        ));
     }
 }

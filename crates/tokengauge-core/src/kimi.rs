@@ -1,7 +1,8 @@
 //! Native Kimi Code usage fetcher (kimi.com/code).
 //!
 //! Read-only: TokenGauge reads the Kimi Code CLI's own credential file
-//! (`~/.kimi-code/credentials/kimi-code.json`, honoring `KIMI_CODE_HOME`) or a
+//! (`~/.kimi-code/credentials/kimi-code.json`, honoring `KIMI_CODE_HOME`, or
+//! the older CLI's `~/.kimi` when that is the only login) or a
 //! `KIMI_CODE_API_KEY` env override, then calls the Kimi Code usage endpoint. It
 //! never refreshes or rewrites that file - the `kimi` CLI owns refresh. On
 //! an expired token we surface an error and let the stale-cache fallback keep
@@ -60,17 +61,31 @@ fn cleaned(raw: Option<String>) -> Option<String> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-/// Home of the Kimi Code CLI state (`~/.kimi-code`, or `KIMI_CODE_HOME`).
+/// Home of the Kimi Code CLI state: `KIMI_CODE_HOME`, else `~/.kimi-code`, or
+/// `~/.kimi` when only the older CLI has logged in.
 pub(crate) fn code_home() -> PathBuf {
     if let Some(dir) = cleaned(std::env::var(HOME_ENV).ok()) {
         return PathBuf::from(dir);
     }
-    dirs::home_dir().unwrap_or_default().join(".kimi-code")
+    code_home_in(&dirs::home_dir().unwrap_or_default())
+}
+
+fn code_home_in(home: &Path) -> PathBuf {
+    let current = home.join(".kimi-code");
+    let legacy = home.join(".kimi");
+    if !credentials_in(&current).is_file() && credentials_in(&legacy).is_file() {
+        return legacy;
+    }
+    current
+}
+
+fn credentials_in(home: &Path) -> PathBuf {
+    home.join("credentials").join("kimi-code.json")
 }
 
 /// Path to the credential file `--doctor` reports.
 pub(crate) fn credentials_path() -> PathBuf {
-    code_home().join("credentials").join("kimi-code.json")
+    credentials_in(&code_home())
 }
 
 fn read_credential(path: &Path) -> Option<CredentialFile> {
@@ -154,7 +169,11 @@ fn resolve_auth(now_unix: f64) -> Result<Auth> {
 
 #[derive(Deserialize)]
 struct UsageResponse {
-    usage: Detail,
+    #[serde(default)]
+    usage: Option<Detail>,
+    /// Some accounts get only these, and no `usage` at all.
+    #[serde(default)]
+    usages: Option<RatioPools>,
     #[serde(default)]
     limits: Option<Vec<RateLimit>>,
     /// Read loosely: a membership block that changed shape must not cost the
@@ -230,6 +249,25 @@ struct Detail {
         alias = "reset_time",
         alias = "reset_at"
     )]
+    reset_time: Option<String>,
+}
+
+/// `limit_month_code` is a slice of the month total, never added beside it.
+#[derive(Deserialize, Default)]
+struct RatioPools {
+    #[serde(default)]
+    limit_5h: Option<RatioPool>,
+    #[serde(default)]
+    limit_7d: Option<RatioPool>,
+    #[serde(default)]
+    limit_month_total: Option<RatioPool>,
+}
+
+#[derive(Deserialize)]
+struct RatioPool {
+    #[serde(default)]
+    used_ratio: Option<Value>,
+    #[serde(default)]
     reset_time: Option<String>,
 }
 
@@ -309,6 +347,42 @@ fn same_window(a: &UsageWindow, b: &UsageWindow) -> bool {
         && a.window_minutes == b.window_minutes
 }
 
+fn ratio_window(pool: Option<&RatioPool>, minutes: u32) -> Option<UsageWindow> {
+    let pool = pool?;
+    let ratio = pool
+        .used_ratio
+        .as_ref()
+        .and_then(value_as_f64)
+        .filter(|r| r.is_finite() && *r >= 0.0)?;
+    Some(UsageWindow {
+        used_percent: Some(pct_u8(ratio.min(1.0) * 100.0)),
+        reset_description: None,
+        resets_at: pool.reset_time.clone(),
+        window_minutes: Some(minutes),
+    })
+}
+
+/// The ratio pool wins, except that it can read 0 beside a counter for the
+/// same window that reports more. The two clocks drift by about 1.5 seconds.
+fn reconcile(ratio: Option<UsageWindow>, counted: Option<UsageWindow>) -> Option<UsageWindow> {
+    let Some(ratio) = ratio else {
+        return counted;
+    };
+    let reset = |w: &UsageWindow| DateTime::parse_from_rfc3339(w.resets_at.as_deref()?).ok();
+    match counted {
+        Some(counted)
+            if counted.window_minutes == ratio.window_minutes
+                && counted.used_percent > ratio.used_percent
+                && reset(&counted)
+                    .zip(reset(&ratio))
+                    .is_some_and(|(a, b)| (a - b).num_milliseconds().abs() <= 2000) =>
+        {
+            Some(counted)
+        }
+        _ => Some(ratio),
+    }
+}
+
 fn to_payload(
     resp: UsageResponse,
     source: &str,
@@ -317,7 +391,11 @@ fn to_payload(
 ) -> Result<ProviderPayload> {
     // Primary = the weekly coding quota. Kimi can return several rolling rate
     // limits: expose the first as secondary and keep the rest so none are lost.
-    let primary = to_window(&resp.usage, Some(10080));
+    let pools = resp.usages.as_ref();
+    let primary = reconcile(
+        ratio_window(pools.and_then(|p| p.limit_7d.as_ref()), 10080),
+        resp.usage.as_ref().and_then(|d| to_window(d, Some(10080))),
+    );
     let mut rate_windows: Vec<UsageWindow> = resp
         .limits
         .as_ref()
@@ -333,23 +411,41 @@ fn to_payload(
                 .collect()
         })
         .unwrap_or_default();
+    if let Some(session) = ratio_window(pools.and_then(|p| p.limit_5h.as_ref()), 300) {
+        let counted = rate_windows
+            .iter()
+            .position(|w| w.window_minutes == Some(300))
+            .map(|i| rate_windows.remove(i));
+        if let Some(session) = reconcile(Some(session), counted) {
+            rate_windows.insert(0, session);
+        }
+    }
     if let Some(primary) = primary.as_ref() {
         rate_windows.retain(|w| !same_window(w, primary));
     }
     let secondary = (!rate_windows.is_empty()).then(|| rate_windows.remove(0));
-    let extra_rate_windows: Vec<ExtraRateWindow> = rate_windows
+    let monthly =
+        ratio_window(pools.and_then(|p| p.limit_month_total.as_ref()), 43200).map(|window| {
+            ExtraRateWindow {
+                id: Some("kimi-monthly".to_string()),
+                title: Some("Monthly total".to_string()),
+                window: Some(window),
+                placeholder: false,
+            }
+        });
+    let extra_rate_windows: Vec<ExtraRateWindow> = monthly
         .into_iter()
-        .map(|window| ExtraRateWindow {
+        .chain(rate_windows.into_iter().map(|window| ExtraRateWindow {
             id: None,
             title: Some(window_title(window.window_minutes)),
             window: Some(window),
             placeholder: false,
-        })
+        }))
         .collect();
 
     // An all-empty snapshot must be an error so the stale-cache fallback keeps
     // the last-good number instead of rendering a blank row.
-    if primary.is_none() && secondary.is_none() {
+    if primary.is_none() && secondary.is_none() && extra_rate_windows.is_empty() {
         return Err(anyhow!("Kimi returned no usage windows"));
     }
 
@@ -822,6 +918,143 @@ mod tests {
         // fallback keeps last-good rather than rendering a blank row.
         let body = resp(r#"{"usage": {"limit": "0", "used": "0"}}"#);
         assert!(to_payload(body, "code-api", "API Key", Utc::now()).is_err());
+    }
+
+    #[test]
+    fn the_older_cli_home_is_read_only_when_it_alone_holds_a_login() {
+        let home = crate::statefiles::tests::cache_test_dir("kimi-home");
+        let current = home.join(".kimi-code");
+        let legacy = home.join(".kimi");
+        assert_eq!(code_home_in(&home), current);
+
+        std::fs::create_dir_all(legacy.join("credentials")).unwrap();
+        std::fs::write(credentials_in(&legacy), "{}").unwrap();
+        assert_eq!(code_home_in(&home), legacy);
+
+        std::fs::create_dir_all(current.join("credentials")).unwrap();
+        std::fs::write(credentials_in(&current), "{}").unwrap();
+        assert_eq!(code_home_in(&home), current);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    fn usage_of(json: &str) -> UsageSnapshot {
+        to_payload(resp(json), "code-api", "API Key", Utc::now())
+            .unwrap()
+            .usage
+            .unwrap()
+    }
+
+    /// The shape some accounts get instead of `usage`. Before it parsed, the
+    /// whole response failed and the row never left stale.
+    #[test]
+    fn ratio_pools_stand_in_for_a_missing_usage_block() {
+        let usage = usage_of(
+            r#"{"usages": {
+                "limit_7d": {"used_ratio": 0.125, "reset_time": "2026-09-20T00:00:00Z"},
+                "limit_5h": {"used_ratio": 0.625},
+                "limit_month_total": {"used_ratio": 0.5531, "reset_time": "2026-10-22T14:26:29Z"},
+                "limit_month_code": {"used_ratio": 0.9}
+            }}"#,
+        );
+        let primary = usage.primary.unwrap();
+        assert_eq!(primary.used_percent, Some(13));
+        assert_eq!(primary.window_minutes, Some(10080));
+        assert_eq!(primary.resets_at.as_deref(), Some("2026-09-20T00:00:00Z"));
+        let secondary = usage.secondary.unwrap();
+        assert_eq!(secondary.used_percent, Some(63));
+        assert_eq!(secondary.window_minutes, Some(300));
+        // The code-only month is a slice of the total, not a fourth row.
+        assert_eq!(usage.extra_rate_windows.len(), 1);
+        let monthly = &usage.extra_rate_windows[0];
+        assert_eq!(monthly.id.as_deref(), Some("kimi-monthly"));
+        assert_eq!(monthly.window.as_ref().unwrap().used_percent, Some(55));
+    }
+
+    #[test]
+    fn a_month_alone_is_still_a_reading() {
+        let usage = usage_of(r#"{"usages": {"limit_month_total": {"used_ratio": 1.05}}}"#);
+        assert!(usage.primary.is_none() && usage.secondary.is_none());
+        let monthly = usage.extra_rate_windows[0].window.as_ref().unwrap();
+        assert_eq!(monthly.used_percent, Some(100));
+    }
+
+    #[test]
+    fn empty_ratio_pools_are_not_an_unused_quota() {
+        for json in [
+            r#"{}"#,
+            r#"{"usages": {}}"#,
+            r#"{"usages": {"limit_5h": {}}}"#,
+        ] {
+            assert!(
+                to_payload(resp(json), "code-api", "API Key", Utc::now()).is_err(),
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_invalid_ratio_leaves_the_counters_standing() {
+        let usage = usage_of(
+            r#"{"usage": {"limit": "100", "used": "25"},
+                "usages": {"limit_7d": {"used_ratio": -0.5}}}"#,
+        );
+        assert_eq!(usage.primary.unwrap().used_percent, Some(25));
+    }
+
+    /// Upstream's #4306 response: the counter says the 5 hours are spent and
+    /// the ratio beside it, on the same clock, says 0.
+    #[test]
+    fn a_zero_ratio_does_not_hide_a_counter_on_the_same_clock() {
+        let usage = usage_of(
+            r#"{"limits": [{"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+                            "detail": {"limit": "100", "used": "100",
+                                       "resetTime": "2026-10-06T13:23:46.915474Z"}}],
+                "usages": {"limit_5h": {"used_ratio": 0, "reset_time": "2026-10-06T13:23:46Z"}}}"#,
+        );
+        assert_eq!(usage.secondary.unwrap().used_percent, Some(100));
+        assert!(usage.extra_rate_windows.is_empty());
+
+        let usage = usage_of(
+            r#"{"usage": {"limit": "100", "used": "19", "resetTime": "2026-09-19T16:45:59.449979Z"},
+                "usages": {"limit_7d": {"used_ratio": 0, "reset_time": "2026-09-19T16:45:58Z"}}}"#,
+        );
+        assert_eq!(usage.primary.unwrap().used_percent, Some(19));
+    }
+
+    #[test]
+    fn a_counter_on_another_clock_cannot_override_the_ratio() {
+        for reset in ["null", r#""invalid""#, r#""2026-09-19T16:46:02Z""#] {
+            let usage = usage_of(&format!(
+                r#"{{"usage": {{"limit": "100", "used": "19", "resetTime": {reset}}},
+                    "usages": {{"limit_7d": {{"used_ratio": 0, "reset_time": "2026-09-19T16:45:59Z"}}}}}}"#
+            ));
+            assert_eq!(usage.primary.unwrap().used_percent, Some(0), "{reset}");
+        }
+        let usage = usage_of(
+            r#"{"usage": {"limit": "100", "used": "19", "resetTime": "2026-09-19T16:45:59Z"},
+                "usages": {"limit_7d": {"used_ratio": 0.5, "reset_time": "2026-09-19T16:45:59Z"}}}"#,
+        );
+        assert_eq!(usage.primary.unwrap().used_percent, Some(50));
+    }
+
+    /// A counter of another length is its own row, not the session's.
+    #[test]
+    fn the_session_ratio_keeps_the_secondary_slot() {
+        let usage = usage_of(
+            r#"{"usage": {"limit": "100", "used": "19", "resetTime": "2026-09-19T16:45:59Z"},
+                "limits": [{"window": {"duration": 120, "timeUnit": "TIME_UNIT_MINUTE"},
+                            "detail": {"limit": "100", "used": "1"}}],
+                "usages": {"limit_5h": {"used_ratio": 0, "reset_time": "2026-09-19T14:45:58Z"},
+                           "limit_7d": {"used_ratio": 0, "reset_time": "2026-09-19T16:45:58Z"}}}"#,
+        );
+        assert_eq!(usage.primary.unwrap().used_percent, Some(19));
+        let secondary = usage.secondary.unwrap();
+        assert_eq!(secondary.used_percent, Some(0));
+        assert_eq!(secondary.window_minutes, Some(300));
+        assert_eq!(
+            usage.extra_rate_windows[0].title.as_deref(),
+            Some("2-hour limit")
+        );
     }
 
     #[test]

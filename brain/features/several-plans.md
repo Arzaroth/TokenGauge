@@ -21,7 +21,10 @@ up by plan multiplier. The mechanism and the remuda contracts are
   `Σ used × weight ÷ Σ weight`, tinted by it, badge `estimate`. A Max 20x and a
   Pro both spent read `105% of 105%`; Max 20x at 50% beside Max 5x at 100% reads
   `75% of 125%` (pooled 60%). Its reset is the earliest among them; the tooltip
-  lists each credential's own figure and reset.
+  lists each credential's own figure and reset. A window that reset since its
+  payload was written counts as empty, not spent, so a credential that is not
+  asked again cannot hold the pool up (`rows::expire_elapsed`,
+  [../architecture/snapshot.md](../architecture/snapshot.md#how-a-change-reaches-a-frontend)).
 - Bar icon hover: the active group's windows, then the combined figures, then
   today's spend.
 - Session cost and threshold notifications follow the active credential only.

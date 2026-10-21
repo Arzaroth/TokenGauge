@@ -20,6 +20,7 @@ use crate::{CredentialState, ProviderPayload, UsageSnapshot, UsageWindow, http_c
 
 const BILLING_ENDPOINT: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
 const SETTINGS_ENDPOINT: &str = "https://cli-chat-proxy.grok.com/v1/settings";
+const BILLING_JSON_ENDPOINT: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 /// The tier is a label, not a figure: it may not double a slow fetch.
 const SETTINGS_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -466,17 +467,21 @@ fn read_varint(data: &[u8], mut i: usize) -> Option<(u64, usize)> {
 // Mapping + network
 // ---------------------------------------------------------------------------
 
+const WEEK_MINUTES: u32 = 10080;
+
 fn to_payload(
     billing: Billing,
+    period_minutes: Option<u32>,
     login_method: Option<String>,
     now: DateTime<Utc>,
 ) -> ProviderPayload {
-    // Grok exposes a single shared weekly usage pool (no rolling sub-windows).
+    // Grok exposes a single shared usage pool (no rolling sub-windows), weekly
+    // unless the CLI's own billing says otherwise.
     let primary = UsageWindow {
         used_percent: Some(billing.used_percent),
         reset_description: None,
         resets_at: billing.resets_at,
-        window_minutes: Some(10080),
+        window_minutes: Some(period_minutes.unwrap_or(WEEK_MINUTES)),
     };
     ProviderPayload::live(
         "grok",
@@ -512,6 +517,74 @@ fn tier_label(raw: &str) -> Option<String> {
 struct Settings {
     #[serde(default)]
     subscription_tier_display: Option<String>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct CliBilling {
+    config: Option<CliBillingConfig>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct CliBillingConfig {
+    current_period: Option<CliPeriod>,
+    /// The fields older servers sent for what was then always a monthly pool.
+    monthly_limit: Option<Value>,
+    billing_period_end: Option<Value>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct CliPeriod {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    start: Option<String>,
+    end: Option<String>,
+}
+
+/// How long the pool runs, off the period the CLI's billing names. A month is
+/// its own span when the period says where it starts and ends. `None` when it
+/// names nothing this build knows.
+fn period_minutes(billing: &CliBilling) -> Option<u32> {
+    let config = billing.config.as_ref()?;
+    let Some(period) = config.current_period.as_ref() else {
+        return (config.monthly_limit.is_some() || config.billing_period_end.is_some())
+            .then_some(43200);
+    };
+    let kind = period.kind.as_deref().unwrap_or("").to_ascii_uppercase();
+    if kind.ends_with("WEEKLY") {
+        return Some(WEEK_MINUTES);
+    }
+    if !kind.ends_with("MONTHLY") {
+        return None;
+    }
+    let at = |iso: Option<&str>| DateTime::parse_from_rfc3339(iso?).ok();
+    let span = at(period.start.as_deref())
+        .zip(at(period.end.as_deref()))
+        .map(|(start, end)| (end - start).num_minutes())
+        .filter(|m| (28 * 1440..=31 * 1440).contains(m));
+    Some(span.map_or(43200, |m| m as u32))
+}
+
+/// The billing period, from the JSON billing the CLI itself reads. The
+/// gRPC-web response carries no schema to find it in, and a monthly pool
+/// paced as a week is a pace badge that is wrong all month (ai-usagebar
+/// #418). Best effort, like the tier: a failure keeps the week.
+fn billing_period(client: &reqwest::blocking::Client, token: &str) -> Option<u32> {
+    let resp = client
+        .get(BILLING_JSON_ENDPOINT)
+        .timeout(SETTINGS_TIMEOUT)
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-xai-token-auth", "xai-grok-cli")
+        .header("accept", "application/json")
+        .header("user-agent", "TokenGauge")
+        .send()
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    period_minutes(&resp.json().ok()?)
 }
 
 /// A plan's weight by its price per $10, since xAI publishes no multiplier
@@ -589,7 +662,8 @@ fn usage_for(
     let billing = parse_grpc_web_response(&bytes, header_status, now)?;
     let tier = subscription_tier(&client, &creds.access_token);
     let weight = tier.as_deref().and_then(tier_weight);
-    let mut payload = to_payload(billing, tier.or(creds.login_method), now);
+    let period = billing_period(&client, &creds.access_token);
+    let mut payload = to_payload(billing, period, tier.or(creds.login_method), now);
     payload.credential.plan_weight = weight.map(f64::from);
     Ok(payload)
 }
@@ -701,6 +775,50 @@ pub(crate) fn fetch_stored(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn period_of(json: &str) -> Option<u32> {
+        period_minutes(&serde_json::from_str(json).unwrap())
+    }
+
+    /// ai-usagebar #418: the pool is weekly or monthly by the period the CLI
+    /// names, and a month paced as a week is wrong all month.
+    #[test]
+    fn the_period_is_the_one_the_cli_billing_names() {
+        assert_eq!(
+            period_of(r#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY"}}}"#),
+            Some(WEEK_MINUTES)
+        );
+        assert_eq!(
+            period_of(
+                r#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_MONTHLY",
+                    "start":"2026-10-01T00:00:00Z","end":"2026-11-01T00:00:00Z"}}}"#
+            ),
+            Some(31 * 1440)
+        );
+        assert_eq!(
+            period_of(r#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_MONTHLY"}}}"#),
+            Some(43200)
+        );
+        // Older servers: no typed period, the monthly fields alone.
+        assert_eq!(
+            period_of(
+                r#"{"config":{"monthlyLimit":{"val":5000},"billingPeriodEnd":"2026-11-01T00:00:00Z"}}"#
+            ),
+            Some(43200)
+        );
+        // A typed period wins over the legacy fields beside it.
+        assert_eq!(
+            period_of(
+                r#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY"},"monthlyLimit":{"val":5000}}}"#
+            ),
+            Some(WEEK_MINUTES)
+        );
+        assert_eq!(
+            period_of(r#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_DAILY"}}}"#),
+            None
+        );
+        assert_eq!(period_of(r#"{}"#), None);
+    }
 
     #[test]
     fn prefers_oidc_entry() {

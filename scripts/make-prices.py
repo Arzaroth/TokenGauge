@@ -24,6 +24,7 @@ import datetime
 import json
 import os
 import pathlib
+import re
 import sys
 import urllib.request
 
@@ -48,6 +49,13 @@ FIELDS = (
     "cache_creation_input_token_cost",
     "cache_creation_input_token_cost_above_1hr",
     "cache_read_input_token_cost",
+)
+
+# Their long-context tiers, `pricing::long_context`: the same names with
+# `_above_<N>k_tokens` on the end and nothing after it. Service-tier variants
+# (`_priority`, `_batches`, `_flex`) are not read and not kept.
+TIER = re.compile(
+    "^(" + "|".join(re.escape(f) for f in FIELDS) + r")_above_\d+k_tokens$"
 )
 
 PREFIXES = (
@@ -102,14 +110,22 @@ def get_json(url):
         return json.load(response)
 
 
-def slice_table(table):
-    """The models TokenGauge can attribute, priced, as `from_json` keeps them."""
+def slice_table(table, tiers=True):
+    """The models TokenGauge can attribute, priced, as `from_json` keeps them.
+
+    The archive is sliced without tiers: history is rated per hourly bucket,
+    where a long-context tier cannot be told apart, so a moved tier price is
+    nothing it could use.
+    """
     kept = {}
     for name, entry in table.items():
         lower = name.lower()
         if attribute(lower) is None or not isinstance(entry, dict):
             continue
-        priced = {f: entry[f] for f in FIELDS if isinstance(entry.get(f), (int, float))}
+        fields = list(FIELDS)
+        if tiers:
+            fields += sorted(f for f in entry if TIER.match(f))
+        priced = {f: entry[f] for f in fields if isinstance(entry.get(f), (int, float))}
         # `from_json` drops an entry that prices neither input nor output.
         if priced.get("input_cost_per_token", 0) <= 0 and (
             priced.get("output_cost_per_token", 0) <= 0
@@ -176,7 +192,7 @@ def build_archive(current):
         if not commits:
             print(f"  {label}: no commit found, skipped", file=sys.stderr)
             continue
-        table = slice_table(get_json(RAW.format(ref=commits[0]["sha"])))
+        table = slice_table(get_json(RAW.format(ref=commits[0]["sha"])), tiers=False)
         overrides = {}
         for name, historical in table.items():
             fields = overrides_for(current.get(name, {}), historical)

@@ -77,6 +77,11 @@ a colour. Each frontend maps it onto its own palette - the Omarchy widget
 deliberately collapses `good`/`warn` onto the bar foreground, because omarchy
 themes carry a foreground and an urgent colour and nothing between them.
 
+The Quickshell widget reads that palette as `Commons.Color` (`import qs.Commons
+as Commons`), never bare `Color`. Qt 6.12 added a QtQuick `Color` type that
+shadows the shell's whatever the import order, and every bare `Color.*` in the
+panel read undefined; the alias works on older shells too.
+
 ### Chrome that is still content
 
 The refresh control is chrome - every toolkit draws its own - but what it says
@@ -370,6 +375,12 @@ A provider whose models are sold under someone else's namespace needs an entry i
 itself, because the `auto` fallback only asks ccusage about providers the readers
 found *nothing* for.
 
+**A long-context tier is a fact about one request.** `ModelPrice.long_context`
+bills every token of a request past its threshold at the tier, so
+`cost_of_request` runs only on a `UsageEvent` with `one_request` (a Claude
+message, a Codex rollout response). A Kimi or Grok turn, a `codex exec` row and
+a fleet bucket are sums of requests: tiering one bills all of it at the premium.
+
 The token counts must match ccusage exactly - they come from the same files.
 Three things assert it, at widening cost: `tests/cost_fixture.rs` diffs the
 readers against a checked-in ccusage golden (no Node, no network, runs in CI),
@@ -460,6 +471,17 @@ still hold, never from its 400-day reach and never from the oldest event
 overall: either erased every day whose transcript had been rotated away (one
 provider keeping sessions forever says nothing about another deleting them),
 and would erase a `--sync-adopt`ed history the same way.
+
+**A read with gaps never replaces.** A transcript directory or file that exists
+and cannot be read reads as nothing in it, so the readers report it
+(`TranscriptRead.gaps`, from their own walk) and such a read never replaces:
+it adds only the calls whose dedup key the store has not counted
+(`DeviceSlice.counted`), and where no keys cover an hour it only fills an empty
+day. Totals and a larger-of-the-two rule were both tried and both lose usage:
+new usage covers for a missing hour, and distinct usage shares an hour with
+what is missing. Only call identity tells overlap from new. The backfill merges a read with gaps the same way and leaves its
+marker off, retrying behind `tokengauge-backfill-retry` an hour later rather
+than on the next fetch.
 
 Four fleet-store rules came in with `--sync-adopt` (decision 0005,
 `brain/architecture/sync.md`):

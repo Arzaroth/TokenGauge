@@ -50,8 +50,9 @@ Key `(utc_hour, provider, model)`, value a `TokenCounts` (the five fields of
   degraded day-granularity contribution is the reserved way to let it in
   (tracked in `TODO.md`).
 - **A peer bucket becomes a synthetic `UsageEvent`** (`at` = start of the hour,
-  `date` = that instant in local time). `build_report` needs no changes: the peer
-  set is one more reader.
+  `date` = that instant in local time, `one_request: false`, so a bucket is
+  never billed at a long-context tier; see [cost.md](cost.md#pricing)).
+  `build_report` needs no changes: the peer set is one more reader.
 
 ## The fleet store is the durable record
 
@@ -79,6 +80,32 @@ maintained on every fetch whether or not sync is on (the gate is in
   `tokengauge-fleet.lock` (`store::lock`) from load to save. The lock blocks
   while another writer holds it (the CLI says it is waiting); a filesystem
   that cannot lock at all leaves every writer unlocked alike.
+- **A read with gaps is merged, not replacing.** The readers report what they
+  could not open from their own walk (`cost::TranscriptRead.gaps`: a directory,
+  entry or file that exists and cannot be read; `jsonl_files` and each reader's
+  `read_file` push to it), and `sync::refresh` takes them as `gaps`. Skipped,
+  such a path reads as nothing in it, and the replace would drop every day only
+  it held, which a comparison of totals cannot see once new usage covers for
+  it. So a read with any gap replaces nothing: `FleetStore::merge_local` adds
+  only the calls the record has not counted. The local slice keeps the
+  readers' dedup keys for its own hourly buckets (`DeviceSlice.counted`,
+  never published, kept compact because the store is rewritten on every
+  fetch) and, per provider, the hour from which that list is complete
+  (`counted_from`); a whole read rewrites both with its replace and
+  compaction prunes them with the hourly buckets. Totals or a larger-of rule
+  cannot do this: new usage covers for a missing hour, and distinct usage
+  shares an hour with what is missing. Where the keys say nothing (before a
+  whole read recorded them, or past the hourly window), a read with gaps only
+  fills a day the record holds nothing for, so a retry or a rolled-up day
+  cannot double it. A missing hour keeps its record, new usage still lands,
+  and the report counts this device
+  from the record (`SyncOutcome.held`: `events` carries its buckets and
+  `native_costs` drops its own read of them, so nothing counts twice). The sync
+  status carries the error. `sync::backfill` merges a deep read with gaps the
+  same way and leaves its marker off, deferring the next attempt an hour
+  (`tokengauge-backfill-retry`, `statefiles::backfill_due`), so a lasting gap
+  costs one deep read an hour and the backfill completes once the tree reads
+  whole.
 - Separate file from the snapshot on purpose: the snapshot is rewritten wholesale
   on every fetch; the store must not be.
 - **Store retention and wire retention differ.** The store keeps
@@ -311,8 +338,8 @@ against a fake transport (`crates/tokengauge-core/tests/fleet_sync.rs`).
 
 ## Sources
 
-- `crates/tokengauge-core/src/sync/{mod,contribution,fleet,hour,crypto,transport,s3,run,report,store,config}.rs` (`adopt`, `settle_adoptions`, `drop_vanished`, `store::lock`)
-- `crates/tokengauge-core/src/fetch.rs` (`native_costs`), `crates/tokengauge-core/src/cost/mod.rs` (`window_start`, `dedup_key`)
+- `crates/tokengauge-core/src/sync/{mod,contribution,fleet,hour,crypto,transport,s3,run,report,store,config}.rs` (`adopt`, `settle_adoptions`, `drop_vanished`, `store::lock`, `merge_local`, `KeySet`)
+- `crates/tokengauge-core/src/fetch.rs` (`native_costs`), `crates/tokengauge-core/src/cost/mod.rs` (`window_start`, `dedup_key`, `read_checked`, `TranscriptRead`)
 - `crates/tokengauge-core/src/device.rs`, `crates/tokengauge-core/src/doctor.rs`
 - `crates/tokengauge-waybar/src/sync_cli.rs`, `crates/tokengauge-tui/src/sync_view.rs`
 - `crates/tokengauge-core/tests/fleet_sync.rs`

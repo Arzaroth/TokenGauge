@@ -21,7 +21,7 @@ own:
 | `tokengauge-refreshing` | the refresh sentinel (a fetch is in flight) |
 | `tokengauge-notify-state.json` | which notification thresholds already fired |
 | `tokengauge-prices.json`, `tokengauge-prices-missed.json` | the fetched price table and the unpriced set ([cost.md](cost.md)) |
-| `tokengauge-fleet.json`, `tokengauge-fleet.lock`, `tokengauge-backfilled` | the fleet store, its writer lock and the backfill marker ([sync.md](sync.md)) |
+| `tokengauge-fleet.json`, `tokengauge-fleet.lock`, `tokengauge-backfilled`, `tokengauge-backfill-retry` | the fleet store, its writer lock, the backfill marker, and when a backfill whose read had gaps may run again ([sync.md](sync.md)) |
 | `tokengauge-device-id`, `tokengauge-sync-key` | device identity and fleet key |
 | `tokengauge-update.json` (`update_status_path`) | the cached update check ([distribution.md](distribution.md)) |
 | `tokengauge-waybar-state.json` | the selected provider and waybar scroll state (keeps its old name) |
@@ -60,6 +60,14 @@ builds the row, so every frontend re-renders on a short cycle while visible
 15s; the daemon renders each socket request fresh). None of that asks a provider
 anything.
 
+A window whose reset passed **after the payload's `updated_at`** is read as the
+empty window that replaced it (0%, no reset time) when rows are built
+(`rows::expire_elapsed`), the same predicate as `snapshot::rolled_over`. For the
+live login the refetch is seconds away, but a stored credential that is expired
+is never asked again and a failing fetch keeps its old payload; without this
+their spent figures fed the combined plans header. A reset already past when the
+provider reported it keeps its figure.
+
 ## The daemon
 
 `tokengauge --daemon` (systemd user unit `scripts/tokengauge-daemon.service`, or
@@ -87,5 +95,6 @@ update check, and reloads config on SIGHUP (`signal_daemon_reload` matches
 - `crates/tokengauge-core/src/snapshot.rs` (`cache_is_stale`, `write_cache_full`, `retain_enabled`, `CacheMeta`, `CACHE_SCHEMA_VERSION`)
 - `crates/tokengauge-core/src/statefiles.rs`, `crates/tokengauge-core/src/config.rs`
 - `crates/tokengauge-core/src/fetch.rs` (`fetch_all_providers`, `apply_stale_fallback`)
+- `crates/tokengauge-core/src/rows.rs` (`expire_elapsed`)
 - `crates/tokengauge-waybar/src/daemon.rs`, `crates/tokengauge-waybar/src/snapshot.rs`, `crates/tokengauge-waybar/src/main.rs`
 - `crates/tokengauge-core/tests/state_files.rs`

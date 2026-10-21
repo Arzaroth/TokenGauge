@@ -34,22 +34,22 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 |----------|------|--------|-------------|
 | Codex | OAuth | `codex = true` | `$CODEX_HOME/auth.json` (`codex` CLI) |
 | Claude | OAuth | `claude = true` | `~/.claude/.credentials.json` (`claude` CLI), macOS keychain / Windows Credential Manager, or `TOKENGAUGE_CLAUDE_OAUTH_TOKEN` |
-| Kimi | CLI / API key | `kimi = true` | `~/.kimi-code/credentials/kimi-code.json` or `KIMI_CODE_API_KEY` |
+| Kimi | CLI / API key | `kimi = true` | `~/.kimi-code/credentials/kimi-code.json` (or the older CLI's `~/.kimi`) or `KIMI_CODE_API_KEY` |
 | Grok | CLI | `grok = true` | `~/.grok/auth.json` (`grok login`) |
 | GLM | API key | `glm = true` | `Z_AI_API_KEY` env (legacy `ZAI_API_TOKEN`) |
 | OpenRouter | API key | `openrouter = true` | `OPENROUTER_API_KEY` env, plus `OPENROUTER_MANAGEMENT_KEY` for the account balance |
 | opencode Go | API key | `opencode = true` | `OPENCODE_API_KEY` env, or the key `/connect` files in `$XDG_DATA_HOME/opencode/auth.json` |
-| Cursor | CLI | `cursor = true` | `~/.config/cursor/auth.json` (`cursor-agent` CLI) or `CURSOR_ACCESS_TOKEN` |
+| Cursor | CLI | `cursor = true` | `~/.config/cursor/auth.json` (`cursor-agent` CLI; `~/.cursor/auth.json` or the Keychain on macOS) or `CURSOR_ACCESS_TOKEN` |
 
 All providers are read-only: TokenGauge never refreshes a token. Codex refreshes its own. For CLI-backed credentials, re-run the respective CLI (`claude`, `kimi`, `grok login`, `cursor-agent`) when a token expires. For env-key providers, update the variable instead: `KIMI_CODE_API_KEY` for Kimi (when set, it takes precedence over the CLI token), `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`) for GLM, `OPENROUTER_API_KEY` for OpenRouter and `OPENCODE_API_KEY` for opencode Go (when set, it takes precedence over opencode's `auth.json`).
 
 - **Claude**: three sources, tried in order, taking the first that holds a *usable* token - the `TOKENGAUGE_CLAUDE_OAUTH_TOKEN` env override, then `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`), then the macOS keychain / Windows Credential Manager entry Claude Code writes (`Claude Code-credentials`). "First usable, not first present" matters because Claude Code 2.1.x moved the token into the keychain on macOS and the Windows desktop app delegates auth over IPC, both leaving the file a stub. If nothing readable holds a token, run `claude setup-token` (it writes a real one back to the file) or set `TOKENGAUGE_CLAUDE_OAUTH_TOKEN`.
-- **Kimi** (kimi.com/code): reuses the `kimi` CLI token, or set `KIMI_CODE_API_KEY`. `KIMI_CODE_HOME` overrides the CLI home.
+- **Kimi** (kimi.com/code): reuses the `kimi` CLI token, or set `KIMI_CODE_API_KEY`. `KIMI_CODE_HOME` overrides the CLI home; without it, a login under the older CLI's `~/.kimi` is read when `~/.kimi-code` holds none.
 - **Grok** (x.ai build): reads the `grok login` token. `GROK_HOME` overrides the auth directory.
 - **GLM** (z.ai / zcode.z.ai): the GLM Coding Plan has no local credential file, so set `Z_AI_API_KEY` (the same key you use for `ANTHROPIC_AUTH_TOKEN`). Set `Z_AI_API_HOST=open.bigmodel.cn` for the China BigModel region, or `Z_AI_QUOTA_URL` to override the full quota endpoint.
 - **OpenRouter** (openrouter.ai): sells credit rather than a plan. `OPENROUTER_API_KEY` (or `OPENROUTER_KEY`) reads the key's own cap and spend; the account balance needs a management key from openrouter.ai/settings/keys in `OPENROUTER_MANAGEMENT_KEY`.
 - **opencode Go** (opencode.ai): the key minted at opencode.ai/auth, from `OPENCODE_API_KEY` or from opencode's `auth.json` once pasted into the TUI with `/connect`. Go only; Zen has no limits to draw.
-- **Cursor** (cursor.com): reads the `cursor-agent` CLI login, or set `CURSOR_ACCESS_TOKEN` (which takes precedence). `CURSOR_CONFIG_DIR` overrides the CLI's directory. The IDE's own login is not read, so an IDE-only user signs in with `cursor-agent` once.
+- **Cursor** (cursor.com): reads the `cursor-agent` CLI login, or set `CURSOR_ACCESS_TOKEN` (which takes precedence). `CURSOR_CONFIG_DIR` overrides the CLI's directory. On macOS the CLI keeps its login in `~/.cursor/auth.json` or, more often, the Keychain, and both are read. The IDE's own login is not read, so an IDE-only user signs in with `cursor-agent` once.
 
 ## Installation
 

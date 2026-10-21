@@ -79,6 +79,69 @@ pub struct DeviceSlice {
     /// Devices whose history this one took over with [`FleetStore::adopt`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adopted: Vec<Adopted>,
+    /// The calls this device's own hourly buckets count, per provider and
+    /// hour, by the readers' dedup key, so a read with gaps can add what is
+    /// new without counting again what is already in. Local only: nothing
+    /// here is published.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub counted: BTreeMap<String, BTreeMap<Hour, KeySet>>,
+    /// Per provider, the hour from which `counted` holds every call a whole
+    /// read found. Below it, or for a provider absent here, the keys say
+    /// nothing either way.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub counted_from: BTreeMap<String, Hour>,
+}
+
+/// The keys of the calls one hour of one provider counts, folded to 32 bits
+/// and written as one base64 blob: stored a key at a time, a heavy month of
+/// calls was forty times the rest of the store. Two calls collide only within
+/// one provider-hour, a few hundred keys in four billion.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeySet(BTreeSet<u32>);
+
+impl KeySet {
+    fn fold(key: u64) -> u32 {
+        (key ^ (key >> 32)) as u32
+    }
+
+    pub fn contains(&self, key: u64) -> bool {
+        self.0.contains(&Self::fold(key))
+    }
+
+    pub fn insert(&mut self, key: u64) {
+        self.0.insert(Self::fold(key));
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Serialize for KeySet {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let bytes: Vec<u8> = self.0.iter().flat_map(|key| key.to_le_bytes()).collect();
+        serializer.serialize_str(&crate::provider::base64_encode(&bytes))
+    }
+}
+
+impl<'de> Deserialize<'de> for KeySet {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        let bytes = crate::provider::base64_decode(&raw)
+            .ok_or_else(|| serde::de::Error::custom("counted keys are not base64"))?;
+        Ok(Self(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_le_bytes(*c))
+                .collect(),
+        ))
+    }
 }
 
 /// What [`FleetStore::adopt`] moved from the retired device.
@@ -532,6 +595,14 @@ impl FleetStore {
     pub fn compact(&mut self, now: DateTime<Utc>, hourly_days: i64) {
         let floor = Hour::containing(now).minus_days(hourly_days.max(HOURLY_RETENTION_DAYS));
         for slice in self.devices.values_mut() {
+            // Keys go with the hourly buckets they describe.
+            for hours in slice.counted.values_mut() {
+                hours.retain(|hour, _| *hour >= floor);
+            }
+            slice.counted.retain(|_, hours| !hours.is_empty());
+            for from in slice.counted_from.values_mut() {
+                *from = (*from).max(floor);
+            }
             let mut rolled: BTreeMap<(NaiveDate, String, String), TokenCounts> = BTreeMap::new();
             let mut kept: Vec<Bucket> = Vec::with_capacity(slice.buckets.len());
             for bucket in slice.buckets.drain(..) {
@@ -668,21 +739,116 @@ impl FleetStore {
                 if is_dropped(&dropped, bucket, id) {
                     continue;
                 }
-                let Some(provider) = intern_provider(&bucket.provider) else {
-                    continue;
-                };
-                let at = bucket.hour.start();
-                events.push(UsageEvent {
-                    provider,
-                    model: bucket.model.clone(),
-                    date: at.with_timezone(&offset).date_naive(),
-                    at,
-                    tokens: bucket.tokens,
-                    key: None,
-                });
+                events.extend(bucket_event(bucket, offset));
             }
         }
         events
+    }
+
+    /// Fold a read with gaps in, adding only what the record does not hold.
+    ///
+    /// Nothing is replaced, so an hour the read could not reach keeps its
+    /// record. Where `counted` is authoritative a call is added unless its key
+    /// is already counted: distinct usage lands even in an hour the missing
+    /// part also covered, and overlapping usage is never counted twice. Older
+    /// than that, or for a provider with no keys yet, nothing can tell a call
+    /// already in a bucket from a new one, so a read only fills a day the
+    /// record holds nothing for - which also keeps a rolled-up day from
+    /// having hours landed beside it on every retry.
+    pub fn merge_local(
+        &mut self,
+        device: &DeviceRecord,
+        from: Hour,
+        events: &[UsageEvent],
+        now_ms: i64,
+    ) {
+        let slice = self.devices.entry(device.id.clone()).or_default();
+        slice.device = device.clone();
+        slice.updated_at_ms = now_ms;
+        slice.covers_from = Some(slice.covers_from.map_or(from, |covers| covers.min(from)));
+        let held_days: BTreeSet<(NaiveDate, String, String)> = slice
+            .buckets
+            .iter()
+            .map(|b| (b.hour.utc_date(), b.provider.clone(), b.model.clone()))
+            .collect();
+        for event in events {
+            let hour = Hour::containing(event.at);
+            if hour < from {
+                continue;
+            }
+            let authoritative = slice
+                .counted_from
+                .get(event.provider)
+                .is_some_and(|first| hour >= *first);
+            if authoritative {
+                let Some(key) = event.key else {
+                    continue;
+                };
+                let keys = slice
+                    .counted
+                    .entry(event.provider.to_string())
+                    .or_default()
+                    .entry(hour)
+                    .or_default();
+                if keys.contains(key) {
+                    continue;
+                }
+                keys.insert(key);
+            } else if held_days.contains(&(
+                hour.utc_date(),
+                event.provider.to_string(),
+                event.model.clone(),
+            )) {
+                continue;
+            }
+            match slice.buckets.iter_mut().find(|b| {
+                b.granularity == Granularity::Hour
+                    && b.hour == hour
+                    && b.provider == event.provider
+                    && b.model == event.model
+            }) {
+                Some(bucket) => bucket.tokens.add(&event.tokens),
+                None => slice.buckets.push(Bucket {
+                    hour,
+                    provider: event.provider.to_string(),
+                    model: event.model.clone(),
+                    granularity: Granularity::Hour,
+                    tokens: event.tokens,
+                }),
+            }
+        }
+        slice.buckets.sort_by(sort_key);
+    }
+
+    /// Every provider this device's record carries.
+    pub fn local_providers(&self, local_id: &str) -> Vec<&'static str> {
+        let mut providers: Vec<&'static str> = self
+            .devices
+            .get(local_id)
+            .into_iter()
+            .flat_map(|slice| &slice.buckets)
+            .filter_map(|bucket| intern_provider(&bucket.provider))
+            .collect();
+        providers.sort_unstable();
+        providers.dedup();
+        providers
+    }
+
+    /// This device's own record for `providers`, as events. What the report
+    /// counts for a provider whose read could not be trusted, in place of it.
+    pub fn held_events(&self, local_id: &str, providers: &[&str]) -> Vec<UsageEvent> {
+        let offset = *chrono::Local::now().offset();
+        self.devices
+            .get(local_id)
+            .map(|slice| {
+                slice
+                    .buckets
+                    .iter()
+                    .filter(|bucket| providers.contains(&bucket.provider.as_str()))
+                    .filter_map(|bucket| bucket_event(bucket, offset))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// The day a device read that another device already reported.
@@ -924,6 +1090,21 @@ impl FleetStore {
 
 /// Each provider's oldest event in the read, no earlier than `floor`: where a
 /// re-read starts to speak for that provider.
+fn bucket_event(bucket: &Bucket, offset: FixedOffset) -> Option<UsageEvent> {
+    let provider = intern_provider(&bucket.provider)?;
+    Some(UsageEvent {
+        provider,
+        model: bucket.model.clone(),
+        // A rolled-up day sits at UTC noon and is that UTC date wherever it is
+        // read; local time would move it a day for a reader past UTC+12.
+        date: bucket_date(bucket, offset),
+        at: bucket.hour.start(),
+        tokens: bucket.tokens,
+        key: None,
+        one_request: false,
+    })
+}
+
 fn read_floors(floor: Hour, events: &[UsageEvent]) -> BTreeMap<&'static str, Hour> {
     let mut floors: BTreeMap<&'static str, Hour> = BTreeMap::new();
     for event in events {
@@ -966,6 +1147,36 @@ fn replace_read(slice: &mut DeviceSlice, floor: Hour, events: &[UsageEvent]) {
             .filter(|bucket| replaced(bucket)),
     );
     slice.buckets.sort_by(sort_key);
+
+    // A whole read: its keys are now the complete list from each floor on.
+    for (provider, first) in &floors {
+        if let Some(hours) = slice.counted.get_mut(*provider) {
+            hours.retain(|hour, _| *hour < *first);
+        }
+    }
+    for event in events {
+        let hour = Hour::containing(event.at);
+        if let Some(key) = event.key
+            && floors
+                .get(event.provider)
+                .is_some_and(|first| hour >= *first)
+        {
+            slice
+                .counted
+                .entry(event.provider.to_string())
+                .or_default()
+                .entry(hour)
+                .or_default()
+                .insert(key);
+        }
+    }
+    for (provider, first) in &floors {
+        slice
+            .counted_from
+            .entry(provider.to_string())
+            .and_modify(|from| *from = (*from).min(*first))
+            .or_insert(*first);
+    }
 
     let floor_date = floor.utc_date();
     let fresh: Vec<DayDigest> = day_digests(events)
@@ -1014,6 +1225,116 @@ mod tests {
         Hour::parse(text).expect("hour stamp")
     }
 
+    /// A read with gaps adds what the record does not count, by key: a
+    /// call already in is not counted again, a missing hour keeps its record,
+    /// and distinct usage in an hour the missing part also covered still lands.
+    #[test]
+    fn a_merge_adds_only_the_calls_the_record_has_not_counted() {
+        let mut store = FleetStore::default();
+        let me = device("a");
+        let from = hour("2026-08-01T00");
+        store.upsert_local(
+            &me,
+            from,
+            &[
+                event("claude", "m", hour("2026-08-02T10"), 100, Some(1)),
+                event("claude", "m", hour("2026-08-02T11"), 100, Some(2)),
+            ],
+            1,
+        );
+        let partial = [
+            // Already counted: not again.
+            event("claude", "m", hour("2026-08-02T10"), 100, Some(1)),
+            // New, in an hour the unreadable part also fed.
+            event("claude", "m", hour("2026-08-02T11"), 20, Some(3)),
+            event("claude", "m", hour("2026-08-02T12"), 50, Some(4)),
+        ];
+        store.merge_local(&me, from, &partial, 2);
+        // A retry of the same read changes nothing.
+        store.merge_local(&me, from, &partial, 3);
+        let hours: Vec<(String, u64)> = store.devices["a"]
+            .buckets
+            .iter()
+            .map(|b| (b.hour.to_string(), b.tokens.output))
+            .collect();
+        assert_eq!(
+            hours,
+            [
+                ("2026-08-02T10".to_string(), 100),
+                ("2026-08-02T11".to_string(), 120),
+                ("2026-08-02T12".to_string(), 50),
+            ]
+        );
+    }
+
+    /// Before any whole read has counted keys, or past the hourly window, a
+    /// call cannot be told apart from one already in a bucket, so a read with
+    /// gaps only fills a day the record holds nothing for. Retried, it counts
+    /// once; beside a rolled-up day, not at all.
+    #[test]
+    fn without_keys_a_merge_only_fills_empty_days() {
+        let mut store = FleetStore::default();
+        let me = device("a");
+        let from = hour("2026-01-01T00");
+        let slice = store.devices.entry(me.id.clone()).or_default();
+        slice.buckets.push(Bucket {
+            hour: Hour::midday(NaiveDate::from_ymd_opt(2026, 3, 1).unwrap()),
+            provider: "claude".into(),
+            model: "m".into(),
+            granularity: Granularity::Day,
+            tokens: TokenCounts {
+                output: 100,
+                ..Default::default()
+            },
+        });
+        let old = [
+            event("claude", "m", hour("2026-03-01T08"), 40, Some(1)),
+            event("claude", "m", hour("2026-03-02T08"), 30, Some(2)),
+            event("claude", "m", hour("2026-03-02T09"), 30, Some(3)),
+        ];
+        store.merge_local(&me, from, &old, 1);
+        store.merge_local(&me, from, &old, 2);
+        let total: u64 = store.devices["a"]
+            .buckets
+            .iter()
+            .map(|b| b.tokens.output)
+            .sum();
+        assert_eq!(
+            total, 160,
+            "the rolled-up day as it was, the empty one filled once"
+        );
+    }
+
+    #[test]
+    fn counted_keys_survive_the_store_file() {
+        let mut keys = KeySet::default();
+        for key in [1u64, 0xdead_beef_0000_0001, u64::MAX, 42] {
+            keys.insert(key);
+        }
+        let json = serde_json::to_string(&keys).unwrap();
+        assert!(json.starts_with('"'), "one string, not a list: {json}");
+        let back: KeySet = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, keys);
+        assert!(back.contains(0xdead_beef_0000_0001));
+        assert!(!back.contains(7));
+    }
+
+    /// A rolled-up day is its UTC date for every reader. Read through local
+    /// time, Jan 31 at UTC noon is Feb 1 at UTC+14, and moves to another month.
+    #[test]
+    fn a_rolled_up_day_keeps_its_utc_date_east_of_twelve() {
+        let bucket = Bucket {
+            hour: hour("2026-01-31T12"),
+            provider: "claude".into(),
+            model: "m".into(),
+            granularity: Granularity::Day,
+            tokens: TokenCounts::default(),
+        };
+        let east = FixedOffset::east_opt(14 * 3600).unwrap();
+        let event = bucket_event(&bucket, east).unwrap();
+        assert_eq!(event.date, NaiveDate::from_ymd_opt(2026, 1, 31).unwrap());
+    }
+
     fn event(
         provider: &'static str,
         model: &str,
@@ -1032,6 +1353,7 @@ mod tests {
                 ..Default::default()
             },
             key,
+            one_request: false,
         }
     }
 

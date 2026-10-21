@@ -11,6 +11,7 @@ use crate::TokenGaugeConfig;
 use crate::cost::UsageEvent;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
+use std::path::PathBuf;
 
 /// What a cycle produced.
 pub struct SyncOutcome {
@@ -20,6 +21,10 @@ pub struct SyncOutcome {
     /// The merged store, so per-device totals can be taken against the same
     /// price table the report was rated with.
     pub store: FleetStore,
+    /// Providers whose read was not trusted - a transcript root of theirs
+    /// could not be read. `events` carries this device's stored record for
+    /// them, and the caller drops its own read of them.
+    pub held: Vec<&'static str>,
 }
 
 /// Keep the durable store current, and - when sync is on - run a cycle and
@@ -33,11 +38,16 @@ pub struct SyncOutcome {
 ///
 /// Never fails: a transport that is down leaves the durable store in place and
 /// the failure in the status, because blanking the totals would be a lie in the
-/// other direction.
+/// other direction. A read with `gaps` - transcripts that are there and could
+/// not be read - is the same lie one level down: its missing events are not
+/// zero. So it replaces nothing: it is merged into the record hour by hour
+/// (`FleetStore::merge_local`), and the report counts this device from the
+/// record, which then holds both what was kept and what was new.
 pub fn refresh(
     config: &TokenGaugeConfig,
     local_events: &[UsageEvent],
     since: NaiveDate,
+    gaps: &[PathBuf],
 ) -> SyncOutcome {
     let mut status = SyncStatus {
         enabled: config.sync.enabled,
@@ -54,7 +64,20 @@ pub fn refresh(
     let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, store_error) = store::load(&config.cache_file);
     status.error = store_error;
-    store.upsert_local(&device, from, local_events, now.timestamp_millis());
+    let held = match gaps_error(gaps) {
+        None => {
+            store.upsert_local(&device, from, local_events, now.timestamp_millis());
+            Vec::new()
+        }
+        Some(e) => {
+            status.error.get_or_insert(e);
+            store.merge_local(&device, from, local_events, now.timestamp_millis());
+            store.local_providers(&device.id)
+        }
+    };
+    // The read the report keeps beside the store's events: none of it once
+    // the record stands in for this device.
+    let read: &[UsageEvent] = if held.is_empty() { local_events } else { &[] };
 
     if config.sync.enabled
         && let Err(e) = cycle(config, &device, &mut store, now, &mut status)
@@ -72,9 +95,10 @@ pub fn refresh(
 
     if !config.sync.enabled {
         return SyncOutcome {
-            events: Vec::new(),
+            events: store.held_events(&device.id, &held),
             status,
             store,
+            held,
         };
     }
 
@@ -98,9 +122,10 @@ pub fn refresh(
     status.unreadable_providers = store.unreadable_providers(&device.id);
 
     SyncOutcome {
-        events: store.synthetic_events(&device.id, from, local_events),
+        events: store.synthetic_events(&device.id, from, read),
         status,
         store,
+        held,
     }
 }
 
@@ -127,16 +152,27 @@ pub struct BackfillOutcome {
 /// last autumn on the chart the first time it draws one.
 ///
 /// Slow by construction - see [`crate::cost::read_history`] - so it is called
-/// behind [`crate::statefiles::backfill_done`] and never on a poll.
+/// behind [`crate::statefiles::backfill_due`] and never on a poll.
 pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome {
-    let (events, since) = crate::cost::read_history(today);
+    let crate::cost::TranscriptRead {
+        events,
+        since,
+        gaps,
+    } = crate::cost::read_history(today);
     let now = Utc::now();
     let identity = crate::device_identity(&config.cache_file);
     let device = DeviceRecord::new(&identity, &config.sync.label);
 
     let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, mut error) = store::load(&config.cache_file);
-    store.backfill_local(&device, window_hour(since), &events, now);
+    // A read with gaps: what was read is merged, which loses nothing, and the
+    // marker stays off so the backfill runs again whole - an hour on, not on
+    // the next fetch, so a gap that lasts costs one deep read an hour.
+    let gap = gaps_error(&gaps);
+    match &gap {
+        None => store.backfill_local(&device, window_hour(since), &events, now),
+        Some(_) => store.merge_local(&device, window_hour(since), &events, now.timestamp_millis()),
+    }
     store.compact(now, i64::from(config.sync.retention_days));
     store.prune(now);
     // The marker records that the work *landed*, not that it was attempted. A
@@ -144,12 +180,18 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
     // not re-walk the tree on every fetch forever - but a store that would not
     // save has kept none of it, and marking there would leave history
     // permanently empty with the one expensive read that could fill it already
-    // spent.
+    // spent. A read with gaps is not the work landing either.
     match store::save(&config.cache_file, &store) {
-        Ok(()) => crate::statefiles::mark_backfilled(&config.cache_file),
+        Ok(()) if gap.is_none() => crate::statefiles::mark_backfilled(&config.cache_file),
+        Ok(()) => {
+            crate::statefiles::defer_backfill(&config.cache_file, now + chrono::Duration::hours(1))
+        }
         Err(e) => {
             error.get_or_insert(format!("{e:#}"));
         }
+    }
+    if let Some(e) = gap {
+        error.get_or_insert(e);
     }
 
     BackfillOutcome {
@@ -157,6 +199,14 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
         since,
         error,
     }
+}
+
+fn gaps_error(gaps: &[PathBuf]) -> Option<String> {
+    let first = gaps.first()?;
+    Some(format!(
+        "transcripts under {} could not be read; this machine's history is merged, not replaced, until they can",
+        first.display()
+    ))
 }
 
 fn cycle(

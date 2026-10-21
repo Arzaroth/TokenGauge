@@ -97,6 +97,11 @@ pub struct UsageEvent {
     /// re-reading the transcripts. `None` where a record carried no identifier
     /// to build one from.
     pub key: Option<u64>,
+    /// The tokens are one API request - a Claude message, a Codex response -
+    /// so whether its prompt ran past a long-context tier can be told. A turn
+    /// of several requests, or a peer's hourly bucket, cannot, and is rated at
+    /// the base price.
+    pub one_request: bool,
 }
 
 /// A rated event, kept only long enough to measure the current session window.
@@ -138,7 +143,10 @@ pub fn dedup_key(a: &str, b: &str) -> u64 {
 /// Transcripts are append-only, so a file untouched since before the window
 /// cannot contain an event inside it. A day of slack absorbs clock skew and
 /// filesystems with coarse timestamps.
-pub(crate) fn jsonl_files(root: &Path, since: NaiveDate) -> Vec<PathBuf> {
+///
+/// A directory or entry that is there and cannot be read is pushed to `gaps`:
+/// skipping it reads as nothing in it, which is not the same as nothing there.
+pub(crate) fn jsonl_files(root: &Path, since: NaiveDate, gaps: &mut Vec<PathBuf>) -> Vec<PathBuf> {
     let cutoff = since
         .checked_sub_days(Days::new(1))
         .and_then(|d| d.and_hms_opt(0, 0, 0))
@@ -148,12 +156,23 @@ pub(crate) fn jsonl_files(root: &Path, since: NaiveDate) -> Vec<PathBuf> {
     let mut files = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    gaps.push(dir);
+                }
+                continue;
+            }
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let Ok(entry) = entry else {
+                gaps.push(dir.clone());
+                continue;
+            };
             let path = entry.path();
             let Ok(kind) = entry.file_type() else {
+                gaps.push(path);
                 continue;
             };
             if kind.is_dir() {
@@ -210,18 +229,26 @@ fn window_start(today: NaiveDate) -> NaiveDate {
 
 /// Read every transcript in the window and rate it.
 pub fn fetch_native(cache_file: &Path, timeout: Duration, today: NaiveDate) -> NativeCostReport {
-    let (events, _) = read_window(today);
-    rate(&events, cache_file, timeout, today)
+    rate(&read_window(today).events, cache_file, timeout, today)
 }
 
-/// Read every transcript in the window, returning the window with them.
-///
-/// The bound is part of the answer: it is the slice of history this read is
-/// authoritative for, and the fleet store replaces exactly that much of its own
-/// device's data and no more.
-pub fn read_window(today: NaiveDate) -> (Vec<UsageEvent>, NaiveDate) {
-    let since = window_start(today);
-    (read_events_from(&Roots::discover(), since), since)
+/// What one read of the transcripts found.
+#[derive(Debug, Default)]
+pub struct TranscriptRead {
+    pub events: Vec<UsageEvent>,
+    /// The bound is part of the answer: it is the slice of history this read
+    /// is authoritative for, and the fleet store replaces exactly that much of
+    /// its own device's data and no more.
+    pub since: NaiveDate,
+    /// Directories and files that are there and could not be read. Their
+    /// events are missing, not zero, so a read with any is not authoritative
+    /// for anything.
+    pub gaps: Vec<PathBuf>,
+}
+
+/// Read every transcript in the window.
+pub fn read_window(today: NaiveDate) -> TranscriptRead {
+    read_checked(&Roots::discover(), window_start(today))
 }
 
 /// Every transcript day the store could still hold, for the one-time backfill.
@@ -232,12 +259,12 @@ pub fn read_window(today: NaiveDate) -> (Vec<UsageEvent>, NaiveDate) {
 /// ever reads back to the start of the month, which would leave a new store
 /// holding a fortnight no matter how much history the CLIs actually kept.
 ///
-/// Run once, behind [`crate::statefiles::backfill_done`]. Never on a poll.
-pub fn read_history(today: NaiveDate) -> (Vec<UsageEvent>, NaiveDate) {
+/// Run once, behind [`crate::statefiles::backfill_due`]. Never on a poll.
+pub fn read_history(today: NaiveDate) -> TranscriptRead {
     let since = today
         .checked_sub_days(Days::new(crate::sync::STORE_RETENTION_DAYS as u64))
         .unwrap_or(today);
-    (read_events_from(&Roots::discover(), since), since)
+    read_checked(&Roots::discover(), since)
 }
 
 /// Rate a set of events, wherever they were read.
@@ -320,6 +347,11 @@ impl Roots {
 /// Split out from [`fetch_native`] so a test can point at a fixture tree
 /// without touching process-global environment variables.
 pub fn read_events_from(roots: &Roots, since: NaiveDate) -> Vec<UsageEvent> {
+    read_checked(roots, since).events
+}
+
+/// [`read_events_from`], with what the walk could not open.
+pub fn read_checked(roots: &Roots, since: NaiveDate) -> TranscriptRead {
     // A `seen` set per reader: the keys are only unique within one transcript
     // format, and a shared set would let one reader's hash collide another's
     // and silently drop a call.
@@ -327,11 +359,33 @@ pub fn read_events_from(roots: &Roots, since: NaiveDate) -> Vec<UsageEvent> {
     let mut codex_seen = HashSet::new();
     let mut kimi_seen = HashSet::new();
     let mut grok_seen = HashSet::new();
-    let mut events = claude_code::read_events(&roots.claude, since, &mut claude_seen);
-    events.extend(codex_cli::read_events(&roots.codex, since, &mut codex_seen));
-    events.extend(kimi_cli::read_events(&roots.kimi, since, &mut kimi_seen));
-    events.extend(grok_cli::read_events(&roots.grok, since, &mut grok_seen));
-    events
+    let mut gaps = Vec::new();
+    let mut events = claude_code::read_events(&roots.claude, since, &mut claude_seen, &mut gaps);
+    events.extend(codex_cli::read_events(
+        &roots.codex,
+        since,
+        &mut codex_seen,
+        &mut gaps,
+    ));
+    events.extend(kimi_cli::read_events(
+        &roots.kimi,
+        since,
+        &mut kimi_seen,
+        &mut gaps,
+    ));
+    events.extend(grok_cli::read_events(
+        &roots.grok,
+        since,
+        &mut grok_seen,
+        &mut gaps,
+    ));
+    gaps.sort();
+    gaps.dedup();
+    TranscriptRead {
+        events,
+        since,
+        gaps,
+    }
 }
 
 #[derive(Default)]
@@ -377,6 +431,7 @@ pub fn build_report(
 
     for event in events {
         let usd = match prices.get(&event.model) {
+            Some(price) if event.one_request => price.cost_of_request(&event.tokens),
             Some(price) => price.cost(&event.tokens),
             None => {
                 if event.tokens.total() > 0 {
@@ -617,6 +672,72 @@ pub fn transcript_roots() -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
+    /// Only a single request can be told to have run past a tier. A bucket of
+    /// the same tokens - a peer's hour - is rated at the base price.
+    #[test]
+    fn only_a_single_request_is_rated_at_its_long_context_tier() {
+        let price: pricing::ModelPrice = serde_json::from_str(
+            r#"{"input_cost_per_token": 1e-06, "output_cost_per_token": 1e-06,
+                "input_cost_per_token_above_200k_tokens": 2e-06}"#,
+        )
+        .unwrap();
+        let prices = pricing::PriceTable::from_models([("claude-sonnet-4-5", price)]);
+        let today = Local::now().date_naive();
+        let event = |one_request| UsageEvent {
+            provider: "claude",
+            model: "claude-sonnet-4-5".into(),
+            date: today,
+            at: Utc::now(),
+            tokens: TokenCounts {
+                input: 300_000,
+                ..Default::default()
+            },
+            key: None,
+            one_request,
+        };
+        let usd = |events: &[UsageEvent]| {
+            build_report(events, &prices, today).costs["claude"].monthly_usd
+        };
+        assert!((usd(&[event(true)]) - 0.6).abs() < 1e-9);
+        assert!((usd(&[event(false)]) - 0.3).abs() < 1e-9);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_root_that_is_there_and_cannot_be_read_is_unreadable() {
+        use std::os::unix::fs::PermissionsExt;
+        /// Unlocks and removes the tree however the test ends.
+        struct Unlock(PathBuf, PathBuf);
+        impl Drop for Unlock {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.1, std::fs::Permissions::from_mode(0o755));
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let base = crate::statefiles::tests::cache_test_dir("unreadable-root");
+        let locked = base.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        let _unlock = Unlock(base.clone(), locked.clone());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root reads anything, so the check means nothing there.
+        if std::fs::read_dir(&locked).is_ok() {
+            return;
+        }
+        let since = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+        let roots = Roots {
+            claude: vec![locked.clone(), base.join("missing")],
+            ..Roots::default()
+        };
+        assert_eq!(read_checked(&roots, since).gaps, vec![locked.clone()]);
+        // Below a readable root counts as much as a root: its files are
+        // skipped the same way.
+        let nested = Roots {
+            codex: vec![base.clone()],
+            ..Roots::default()
+        };
+        assert_eq!(read_checked(&nested, since).gaps, vec![locked.clone()]);
+    }
+
     /// Two machines on different builds have to produce the same day
     /// fingerprint, or the double-counting check goes quietly dead. A literal
     /// pins that: refactoring the length-prefixing would otherwise pass every
@@ -651,6 +772,7 @@ mod tests {
                 ..Default::default()
             },
             key: None,
+            one_request: false,
         }
     }
 

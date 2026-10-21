@@ -52,6 +52,9 @@ archive was missing `cache_read_input_token_cost` from 124 model-months).
 `scripts/make-prices.py` builds it from LiteLLM's git history (13 months, ~670
 overrides, ~90 KiB), vendored rather than fetched. Months after the vendoring
 release are rated at today's prices; `--doctor` says how far back it reaches.
+The archive carries no long-context tiers: history is rated per hourly bucket,
+which is never one request, so a tier is nothing it could apply
+([../architecture/cost.md](../architecture/cost.md#pricing)).
 
 ## Backfill
 
@@ -59,10 +62,17 @@ A fetch reads back only to the start of the month, so a new store would hold a
 fortnight. `cost::read_history` reads as far back as the store holds and
 `sync::backfill` upserts it once, behind `tokengauge-backfilled`, before the first
 fetch and never on a poll (it defeats `jsonl_files`'s mtime filter). The marker is
-written even when nothing was found. `--backfill` forces it again, e.g. after
-restoring transcripts. It replaces each provider only from the oldest event its
-transcripts still hold, so the days before that (rotated away, or adopted with
-`--sync-adopt`) survive, and a floor inside a rolled-up day moves to the next.
+written even when nothing was found, but not after a read with gaps
+(`TranscriptRead.gaps`: transcripts that exist and cannot be read): that read
+is merged into the record and the next attempt deferred an hour
+(`tokengauge-backfill-retry`), so the backfill completes once the tree reads
+whole. Every fetch's re-read with a gap is merged into the record the same way
+rather than replacing it
+([../architecture/sync.md](../architecture/sync.md#the-fleet-store-is-the-durable-record)).
+`--backfill` forces it again, e.g. after restoring transcripts. It replaces each
+provider only from the oldest event its transcripts still hold, so the days
+before that (rotated away, or adopted with `--sync-adopt`) survive, and a floor
+inside a rolled-up day moves to the next.
 
 ## What the screens draw
 
@@ -103,5 +113,5 @@ annotating the past, budgets and forecasts, exports beyond the raw rows.
 
 - `crates/tokengauge-core/src/history.rs` (`history_panel`, `covers`)
 - `crates/tokengauge-core/src/sync/fleet.rs` (retention constants, rollup, `upsert_local`), `crates/tokengauge-core/src/sync/hour.rs`, `crates/tokengauge-core/src/sync/run.rs` (`backfill`)
-- `crates/tokengauge-core/src/cost/mod.rs` (`read_history`), `crates/tokengauge-core/src/cost/pricing.rs`, `crates/tokengauge-core/src/cost/price-archive.json`, `scripts/make-prices.py`
+- `crates/tokengauge-core/src/cost/mod.rs` (`read_history`, `TranscriptRead`), `crates/tokengauge-core/src/cost/pricing.rs`, `crates/tokengauge-core/src/cost/price-archive.json`, `scripts/make-prices.py`
 - `crates/tokengauge-tui/src/history_view.rs`, `crates/tokengauge-tray/src/main.rs` (`draw_history_chart`), `crates/tokengauge-waybar/src/export.rs`

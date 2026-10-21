@@ -51,6 +51,21 @@ pub(crate) fn base64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Base64url, unpadded: [`base64_decode`]'s other half.
+pub(crate) fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let mut buf = [0u8; 3];
+        buf[..chunk.len()].copy_from_slice(chunk);
+        let n = u32::from_be_bytes([0, buf[0], buf[1], buf[2]]);
+        for i in 0..chunk.len() + 1 {
+            out.push(ALPHABET[((n >> (18 - 6 * i)) & 0x3f) as usize] as char);
+        }
+    }
+    out
+}
+
 /// A JWT's payload claims. `None` for an opaque or malformed token, which is
 /// never treated as a bad credential on its own - two providers now read a
 /// claim off a token that may legitimately not be a JWT at all.
@@ -119,6 +134,35 @@ where
 {
     use serde::Deserialize;
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// A list whose entries are read one at a time, so a sibling of another shape
+/// costs only itself and not the response around it. `null` reads as empty;
+/// a non-list is still refused, as in [`null_as_default`].
+pub(crate) fn lenient_list<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Ok(lenient_opt_list(deserializer)?.unwrap_or_default())
+}
+
+/// [`lenient_list`] where an absent or `null` list stays distinct from an
+/// empty one.
+pub(crate) fn lenient_opt_list<'de, D, T>(deserializer: D) -> Result<Option<Vec<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    use serde::Deserialize;
+    Ok(
+        Option::<Vec<Value>>::deserialize(deserializer)?.map(|entries| {
+            entries
+                .into_iter()
+                .filter_map(|entry| serde_json::from_value(entry).ok())
+                .collect()
+        }),
+    )
 }
 
 /// A number out of a loosely-typed body, whether it arrived as a number or as

@@ -336,6 +336,34 @@ pub fn mark_backfilled(cache_file: &Path) {
         fs::create_dir_all(parent).ok();
     }
     fs::write(&path, chrono::Utc::now().to_rfc3339()).ok();
+    fs::remove_file(backfill_retry_path(cache_file)).ok();
+}
+
+/// When a backfill whose read had gaps may run again. A deep read that comes
+/// up short is not done, and must not repeat on every fetch while the gap
+/// lasts either.
+pub fn backfill_retry_path(cache_file: &Path) -> PathBuf {
+    let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
+    parent.join("tokengauge-backfill-retry")
+}
+
+/// Not done, and not deferred past `now`.
+pub fn backfill_due(cache_file: &Path, now: chrono::DateTime<chrono::Utc>) -> bool {
+    if backfill_done(cache_file) {
+        return false;
+    }
+    fs::read_to_string(backfill_retry_path(cache_file))
+        .ok()
+        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw.trim()).ok())
+        .is_none_or(|at| at <= now)
+}
+
+pub fn defer_backfill(cache_file: &Path, until: chrono::DateTime<chrono::Utc>) {
+    let path = backfill_retry_path(cache_file);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    fs::write(&path, until.to_rfc3339()).ok();
 }
 
 pub fn read_notify_state(path: &Path) -> NotifyState {
@@ -460,6 +488,23 @@ pub(crate) mod tests {
         path.push(format!("tokengauge-test-{prefix}-{pid}"));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    /// A backfill whose read had gaps waits an hour before reading again, and
+    /// a whole one ends the wait for good.
+    #[test]
+    fn a_deferred_backfill_waits_its_hour() {
+        let root = cache_test_dir("backfill-retry");
+        let cache = root.join("tokengauge-usage.json");
+        let now = chrono::Utc::now();
+        assert!(backfill_due(&cache, now));
+        defer_backfill(&cache, now + chrono::Duration::hours(1));
+        assert!(!backfill_due(&cache, now));
+        assert!(backfill_due(&cache, now + chrono::Duration::hours(2)));
+        mark_backfilled(&cache);
+        assert!(!backfill_due(&cache, now + chrono::Duration::hours(2)));
+        assert!(!backfill_retry_path(&cache).exists());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

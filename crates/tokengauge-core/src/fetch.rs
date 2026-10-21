@@ -444,12 +444,17 @@ fn native_costs(
     // Once, before the first fetch leaves the store holding a fortnight: read
     // back as far as the store can hold, so the first history chart is worth
     // opening instead of a week of bars on an empty year.
-    if !crate::statefiles::backfill_done(&config.cache_file) {
+    if crate::statefiles::backfill_due(&config.cache_file, chrono::Utc::now()) {
         sync::backfill(config, today);
     }
 
-    let (mut events, since) = cost::read_window(today);
-    let outcome = sync::refresh(config, &events, since);
+    let cost::TranscriptRead {
+        mut events,
+        since,
+        gaps,
+    } = cost::read_window(today);
+    let outcome = sync::refresh(config, &events, since, &gaps);
+    events.retain(|event| !outcome.held.contains(&event.provider));
     events.extend(outcome.events);
 
     let (mut report, prices) = cost::rate_with_prices(&events, &config.cache_file, timeout, today);

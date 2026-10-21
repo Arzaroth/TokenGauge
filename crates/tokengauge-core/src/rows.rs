@@ -241,13 +241,12 @@ pub fn format_window(window: Option<UsageWindow>) -> (Option<u8>, Option<u32>, S
 ///
 /// Counted against the clock at render time, never against the fetch: the
 /// instant is absolute, so a countdown drawn from a snapshot minutes old is
-/// still the right countdown. The percentage beside it is the one that has to
-/// wait for the next fetch.
+/// still the right countdown. A window that rolled over since the fetch never
+/// gets here: [`expire_elapsed`] has already read it as empty.
 ///
-/// A reset instant already past is a window that rolled over since the fetch,
-/// which is a different thing from a window that never had a reset time - and
-/// says "now" rather than counting up, because the panel calls the latter
-/// "not started".
+/// A reset instant already past by the time the provider reported it is a
+/// different thing from a window that never had a reset time - and says "now"
+/// rather than counting up, because the panel calls the latter "not started".
 fn format_reset_time(resets_at: Option<&str>, description: Option<String>) -> String {
     if let Some(resets_at) = resets_at
         && let Ok(reset_time) = DateTime::parse_from_rfc3339(resets_at)
@@ -266,6 +265,54 @@ fn format_reset_time(resets_at: Option<&str>, description: Option<String>) -> St
     }
     // Fall back to description if we can't compute relative time
     description.unwrap_or_else(|| "—".to_string())
+}
+
+/// Every window that reset after its figures were taken, read as the empty
+/// window that replaced it.
+///
+/// The fetch that would say so is usually seconds away, since a reset is what
+/// makes the snapshot stale. Not always: a stored credential that is expired
+/// is never asked again, a failed fetch keeps the old payload, and their dead
+/// percentages went on feeding the combined plans header as if they were
+/// spent. The comparison is the one `snapshot::rolled_over` makes, against the
+/// write, so a provider that reports an instant already past keeps its figure.
+fn expire_elapsed(mut usage: UsageSnapshot, now: DateTime<Utc>) -> UsageSnapshot {
+    let Some(written) = usage
+        .updated_at
+        .as_deref()
+        .and_then(|iso| DateTime::parse_from_rfc3339(iso).ok())
+        .map(|at| at.with_timezone(&Utc))
+    else {
+        return usage;
+    };
+    let expire = |window: &mut UsageWindow| {
+        let reset = window
+            .resets_at
+            .as_deref()
+            .and_then(|iso| DateTime::parse_from_rfc3339(iso).ok())
+            .map(|at| at.with_timezone(&Utc));
+        if reset.is_some_and(|reset| reset <= now && reset > written) {
+            window.used_percent = Some(0);
+            window.resets_at = None;
+            window.reset_description = None;
+        }
+    };
+    for window in [
+        &mut usage.primary,
+        &mut usage.secondary,
+        &mut usage.tertiary,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        expire(window);
+    }
+    for extra in &mut usage.extra_rate_windows {
+        if let Some(window) = extra.window.as_mut() {
+            expire(window);
+        }
+    }
+    usage
 }
 
 fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
@@ -292,6 +339,7 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
     if let Some(usage) = payload.usage {
         banked_resets = usage.banked_resets.clone();
         let now = Utc::now();
+        let usage = expire_elapsed(usage, now);
         // `used` stopped moving when the fetch did, so a pace measured against
         // a clock that kept going decays on its own: the longer the outage
         // lasts, the more it reads as a slowdown that never happened. The
@@ -419,6 +467,59 @@ mod tests {
     // ------------------------------------------------------------------------
     // format_window tests
     // ------------------------------------------------------------------------
+
+    fn window_resetting_at(at: DateTime<Utc>, used: u8) -> UsageWindow {
+        UsageWindow {
+            used_percent: Some(used),
+            reset_description: None,
+            resets_at: Some(at.to_rfc3339()),
+            window_minutes: Some(300),
+        }
+    }
+
+    /// Omarchy d21e5810: a window that reset after the write is the empty
+    /// window that replaced it, not the spent one it was.
+    #[test]
+    fn a_window_that_reset_since_the_write_reads_empty() {
+        let now = Utc::now();
+        let written = now - chrono::Duration::hours(2);
+        let usage = UsageSnapshot {
+            primary: Some(window_resetting_at(now - chrono::Duration::hours(1), 93)),
+            secondary: Some(window_resetting_at(now + chrono::Duration::hours(1), 40)),
+            // Already past when the provider reported it: kept as reported.
+            tertiary: Some(window_resetting_at(now - chrono::Duration::hours(3), 12)),
+            extra_rate_windows: vec![ExtraRateWindow {
+                id: None,
+                title: Some("Weekly".into()),
+                window: Some(window_resetting_at(now - chrono::Duration::minutes(5), 70)),
+                placeholder: false,
+            }],
+            ..UsageSnapshot::at(written)
+        };
+        let usage = expire_elapsed(usage, now);
+        let primary = usage.primary.unwrap();
+        assert_eq!(primary.used_percent, Some(0));
+        assert!(primary.resets_at.is_none());
+        assert_eq!(primary.window_minutes, Some(300));
+        assert_eq!(usage.secondary.unwrap().used_percent, Some(40));
+        assert_eq!(usage.tertiary.unwrap().used_percent, Some(12));
+        let extra = usage.extra_rate_windows[0].window.as_ref().unwrap();
+        assert_eq!(extra.used_percent, Some(0));
+    }
+
+    #[test]
+    fn a_window_with_no_write_instant_is_left_as_it_was() {
+        let now = Utc::now();
+        let usage = UsageSnapshot {
+            primary: Some(window_resetting_at(now - chrono::Duration::hours(1), 93)),
+            updated_at: None,
+            ..UsageSnapshot::at(now)
+        };
+        assert_eq!(
+            expire_elapsed(usage, now).primary.unwrap().used_percent,
+            Some(93)
+        );
+    }
 
     #[test]
     fn format_window_with_resets_at() {

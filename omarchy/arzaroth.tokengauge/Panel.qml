@@ -4,6 +4,7 @@ import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Panel {
@@ -16,10 +17,10 @@ Panel {
   // this file is the bar-widget entry point as well as the popup.
   readonly property bool vertical: bar ? bar.vertical : false
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
+  readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
-  readonly property color track: Style.selectedFillFor(foreground, Color.accent)
+  readonly property color track: Style.selectedFillFor(foreground, Commons.Color.accent)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property var providers: usage.rows
@@ -553,7 +554,7 @@ Panel {
             width: parent.width
             height: updateRow.implicitHeight + Style.space(16)
             radius: Style.cornerRadius
-            color: root.alpha(Color.accent, 0.12)
+            color: root.alpha(Commons.Color.accent, 0.12)
 
             Row {
               id: updateRow
@@ -583,7 +584,7 @@ Panel {
                 text: usage.updating ? "Updating…" : "Update"
                 bordered: true
                 foreground: root.foreground
-                accent: Color.accent
+                accent: Commons.Color.accent
                 fontFamily: root.fontFamily
                 fontSize: Style.font.bodySmall
                 onClicked: if (!usage.updating) usage.applyUpdate()
@@ -665,7 +666,7 @@ Panel {
                 PanelActionButton {
                   iconText: "󰄨"
                   tooltipText: "History  ."
-                  foreground: root.historyOpen ? Color.accent : root.dim
+                  foreground: root.historyOpen ? Commons.Color.accent : root.dim
                   hoverColor: root.foreground
                   fontFamily: root.fontFamily
                   onClicked: root.openScreen(root.historyOpen ? "panel" : "history")
@@ -683,7 +684,7 @@ Panel {
                 PanelActionButton {
                   iconText: "󰒓"
                   tooltipText: "Settings  ,"
-                  foreground: root.settingsOpen ? Color.accent : root.dim
+                  foreground: root.settingsOpen ? Commons.Color.accent : root.dim
                   hoverColor: root.foreground
                   fontFamily: root.fontFamily
                   onClicked: root.openScreen(root.settingsOpen ? "panel" : "settings")
@@ -735,7 +736,7 @@ Panel {
             visible: root.providers.length > 1
             width: parent.width
             foreground: root.foreground
-            accent: Color.accent
+            accent: Commons.Color.accent
             fontFamily: root.fontFamily
             options: {
               var out = []
@@ -1104,7 +1105,7 @@ Panel {
                   checked: usage.enabledProviders.indexOf(String(modelData)) >= 0
                   busy: usage.loading
                   foreground: root.foreground
-                  accent: Color.accent
+                  accent: Commons.Color.accent
                   onToggled: usage.setProvider(String(modelData), !checked)
                 }
               }
@@ -1123,7 +1124,7 @@ Panel {
             visible: root.settingsOpen
             width: parent.width
             foreground: root.foreground
-            accent: Color.accent
+            accent: Commons.Color.accent
             fontFamily: root.fontFamily
             options: {
               var out = [{ value: "highest", label: "Highest usage" }]
@@ -1180,7 +1181,7 @@ Panel {
                   checked: usage.panelOptions[parent.modelData.key] === true
                   busy: usage.loading
                   foreground: root.foreground
-                  accent: Color.accent
+                  accent: Commons.Color.accent
                   onToggled: root.togglePanelOption(parent.modelData.key)
                 }
               }
@@ -1200,7 +1201,7 @@ Panel {
             visible: root.settingsOpen
             width: parent.width
             foreground: root.foreground
-            accent: Color.accent
+            accent: Commons.Color.accent
             fontFamily: root.fontFamily
             options: [
               { value: "weighted", label: "Weighted" },

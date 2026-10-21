@@ -109,11 +109,14 @@ pub fn read_events(
     roots: &[PathBuf],
     since: NaiveDate,
     seen: &mut HashMap<u64, usize>,
+    gaps: &mut Vec<PathBuf>,
 ) -> Vec<UsageEvent> {
     let mut events = Vec::new();
     for root in roots {
-        for file in jsonl_files(root, since) {
-            read_file(&file, since, seen, &mut events);
+        for file in jsonl_files(root, since, gaps) {
+            if !read_file(&file, since, seen, &mut events) {
+                gaps.push(file.clone());
+            }
         }
     }
     events
@@ -124,9 +127,9 @@ pub(super) fn read_file(
     since: NaiveDate,
     seen: &mut HashMap<u64, usize>,
     events: &mut Vec<UsageEvent>,
-) {
+) -> bool {
     let Ok(contents) = std::fs::read_to_string(path) else {
-        return;
+        return false;
     };
     for line in contents.lines() {
         if !line.contains("\"usage\"") {
@@ -160,6 +163,7 @@ pub(super) fn read_file(
             }
         }
     }
+    true
 }
 
 /// The event a record describes, and the key that identifies its request.
@@ -197,6 +201,7 @@ fn event_from(record: &Record, since: NaiveDate) -> Option<(Option<u64>, UsageEv
             date,
             at,
             key,
+            one_request: true,
             tokens: TokenCounts {
                 input: usage.input_tokens,
                 output: usage.output_tokens,

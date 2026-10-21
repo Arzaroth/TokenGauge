@@ -47,10 +47,12 @@ impl Tone {
     }
 
     /// Burning ahead of an even rate is the warning direction; behind it is
-    /// headroom. On-track says nothing worth tinting.
+    /// headroom. On-track says nothing worth tinting. Early in a window with
+    /// most of it left, ahead is a warning at most: a morning's burst is not
+    /// yet a run-out.
     pub fn for_pace(pace: &crate::UsagePace) -> Self {
         if pace.stage.is_ahead() {
-            if pace.delta_percent.abs() > 6.0 {
+            if pace.delta_percent.abs() > 6.0 && !pace.early {
                 Self::Critical
             } else {
                 Self::Warn

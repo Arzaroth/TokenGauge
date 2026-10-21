@@ -294,9 +294,14 @@ impl FleetStore {
         if first_time { None } else { Some(change) }
     }
 
-    /// Replace this device's buckets inside `[from, ..]` and leave everything
+    /// Replace this device's buckets for each provider the read found, from
+    /// that provider's oldest event in `[from, ..]`, and leave everything
     /// older untouched: a re-read only ever covers the window the transcripts
     /// were scanned for, and the months before it survive only here.
+    ///
+    /// Not from `from` itself: an hour inside the window that no transcript
+    /// holds any more - adopted from the machine a reinstall replaced, or
+    /// rotated away - is unknown, not zero.
     pub fn upsert_local(
         &mut self,
         device: &DeviceRecord,
@@ -311,21 +316,7 @@ impl FleetStore {
             Some(existing) => existing.min(from),
             None => from,
         });
-
-        slice.buckets.retain(|bucket| bucket.hour < from);
-        slice
-            .buckets
-            .extend(bucketize(events).into_iter().filter(|b| b.hour >= from));
-        slice.buckets.sort_by(sort_key);
-
-        let from_date = from.utc_date();
-        slice.days.retain(|day| day.date < from_date);
-        slice.days.extend(
-            day_digests(events)
-                .into_iter()
-                .filter(|d| d.date >= from_date),
-        );
-        slice.days.sort_by_key(|day| day.date);
+        replace_read(slice, from, events);
     }
 
     /// The deep re-read: each provider's buckets are replaced from the oldest
@@ -335,9 +326,7 @@ impl FleetStore {
     /// transcript mentions is unknown, not zero - its file was rotated away,
     /// or it was adopted from a machine this one replaced - and one provider
     /// that keeps its sessions forever says nothing about another that
-    /// deletes them after a month. A floor inside a rolled-up day moves to the
-    /// next one: that day was built while its transcripts were all there, and
-    /// re-read hours landed beside it would count the rest of it twice.
+    /// deletes them after a month.
     pub fn backfill_local(
         &mut self,
         device: &DeviceRecord,
@@ -350,45 +339,7 @@ impl FleetStore {
         slice.updated_at_ms = now.timestamp_millis();
         slice.covers_from = Some(slice.covers_from.map_or(reach, |covers| covers.min(reach)));
 
-        let mut floors: BTreeMap<&str, Hour> = BTreeMap::new();
-        for event in events {
-            let at = Hour::containing(event.at).max(reach);
-            floors
-                .entry(event.provider)
-                .and_modify(|floor| *floor = (*floor).min(at))
-                .or_insert(at);
-        }
-        for (provider, floor) in floors.iter_mut() {
-            let date = floor.utc_date();
-            let rolled_up = slice.buckets.iter().any(|bucket| {
-                bucket.granularity == Granularity::Day
-                    && bucket.hour.utc_date() == date
-                    && bucket.provider == *provider
-            });
-            if rolled_up && *floor > day_start(Some(date)) {
-                *floor = day_start(date.succ_opt());
-            }
-        }
-        let replaced = |bucket: &Bucket| {
-            floors
-                .get(bucket.provider.as_str())
-                .is_some_and(|floor| bucket.hour >= *floor)
-        };
-
-        slice.buckets.retain(|bucket| !replaced(bucket));
-        slice.buckets.extend(
-            bucketize(events)
-                .into_iter()
-                .filter(|bucket| replaced(bucket)),
-        );
-        slice.buckets.sort_by(sort_key);
-
-        let fresh = day_digests(events);
-        slice
-            .days
-            .retain(|day| !fresh.iter().any(|new| new.date == day.date));
-        slice.days.extend(fresh);
-        slice.days.sort_by_key(|day| day.date);
+        replace_read(slice, reach, events);
     }
 
     /// Fold a retired device's history into `into_id` and drop the retired
@@ -688,18 +639,30 @@ impl FleetStore {
 
     /// Events for `build_report`, minus what the caller already holds.
     ///
-    /// The local device's buckets from `local_from` on are skipped: the caller
-    /// passes its real events for that window, which carry exact timestamps
-    /// rather than the start of an hour, and there is no reason to make the
-    /// local session figure coarser than it already is.
-    pub fn synthetic_events(&self, local_id: &str, local_from: Hour) -> Vec<UsageEvent> {
+    /// The local device's buckets are skipped where the caller's real events
+    /// speak for them - per provider, from its oldest event at or after
+    /// `local_from` - because those carry exact timestamps rather than the
+    /// start of an hour, and there is no reason to make the local session
+    /// figure coarser than it already is. A local bucket the read does not
+    /// cover, adopted or rotated away, is counted from here.
+    pub fn synthetic_events(
+        &self,
+        local_id: &str,
+        local_from: Hour,
+        local_events: &[UsageEvent],
+    ) -> Vec<UsageEvent> {
         let dropped = self.dropped_days();
+        let floors = read_floors(local_from, local_events);
 
         let offset = *chrono::Local::now().offset();
         let mut events = Vec::new();
         for (id, slice) in &self.devices {
             for bucket in &slice.buckets {
-                if id == local_id && bucket.hour >= local_from {
+                if id == local_id
+                    && floors
+                        .get(bucket.provider.as_str())
+                        .is_some_and(|first| bucket.hour >= *first)
+                {
                     continue;
                 }
                 if is_dropped(&dropped, bucket, id) {
@@ -957,6 +920,63 @@ impl FleetStore {
         }
         out
     }
+}
+
+/// Each provider's oldest event in the read, no earlier than `floor`: where a
+/// re-read starts to speak for that provider.
+fn read_floors(floor: Hour, events: &[UsageEvent]) -> BTreeMap<&'static str, Hour> {
+    let mut floors: BTreeMap<&'static str, Hour> = BTreeMap::new();
+    for event in events {
+        let at = Hour::containing(event.at).max(floor);
+        floors
+            .entry(event.provider)
+            .and_modify(|first| *first = (*first).min(at))
+            .or_insert(at);
+    }
+    floors
+}
+
+/// Replace a slice's buckets with a read's, provider by provider, from
+/// [`read_floors`]. A floor inside a rolled-up day moves to the next one: that
+/// day was built while its transcripts were all there, and re-read hours
+/// landed beside it would count the rest of it twice.
+fn replace_read(slice: &mut DeviceSlice, floor: Hour, events: &[UsageEvent]) {
+    let mut floors = read_floors(floor, events);
+    for (provider, first) in floors.iter_mut() {
+        let date = first.utc_date();
+        let rolled_up = slice.buckets.iter().any(|bucket| {
+            bucket.granularity == Granularity::Day
+                && bucket.hour.utc_date() == date
+                && bucket.provider == *provider
+        });
+        if rolled_up && *first > day_start(Some(date)) {
+            *first = day_start(date.succ_opt());
+        }
+    }
+    let replaced = |bucket: &Bucket| {
+        floors
+            .get(bucket.provider.as_str())
+            .is_some_and(|first| bucket.hour >= *first)
+    };
+
+    slice.buckets.retain(|bucket| !replaced(bucket));
+    slice.buckets.extend(
+        bucketize(events)
+            .into_iter()
+            .filter(|bucket| replaced(bucket)),
+    );
+    slice.buckets.sort_by(sort_key);
+
+    let floor_date = floor.utc_date();
+    let fresh: Vec<DayDigest> = day_digests(events)
+        .into_iter()
+        .filter(|day| day.date >= floor_date)
+        .collect();
+    slice
+        .days
+        .retain(|day| !fresh.iter().any(|new| new.date == day.date));
+    slice.days.extend(fresh);
+    slice.days.sort_by_key(|day| day.date);
 }
 
 /// The first hour a bucket spans.
@@ -1343,7 +1363,7 @@ mod tests {
             "smallest id, agreed without coordinating"
         );
 
-        let events = store.synthetic_events("nobody", hour("2099-01-01T00"));
+        let events = store.synthetic_events("nobody", hour("2099-01-01T00"), &[]);
         assert_eq!(events.iter().map(|e| e.tokens.output).sum::<u64>(), 60);
     }
 
@@ -1351,12 +1371,8 @@ mod tests {
     fn two_devices_that_merely_spent_the_same_are_not_an_overlap() {
         let at = hour("2026-08-25T14");
         let mut store = FleetStore::new();
-        store.upsert_local(
-            &device("a"),
-            hour("2026-08-01T00"),
-            &[event("claude", "opus", at, 60, Some(1))],
-            1,
-        );
+        let local = [event("claude", "opus", at, 60, Some(1))];
+        store.upsert_local(&device("a"), hour("2026-08-01T00"), &local, 1);
         store.upsert_local(
             &device("z"),
             hour("2026-08-01T00"),
@@ -1365,7 +1381,7 @@ mod tests {
         );
 
         assert!(store.overlaps().is_empty());
-        let events = store.synthetic_events("nobody", hour("2099-01-01T00"));
+        let events = store.synthetic_events("nobody", hour("2099-01-01T00"), &[]);
         assert_eq!(events.iter().map(|e| e.tokens.output).sum::<u64>(), 120);
     }
 
@@ -1373,16 +1389,17 @@ mod tests {
     fn synthetic_events_leave_the_local_window_to_the_transcripts() {
         let at = hour("2026-08-25T14");
         let mut store = FleetStore::new();
-        store.upsert_local(
-            &device("a"),
-            hour("2026-08-01T00"),
-            &[event("claude", "opus", at, 60, Some(1))],
-            1,
-        );
+        let local = [event("claude", "opus", at, 60, Some(1))];
+        store.upsert_local(&device("a"), hour("2026-08-01T00"), &local, 1);
 
-        assert!(store.synthetic_events("a", at).is_empty());
-        assert_eq!(store.synthetic_events("a", hour("2026-08-25T15")).len(), 1);
-        assert_eq!(store.synthetic_events("other", at).len(), 1);
+        assert!(store.synthetic_events("a", at, &local).is_empty());
+        assert_eq!(
+            store
+                .synthetic_events("a", hour("2026-08-25T15"), &local)
+                .len(),
+            1
+        );
+        assert_eq!(store.synthetic_events("other", at, &local).len(), 1);
     }
 
     #[test]
@@ -1572,7 +1589,7 @@ mod tests {
         // `synthetic_events` with a local id the store does not hold is what
         // `build_report` sums the row total out of.
         let row_total: u64 = store
-            .synthetic_events("neither", hour("2026-09-01T00"))
+            .synthetic_events("neither", hour("2026-09-01T00"), &[])
             .iter()
             .map(|e| e.tokens.total())
             .sum();
@@ -1637,7 +1654,7 @@ mod tests {
 
         let mut store = FleetStore::new();
         store.upsert_local(&device("a"), base.minus_days(30), &events, 1);
-        let synthetic = store.synthetic_events("nobody", base);
+        let synthetic = store.synthetic_events("nobody", base, &[]);
 
         let direct = build_report(&events, &prices, today);
         let round_tripped = build_report(&synthetic, &prices, today);

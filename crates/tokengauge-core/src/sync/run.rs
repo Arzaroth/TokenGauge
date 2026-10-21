@@ -98,7 +98,7 @@ pub fn refresh(
     status.unreadable_providers = store.unreadable_providers(&device.id);
 
     SyncOutcome {
-        events: store.synthetic_events(&device.id, from),
+        events: store.synthetic_events(&device.id, from, local_events),
         status,
         store,
     }

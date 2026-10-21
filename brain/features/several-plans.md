@@ -67,7 +67,9 @@ A value that does not parse reads as its default.
 ## Cadence and freshness
 
 The live login is asked every refresh; an inactive credential every
-`inactive_refresh_secs` (1800) or when a window resets. Adding a credential or
+`inactive_refresh_secs` (1800) or when a window resets, and as often as the live
+login while its 5-hour window is past 10%, since that is another machine
+spending from it. Adding a credential or
 `remuda use` refreshes the panel immediately (the snapshot goes stale on a store
 change). `--doctor` checks every stored credential offline.
 

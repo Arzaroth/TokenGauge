@@ -425,6 +425,7 @@ click_action = "tui"
 # Windows); set it if remuda's store is elsewhere, or to "" to turn it off.
 # store = "/home/you/.local/share/remuda/credentials"
 # Seconds before a credential the CLI is not signed into is asked again.
+# One whose 5-hour window is past 10% is asked every refresh_secs instead.
 # inactive_refresh_secs = 1800
 
 [panel]

@@ -31,6 +31,13 @@ use crate::{CredentialState, ProviderFetchError, ProviderPayload, TokenGaugeConf
 /// its tokens can change buys nothing but rate limits.
 pub const DEFAULT_INACTIVE_REFRESH_SECS: u64 = 1800;
 
+/// Past this share of its 5-hour window, an inactive credential is being spent
+/// from somewhere else, another machine or another tool, and is asked as often
+/// as the live login. Below it, a window opened by a stray request.
+const IN_USE_SESSION_PERCENT: u8 = 10;
+
+const SESSION_WINDOW_MINUTES: u32 = 300;
+
 /// Where remuda keeps its store when nothing moves it.
 ///
 /// Deliberately not remuda's resolution. That reads `$REMUDA_STORE` and
@@ -444,9 +451,10 @@ pub(crate) fn resolve(
 /// then every stored credential it is not.
 ///
 /// The live login is asked on every refresh. An inactive credential is asked
-/// only once its last payload is older than `inactive_refresh_secs` or a
-/// window it reported has reset since; otherwise that payload is carried
-/// unchanged, its own `updatedAt` and all. Each one that is asked gets its own
+/// only once its last payload is older than `inactive_refresh_secs`
+/// (`refresh_secs` while it is [`in_use`]) or a window it reported has reset
+/// since; otherwise that payload is carried unchanged, its own `updatedAt`
+/// and all. Each one that is asked gets its own
 /// thread, spaced by `stagger_ms`, so a store of several credentials costs one
 /// request's time rather than their sum.
 pub(crate) fn fetch_provider(
@@ -479,10 +487,14 @@ pub(crate) fn fetch_provider(
 
     // The stored credentials are asked while the live login is, so a store of
     // several costs one request's time rather than two.
-    let max_age = i64::try_from(config.credentials.inactive_refresh_secs)
-        .ok()
-        .and_then(chrono::Duration::try_seconds)
-        .unwrap_or(chrono::Duration::MAX);
+    let age = |secs: u64| {
+        i64::try_from(secs)
+            .ok()
+            .and_then(chrono::Duration::try_seconds)
+            .unwrap_or(chrono::Duration::MAX)
+    };
+    let max_age = age(config.credentials.inactive_refresh_secs);
+    let in_use_max_age = max_age.min(age(config.refresh_secs));
     let mut slots: Vec<Option<ProviderPayload>> = Vec::new();
     let mut asks = Vec::new();
     for &i in &resolved.others {
@@ -494,7 +506,7 @@ pub(crate) fn fetch_provider(
             slots.push(Some(stored(payload, entry, reader)));
             continue;
         }
-        if let Some(payload) = carried(provider, entry, previous, now, max_age) {
+        if let Some(payload) = carried(provider, entry, previous, now, max_age, in_use_max_age) {
             slots.push(Some(stored(payload, entry, reader)));
             continue;
         }
@@ -579,8 +591,9 @@ fn stored(
 }
 
 /// The last payload a stored credential produced, when it is still worth
-/// serving: asked within `max_age`, a live answer rather than a fallback, and
-/// with no window that has reset since it was asked.
+/// serving: asked within `max_age` (`in_use_max_age` while it is
+/// [`in_use`]), a live answer rather than a fallback, and with no window that
+/// has reset since it was asked.
 ///
 /// And only while the name still holds the same account: a name re-captured
 /// for another account would otherwise carry the old one's figures.
@@ -590,6 +603,7 @@ fn carried(
     previous: &[ProviderPayload],
     now: DateTime<Utc>,
     max_age: chrono::Duration,
+    in_use_max_age: chrono::Duration,
 ) -> Option<ProviderPayload> {
     let payload = previous.iter().find(|p| {
         p.provider.eq_ignore_ascii_case(provider)
@@ -604,11 +618,34 @@ fn carried(
     let asked = DateTime::parse_from_rfc3339(usage.updated_at.as_deref()?)
         .ok()?
         .with_timezone(&Utc);
+    let max_age = if in_use(usage) {
+        in_use_max_age
+    } else {
+        max_age
+    };
     if now - asked >= max_age || asked > now {
         return None;
     }
     let reset_since = crate::snapshot::rolled_over(std::slice::from_ref(payload), asked, now);
     (!reset_since).then(|| payload.clone())
+}
+
+/// Whether a credential's 5-hour window says something is spending from it.
+fn in_use(usage: &crate::UsageSnapshot) -> bool {
+    [&usage.primary, &usage.secondary, &usage.tertiary]
+        .into_iter()
+        .flatten()
+        .chain(
+            usage
+                .extra_rate_windows
+                .iter()
+                .filter_map(|e| e.window.as_ref()),
+        )
+        .any(|w| {
+            w.window_minutes == Some(SESSION_WINDOW_MINUTES)
+                && w.used_percent
+                    .is_some_and(|used| used > IN_USE_SESSION_PERCENT)
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -1345,6 +1382,56 @@ pub(crate) mod tests {
             Some((now - chrono::Duration::hours(1)).to_rfc3339());
         let (payloads, _) = fetch_provider("claude", &FAKE, &config, &[due], live_payload);
         assert_eq!(named(&payloads, "perso").source.as_deref(), Some("fetched"));
+        let _ = std::fs::remove_dir_all(&store);
+    }
+
+    /// A 5-hour window filling while the CLI is signed in elsewhere is another
+    /// machine spending from it: asked as often as the live login, not left to
+    /// reach 100% inside one 30-minute carry. A weekly window says nothing
+    /// about now, and a few percent is a stray request.
+    #[test]
+    fn an_inactive_credential_in_use_is_asked_as_often_as_the_live_login() {
+        let (store, mut config) = store_with_every_kind("in-use");
+        config.refresh_secs = 600;
+        let now = Utc::now();
+        let asked = |minutes: u32, used: u8| {
+            let mut payload = ProviderPayload::live(
+                "claude",
+                "carried",
+                crate::UsageSnapshot {
+                    primary: Some(crate::UsageWindow {
+                        used_percent: Some(used),
+                        reset_description: None,
+                        resets_at: Some((now + chrono::Duration::hours(2)).to_rfc3339()),
+                        window_minutes: Some(minutes),
+                    }),
+                    ..crate::UsageSnapshot::at(now - chrono::Duration::minutes(15))
+                },
+            );
+            payload.credential.name = Some("perso".into());
+            payload.credential.active = Some(false);
+            payload.credential.account_digest = Some(hex_sha256(b"u-perso")[..16].to_string());
+            payload
+        };
+        let source = |config: &TokenGaugeConfig, previous: ProviderPayload| {
+            let (payloads, _) = fetch_provider("claude", &FAKE, config, &[previous], live_payload);
+            named(&payloads, "perso").source.clone()
+        };
+
+        assert_eq!(source(&config, asked(300, 40)).as_deref(), Some("fetched"));
+        assert_eq!(source(&config, asked(300, 10)).as_deref(), Some("carried"));
+        assert_eq!(
+            source(&config, asked(10080, 90)).as_deref(),
+            Some("carried")
+        );
+
+        // Never asked more often than inactive_refresh_secs says, either.
+        config.credentials.inactive_refresh_secs = 300;
+        config.refresh_secs = 3600;
+        assert_eq!(
+            source(&config, asked(10080, 90)).as_deref(),
+            Some("fetched")
+        );
         let _ = std::fs::remove_dir_all(&store);
     }
 

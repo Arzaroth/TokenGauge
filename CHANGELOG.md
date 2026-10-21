@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A stored login the CLI is not signed into is asked as often as the live one
+  once its 5-hour window is past 10%. That is another machine or tool spending
+  from it, and the 30-minute wait between asks let it go from half used to
+  exhausted with the panel still showing the old figure.
+
 ## [0.48.0] - 2026-10-21
 
 ### Added

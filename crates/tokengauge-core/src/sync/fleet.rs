@@ -668,22 +668,26 @@ impl FleetStore {
                 if is_dropped(&dropped, bucket, id) {
                     continue;
                 }
-                let Some(provider) = intern_provider(&bucket.provider) else {
-                    continue;
-                };
-                let at = bucket.hour.start();
-                events.push(UsageEvent {
-                    provider,
-                    model: bucket.model.clone(),
-                    date: at.with_timezone(&offset).date_naive(),
-                    at,
-                    tokens: bucket.tokens,
-                    key: None,
-                    one_request: false,
-                });
+                events.extend(bucket_event(bucket, offset));
             }
         }
         events
+    }
+
+    /// This device's own record, as events. What the report counts for this
+    /// machine when its read could not be trusted, in place of that read.
+    pub fn held_events(&self, local_id: &str) -> Vec<UsageEvent> {
+        let offset = *chrono::Local::now().offset();
+        self.devices
+            .get(local_id)
+            .map(|slice| {
+                slice
+                    .buckets
+                    .iter()
+                    .filter_map(|bucket| bucket_event(bucket, offset))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// The day a device read that another device already reported.
@@ -925,6 +929,20 @@ impl FleetStore {
 
 /// Each provider's oldest event in the read, no earlier than `floor`: where a
 /// re-read starts to speak for that provider.
+fn bucket_event(bucket: &Bucket, offset: FixedOffset) -> Option<UsageEvent> {
+    let provider = intern_provider(&bucket.provider)?;
+    let at = bucket.hour.start();
+    Some(UsageEvent {
+        provider,
+        model: bucket.model.clone(),
+        date: at.with_timezone(&offset).date_naive(),
+        at,
+        tokens: bucket.tokens,
+        key: None,
+        one_request: false,
+    })
+}
+
 fn read_floors(floor: Hour, events: &[UsageEvent]) -> BTreeMap<&'static str, Hour> {
     let mut floors: BTreeMap<&'static str, Hour> = BTreeMap::new();
     for event in events {

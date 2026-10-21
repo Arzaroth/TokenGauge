@@ -1031,6 +1031,13 @@ fn an_unreadable_transcript_root_keeps_the_history_it_had() {
     let unreadable = vec![root.join("projects")];
     let blind = sync::refresh(&config, &[readable], since, &unreadable);
     assert_eq!(output(&blind.store), 201, "the month must survive the gap");
+    // The report counts the record it kept, in place of the partial read.
+    assert!(blind.local_held);
+    assert_eq!(
+        blind.events.iter().map(|e| e.tokens.output).sum::<u64>(),
+        201,
+        "the report must not drop what the store kept"
+    );
     assert!(
         blind
             .status

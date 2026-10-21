@@ -21,6 +21,10 @@ pub struct SyncOutcome {
     /// The merged store, so per-device totals can be taken against the same
     /// price table the report was rated with.
     pub store: FleetStore,
+    /// The caller's read was not trusted - a transcript root could not be
+    /// read - so `events` carries this device's stored record in its place,
+    /// and the report is built from `events` alone.
+    pub local_held: bool,
 }
 
 /// Keep the durable store current, and - when sync is on - run a cycle and
@@ -58,12 +62,16 @@ pub fn refresh(
     let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, store_error) = store::load(&config.cache_file);
     status.error = store_error;
-    match unreadable_error(unreadable) {
-        None => store.upsert_local(&device, from, local_events, now.timestamp_millis()),
+    let local_held = match unreadable_error(unreadable) {
+        None => {
+            store.upsert_local(&device, from, local_events, now.timestamp_millis());
+            false
+        }
         Some(e) => {
             status.error.get_or_insert(e);
+            true
         }
-    }
+    };
 
     if config.sync.enabled
         && let Err(e) = cycle(config, &device, &mut store, now, &mut status)
@@ -81,9 +89,14 @@ pub fn refresh(
 
     if !config.sync.enabled {
         return SyncOutcome {
-            events: Vec::new(),
+            events: if local_held {
+                store.held_events(&device.id)
+            } else {
+                Vec::new()
+            },
             status,
             store,
+            local_held,
         };
     }
 
@@ -107,9 +120,14 @@ pub fn refresh(
     status.unreadable_providers = store.unreadable_providers(&device.id);
 
     SyncOutcome {
-        events: store.synthetic_events(&device.id, from, local_events),
+        events: store.synthetic_events(
+            &device.id,
+            from,
+            if local_held { &[] } else { local_events },
+        ),
         status,
         store,
+        local_held,
     }
 }
 

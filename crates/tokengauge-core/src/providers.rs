@@ -57,9 +57,6 @@ pub struct ProviderMeta {
     /// environment, and `--doctor` says so rather than naming a missing CLI.
     pub cli: Option<&'static str>,
     pub glyph: &'static str,
-    pub color_hex: &'static str,
-    /// Basename of the bundled brand SVG, when one ships.
-    pub icon_slug: Option<&'static str>,
     pub urls: ProviderUrls,
     /// Labels for the session, weekly and tertiary windows. Every provider
     /// slices its limits differently and calls the slices different things.
@@ -84,8 +81,6 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         label: "Codex",
         cli: Some("codex"),
         glyph: "\u{f0b2b}",
-        color_hex: "#74AA9C",
-        icon_slug: Some("codex"),
         urls: ProviderUrls {
             dashboard: Some("https://platform.openai.com/usage"),
             status: Some("https://status.openai.com"),
@@ -108,8 +103,6 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         label: "Claude",
         cli: Some("claude"),
         glyph: "\u{f0721}",
-        color_hex: "#DE7356",
-        icon_slug: Some("claude"),
         urls: ProviderUrls {
             dashboard: Some("https://claude.ai/settings/usage"),
             status: Some("https://status.anthropic.com"),
@@ -132,8 +125,6 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         label: "Kimi",
         cli: Some("kimi"),
         glyph: "\u{f06a9}",
-        color_hex: "#FE603C",
-        icon_slug: Some("kimi"),
         urls: ProviderUrls {
             dashboard: Some("https://www.kimi.com/code/console"),
             status: None,
@@ -156,8 +147,6 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         label: "Grok",
         cli: Some("grok"),
         glyph: "\u{f06a9}",
-        color_hex: "#000000",
-        icon_slug: Some("grok"),
         urls: ProviderUrls {
             dashboard: Some("https://grok.com/?_s=usage"),
             status: Some("https://status.x.ai"),
@@ -181,8 +170,6 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         // An API key in the environment, so there is no CLI to name.
         cli: None,
         glyph: "\u{f06a9}",
-        color_hex: "#E85A6A",
-        icon_slug: Some("glm"),
         urls: ProviderUrls {
             dashboard: Some("https://zcode.z.ai/en"),
             status: None,
@@ -207,8 +194,6 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         // agent routes through it, so no file on disk reliably holds one.
         cli: None,
         glyph: "\u{f0ac}",
-        color_hex: "#6467F2",
-        icon_slug: Some("openrouter"),
         urls: ProviderUrls {
             dashboard: Some("https://openrouter.ai/activity"),
             status: Some("https://status.openrouter.ai"),
@@ -236,8 +221,6 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         // other provider's login: a key, not a CLI login to name.
         cli: None,
         glyph: "\u{f121}",
-        color_hex: "#5B9DD9",
-        icon_slug: Some("opencode"),
         urls: ProviderUrls {
             dashboard: Some("https://opencode.ai/auth"),
             status: None,
@@ -266,8 +249,6 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         // it rather than to go looking for a key that does not exist.
         cli: Some("cursor-agent"),
         glyph: "\u{f1c9}",
-        color_hex: "#6C7086",
-        icon_slug: Some("cursor"),
         urls: ProviderUrls {
             dashboard: Some("https://cursor.com/dashboard"),
             status: Some("https://status.cursor.com"),
@@ -341,7 +322,9 @@ pub fn provider_icon(label: &str) -> ProviderIcon {
     match provider_meta(label) {
         Some(meta) => ProviderIcon {
             glyph: meta.glyph,
-            color_hex: meta.color_hex,
+            color_hex: selvedge::brands::brand(meta.id)
+                .and_then(|b| b.color)
+                .unwrap_or(crate::NEUTRAL_HEX),
         },
         None => ProviderIcon {
             glyph: "\u{f06a9}",
@@ -352,7 +335,7 @@ pub fn provider_icon(label: &str) -> ProviderIcon {
 
 /// Basename slug of the bundled brand SVG for a provider label, if one ships.
 pub fn provider_icon_slug(label: &str) -> Option<&'static str> {
-    provider_meta(label)?.icon_slug
+    selvedge::brands::brand(provider_meta(label)?.id).map(|b| b.id)
 }
 
 pub fn provider_urls(provider: &str) -> ProviderUrls {
@@ -664,44 +647,6 @@ fn glm_auth() -> AuthStatus {
     }
 }
 
-/// The logos the frontends load by path. The binary carries them because
-/// `--update` replaces binaries and desktop payloads, never this directory, so
-/// a provider added after install would otherwise never get one.
-const PROVIDER_ICONS: &[(&str, &str)] = &[
-    (
-        "claude",
-        include_str!("../../../assets/providers/ProviderIcon-claude.svg"),
-    ),
-    (
-        "codex",
-        include_str!("../../../assets/providers/ProviderIcon-codex.svg"),
-    ),
-    (
-        "cursor",
-        include_str!("../../../assets/providers/ProviderIcon-cursor.svg"),
-    ),
-    (
-        "glm",
-        include_str!("../../../assets/providers/ProviderIcon-glm.svg"),
-    ),
-    (
-        "grok",
-        include_str!("../../../assets/providers/ProviderIcon-grok.svg"),
-    ),
-    (
-        "kimi",
-        include_str!("../../../assets/providers/ProviderIcon-kimi.svg"),
-    ),
-    (
-        "opencode",
-        include_str!("../../../assets/providers/ProviderIcon-opencode.svg"),
-    ),
-    (
-        "openrouter",
-        include_str!("../../../assets/providers/ProviderIcon-openrouter.svg"),
-    ),
-];
-
 /// Monochrome marks are drawn in `currentColor`, which an `Image` loading the
 /// file by path resolves to black.
 const PROVIDER_ICON_FG: &str = "#cdd6f4";
@@ -715,8 +660,8 @@ fn default_provider_icon_dir() -> PathBuf {
 }
 
 /// Directory the provider SVG logos are read from. Overridable with
-/// `TOKENGAUGE_ICON_DIR` (e.g. point it at the repo `assets/providers` when
-/// running a dev build).
+/// `TOKENGAUGE_ICON_DIR`, a directory of `ProviderIcon-<id>.svg` the caller
+/// keeps.
 pub fn provider_icon_dir() -> PathBuf {
     icon_dir_override().unwrap_or_else(default_provider_icon_dir)
 }
@@ -728,9 +673,10 @@ fn icon_dir_override() -> Option<PathBuf> {
 }
 
 /// Path to a provider's brand SVG, or None when there is none to point at
-/// (the frontend then falls back to the glyph icon). A logo missing from the
-/// default directory is written there from the copy the binary carries; a
-/// `TOKENGAUGE_ICON_DIR` is the caller's and is only read.
+/// (the frontend then falls back to the glyph icon). The default directory is
+/// the binary's: a logo missing there, or differing from the one this build
+/// carries, is written; a `TOKENGAUGE_ICON_DIR` is the caller's and is only
+/// read.
 pub fn provider_icon_svg_path(label: &str) -> Option<PathBuf> {
     let slug = provider_icon_slug(label)?;
     match icon_dir_override() {
@@ -741,14 +687,15 @@ pub fn provider_icon_svg_path(label: &str) -> Option<PathBuf> {
 
 fn icon_svg_in(dir: &Path, slug: &str, fill: bool) -> Option<PathBuf> {
     let path = dir.join(format!("ProviderIcon-{slug}.svg"));
-    if path.exists() {
+    if !fill {
+        return path.exists().then_some(path);
+    }
+    let svg = selvedge::brands::brand(slug)?
+        .svg
+        .replace("currentColor", PROVIDER_ICON_FG);
+    if std::fs::read_to_string(&path).is_ok_and(|on_disk| on_disk == svg) {
         return Some(path);
     }
-    if !fill {
-        return None;
-    }
-    let (_, svg) = PROVIDER_ICONS.iter().find(|(s, _)| *s == slug)?;
-    let svg = svg.replace("currentColor", PROVIDER_ICON_FG);
     crate::statefiles::write_atomic(&path, svg.as_bytes())
         .ok()
         .map(|()| path)
@@ -778,6 +725,8 @@ mod tests {
         assert_eq!(provider_icon("Claude").glyph, "\u{f0721}");
         assert_eq!(provider_icon("claude").color_hex, "#DE7356");
         assert_eq!(provider_icon("Codex").glyph, "\u{f0b2b}");
+        assert_eq!(provider_icon("kimi").color_hex, "#1783FF");
+        assert_eq!(provider_icon("grok").color_hex, crate::NEUTRAL_HEX);
         assert_eq!(provider_icon("Unknown").glyph, "\u{f06a9}");
     }
 
@@ -867,12 +816,12 @@ mod tests {
                 meta.id
             );
             assert!(
-                meta.icon_slug.is_some(),
-                "{}: no brand mark, so every frontend falls back to the glyph",
+                provider_icon_slug(meta.id).is_some(),
+                "{}: no brand mark in selvedge, so every frontend falls back to the glyph",
                 meta.id
             );
             assert!(
-                !meta.glyph.is_empty() && meta.color_hex.starts_with('#'),
+                !meta.glyph.is_empty() && provider_icon(meta.id).color_hex.starts_with('#'),
                 "{}: incomplete icon",
                 meta.id
             );
@@ -913,20 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn every_provider_with_an_icon_slug_carries_its_logo() {
-        for meta in PROVIDER_META {
-            if let Some(slug) = meta.icon_slug {
-                assert!(
-                    PROVIDER_ICONS.iter().any(|(s, _)| *s == slug),
-                    "{} has icon slug `{slug}` and no logo in the binary",
-                    meta.id
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn a_missing_logo_is_written_where_the_frontends_look() {
+    fn a_missing_or_stale_logo_is_written_where_the_frontends_look() {
         let dir = std::env::temp_dir().join(format!("tg-icons-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
 
@@ -937,7 +873,17 @@ mod tests {
 
         std::fs::write(&path, "<svg/>").unwrap();
         assert_eq!(icon_svg_in(&dir, "grok", true), Some(path.clone()));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "<svg/>");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), svg);
+
+        std::fs::write(dir.join("ProviderIcon-kimi.svg"), "<svg/>").unwrap();
+        assert_eq!(
+            icon_svg_in(&dir, "kimi", false),
+            Some(dir.join("ProviderIcon-kimi.svg"))
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("ProviderIcon-kimi.svg")).unwrap(),
+            "<svg/>"
+        );
 
         assert_eq!(icon_svg_in(&dir, "codex", false), None);
         assert!(!dir.join("ProviderIcon-codex.svg").exists());

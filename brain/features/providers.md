@@ -64,8 +64,13 @@ Notes:
   through `provider::lenient_list` / `lenient_opt_list`: each entry on its own,
   so a sibling of another shape costs only itself. A field that is not a list
   is still refused as drift.
-- Provider protocols, `pace.rs` and the brand icons in `assets/providers/` were
-  ported from CodexBar; the `upstream-check` skill watches it.
+- Provider protocols and `pace.rs` were ported from CodexBar; the
+  `upstream-check` skill watches it.
+- Each provider's mark and colour come from `selvedge::brands`, shared with
+  remuda. `provider_icon` takes its colour from there (a black-and-white brand,
+  Grok, Z.ai or opencode, gets `NEUTRAL_HEX`), and `provider_icon_svg_path`
+  writes the mark to `~/.local/share/tokengauge/icons`, rewriting one that
+  differs from this build's, for the frontends to load by path.
 - Middle-click opens a provider's dashboard and back-button its status page
   (`ProviderMeta.urls`).
 - Plan weights per provider are in [several-plans.md](several-plans.md).
@@ -75,4 +80,4 @@ Notes:
 - `crates/tokengauge-core/src/providers.rs` (`PROVIDER_META`, `natively_read`, `provider_auth_status`)
 - `crates/tokengauge-core/src/{claude,codex,kimi,grok,glm,openrouter,opencode,cursor}.rs`
 - `crates/tokengauge-core/src/provider.rs`, `crates/tokengauge-core/src/config.rs` (`ProvidersConfig`)
-- `assets/providers/`
+- selvedge's `src/brands.rs` and `assets/providers/`

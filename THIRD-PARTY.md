@@ -20,11 +20,36 @@ What is here because of it:
 - **`crates/tokengauge-core/src/payload.rs`**'s `Credits` / `CreditLimit`
   follow `CreditsSnapshot`, including the distinction between a key's balance
   and a subscription's cap.
-- **`assets/providers/ProviderIcon-*.svg`** are copied verbatim. Their own MIT
-  notice travels with them in `assets/providers/NOTICE`.
+- **The provider marks** came from its `ProviderIcon-*.svg`. They now live in
+  [selvedge](https://github.com/Arzaroth/selvedge) (`selvedge::brands`), which
+  carries their notice and is shared with remuda.
 
-The full MIT notice is reproduced in `assets/providers/NOTICE` and applies to
-the ported work above as well.
+CodexBar's MIT notice, which applies to the ported work above:
+
+```text
+    MIT License
+
+    Copyright (c) 2026 Peter Steinberger
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be included
+    in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
 
 ## oorestisime/TokenGauge - no licence stated
 

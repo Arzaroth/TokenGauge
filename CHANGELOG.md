@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-10-22
+
 ### Changed
 
 - Provider marks and colours come from selvedge 0.10.0, shared with remuda, and

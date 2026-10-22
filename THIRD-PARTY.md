@@ -20,9 +20,11 @@ What is here because of it:
 - **`crates/tokengauge-core/src/payload.rs`**'s `Credits` / `CreditLimit`
   follow `CreditsSnapshot`, including the distinction between a key's balance
   and a subscription's cap.
-- **The provider marks** came from its `ProviderIcon-*.svg`. They now live in
-  [selvedge](https://github.com/Arzaroth/selvedge) (`selvedge::brands`), which
-  carries their notice and is shared with remuda.
+- **The provider marks** came from its `ProviderIcon-*.svg`, but for Kimi's,
+  from lobe-icons, and opencode's, redrawn from its favicon. They now live in
+  [selvedge](https://github.com/Arzaroth/selvedge) (`selvedge::brands`), whose
+  `assets/providers/NOTICE` carries each one's notice; it is shared with
+  remuda.
 
 CodexBar's MIT notice, which applies to the ported work above:
 

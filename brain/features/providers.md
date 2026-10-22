@@ -68,9 +68,12 @@ Notes:
   `upstream-check` skill watches it.
 - Each provider's mark and colour come from `selvedge::brands`, shared with
   remuda. `provider_icon` takes its colour from there (a black-and-white brand,
-  Grok, Z.ai or opencode, gets `NEUTRAL_HEX`), and `provider_icon_svg_path`
-  writes the mark to `~/.local/share/tokengauge/icons`, rewriting one that
-  differs from this build's, for the frontends to load by path.
+  Grok, Z.ai or opencode, gets `NEUTRAL_HEX`). `provider_icon_svg_path`
+  writes the mark, its `currentColor` in the neutral foreground, to
+  `$XDG_DATA_HOME/tokengauge/icons` (`~/.local/share/tokengauge/icons` when
+  that is unset or relative), rewriting one that differs from this build's,
+  for the frontends to load by path. A non-empty `TOKENGAUGE_ICON_DIR` is the
+  caller's: a mark there is only read, never written or refreshed.
 - Middle-click opens a provider's dashboard and back-button its status page
   (`ProviderMeta.urls`).
 - Plan weights per provider are in [several-plans.md](several-plans.md).

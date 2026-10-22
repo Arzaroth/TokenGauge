@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Provider marks and colours come from selvedge 0.9.0, shared with remuda, and
+- Provider marks and colours come from selvedge 0.10.0, shared with remuda, and
   follow each provider's own logo: Kimi is its current K with the blue dot
   (`#1783FF`), opencode's mark has the block inside its frame, and Z.ai,
   opencode and Grok, whose brands are black and white, are drawn in the

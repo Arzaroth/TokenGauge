@@ -26,6 +26,7 @@ pub mod codex_cli;
 pub mod grok_cli;
 pub mod kimi_cli;
 pub mod pricing;
+pub mod remuda;
 
 /// Where cost figures come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -408,6 +409,10 @@ pub fn read_checked(roots: &Roots, since: NaiveDate) -> TranscriptRead {
         &mut grok_seen,
         &mut gaps,
     ));
+    if let Some(store) = &roots.remuda {
+        remuda::merge_requests(store, since, &mut events, &claude_seen, &mut gaps);
+        remuda::attribute(store, &mut events, &mut gaps);
+    }
     mark_starts(&mut events, &firsts);
     gaps.sort();
     gaps.dedup();

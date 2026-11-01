@@ -18,7 +18,8 @@ are read, not shelled out for"). User-facing figures:
 | `grok_cli.rs` | `~/.grok/sessions/**/updates.jsonl` |
 
 Every reader emits the same unit, a `UsageEvent` (`provider`, `model`, `date`,
-`at`, `tokens`, `key`, `one_request`), so **a new CLI is one more reader**: add a field to
+`at`, `tokens`, `key`, `one_request`, `session`, `starts_session`, `login`,
+`source`), so **a new CLI is one more reader**: add a field to
 `cost::Roots` (filled by the reader's `roots()` in `Roots::discover`, listed in
 `Roots::all`), call the reader from `read_events_from`, flip its
 `ProviderMeta.natively_read` (below), and `build_report` does the rest. A fetch reads from `cost::window_start` (the start of the month,

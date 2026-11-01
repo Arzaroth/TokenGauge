@@ -2081,6 +2081,80 @@ mod tests {
         );
     }
 
+    fn attributed(at: Hour, out: u64, key: u64, login: Option<&str>, starts: bool) -> UsageEvent {
+        UsageEvent {
+            login: login.map(str::to_owned),
+            starts_session: starts,
+            ..event("claude", "m", at, out, Some(key))
+        }
+    }
+
+    #[test]
+    fn each_login_keeps_its_own_buckets_through_the_roll_up() {
+        let now = hour("2026-08-25T12").start();
+        let old = hour("2026-01-14T03");
+        let mut store = FleetStore::default();
+        let mut proxy = attributed(hour("2026-01-14T05"), 7, 4, Some("aa"), false);
+        proxy.source = Source::Proxy;
+        store.upsert_local(
+            &device("a"),
+            old,
+            &[
+                attributed(old, 100, 1, Some("aa"), true),
+                attributed(hour("2026-01-14T04"), 200, 2, Some("bb"), true),
+                attributed(hour("2026-01-14T09"), 400, 3, Some("aa"), false),
+                proxy,
+            ],
+            0,
+        );
+        assert_eq!(store.devices["a"].buckets.len(), 4);
+
+        store.compact(now, WIRE_RETENTION_DAYS);
+
+        let days: Vec<(Option<&str>, Source, u64, u64)> = store.devices["a"]
+            .buckets
+            .iter()
+            .map(|b| (b.login.as_deref(), b.source, b.tokens.total(), b.sessions))
+            .collect();
+        assert_eq!(
+            days,
+            [
+                (Some("aa"), Source::Cli, 500, 1),
+                (Some("aa"), Source::Proxy, 7, 0),
+                (Some("bb"), Source::Cli, 200, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bucket_with_no_login_reads_writes_and_hashes_as_before() {
+        let plain = r#"{"h":"2026-08-25T14","p":"claude","m":"opus","o":60}"#;
+        let bucket: Bucket = serde_json::from_str(plain).unwrap();
+        assert_eq!((bucket.login.as_deref(), bucket.sessions), (None, 0));
+        assert_eq!(bucket.source, Source::Cli);
+        assert_eq!(serde_json::to_string(&bucket).unwrap(), plain);
+
+        let mut store = FleetStore::new();
+        store.upsert_local(
+            &device("a"),
+            hour("2026-08-01T00"),
+            &[event("claude", "opus", hour("2026-08-25T14"), 60, Some(1))],
+            1,
+        );
+        let now = hour("2026-08-25T15").start();
+        let providers = vec!["claude".to_string()];
+        let first = store
+            .contribution("a", now, &providers, WIRE_RETENTION_DAYS)
+            .expect("slice");
+        let mut attributed = first.clone();
+        attributed.buckets[0].login = Some("aa".into());
+        assert_ne!(content_hash(&first), content_hash(&attributed));
+        assert_eq!(
+            serde_json::to_string(&attributed.buckets[0]).unwrap(),
+            r#"{"h":"2026-08-25T14","p":"claude","m":"opus","l":"aa","o":60}"#
+        );
+    }
+
     #[test]
     fn compacting_twice_changes_nothing_the_second_time() {
         let now = hour("2026-08-25T12").start();

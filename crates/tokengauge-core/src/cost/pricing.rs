@@ -15,6 +15,8 @@ use anyhow::{Context, Result};
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 
+use selvedge::usage::export::TypeCosts;
+
 use super::TokenCounts;
 use crate::model_to_provider;
 
@@ -182,6 +184,22 @@ impl ModelPrice {
             + self.cache_write_5m * t.cache_write_5m as f64
             + write_1h * t.cache_write_1h as f64
             + self.cache_read * t.cache_read as f64
+    }
+
+    /// [`ModelPrice::cost`], split by the rate each token was billed at.
+    pub fn cost_by_type(&self, t: &TokenCounts) -> TypeCosts {
+        let write_1h = if self.cache_write_1h > 0.0 {
+            self.cache_write_1h
+        } else {
+            self.cache_write_5m
+        };
+        TypeCosts {
+            input: self.input * t.input as f64,
+            output: self.output * t.output as f64,
+            cache_write: self.cache_write_5m * t.cache_write_5m as f64
+                + write_1h * t.cache_write_1h as f64,
+            cache_read: self.cache_read * t.cache_read as f64,
+        }
     }
 
     /// One request, at the long-context tier when its prompt ran past it.

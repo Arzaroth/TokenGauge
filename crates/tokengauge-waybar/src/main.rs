@@ -151,8 +151,13 @@ pub struct Args {
     /// `csv` when given no value, or `json`.
     #[arg(long, value_enum, value_name = "FORMAT", num_args = 0..=1, default_missing_value = "csv")]
     export: Option<ExportFormat>,
-    /// Oldest day `--export` includes, as `YYYY-MM-DD`. Defaults to everything
-    /// the store still holds.
+    /// Write the history store as remuda's usage page reads it: one JSON
+    /// document, a row per day, provider, model, login and source, each rate
+    /// priced.
+    #[arg(long)]
+    usage_json: bool,
+    /// Oldest day `--export` or `--usage-json` includes, as `YYYY-MM-DD`.
+    /// Defaults to everything the store still holds.
     #[arg(long, value_name = "DATE")]
     since: Option<String>,
     /// Re-read every transcript still on disk into the history store. This runs
@@ -208,6 +213,7 @@ enum Action {
     CheckUpdate,
     InstallFrontend(String),
     Export(ExportFormat),
+    UsageJson,
     Backfill,
     Update,
     Refresh,
@@ -275,6 +281,9 @@ impl Action {
         if let Some(format) = args.export {
             add!("--export", Action::Export(format));
         }
+        if args.usage_json {
+            add!("--usage-json", Action::UsageJson);
+        }
         if args.backfill {
             add!("--backfill", Action::Backfill);
         }
@@ -298,11 +307,11 @@ impl Action {
                 flags.join(", ")
             );
         }
-        // `--since` modifies `--export` and nothing else. Ignoring it in silence
-        // is how someone runs `--since 2026-01-01 --json`, gets the whole
-        // snapshot, and believes it was narrowed.
-        if args.since.is_some() && args.export.is_none() {
-            anyhow::bail!("--since only applies to --export");
+        // `--since` narrows the two exports and nothing else. Ignoring it in
+        // silence is how someone runs `--since 2026-01-01 --json`, gets the
+        // whole snapshot, and believes it was narrowed.
+        if args.since.is_some() && args.export.is_none() && !args.usage_json {
+            anyhow::bail!("--since only applies to --export and --usage-json");
         }
         Ok(asked.pop().map(|(_, action)| action).unwrap_or(Action::Bar))
     }
@@ -356,6 +365,7 @@ fn main() -> Result<()> {
         Action::CheckUpdate => handle_check_update(&config),
         Action::InstallFrontend(spec) => handle_install_frontend(&spec),
         Action::Export(format) => export::run(&config, format, args.since.as_deref()),
+        Action::UsageJson => export::usage(&config, args.since.as_deref()),
         Action::Backfill => handle_backfill(&config),
         Action::Update => handle_update(&config),
         Action::Refresh => {

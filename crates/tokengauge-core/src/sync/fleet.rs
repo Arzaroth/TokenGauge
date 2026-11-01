@@ -18,6 +18,7 @@ use super::contribution::{
 use super::hour::Hour;
 use crate::cost::pricing::{PriceArchive, PriceTable, month_key};
 use crate::cost::{Source, TokenCounts, UsageEvent};
+use selvedge::usage::export::{self as usage_export, Row as UsageRow, TypeCosts, UsageExport};
 
 /// The calendar step a history series advances by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -978,6 +979,81 @@ impl FleetStore {
     /// [`HOURLY_RETENTION_DAYS`] half the store has no hour left to report and
     /// a column that is exact for a month and rounded for a year is worse than
     /// one that is honest throughout.
+    /// What `--usage-json` prints: the record per local day, provider, model,
+    /// login and source, across every device, each rate priced at its month's
+    /// prices. A model with no price for its month has no cost at all, a gap
+    /// rather than a zero.
+    pub fn usage_export(
+        &self,
+        since: Option<NaiveDate>,
+        offset: FixedOffset,
+        prices: &PriceTable,
+        archive: &PriceArchive,
+        now_ms: i64,
+    ) -> UsageExport {
+        type Key = (NaiveDate, String, String, Option<String>, Source);
+        let dropped = self.dropped_days();
+        let mut tables: HashMap<String, PriceTable> = HashMap::new();
+        let mut folded: BTreeMap<Key, (TokenCounts, u64, Option<TypeCosts>)> = BTreeMap::new();
+        let mut covers_from: Option<NaiveDate> = None;
+        for (id, slice) in &self.devices {
+            for bucket in &slice.buckets {
+                if is_dropped(&dropped, bucket, id) {
+                    continue;
+                }
+                let date = bucket_date(bucket, offset);
+                covers_from = Some(covers_from.map_or(date, |from| from.min(date)));
+                if since.is_some_and(|from| date < from) {
+                    continue;
+                }
+                let month = month_key(date);
+                let table = tables
+                    .entry(month.clone())
+                    .or_insert_with(|| prices.as_of(archive, &month));
+                let entry = folded
+                    .entry((
+                        date,
+                        bucket.provider.clone(),
+                        bucket.model.clone(),
+                        bucket.login.clone(),
+                        bucket.source,
+                    ))
+                    .or_insert((TokenCounts::default(), 0, Some(TypeCosts::default())));
+                entry.0.add(&bucket.tokens);
+                entry.1 += bucket.sessions;
+                match table.get(&bucket.model) {
+                    Some(price) => {
+                        if let Some(usd) = entry.2.as_mut() {
+                            usd.add(&price.cost_by_type(&bucket.tokens));
+                        }
+                    }
+                    None => entry.2 = None,
+                }
+            }
+        }
+        UsageExport {
+            schema_version: usage_export::SCHEMA_VERSION,
+            generated_at: now_ms,
+            currency: "USD".into(),
+            covers_from: covers_from.map(|date| date.to_string()),
+            rows: folded
+                .into_iter()
+                .map(
+                    |((date, provider, model, login, source), (tokens, sessions, usd))| UsageRow {
+                        date: date.to_string(),
+                        provider,
+                        model,
+                        login,
+                        source,
+                        sessions,
+                        tokens,
+                        usd,
+                    },
+                )
+                .collect(),
+        }
+    }
+
     pub fn export_rows(
         &self,
         since: Option<NaiveDate>,

@@ -623,6 +623,9 @@ impl FleetStore {
                         provider,
                         model,
                         granularity: Granularity::Day,
+                        login: None,
+                        sessions: 0,
+                        source: crate::cost::Source::Cli,
                         tokens,
                     }),
             );
@@ -813,6 +816,9 @@ impl FleetStore {
                     provider: event.provider.to_string(),
                     model: event.model.clone(),
                     granularity: Granularity::Hour,
+                    login: None,
+                    sessions: 0,
+                    source: crate::cost::Source::Cli,
                     tokens: event.tokens,
                 }),
             }
@@ -1286,6 +1292,9 @@ mod tests {
             provider: "claude".into(),
             model: "m".into(),
             granularity: Granularity::Day,
+            login: None,
+            sessions: 0,
+            source: crate::cost::Source::Cli,
             tokens: TokenCounts {
                 output: 100,
                 ..Default::default()
@@ -1332,6 +1341,9 @@ mod tests {
             provider: "claude".into(),
             model: "m".into(),
             granularity: Granularity::Day,
+            login: None,
+            sessions: 0,
+            source: crate::cost::Source::Cli,
             tokens: TokenCounts::default(),
         };
         let east = FixedOffset::east_opt(14 * 3600).unwrap();
@@ -1504,6 +1516,9 @@ mod tests {
                 provider: "claude".into(),
                 model: "opus".into(),
                 granularity: Granularity::Day,
+                login: None,
+                sessions: 0,
+                source: crate::cost::Source::Cli,
                 tokens: TokenCounts {
                     output: 1000,
                     ..Default::default()
@@ -1547,6 +1562,9 @@ mod tests {
                 provider: "claude".into(),
                 model: "opus".into(),
                 granularity: Granularity::Day,
+                login: None,
+                sessions: 0,
+                source: crate::cost::Source::Cli,
                 tokens: TokenCounts {
                     output: out,
                     ..Default::default()

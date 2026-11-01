@@ -392,6 +392,9 @@ mod tests {
             provider: "claude".into(),
             model: "claude-sonnet-4-5".into(),
             granularity: Granularity::Hour,
+            login: None,
+            sessions: 0,
+            source: crate::cost::Source::Cli,
             tokens: crate::cost::TokenCounts {
                 input: tokens,
                 ..Default::default()
@@ -571,6 +574,9 @@ mod tests {
             provider: "claude".into(),
             model: "a-model-nobody-prices".into(),
             granularity: Granularity::Hour,
+            login: None,
+            sessions: 0,
+            source: crate::cost::Source::Cli,
             tokens: crate::cost::TokenCounts {
                 input: 1_000_000,
                 ..Default::default()

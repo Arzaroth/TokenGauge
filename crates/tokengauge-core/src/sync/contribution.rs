@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::hour::Hour;
 use crate::DeviceIdentity;
-use crate::cost::{TokenCounts, UsageEvent, digest_u64};
+use crate::cost::{Source, TokenCounts, UsageEvent, digest_u64};
 use crate::{PROVIDERS, natively_read};
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -71,8 +71,30 @@ pub struct Bucket {
     pub model: String,
     #[serde(rename = "g", default, skip_serializing_if = "Granularity::is_hour")]
     pub granularity: Granularity,
+    /// The login that spent it, as an account digest; absent when nothing
+    /// attributes it, and on everything a peer older than attribution wrote.
+    #[serde(rename = "l", default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<String>,
+    /// Sessions whose first request falls in this bucket.
+    #[serde(rename = "s", default, skip_serializing_if = "is_zero")]
+    pub sessions: u64,
+    /// Spend only remuda's proxy saw; transcripts' when absent.
+    #[serde(rename = "src", default = "cli", skip_serializing_if = "is_cli")]
+    pub source: Source,
     #[serde(flatten)]
     pub tokens: TokenCounts,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+fn cli() -> Source {
+    Source::Cli
+}
+
+fn is_cli(source: &Source) -> bool {
+    *source == Source::Cli
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +199,9 @@ pub fn bucketize(events: &[UsageEvent]) -> Vec<Bucket> {
             provider: key.provider,
             model: key.model,
             granularity: Granularity::Hour,
+            login: None,
+            sessions: 0,
+            source: crate::cost::Source::Cli,
             tokens,
         })
         .collect()

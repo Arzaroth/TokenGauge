@@ -291,6 +291,31 @@ mod tests {
     }
 
     #[test]
+    fn a_streamed_or_synthetic_first_record_still_starts_its_session() {
+        let f = Fixture::new("streamed");
+        let mut partial: serde_json::Value =
+            serde_json::from_str(&line("2026-10-20T10:00:00Z", "s-stream", "m1", "r1")).unwrap();
+        partial["message"]["usage"]["output_tokens"] = serde_json::json!(1);
+        let mut synthetic: serde_json::Value =
+            serde_json::from_str(&line("2026-10-20T08:00:00Z", "s-synth", "m9", "r9")).unwrap();
+        synthetic["message"]["model"] = serde_json::json!("<synthetic>");
+        f.transcript(&[
+            partial.to_string(),
+            line("2026-10-20T10:00:05Z", "s-stream", "m1", "r1"),
+            synthetic.to_string(),
+            line("2026-10-20T09:00:00Z", "s-synth", "m2", "r2"),
+        ]);
+
+        let events = f.read();
+        let starts: Vec<(&str, bool)> = events
+            .iter()
+            .map(|e| (e.session.as_deref().unwrap(), e.starts_session))
+            .collect();
+
+        assert_eq!(starts, [("s-stream", true), ("s-synth", true)]);
+    }
+
+    #[test]
     fn a_session_counts_once_and_only_where_it_began() {
         let f = Fixture::new("sessions");
         f.transcript(&[

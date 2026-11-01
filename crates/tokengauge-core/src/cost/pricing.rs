@@ -669,6 +669,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_cost_by_rate_adds_up_to_the_cost() {
+        let price = ModelPrice {
+            input: 1e-6,
+            output: 2e-6,
+            cache_write_5m: 3e-6,
+            cache_write_1h: 0.0,
+            cache_read: 4e-7,
+            long_context: None,
+        };
+        let tokens = TokenCounts {
+            input: 10,
+            output: 20,
+            cache_write_5m: 30,
+            cache_write_1h: 40,
+            cache_read: 50,
+        };
+        let split = price.cost_by_type(&tokens);
+        assert!((split.total() - price.cost(&tokens)).abs() < 1e-12);
+        assert!(
+            (split.cache_write - 70.0 * 3e-6).abs() < 1e-12,
+            "a missing 1h price bills as the 5m one"
+        );
+        assert!((split.cache_read - 50.0 * 4e-7).abs() < 1e-12);
+    }
+
+    #[test]
     fn an_override_moves_only_the_fields_it_names() {
         // The archive used to carry whole entries, which zeroed every field the
         // historical table happened not to list - and LiteLLM fills gaps in

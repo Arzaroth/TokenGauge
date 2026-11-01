@@ -806,6 +806,15 @@ mod tests {
     }
 
     #[test]
+    fn usage_json_takes_since_and_nothing_else_beside_it() {
+        assert!(matches!(
+            action_for(&["--usage-json", "--since", "2026-01-01"]),
+            Ok(Action::UsageJson)
+        ));
+        assert!(action_for(&["--usage-json", "--export"]).is_err());
+    }
+
+    #[test]
     fn since_without_export_is_refused_rather_than_ignored() {
         let error = match action_for(&["--since", "2026-01-01", "--json"]) {
             Err(e) => e.to_string(),

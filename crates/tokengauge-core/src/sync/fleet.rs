@@ -2323,6 +2323,74 @@ mod tests {
     }
 
     #[test]
+    fn the_usage_export_splits_by_login_and_source_across_devices() {
+        let at = hour("2026-08-24T09");
+        let mut store = FleetStore::default();
+        let mut proxied = event("claude", "claude-sonnet-4-5", at, 50, Some(3));
+        proxied.login = Some("aa".into());
+        proxied.source = Source::Proxy;
+        let mut started = event("claude", "claude-sonnet-4-5", at, 100, Some(1));
+        started.login = Some("aa".into());
+        started.starts_session = true;
+        store.upsert_local(&device("a"), at, &[started, proxied], 0);
+        let mut other = event("claude", "claude-sonnet-4-5", at, 100, Some(2));
+        other.login = Some("aa".into());
+        store.upsert_local(&device("b"), at, &[other], 0);
+        store.upsert_local(
+            &device("c"),
+            at,
+            &[event("claude", "not-a-model-anyone-prices", at, 9, Some(4))],
+            0,
+        );
+
+        let export = store.usage_export(
+            None,
+            FixedOffset::east_opt(0).expect("offset"),
+            &PriceTable::vendored(),
+            &PriceArchive::vendored(),
+            7,
+        );
+
+        assert_eq!(export.schema_version, usage_export::SCHEMA_VERSION);
+        assert_eq!(export.covers_from.as_deref(), Some("2026-08-24"));
+        type Seen<'a> = (&'a str, Option<&'a str>, Source, u64, u64, bool);
+        let rows: Vec<Seen> = export
+            .rows
+            .iter()
+            .map(|r| {
+                (
+                    r.model.as_str(),
+                    r.login.as_deref(),
+                    r.source,
+                    r.tokens.output,
+                    r.sessions,
+                    r.usd.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("claude-sonnet-4-5", Some("aa"), Source::Cli, 200, 1, true),
+                ("claude-sonnet-4-5", Some("aa"), Source::Proxy, 50, 0, true),
+                ("not-a-model-anyone-prices", None, Source::Cli, 9, 0, false),
+            ]
+        );
+        let usd = export.rows[0].usd.expect("priced");
+        assert!(usd.output > 0.0 && usd.input == 0.0);
+
+        let later = store.usage_export(
+            Some("2026-08-25".parse().expect("date")),
+            FixedOffset::east_opt(0).expect("offset"),
+            &PriceTable::vendored(),
+            &PriceArchive::vendored(),
+            7,
+        );
+        assert!(later.rows.is_empty());
+        assert_eq!(later.covers_from.as_deref(), Some("2026-08-24"));
+    }
+
+    #[test]
     fn an_unpriced_model_exports_no_money_rather_than_none_spent() {
         let at = hour("2026-08-24T09");
         let mut store = FleetStore::default();

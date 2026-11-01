@@ -44,6 +44,7 @@ pub enum CostSource {
 /// Tokens billed at each rate, `input` fresh. The field names are the sync
 /// wire format, and remuda's records count in it too, so it lives in selvedge.
 pub use selvedge::usage::TokenCounts;
+pub use selvedge::usage::export::Source;
 
 /// One billed call.
 #[derive(Debug, Clone)]
@@ -65,6 +66,15 @@ pub struct UsageEvent {
     /// of several requests, or a peer's hourly bucket, cannot, and is rated at
     /// the base price.
     pub one_request: bool,
+    /// The CLI session the request was made in, when the transcript names one.
+    pub session: Option<String>,
+    /// The session's first billed request, which is where a session is
+    /// counted, so a window read again never counts it twice.
+    pub starts_session: bool,
+    /// The login that spent it, as an account digest, once attributed.
+    pub login: Option<String>,
+    /// Read from a transcript, or seen only by remuda's proxy.
+    pub source: Source,
 }
 
 /// A rated event, kept only long enough to measure the current session window.
@@ -191,8 +201,18 @@ fn window_start(today: NaiveDate) -> NaiveDate {
 }
 
 /// Read every transcript in the window and rate it.
-pub fn fetch_native(cache_file: &Path, timeout: Duration, today: NaiveDate) -> NativeCostReport {
-    rate(&read_window(today).events, cache_file, timeout, today)
+pub fn fetch_native(
+    cache_file: &Path,
+    timeout: Duration,
+    today: NaiveDate,
+    remuda: Option<PathBuf>,
+) -> NativeCostReport {
+    rate(
+        &read_window(today, remuda).events,
+        cache_file,
+        timeout,
+        today,
+    )
 }
 
 /// What one read of the transcripts found.
@@ -210,8 +230,8 @@ pub struct TranscriptRead {
 }
 
 /// Read every transcript in the window.
-pub fn read_window(today: NaiveDate) -> TranscriptRead {
-    read_checked(&Roots::discover(), window_start(today))
+pub fn read_window(today: NaiveDate, remuda: Option<PathBuf>) -> TranscriptRead {
+    read_checked(&Roots::with_remuda(remuda), window_start(today))
 }
 
 /// Every transcript day the store could still hold, for the one-time backfill.
@@ -223,11 +243,11 @@ pub fn read_window(today: NaiveDate) -> TranscriptRead {
 /// holding a fortnight no matter how much history the CLIs actually kept.
 ///
 /// Run once, behind [`crate::statefiles::backfill_due`]. Never on a poll.
-pub fn read_history(today: NaiveDate) -> TranscriptRead {
+pub fn read_history(today: NaiveDate, remuda: Option<PathBuf>) -> TranscriptRead {
     let since = today
         .checked_sub_days(Days::new(crate::sync::STORE_RETENTION_DAYS as u64))
         .unwrap_or(today);
-    read_checked(&Roots::discover(), since)
+    read_checked(&Roots::with_remuda(remuda), since)
 }
 
 /// Rate a set of events, wherever they were read.
@@ -283,6 +303,9 @@ pub struct Roots {
     pub codex: Vec<PathBuf>,
     pub kimi: Vec<PathBuf>,
     pub grok: Vec<PathBuf>,
+    /// remuda's store, whose ledger and proxy log say which login spent what.
+    /// Not a transcript tree, so not in [`Roots::all`].
+    pub remuda: Option<PathBuf>,
 }
 
 impl Roots {
@@ -293,6 +316,15 @@ impl Roots {
             codex: codex_cli::roots(),
             kimi: kimi_cli::roots(),
             grok: grok_cli::roots(),
+            remuda: None,
+        }
+    }
+
+    /// [`Roots::discover`], with remuda's store when there is one.
+    pub fn with_remuda(remuda: Option<PathBuf>) -> Self {
+        Self {
+            remuda,
+            ..Self::discover()
         }
     }
 
@@ -657,6 +689,10 @@ mod tests {
             },
             key: None,
             one_request,
+            session: None,
+            starts_session: false,
+            login: None,
+            source: crate::cost::Source::Cli,
         };
         let usd = |events: &[UsageEvent]| {
             build_report(events, &prices, today).costs["claude"].monthly_usd
@@ -736,6 +772,10 @@ mod tests {
             },
             key: None,
             one_request: false,
+            session: None,
+            starts_session: false,
+            login: None,
+            source: crate::cost::Source::Cli,
         }
     }
 

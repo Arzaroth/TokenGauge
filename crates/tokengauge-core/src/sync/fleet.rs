@@ -1102,6 +1102,10 @@ fn bucket_event(bucket: &Bucket, offset: FixedOffset) -> Option<UsageEvent> {
         tokens: bucket.tokens,
         key: None,
         one_request: false,
+        session: None,
+        starts_session: false,
+        login: None,
+        source: crate::cost::Source::Cli,
     })
 }
 
@@ -1354,6 +1358,10 @@ mod tests {
             },
             key,
             one_request: false,
+            session: None,
+            starts_session: false,
+            login: None,
+            source: crate::cost::Source::Cli,
         }
     }
 

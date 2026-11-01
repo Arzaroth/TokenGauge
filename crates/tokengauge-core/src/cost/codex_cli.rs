@@ -368,6 +368,10 @@ pub(super) fn read_file(
                 tokens,
                 key: Some(key),
                 one_request: false,
+                session: None,
+                starts_session: false,
+                login: None,
+                source: crate::cost::Source::Cli,
             });
             continue;
         };
@@ -467,6 +471,10 @@ pub(super) fn read_file(
             tokens,
             key: Some(key),
             one_request,
+            session: None,
+            starts_session: false,
+            login: None,
+            source: crate::cost::Source::Cli,
         });
     }
 

@@ -53,6 +53,10 @@ fn event(hours_ago: i64, out: u64, key: u64) -> UsageEvent {
         },
         key: Some(key),
         one_request: false,
+        session: None,
+        starts_session: false,
+        login: None,
+        source: tokengauge_core::cost::Source::Cli,
     }
 }
 

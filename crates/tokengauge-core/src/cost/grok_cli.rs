@@ -276,6 +276,10 @@ fn read_file(
                 tokens,
                 key: Some(key),
                 one_request: false,
+                session: None,
+                starts_session: false,
+                login: None,
+                source: crate::cost::Source::Cli,
             });
         }
     }

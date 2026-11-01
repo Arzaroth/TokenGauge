@@ -202,6 +202,10 @@ fn event_from(record: &Record, since: NaiveDate) -> Option<(Option<u64>, UsageEv
             at,
             key,
             one_request: true,
+            session: None,
+            starts_session: false,
+            login: None,
+            source: crate::cost::Source::Cli,
             tokens: TokenCounts {
                 input: usage.input_tokens,
                 output: usage.output_tokens,

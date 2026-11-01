@@ -291,6 +291,32 @@ pub fn rate_with_prices(
     }
 }
 
+/// The earliest billed request of each session a read came across, whether or
+/// not it fell inside the read's window.
+pub type Firsts = HashMap<String, DateTime<Utc>>;
+
+pub(crate) fn first_seen(firsts: &mut Firsts, session: &str, at: DateTime<Utc>) {
+    firsts
+        .entry(session.to_owned())
+        .and_modify(|first| *first = (*first).min(at))
+        .or_insert(at);
+}
+
+/// Each session counts once, on its earliest request. A session that began
+/// before the read's window has its start outside the events, and none of
+/// them is marked.
+fn mark_starts(events: &mut [UsageEvent], firsts: &Firsts) {
+    let mut marked = HashSet::new();
+    for event in events.iter_mut() {
+        if let Some(session) = &event.session
+            && firsts.get(session) == Some(&event.at)
+            && marked.insert(session.clone())
+        {
+            event.starts_session = true;
+        }
+    }
+}
+
 /// Where each reader looks.
 ///
 /// One field per reader rather than one argument per reader: adding a CLI is
@@ -354,12 +380,20 @@ pub fn read_checked(roots: &Roots, since: NaiveDate) -> TranscriptRead {
     let mut codex_seen = HashSet::new();
     let mut kimi_seen = HashSet::new();
     let mut grok_seen = HashSet::new();
+    let mut firsts = Firsts::new();
     let mut gaps = Vec::new();
-    let mut events = claude_code::read_events(&roots.claude, since, &mut claude_seen, &mut gaps);
+    let mut events = claude_code::read_events(
+        &roots.claude,
+        since,
+        &mut claude_seen,
+        &mut firsts,
+        &mut gaps,
+    );
     events.extend(codex_cli::read_events(
         &roots.codex,
         since,
         &mut codex_seen,
+        &mut firsts,
         &mut gaps,
     ));
     events.extend(kimi_cli::read_events(
@@ -374,6 +408,7 @@ pub fn read_checked(roots: &Roots, since: NaiveDate) -> TranscriptRead {
         &mut grok_seen,
         &mut gaps,
     ));
+    mark_starts(&mut events, &firsts);
     gaps.sort();
     gaps.dedup();
     TranscriptRead {

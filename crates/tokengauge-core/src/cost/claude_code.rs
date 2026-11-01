@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::Deserialize;
 
-use super::{TokenCounts, UsageEvent, dedup_key, jsonl_files};
+use super::{Firsts, TokenCounts, UsageEvent, dedup_key, jsonl_files};
 use crate::model_to_provider;
 
 #[derive(Debug, Deserialize)]
@@ -23,6 +23,8 @@ struct Record {
     timestamp: String,
     #[serde(default, rename = "requestId")]
     request_id: String,
+    #[serde(default, rename = "sessionId")]
+    session_id: String,
     #[serde(default)]
     message: Option<Message>,
 }
@@ -109,12 +111,13 @@ pub fn read_events(
     roots: &[PathBuf],
     since: NaiveDate,
     seen: &mut HashMap<u64, usize>,
+    firsts: &mut Firsts,
     gaps: &mut Vec<PathBuf>,
 ) -> Vec<UsageEvent> {
     let mut events = Vec::new();
     for root in roots {
         for file in jsonl_files(root, since, gaps) {
-            if !read_file(&file, since, seen, &mut events) {
+            if !read_file(&file, since, seen, firsts, &mut events) {
                 gaps.push(file.clone());
             }
         }
@@ -126,6 +129,7 @@ pub(super) fn read_file(
     path: &Path,
     since: NaiveDate,
     seen: &mut HashMap<u64, usize>,
+    firsts: &mut Firsts,
     events: &mut Vec<UsageEvent>,
 ) -> bool {
     let Ok(contents) = std::fs::read_to_string(path) else {
@@ -138,6 +142,12 @@ pub(super) fn read_file(
         let Ok(record) = serde_json::from_str::<Record>(line) else {
             continue;
         };
+        if !record.session_id.is_empty()
+            && record.message.as_ref().is_some_and(|m| m.usage.is_some())
+            && let Ok(at) = record.timestamp.parse::<DateTime<Utc>>()
+        {
+            super::first_seen(firsts, &record.session_id, at);
+        }
         let Some((key, event)) = event_from(&record, since) else {
             continue;
         };
@@ -202,7 +212,7 @@ fn event_from(record: &Record, since: NaiveDate) -> Option<(Option<u64>, UsageEv
             at,
             key,
             one_request: true,
-            session: None,
+            session: (!record.session_id.is_empty()).then(|| record.session_id.clone()),
             starts_session: false,
             login: None,
             source: crate::cost::Source::Cli,
@@ -239,7 +249,7 @@ mod tests {
         std::fs::write(&path, lines).expect("write fixture");
         let mut seen = HashMap::new();
         let mut events = Vec::new();
-        read_file(&path, since, &mut seen, &mut events);
+        read_file(&path, since, &mut seen, &mut Firsts::new(), &mut events);
         let _ = std::fs::remove_dir_all(&dir);
         events
     }

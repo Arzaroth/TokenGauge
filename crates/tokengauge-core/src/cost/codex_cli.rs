@@ -589,6 +589,31 @@ mod tests {
         assert_eq!(one, [true, true, false]);
     }
 
+    #[test]
+    fn a_codex_session_is_the_login_of_the_seat_it_names() {
+        let meta = r#"{"timestamp":"2026-05-11T06:17:00.000Z","type":"session_meta","payload":{"id":"sess-1","creator_user_id":"user-1","creator_account_id":"acct-1"}}"#;
+        let lines = [
+            meta,
+            CONTEXT,
+            &token_count("2026-05-11T06:18:00.000Z", 100, 0, 10),
+        ]
+        .join("\n");
+        let events = read(&lines);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].session.as_deref(), Some("sess-1"));
+        assert_eq!(
+            events[0].login,
+            Some(selvedge::usage::account_digest("user-1__acct-1"))
+        );
+
+        let anonymous = [
+            CONTEXT,
+            &token_count("2026-05-11T06:18:00.000Z", 100, 0, 10),
+        ]
+        .join("\n");
+        assert_eq!(read(&anonymous)[0].login, None);
+    }
+
     fn ordinal_token_count(ordinal: u64, ts: &str, input: u64, output: u64) -> String {
         let row = token_count(ts, input, 0, output);
         format!(r#"{{"ordinal":{ordinal},{}"#, &row[1..])

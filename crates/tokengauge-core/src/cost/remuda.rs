@@ -101,3 +101,214 @@ pub fn attribute(store: &Path, events: &mut [UsageEvent], gaps: &mut Vec<PathBuf
             .map(account_digest);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use selvedge::usage::TokenCounts;
+    use selvedge::usage::ledger::Entry;
+    use selvedge::usage::requests::{Outcome, Request};
+
+    use super::*;
+    use crate::cost::{Roots, read_checked};
+
+    struct Fixture {
+        dir: PathBuf,
+    }
+
+    impl Fixture {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "tg-remuda-usage-{tag}-{}-{}",
+                std::process::id(),
+                crate::now_ms()
+            ));
+            std::fs::create_dir_all(dir.join("claude/project")).unwrap();
+            std::fs::create_dir_all(dir.join("store")).unwrap();
+            Fixture { dir }
+        }
+
+        fn store(&self) -> PathBuf {
+            self.dir.join("store")
+        }
+
+        fn transcript(&self, lines: &[String]) {
+            std::fs::write(
+                self.dir.join("claude/project/session.jsonl"),
+                lines.join("\n"),
+            )
+            .unwrap();
+        }
+
+        fn read(&self) -> Vec<UsageEvent> {
+            let roots = Roots {
+                claude: vec![self.dir.join("claude")],
+                remuda: Some(self.store()),
+                ..Roots::default()
+            };
+            read_checked(&roots, day("2026-10-01")).events
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn day(text: &str) -> NaiveDate {
+        text.parse().unwrap()
+    }
+
+    fn ms(text: &str) -> i64 {
+        text.parse::<DateTime<Utc>>().unwrap().timestamp_millis()
+    }
+
+    fn line(at: &str, session: &str, message: &str, request: &str) -> String {
+        serde_json::json!({
+            "timestamp": at,
+            "sessionId": session,
+            "requestId": request,
+            "message": {"id": message, "model": "claude-opus-4-5", "usage": {"input_tokens": 10, "output_tokens": 5}},
+        })
+        .to_string()
+    }
+
+    fn request(at: &str, message: &str, account: &str) -> Request {
+        Request {
+            at: ms(at),
+            provider: "claude".into(),
+            model: "claude-opus-4-5".into(),
+            account_id: Some(account.into()),
+            name: None,
+            key: Some("k".into()),
+            format: "messages".into(),
+            stream: true,
+            outcome: Outcome::Ok,
+            status: 200,
+            first_byte_ms: None,
+            latency_ms: 10,
+            tokens: TokenCounts {
+                input: 100,
+                output: 50,
+                ..TokenCounts::default()
+            },
+            reasoning: 0,
+            message_id: Some(message.into()),
+            request_id: Some("req_p".into()),
+            speed: None,
+        }
+    }
+
+    fn live(at: &str, account: Option<&str>) -> Entry {
+        Entry::Live {
+            at: ms(at),
+            provider: "claude".into(),
+            account_id: account.map(str::to_owned),
+            name: None,
+        }
+    }
+
+    #[test]
+    fn a_request_the_transcript_holds_counts_once_and_takes_the_proxy_s_login() {
+        let f = Fixture::new("dedup");
+        f.transcript(&[line("2026-10-20T10:00:00Z", "s1", "msg_1", "req_p")]);
+        ledger::append(&f.store(), &live("2026-10-01T00:00:00Z", Some("u-live"))).unwrap();
+        requests::append(
+            &f.store(),
+            &request("2026-10-20T10:00:00Z", "msg_1", "u-proxy"),
+        )
+        .unwrap();
+
+        let events = f.read();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].tokens.input, 10, "the transcript's count stands");
+        assert_eq!(events[0].source, Source::Cli);
+        assert_eq!(events[0].login, Some(account_digest("u-proxy")));
+    }
+
+    #[test]
+    fn a_request_no_transcript_holds_is_an_event_of_its_own() {
+        let f = Fixture::new("proxy-only");
+        f.transcript(&[]);
+        requests::append(
+            &f.store(),
+            &request("2026-10-20T10:00:00Z", "chatcmpl-1", "u-proxy"),
+        )
+        .unwrap();
+        let mut empty = request("2026-10-20T11:00:00Z", "chatcmpl-2", "u-proxy");
+        empty.tokens = TokenCounts::default();
+        requests::append(&f.store(), &empty).unwrap();
+        requests::append(
+            &f.store(),
+            &request("2026-09-01T10:00:00Z", "chatcmpl-3", "u-proxy"),
+        )
+        .unwrap();
+
+        let events = f.read();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].source, Source::Proxy);
+        assert_eq!(events[0].provider, "claude");
+        assert_eq!(events[0].tokens.output, 50);
+        assert_eq!(events[0].login, Some(account_digest("u-proxy")));
+    }
+
+    #[test]
+    fn the_ledger_names_the_rest_and_a_run_session_beats_the_live_login() {
+        let f = Fixture::new("ledger");
+        f.transcript(&[
+            line("2026-10-05T10:00:00Z", "s-old", "m0", "r0"),
+            line("2026-10-20T10:00:00Z", "s-live", "m1", "r1"),
+            line("2026-10-20T10:05:00Z", "s-run", "m2", "r2"),
+        ]);
+        ledger::append(&f.store(), &live("2026-10-10T00:00:00Z", Some("u-live"))).unwrap();
+        ledger::append(
+            &f.store(),
+            &Entry::Run {
+                at: ms("2026-10-20T10:04:00Z"),
+                provider: "claude".into(),
+                session: "s-run".into(),
+                account_id: "u-run".into(),
+                name: None,
+            },
+        )
+        .unwrap();
+
+        let events = f.read();
+        let login = |session: &str| {
+            events
+                .iter()
+                .find(|e| e.session.as_deref() == Some(session))
+                .unwrap()
+                .login
+                .clone()
+        };
+
+        assert_eq!(login("s-old"), None, "before the ledger, nobody's");
+        assert_eq!(login("s-live"), Some(account_digest("u-live")));
+        assert_eq!(login("s-run"), Some(account_digest("u-run")));
+    }
+
+    #[test]
+    fn a_session_counts_once_and_only_where_it_began() {
+        let f = Fixture::new("sessions");
+        f.transcript(&[
+            line("2026-09-20T10:00:00Z", "s-before", "m0", "r0"),
+            line("2026-10-20T10:00:00Z", "s-before", "m1", "r1"),
+            line("2026-10-20T11:00:00Z", "s-new", "m2", "r2"),
+            line("2026-10-21T11:00:00Z", "s-new", "m3", "r3"),
+        ]);
+
+        let events = f.read();
+        let starts: Vec<(&str, bool)> = events
+            .iter()
+            .map(|e| (e.session.as_deref().unwrap(), e.starts_session))
+            .collect();
+
+        assert_eq!(
+            starts,
+            [("s-before", false), ("s-new", true), ("s-new", false)]
+        );
+    }
+}

@@ -58,6 +58,30 @@ pub struct BucketKey {
     pub hour: Hour,
     pub provider: String,
     pub model: String,
+    pub login: Option<String>,
+    pub source: Source,
+}
+
+impl BucketKey {
+    pub fn for_event(event: &UsageEvent) -> Self {
+        BucketKey {
+            hour: Hour::containing(event.at),
+            provider: event.provider.to_string(),
+            model: event.model.clone(),
+            login: event.login.clone(),
+            source: event.source,
+        }
+    }
+
+    pub fn of(bucket: &Bucket) -> Self {
+        BucketKey {
+            hour: bucket.hour,
+            provider: bucket.provider.clone(),
+            model: bucket.model.clone(),
+            login: bucket.login.clone(),
+            source: bucket.source,
+        }
+    }
 }
 
 /// Tokens billed for one provider and model within one UTC hour.
@@ -180,28 +204,26 @@ pub(super) fn merge_adopted(into: &mut Vec<Adopted>, more: impl IntoIterator<Ite
     into.dedup_by(|later, kept| later.id == kept.id);
 }
 
-/// Fold events into `(hour, provider, model)` buckets, sorted so the serialised
-/// form is stable and [`content_hash`] can tell a real change from a rewrite.
+/// Fold events into `(hour, provider, model, login, source)` buckets, sorted so
+/// the serialised form is stable and [`content_hash`] can tell a real change
+/// from a rewrite.
 pub fn bucketize(events: &[UsageEvent]) -> Vec<Bucket> {
-    let mut folded: BTreeMap<BucketKey, TokenCounts> = BTreeMap::new();
+    let mut folded: BTreeMap<BucketKey, (TokenCounts, u64)> = BTreeMap::new();
     for event in events {
-        let key = BucketKey {
-            hour: Hour::containing(event.at),
-            provider: event.provider.to_string(),
-            model: event.model.clone(),
-        };
-        folded.entry(key).or_default().add(&event.tokens);
+        let entry = folded.entry(BucketKey::for_event(event)).or_default();
+        entry.0.add(&event.tokens);
+        entry.1 += u64::from(event.starts_session);
     }
     folded
         .into_iter()
-        .map(|(key, tokens)| Bucket {
+        .map(|(key, (tokens, sessions))| Bucket {
             hour: key.hour,
             provider: key.provider,
             model: key.model,
             granularity: Granularity::Hour,
-            login: None,
-            sessions: 0,
-            source: crate::cost::Source::Cli,
+            login: key.login,
+            sessions,
+            source: key.source,
             tokens,
         })
         .collect()
@@ -263,6 +285,19 @@ pub fn content_hash(contribution: &Contribution) -> u64 {
         ] {
             feed(&mut buf, &field.to_le_bytes());
         }
+        // Each only when present, so a bucket without them hashes as before
+        // and a store that predates them does not republish on upgrade.
+        if let Some(login) = &bucket.login {
+            feed(&mut buf, b"l");
+            feed(&mut buf, login.as_bytes());
+        }
+        if bucket.sessions > 0 {
+            feed(&mut buf, b"s");
+            feed(&mut buf, &bucket.sessions.to_le_bytes());
+        }
+        if bucket.source == Source::Proxy {
+            feed(&mut buf, b"src");
+        }
     }
     for day in &contribution.days {
         feed(&mut buf, day.date.to_string().as_bytes());
@@ -283,4 +318,6 @@ pub(super) fn sort_key(a: &Bucket, b: &Bucket) -> std::cmp::Ordering {
         .cmp(&b.hour)
         .then_with(|| a.provider.cmp(&b.provider))
         .then_with(|| a.model.cmp(&b.model))
+        .then_with(|| a.login.cmp(&b.login))
+        .then_with(|| a.source.cmp(&b.source))
 }

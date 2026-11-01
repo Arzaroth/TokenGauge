@@ -17,7 +17,7 @@ use super::contribution::{
 };
 use super::hour::Hour;
 use crate::cost::pricing::{PriceArchive, PriceTable, month_key};
-use crate::cost::{TokenCounts, UsageEvent};
+use crate::cost::{Source, TokenCounts, UsageEvent};
 
 /// The calendar step a history series advances by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -603,32 +603,38 @@ impl FleetStore {
             for from in slice.counted_from.values_mut() {
                 *from = (*from).max(floor);
             }
-            let mut rolled: BTreeMap<(NaiveDate, String, String), TokenCounts> = BTreeMap::new();
+            type Day = (NaiveDate, String, String, Option<String>, Source);
+            let mut rolled: BTreeMap<Day, (TokenCounts, u64)> = BTreeMap::new();
             let mut kept: Vec<Bucket> = Vec::with_capacity(slice.buckets.len());
             for bucket in slice.buckets.drain(..) {
                 if bucket.hour >= floor {
                     kept.push(bucket);
                     continue;
                 }
-                rolled
-                    .entry((bucket.hour.utc_date(), bucket.provider, bucket.model))
-                    .or_default()
-                    .add(&bucket.tokens);
+                let day = rolled
+                    .entry((
+                        bucket.hour.utc_date(),
+                        bucket.provider,
+                        bucket.model,
+                        bucket.login,
+                        bucket.source,
+                    ))
+                    .or_default();
+                day.0.add(&bucket.tokens);
+                day.1 += bucket.sessions;
             }
-            kept.extend(
-                rolled
-                    .into_iter()
-                    .map(|((date, provider, model), tokens)| Bucket {
-                        hour: Hour::midday(date),
-                        provider,
-                        model,
-                        granularity: Granularity::Day,
-                        login: None,
-                        sessions: 0,
-                        source: crate::cost::Source::Cli,
-                        tokens,
-                    }),
-            );
+            kept.extend(rolled.into_iter().map(
+                |((date, provider, model, login, source), (tokens, sessions))| Bucket {
+                    hour: Hour::midday(date),
+                    provider,
+                    model,
+                    granularity: Granularity::Day,
+                    login,
+                    sessions,
+                    source,
+                    tokens,
+                },
+            ));
             kept.sort_by(sort_key);
             slice.buckets = kept;
         }
@@ -809,16 +815,21 @@ impl FleetStore {
                     && b.hour == hour
                     && b.provider == event.provider
                     && b.model == event.model
+                    && b.login == event.login
+                    && b.source == event.source
             }) {
-                Some(bucket) => bucket.tokens.add(&event.tokens),
+                Some(bucket) => {
+                    bucket.tokens.add(&event.tokens);
+                    bucket.sessions += u64::from(event.starts_session);
+                }
                 None => slice.buckets.push(Bucket {
                     hour,
                     provider: event.provider.to_string(),
                     model: event.model.clone(),
                     granularity: Granularity::Hour,
-                    login: None,
-                    sessions: 0,
-                    source: crate::cost::Source::Cli,
+                    login: event.login.clone(),
+                    sessions: u64::from(event.starts_session),
+                    source: event.source,
                     tokens: event.tokens,
                 }),
             }
@@ -1110,8 +1121,8 @@ fn bucket_event(bucket: &Bucket, offset: FixedOffset) -> Option<UsageEvent> {
         one_request: false,
         session: None,
         starts_session: false,
-        login: None,
-        source: crate::cost::Source::Cli,
+        login: bucket.login.clone(),
+        source: bucket.source,
     })
 }
 

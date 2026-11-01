@@ -41,46 +41,9 @@ pub enum CostSource {
     Ccusage,
 }
 
-/// Tokens billed at each rate. Every reader normalises onto this, which is why
-/// `input` here means *fresh* input: Codex reports cached tokens inside its
-/// input count and Anthropic reports them beside it.
-/// Field names are the sync wire format: a contribution is re-uploaded on every
-/// change, and these five keys repeat once per bucket.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TokenCounts {
-    #[serde(rename = "i", default, skip_serializing_if = "is_zero")]
-    pub input: u64,
-    #[serde(rename = "o", default, skip_serializing_if = "is_zero")]
-    pub output: u64,
-    #[serde(rename = "cw5", default, skip_serializing_if = "is_zero")]
-    pub cache_write_5m: u64,
-    #[serde(rename = "cw1h", default, skip_serializing_if = "is_zero")]
-    pub cache_write_1h: u64,
-    #[serde(rename = "cr", default, skip_serializing_if = "is_zero")]
-    pub cache_read: u64,
-}
-
-fn is_zero(value: &u64) -> bool {
-    *value == 0
-}
-
-impl TokenCounts {
-    pub fn total(&self) -> u64 {
-        self.input + self.output + self.cache_write_5m + self.cache_write_1h + self.cache_read
-    }
-
-    pub fn cache_creation(&self) -> u64 {
-        self.cache_write_5m + self.cache_write_1h
-    }
-
-    pub(crate) fn add(&mut self, other: &TokenCounts) {
-        self.input += other.input;
-        self.output += other.output;
-        self.cache_write_5m += other.cache_write_5m;
-        self.cache_write_1h += other.cache_write_1h;
-        self.cache_read += other.cache_read;
-    }
-}
+/// Tokens billed at each rate, `input` fresh. The field names are the sync
+/// wire format, and remuda's records count in it too, so it lives in selvedge.
+pub use selvedge::usage::TokenCounts;
 
 /// One billed call.
 #[derive(Debug, Clone)]

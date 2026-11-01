@@ -85,20 +85,7 @@ pub fn serving_in(dir: &Path) -> Option<ServeRecord> {
 }
 
 fn started(pid: u32) -> Option<u64> {
-    let stat =
-        std::fs::read_to_string(Path::new("/proc").join(pid.to_string()).join("stat")).ok()?;
-    start_time(&stat)
-}
-
-/// Field 22 of a `/proc/<pid>/stat` line. The command name in field 2 may hold
-/// spaces and parentheses, so the fields are counted from after its last `)`.
-pub fn start_time(stat: &str) -> Option<u64> {
-    stat.rsplit_once(')')?
-        .1
-        .split_whitespace()
-        .nth(19)?
-        .parse()
-        .ok()
+    selvedge::proc::start_time(pid)
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -163,13 +150,16 @@ mod tests {
     #[test]
     fn a_start_time_is_the_twenty_second_stat_field() {
         let stat = "1234 (a) b (c)) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 20 21";
-        assert_eq!(start_time(stat), Some(987654));
-        assert_eq!(start_time("1234 (short) S 1 2"), None);
-        assert_eq!(start_time("no parenthesis"), None);
+        assert_eq!(selvedge::proc::stat_start_time(stat), Some(987654));
+        assert_eq!(selvedge::proc::stat_start_time("1234 (short) S 1 2"), None);
+        assert_eq!(selvedge::proc::stat_start_time("no parenthesis"), None);
 
         let own = std::fs::read_to_string("/proc/self/stat").unwrap();
         let fields: Vec<&str> = own.rsplit_once(')').unwrap().1.split_whitespace().collect();
-        assert_eq!(start_time(&own), fields[19].parse().ok());
+        assert_eq!(
+            selvedge::proc::stat_start_time(&own),
+            fields[19].parse().ok()
+        );
     }
 
     #[test]

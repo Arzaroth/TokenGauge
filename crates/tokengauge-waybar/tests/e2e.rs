@@ -611,8 +611,7 @@ fn a_remuda_page_is_offered_only_while_it_is_served() {
         serde_json::json!({"serving": false, "version": null})
     );
 
-    let stat = std::fs::read_to_string("/proc/self/stat").expect("this process's stat");
-    let started = tokengauge_core::remuda::start_time(&stat).expect("a start time");
+    let started = selvedge::proc::start_time(std::process::id()).expect("a start time");
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("a port");
     let port = listener.local_addr().expect("its address").port();
     let dir = machine.root.join("run/remuda");

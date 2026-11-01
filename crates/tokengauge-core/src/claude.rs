@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
-use selvedge::plans::{Seat, team_seat, tier_multiplier};
+use selvedge::plans::{MaxPlan, Seat, max_plan, team_seat, tier_multiplier};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -552,7 +552,7 @@ fn to_window(win: Option<&Win>, minutes: u32) -> Option<UsageWindow> {
 }
 
 /// Brand a plan label from the credential's subscription type and rate-limit
-/// tier. The Max multiplier ("5x"/"20x") always comes from the tier.
+/// tier. Which Max plan it is (Max, Ultra) always comes from the tier.
 fn plan_label(subscription_type: Option<&str>, tier: Option<&str>) -> Option<String> {
     #[derive(PartialEq)]
     enum Kind {
@@ -567,7 +567,7 @@ fn plan_label(subscription_type: Option<&str>, tier: Option<&str>) -> Option<Str
             Some(Kind::Enterprise)
         } else if s.contains("team") {
             Some(Kind::Team)
-        } else if s.contains("max") {
+        } else if s.contains("max") || s.contains("ultra") {
             Some(Kind::Max)
         } else if s.contains("pro") {
             Some(Kind::Pro)
@@ -591,13 +591,11 @@ fn plan_label(subscription_type: Option<&str>, tier: Option<&str>) -> Option<Str
         .and_then(classify)
         .or_else(|| tier.and_then(classify))?;
     let label = match kind {
-        Kind::Max => {
-            let mult = tier.and_then(max_multiplier);
-            match mult {
-                Some(m) => format!("Claude Max {m}"),
-                None => "Claude Max".to_string(),
-            }
-        }
+        Kind::Max => match (tier.and_then(max_plan), tier.and_then(max_multiplier)) {
+            (Some(plan), _) => format!("Claude {}", plan.name()),
+            (None, Some(m)) => format!("Claude Max {m}"),
+            (None, None) => "Claude Max".to_string(),
+        },
         Kind::Pro => "Claude Pro".to_string(),
         Kind::Team => "Claude Team".to_string(),
         Kind::Enterprise => "Claude Enterprise".to_string(),
@@ -605,8 +603,9 @@ fn plan_label(subscription_type: Option<&str>, tier: Option<&str>) -> Option<Str
     Some(label)
 }
 
-/// A plan's nominal multiplier against Pro: the `Nx` in a rate-limit tier
-/// (`default_claude_max_20x`), else 1 for Pro. A Team seat is sold against
+/// A plan's nominal multiplier against Pro: a Max plan's weekly allowance
+/// ([`max_plan`]: Max 5, Ultra 10, though Ultra's tier still says `_20x`),
+/// else the `Nx` in a rate-limit tier, else 1 for Pro. A Team seat is sold against
 /// Pro's per-session allowance, not as a Max: a standard seat is 1.25x and a
 /// premium one 6.25x (support.claude.com, "What is the Team plan?"). Premium
 /// is named in the subscription type, or read off the tier by
@@ -627,10 +626,13 @@ fn plan_weight(subscription_type: Option<&str>, tier: Option<&str>) -> Option<f6
         };
         return Some(seat.weight());
     }
-    tier.and_then(tier_multiplier).map(f64::from).or_else(|| {
-        (sub.contains("pro") && !["max", "enterprise"].iter().any(|k| sub.contains(k)))
-            .then_some(1.0)
-    })
+    tier.and_then(max_plan)
+        .map(MaxPlan::weight)
+        .or_else(|| tier.and_then(tier_multiplier).map(f64::from))
+        .or_else(|| {
+            (sub.contains("pro") && !["max", "enterprise"].iter().any(|k| sub.contains(k)))
+                .then_some(1.0)
+        })
 }
 
 /// A stored credential's weight, from its own text and what its sidecar's
@@ -1065,7 +1067,7 @@ mod tests {
             ]
         }"#,
         );
-        let plan = plan_label(Some("max"), Some("default_claude_max_20x"));
+        let plan = plan_label(Some("max"), Some("default_claude_max_5x"));
         let payload = to_payload(body, plan, Utc::now()).unwrap();
         let usage = payload.usage.unwrap();
 
@@ -1073,7 +1075,7 @@ mod tests {
         assert_eq!(usage.primary.as_ref().unwrap().window_minutes, Some(300));
         assert_eq!(usage.secondary.as_ref().unwrap().used_percent, Some(89));
         assert!(usage.tertiary.is_none());
-        assert_eq!(usage.login_method.as_deref(), Some("Claude Max 20x"));
+        assert_eq!(usage.login_method.as_deref(), Some("Claude Max"));
 
         let titles: Vec<&str> = usage
             .extra_rate_windows
@@ -1362,11 +1364,19 @@ mod tests {
     fn plan_label_table() {
         assert_eq!(
             plan_label(None, Some("default_claude_max_5x")).as_deref(),
-            Some("Claude Max 5x")
+            Some("Claude Max")
         );
         assert_eq!(
             plan_label(Some("max"), Some("v2_default_claude_max_20x")).as_deref(),
-            Some("Claude Max 20x")
+            Some("Claude Ultra")
+        );
+        assert_eq!(
+            plan_label(None, Some("default_claude_ultra")).as_deref(),
+            Some("Claude Ultra")
+        );
+        assert_eq!(
+            plan_label(Some("max"), Some("default_claude_max_8x")).as_deref(),
+            Some("Claude Max 8x")
         );
         assert_eq!(
             plan_label(None, Some("claude_max")).as_deref(),
@@ -1464,14 +1474,14 @@ mod tests {
         assert_eq!(bare.access_token, "b");
     }
 
-    /// The combined header weighs a Max 20x and a Pro as 20 to 1, not as two
+    /// The combined header weighs an Ultra and a Pro as 10 to 1, not as two
     /// equal halves, and a Team seat as the 1.25x or 6.25x of a Pro it is sold
     /// as.
     #[test]
     fn a_plan_weighs_its_nominal_multiplier() {
         assert_eq!(
             plan_weight(Some("max"), Some("default_claude_max_20x")),
-            Some(20.0)
+            Some(10.0)
         );
         assert_eq!(
             plan_weight(Some("max"), Some("default_claude_max_5x")),
@@ -1585,7 +1595,7 @@ mod tests {
         );
         let unlabelled =
             r#"{"claudeAiOauth":{"accessToken":"a","rateLimitTier":"default_claude_max_20x"}}"#;
-        assert_eq!(stored_weight(unlabelled, None, None), Some(20.0));
+        assert_eq!(stored_weight(unlabelled, None, None), Some(10.0));
         assert_eq!(
             stored_weight(team, Some("team_tier_1"), None),
             Some(1.25),
@@ -1605,10 +1615,10 @@ mod tests {
         let max = r#"{"claudeAiOauth":{"accessToken":"a","subscriptionType":"max","rateLimitTier":"default_claude_max_20x"}}"#;
         assert_eq!(
             stored_weight(max, Some("team_tier_1"), Some("default_claude_max_5x")),
-            Some(20.0),
+            Some(10.0),
             "a seat for a login that has left its Team plan"
         );
-        assert_eq!(stored_weight(max, Some("team_premium"), None), Some(20.0));
+        assert_eq!(stored_weight(max, Some("team_premium"), None), Some(10.0));
     }
 
     #[test]

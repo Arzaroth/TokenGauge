@@ -303,18 +303,35 @@ pub(crate) fn first_seen(firsts: &mut Firsts, session: &str, at: DateTime<Utc>) 
         .or_insert(at);
 }
 
-/// Each session counts once, on its earliest request. A session that began
-/// before the read's window has its start outside the events, and none of
-/// them is marked.
-fn mark_starts(events: &mut [UsageEvent], firsts: &Firsts) {
-    let mut marked = HashSet::new();
-    for event in events.iter_mut() {
-        if let Some(session) = &event.session
-            && firsts.get(session) == Some(&event.at)
-            && marked.insert(session.clone())
-        {
-            event.starts_session = true;
+/// Each session counts once, on its earliest request in the read. A session
+/// whose first record falls before the window began there, and none of its
+/// events is marked. The kept copy of a streamed message carries a later
+/// time than its first record, so the start is the earliest event, not one
+/// whose time matches the record.
+fn mark_starts(events: &mut [UsageEvent], firsts: &Firsts, since: NaiveDate) {
+    let mut earliest: HashMap<&str, usize> = HashMap::new();
+    for (index, event) in events.iter().enumerate() {
+        let Some(session) = event.session.as_deref() else {
+            continue;
+        };
+        let began_inside = firsts
+            .get(session)
+            .is_none_or(|first| first.with_timezone(&Local).date_naive() >= since);
+        if !began_inside {
+            continue;
         }
+        earliest
+            .entry(session)
+            .and_modify(|kept| {
+                if event.at < events[*kept].at {
+                    *kept = index;
+                }
+            })
+            .or_insert(index);
+    }
+    let starts: Vec<usize> = earliest.into_values().collect();
+    for index in starts {
+        events[index].starts_session = true;
     }
 }
 
@@ -413,7 +430,7 @@ pub fn read_checked(roots: &Roots, since: NaiveDate) -> TranscriptRead {
         remuda::merge_requests(store, since, &mut events, &claude_seen, &mut gaps);
         remuda::attribute(store, &mut events, &mut gaps);
     }
-    mark_starts(&mut events, &firsts);
+    mark_starts(&mut events, &firsts, since);
     gaps.sort();
     gaps.dedup();
     TranscriptRead {

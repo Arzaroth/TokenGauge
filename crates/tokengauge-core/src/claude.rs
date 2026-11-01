@@ -439,6 +439,7 @@ fn read_credentials(path: &Path, now: DateTime<Utc>) -> Result<Oauth> {
 struct UsageResponse {
     five_hour: Option<Win>,
     seven_day: Option<Win>,
+    seven_day_oauth_apps: Option<Win>,
     seven_day_opus: Option<Win>,
     seven_day_sonnet: Option<Win>,
     #[serde(default, deserialize_with = "crate::provider::lenient_list")]
@@ -834,7 +835,8 @@ fn to_payload(
     // 5-hour window, and a weekly one moved up would draw as "Session" and
     // pool with other plans' sessions.
     let primary = to_window(resp.five_hour.as_ref(), 300);
-    let secondary = to_window(resp.seven_day.as_ref(), 10080);
+    let secondary = to_window(resp.seven_day.as_ref(), 10080)
+        .or_else(|| to_window(resp.seven_day_oauth_apps.as_ref(), 10080));
     let tertiary = to_window(resp.seven_day_sonnet.as_ref(), 10080)
         .or_else(|| to_window(resp.seven_day_opus.as_ref(), 10080));
 
@@ -1176,6 +1178,14 @@ mod tests {
             usage.secondary.as_ref().unwrap().window_minutes,
             Some(10080)
         );
+    }
+
+    #[test]
+    fn an_oauth_apps_week_stands_in_for_the_week() {
+        let body = resp(r#"{"seven_day_oauth_apps":{"utilization":17.0}}"#);
+        let usage = to_payload(body, None, Utc::now()).unwrap().usage.unwrap();
+        assert!(usage.primary.is_none());
+        assert_eq!(usage.secondary.as_ref().unwrap().used_percent, Some(17));
     }
 
     #[test]

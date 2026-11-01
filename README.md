@@ -222,6 +222,13 @@ One row per day, provider, model and device, with the token split beside the
 money it was rated from. It goes through the same walk the chart does, so it
 drops the same double-read days and cannot disagree with what you see.
 
+`tokengauge --usage-json [--since YYYY-MM-DD]` writes the same record as one
+JSON document, for [remuda](https://github.com/Arzaroth/remuda)'s usage page:
+one row per day, provider, model, login and source (`cli` or `proxy`), summed
+across devices, with the sessions begun and the cost of each rate. A model
+with no price that month has a `null` cost. The format is
+`selvedge::usage::export`.
+
 The design notes are in [brain/features/spend-history.md](brain/features/spend-history.md).
 
 ## Fleet sync

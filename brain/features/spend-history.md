@@ -93,6 +93,16 @@ painting (tray, History button). The chart is the only part a frontend decides.
 `tokengauge --export [csv|json] [--since YYYY-MM-DD]` writes one row per day,
 provider, model and device, through the same walk the chart uses.
 
+`tokengauge --usage-json [--since YYYY-MM-DD]` is the record for remuda's usage
+page (`FleetStore::usage_export`): one versioned document
+(`selvedge::usage::export`, which remuda parses with the same types) with a
+row per local day, provider, model, login and source, summed across devices,
+the sessions begun, and each rate priced at its month's prices
+(`ModelPrice::cost_by_type`, the same arithmetic as `cost`). An unpriced
+model's cost is `null`, a gap like `--export`'s empty cell. remuda runs it and
+draws what it says, so the page and the panel never price a token two ways
+([../decisions.md](../decisions.md#0006-spend-is-attributed-from-what-remuda-recorded)).
+
 ## Hazards
 
 1. **The store is the only copy.** A lost `tokengauge-fleet.json` is a year that

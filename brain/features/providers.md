@@ -9,7 +9,7 @@ its live `auth.json`.
 | Provider | Credential (live) | Windows (session / weekly / tertiary labels) | Reader | remuda store | Plan weight |
 | --- | --- | --- | --- | --- | --- |
 | Codex | `$CODEX_HOME/auth.json` (`codex`), or `OPENAI_API_KEY` | Session, Weekly, Tertiary + Spend limit (`individual_limit`) | yes | yes | vs Plus |
-| Claude | `TOKENGAUGE_CLAUDE_OAUTH_TOKEN`, `~/.claude/.credentials.json`, macOS keychain / Windows Credential Manager | Session, Weekly (all), Weekly (Sonnet) + model-scoped extras; extra usage as an on-demand cap | yes | yes | vs Pro |
+| Claude | `TOKENGAUGE_CLAUDE_OAUTH_TOKEN`, `~/.claude/.credentials.json`, macOS keychain / Windows Credential Manager | Session, Weekly (all), Weekly (Sonnet) + model-scoped extras, each in its own slot (Ultra has no Session); extra usage as an on-demand cap | yes | yes | vs Pro |
 | Kimi | `~/.kimi-code/credentials/kimi-code.json` (`KIMI_CODE_HOME`; the older CLI's `~/.kimi` when `~/.kimi-code` holds no credential) or `KIMI_CODE_API_KEY` | Weekly, Rate Limit + Monthly total (ratio pools) | yes | yes | vs Plus |
 | Grok | `~/.grok/auth.json` (`grok login`, `GROK_HOME`) | Pool (weekly or monthly, per the CLI's billing period), On-demand | yes | yes | by price |
 | GLM (z.ai) | `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`), `Z_AI_API_HOST`, `Z_AI_QUOTA_URL` | Weekly, 30-day, 5-hour | no (ccusage) | yes (key) | weekly credits |

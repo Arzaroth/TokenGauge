@@ -28,7 +28,7 @@ and Fireworks. Both can sit in the bar at once; drop theirs with
 
 ## Panel
 
-- **Hero** - the provider and the plan it runs on ("Claude Max 20x").
+- **Hero** - the provider and the plan it runs on ("Claude Ultra").
 - **Provider switch** - one chip per enabled provider, shown only when more
   than one is enabled.
 - **Limits** - the percentage of each window used, a matching meter, the time

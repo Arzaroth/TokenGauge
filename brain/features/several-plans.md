@@ -1,6 +1,6 @@
 # Several plans per provider
 
-One person can hold several plans at one vendor (a work Max 20x and a personal
+One person can hold several plans at one vendor (a work Ultra and a personal
 Pro). With [remuda](https://github.com/Arzaroth/remuda) keeping the logins,
 TokenGauge shows every one of their limits, the active one first, and adds them
 up by plan multiplier. The mechanism and the remuda contracts are
@@ -18,9 +18,11 @@ up by plan multiplier. The mechanism and the remuda contracts are
 - **ALL PLANS** (the `plans` section, `Meters`): one meter per window label at
   least two weighted credentials report, valued `"<used>% of <capacity>%"` in
   units of the largest plan, filled to the pooled fraction
-  `Σ used × weight ÷ Σ weight`, tinted by it, badge `estimate`. A Max 20x and a
-  Pro both spent read `105% of 105%`; Max 20x at 50% beside Max 5x at 100% reads
-  `75% of 125%` (pooled 60%). Its reset is the earliest among them; the tooltip
+  `Σ used × weight ÷ Σ weight`, tinted by it, badge `estimate`. An Ultra and a
+  Pro both spent read `110% of 110%`; Ultra at 50% beside Max at 100% reads
+  `100% of 150%` (pooled 67%). Meters pool by window label, so a login missing
+  a window (Ultra has no 5-hour session) leaves that meter rather than lending
+  it another window's figure. Its reset is the earliest among them; the tooltip
   lists each credential's own figure and reset. A window that reset since its
   payload was written counts as empty, not spent, so a credential that is not
   asked again cannot hold the pool up (`rows::expire_elapsed`,
@@ -37,7 +39,7 @@ estimate. A plan with no known weight stays out of the total and is marked
 
 | Provider | Base | Weights |
 | --- | --- | --- |
-| Claude (`claude.rs`) | Pro | Pro 1; an `Nx` tier N (Max 5x 5, Max 20x 20); Team standard 1.25, premium 6.25 (`selvedge::plans::team_seat`): a `userRateLimitTier` naming an `Nx` is premium, else `oauthAccount.seatTier` when it is `team_premium` / `team_standard`, else the token. Enterprise none |
+| Claude (`claude.rs`) | Pro | Pro 1; Max (`_5x` tier) 5, Ultra (`_20x` tier) 10 (`selvedge::plans::max_plan`: the `20x` was Ultra's 5-hour session, the week is 10x), another `Nx` tier N; Team standard 1.25, premium 6.25 (`selvedge::plans::team_seat`): a `userRateLimitTier` naming an `Nx` is premium, else `oauthAccount.seatTier` when it is `team_premium` / `team_standard`, else the token. Enterprise none |
 | Codex (`codex.rs`, wire `plan_type`) | Plus | `plus` 1, `prolite` (Pro 100) 5, `pro` (Pro 200) 10, `promax` (Pro 500) 25, `team` (Business) 1, `self_serve_business_prolite` 5. `business` (Enterprise), free, Go, EDU none |
 | GLM (`glm.rs`) | weekly credits / 1000 | Lite 10, Pro 60, Max 140 |
 | Cursor (`cursor.rs`) | Pro | Pro 1, Pro+ 3, Ultra 20; team seats none |

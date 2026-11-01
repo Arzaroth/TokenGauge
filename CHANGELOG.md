@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Claude's Max 5x and Max 20x are shown as Max and Ultra, their new names, and
+  Ultra counts as 10 Pros in **ALL PLANS**, not 20: the 20x was its 5-hour
+  session, and its weekly allowance is 10x a Pro's.
+
+### Fixed
+
+- A Claude login with no 5-hour window (Ultra) had its weekly figure drawn as
+  its Session, and **ALL PLANS** pooled that week with the other logins'
+  5-hour sessions. Each window now keeps its own row, as remuda's page shows
+  them.
+
 ## [0.50.0] - 2026-10-22
 
 ### Changed

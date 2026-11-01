@@ -336,7 +336,7 @@ too low is worse than one that is visibly missing.
 
 ## Several plans per provider
 
-If you hold more than one plan at a vendor - a work Max 20x and a personal
+If you hold more than one plan at a vendor - a work Ultra and a personal
 Pro, say - and switch between them with
 [remuda](https://github.com/Arzaroth/remuda), TokenGauge shows all of them. It
 reads remuda's credential store (`[credentials] store`, which defaults to where
@@ -347,9 +347,10 @@ The provider stays one tab. Its panel gets one group of limits per credential,
 titled with the store name, remuda's label and the plan, the active one first
 and marked; the bar keeps showing the plan the CLI is signed into. An **ALL
 PLANS** header above them adds the plans up by their multiplier, in
-units of the largest: a Max 20x and a Pro both spent read `105% of 105%`, a Max
-20x at 50% beside a Max 5x at 100% reads `75% of 125%`, and the bar fills to
-the pooled share. The multipliers are the nominal ones the plans are sold with,
+units of the largest: an Ultra and a Pro both spent read `110% of 110%`, an
+Ultra at 50% beside a Max at 100% reads `100% of 150%`, and the bar fills to
+the pooled share. A Claude Max counts as 5 Pros and an Ultra as 10: its tier
+still says `20x`, but that was its 5-hour session, which Ultra no longer has. The multipliers are the nominal ones the plans are sold with,
 so the header says `estimate`. A Team seat counts as 1.25 Pros (standard) or
 6.25 (premium), as Anthropic sells them, going by what Anthropic's profile
 reports for the login: a rate-limit tier naming a multiplier is a premium

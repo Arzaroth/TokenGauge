@@ -850,8 +850,8 @@ fn state_row(state: crate::CredentialState) -> PanelRow {
 /// credentials report. The figures are `selvedge::plans`, which remuda's page
 /// draws too; the words around them are this panel's.
 ///
-/// Weighted, it counts in units of the largest plan, so a Max 20x and a Pro
-/// both at 100% read "105% of 105%": each contributes `used × weight ÷
+/// Weighted, it counts in units of the largest plan, so an Ultra and a Pro
+/// both at 100% read "110% of 110%": each contributes `used × weight ÷
 /// largest`, and the capacity is the same sum at 100%. Absolute, every plan
 /// weighs 1 and the largest is 1 too, so five plans read "409% of 500%". The
 /// bar fills to the pooled fraction, `Σ used × weight ÷ Σ weight`, so an idle
@@ -1695,7 +1695,7 @@ mod tests {
         assert!(spec.iter().all(|s| !s.title.contains("not in total")));
     }
 
-    /// A Team seat weighs 1.25 Pros: beside a Max 20x, two spent Standard
+    /// A Team seat weighs 1.25 Pros: beside a plan of 20, two spent Standard
     /// seats add 12.5% to the total, and each says so in the tooltip.
     #[test]
     fn a_team_seat_weighs_a_fraction_of_a_pro() {

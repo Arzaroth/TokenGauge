@@ -439,7 +439,6 @@ fn read_credentials(path: &Path, now: DateTime<Utc>) -> Result<Oauth> {
 struct UsageResponse {
     five_hour: Option<Win>,
     seven_day: Option<Win>,
-    seven_day_oauth_apps: Option<Win>,
     seven_day_opus: Option<Win>,
     seven_day_sonnet: Option<Win>,
     #[serde(default, deserialize_with = "crate::provider::lenient_list")]
@@ -829,39 +828,13 @@ fn to_payload(
     plan: Option<String>,
     now: DateTime<Utc>,
 ) -> Result<ProviderPayload> {
-    // Primary falls back through the 5h/weekly windows, remembering which source
-    // it used so the same window isn't also emitted as secondary/tertiary (which
-    // would render a "Session" row showing weekly data).
-    let primary_chain = [
-        ("five_hour", resp.five_hour.as_ref(), 300u32),
-        ("seven_day", resp.seven_day.as_ref(), 10080),
-        (
-            "seven_day_oauth_apps",
-            resp.seven_day_oauth_apps.as_ref(),
-            10080,
-        ),
-        ("seven_day_sonnet", resp.seven_day_sonnet.as_ref(), 10080),
-        ("seven_day_opus", resp.seven_day_opus.as_ref(), 10080),
-    ];
-    let (primary_key, primary) = primary_chain
-        .iter()
-        .find_map(|(k, w, m)| to_window(*w, *m).map(|uw| (Some(*k), Some(uw))))
-        .unwrap_or((None, None));
-
-    let taken = |key: &str| primary_key == Some(key);
-    let secondary = if taken("seven_day") {
-        None
-    } else {
-        to_window(resp.seven_day.as_ref(), 10080)
-    };
-    let tertiary = if taken("seven_day_sonnet") {
-        to_window(resp.seven_day_opus.as_ref(), 10080)
-    } else if taken("seven_day_opus") {
-        None
-    } else {
-        to_window(resp.seven_day_sonnet.as_ref(), 10080)
-            .or_else(|| to_window(resp.seven_day_opus.as_ref(), 10080))
-    };
+    // Each window keeps its own slot, whatever else is missing: Ultra has no
+    // 5-hour window, and a weekly one moved up would draw as "Session" and
+    // pool with other plans' sessions.
+    let primary = to_window(resp.five_hour.as_ref(), 300);
+    let secondary = to_window(resp.seven_day.as_ref(), 10080);
+    let tertiary = to_window(resp.seven_day_sonnet.as_ref(), 10080)
+        .or_else(|| to_window(resp.seven_day_opus.as_ref(), 10080));
 
     let mut extra_rate_windows = Vec::new();
     extra_rate_windows.extend(routines_window(&resp.rest));
@@ -1188,15 +1161,19 @@ mod tests {
         assert_eq!(w.window.as_ref().unwrap().used_percent, Some(30));
     }
 
+    /// Ultra reports no 5-hour window. Its week stays the week, or the
+    /// combined header pools it with other plans' sessions.
     #[test]
-    fn primary_falls_back_when_five_hour_absent() {
-        let body = resp(r#"{"seven_day":{"utilization":42.0}}"#);
+    fn a_lone_weekly_window_stays_weekly() {
+        let body = resp(r#"{"five_hour":null,"seven_day":{"utilization":42.0}}"#);
         let payload = to_payload(body, None, Utc::now()).unwrap();
         let usage = payload.usage.unwrap();
-        assert_eq!(usage.primary.as_ref().unwrap().used_percent, Some(42));
-        assert_eq!(usage.primary.as_ref().unwrap().window_minutes, Some(10080));
-        // seven_day was consumed as primary, so it is not duplicated in secondary.
-        assert!(usage.secondary.is_none());
+        assert!(usage.primary.is_none());
+        assert_eq!(usage.secondary.as_ref().unwrap().used_percent, Some(42));
+        assert_eq!(
+            usage.secondary.as_ref().unwrap().window_minutes,
+            Some(10080)
+        );
     }
 
     #[test]

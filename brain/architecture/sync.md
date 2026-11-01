@@ -28,8 +28,14 @@ else, so a leak has to be written on purpose rather than inherited.
 
 ## The unit is an hourly token bucket
 
-Key `(utc_hour, provider, model)`, value a `TokenCounts` (the five fields of
-`cost::TokenCounts`).
+Key `(utc_hour, provider, model, login, source)`, value a `TokenCounts` (the
+five fields of `cost::TokenCounts`, which is `selvedge::usage::TokenCounts`)
+and the sessions begun in it. The login (`l`, an account digest), the session
+count (`s`) and the source (`src`, `proxy` for spend only remuda's proxy saw)
+are left out when empty, so a bucket without them, from before attribution or
+from an older peer, reads, writes and hashes as it always did, and an older
+peer that reads one with them keeps its tokens and drops the split
+([../decisions.md](../decisions.md#0006-spend-is-attributed-from-what-remuda-recorded)).
 
 - **Hourly, in UTC, because the reader owns the calendar.** Each machine converts
   a bucket's hour into its own local day, so Paris and Montreal each see a

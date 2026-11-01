@@ -27,6 +27,15 @@ read behind the backfill (see [../features/spend-history.md](../features/spend-h
 `jsonl_files` leans on an mtime filter that a deep read defeats, so the deep read
 never runs on a poll.
 
+Claude and Codex events also carry their session id, and a session counts
+once, on its earliest request (`starts_session`), found across the whole
+read, so a session begun before the window counts nowhere in it. With
+remuda's store (`Roots.remuda`, from `[credentials] store`), `cost::remuda`
+folds in its proxy log, deduped against Claude transcripts on the same key,
+and names each event's login from its ledger
+([../decisions.md](../decisions.md#0006-spend-is-attributed-from-what-remuda-recorded)).
+`--doctor`'s drift check reads without it, since ccusage sees no proxy log.
+
 A read reports what it could not open (`TranscriptRead.gaps`, from
 `read_window`, `read_history` and `read_checked`): `jsonl_files` pushes a
 directory, entry or file type it cannot read (any error but `NotFound`), and
@@ -112,7 +121,7 @@ refuses a fixture that stopped covering the traps.
 
 ## Sources
 
-- `crates/tokengauge-core/src/cost/{mod,pricing,claude_code,codex_cli,kimi_cli,grok_cli}.rs` (`TranscriptRead`, `UsageEvent.one_request`, `ModelPrice::cost_of_request`)
+- `crates/tokengauge-core/src/cost/{mod,pricing,claude_code,codex_cli,kimi_cli,grok_cli,remuda}.rs` (`TranscriptRead`, `UsageEvent.one_request`, `ModelPrice::cost_of_request`, `mark_starts`)
 - `crates/tokengauge-core/src/cost/prices.json`, `crates/tokengauge-core/src/cost/price-archive.json`
 - `crates/tokengauge-core/src/ccusage.rs`, `crates/tokengauge-core/src/providers.rs` (`natively_read`)
 - `crates/tokengauge-core/tests/cost_fixture.rs`, `crates/tokengauge-core/tests/fixtures/`

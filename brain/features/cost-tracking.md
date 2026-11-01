@@ -28,8 +28,9 @@ timeout).
 
 ## Known gaps
 
-- Transcripts carry no credential, so cost is provider-scoped, never
-  per-credential (decision 0003).
+- Transcripts carry no credential, so spend is split by login only from what
+  remuda recorded (decision 0006): before its ledger, and on a machine without
+  remuda, spend is unattributed. The panel still shows cost per provider.
 - A provider with no reader (GLM from z.ai's CLI, OpenRouter, opencode, Cursor)
   relies on ccusage or the vendor, and cannot sync.
 - History and the per-device split are rated per bucket, never at a

@@ -62,6 +62,13 @@ token is "not signed in - run `claude setup-token`", distinct from "expired".
   `email` is never written anywhere.
 - `<store>/.last-switch.json` is `{"<provider>": <epoch ms of last switch>}`. A
   missing or unreadable file, or a future-stamped entry, is no signal.
+- `<store>/.attribution.jsonl` (the ledger) and `<store>/.proxy-requests.jsonl`
+  (the proxy's request log) say which login spent what. Their lines are
+  `selvedge::usage::{ledger, requests}`, declared once for remuda's writer and
+  this reader; read by `cost::remuda`
+  ([../decisions.md](../decisions.md#0006-spend-is-attributed-from-what-remuda-recorded)).
+  A file that cannot be read is a read gap, so the record is merged, not
+  replaced.
 
 ## Matching the live login
 

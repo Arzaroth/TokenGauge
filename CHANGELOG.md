@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-11-02
+
 ### Added
 
 - Plain `tokengauge` prints where every window stands, as a table: a line per

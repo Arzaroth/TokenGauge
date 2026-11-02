@@ -233,7 +233,7 @@ pub fn render(
         }
     }
     let pace = pace_line(&lines);
-    if pace.is_some() || month.is_some() {
+    if !lines.is_empty() && (pace.is_some() || month.is_some()) {
         writeln!(out)?;
     }
     if let Some(pace) = pace {
@@ -357,6 +357,44 @@ mod tests {
             !text.contains("this month"),
             "no cost, no month line: {text}"
         );
+    }
+
+    #[test]
+    fn the_soonest_run_out_leads_then_a_spent_window() {
+        let mut slow = sample_row("Claude");
+        slow.session_pace = Some(pace(100.0, Some(7200)));
+        let mut fast = sample_row("Codex");
+        fast.session_pace = Some(pace(100.0, Some(300)));
+        let text = printed(&[slow.clone(), fast], &[]);
+        assert!(
+            text.contains("at reset    codex 5h runs out in 5m"),
+            "{text}"
+        );
+
+        let mut spent = sample_row("Kimi");
+        spent.weekly_used = Some(100);
+        let text = printed(&[spent], &[]);
+        assert!(
+            text.contains("at reset    kimi weekly is spent until it resets in 4d 11h"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn stale_figures_are_marked_and_a_cost_alone_is_shown() {
+        let mut stale = sample_row("Claude");
+        stale.stale = true;
+        let text = printed(&[stale], &[]);
+        assert!(
+            text.contains("in 2h 34m  (last figures, the fetch failed)"),
+            "{text}"
+        );
+
+        let mut cost_only = sample_row("OpenRouter");
+        cost_only.session_used = None;
+        cost_only.weekly_used = None;
+        cost_only.cost = Some(cost(3.5, &[]));
+        assert_eq!(printed(&[cost_only], &[]), "this month  $3.50\n");
     }
 
     #[test]

@@ -224,6 +224,14 @@ mod tests {
             "the old name still prints the payload"
         );
         assert_eq!(module_exec(r#"{"modules-right":["clock"]}"#), None);
+
+        let listed_first = r#"{
+  "modules-right": ["custom/tokengauge", "clock"],
+  "clock": {"format": "{:%H:%M}"},
+  "custom/tokengauge": {"exec": "tokengauge"}
+}"#;
+        assert_eq!(module_exec(listed_first), Some("tokengauge"));
+        assert!(!bar_wiring_check(path, Some(listed_first), &[]).ok);
     }
 
     /// The check is about the launcher being on PATH, so it has to name the

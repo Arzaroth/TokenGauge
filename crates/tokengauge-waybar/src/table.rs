@@ -229,3 +229,125 @@ pub fn render(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::tests::sample_row;
+    use tokengauge_core::sync::DeviceCost;
+    use tokengauge_core::{CostInfo, CredentialInfo, PaceStage};
+
+    fn printed(rows: &[ProviderRow], errors: &[ProviderFetchError]) -> String {
+        let mut out = Vec::new();
+        render(rows, errors, &Ink::new(false), &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    fn pace(projected: f64, eta: Option<i64>) -> UsagePace {
+        UsagePace {
+            stage: PaceStage::Ahead,
+            delta_percent: 10.0,
+            projected_percent: projected,
+            eta_seconds: eta,
+            will_last_to_reset: eta.is_none(),
+            early: false,
+        }
+    }
+
+    fn cost(usd: f64, devices: &[&str]) -> CostInfo {
+        CostInfo {
+            monthly_usd: usd,
+            by_device: devices
+                .iter()
+                .map(|id| DeviceCost {
+                    device_id: (*id).into(),
+                    label: (*id).into(),
+                    tokens: 0,
+                    usd: 0.0,
+                    updated_at_ms: 0,
+                    partial: false,
+                    is_local: false,
+                })
+                .collect(),
+            ..CostInfo::default()
+        }
+    }
+
+    #[test]
+    fn each_window_is_a_line_with_a_bar_and_its_reset() {
+        let mut claude = sample_row("Claude");
+        claude.session_pace = Some(pace(81.0, None));
+        claude.cost = Some(cost(30.0, &["a", "b"]));
+        let mut codex = sample_row("Codex");
+        codex.weekly_used = None;
+        codex.session_used = Some(14);
+        codex.session_reset = "in 4h 10m 12s".into();
+        codex.cost = Some(cost(11.2, &["a", "c"]));
+
+        let text = printed(&[claude, codex], &[]);
+        let lines: Vec<&str> = text.lines().collect();
+
+        assert_eq!(lines[0], format!("provider  window  {:26}  resets", "used"));
+        assert_eq!(
+            lines[1],
+            format!(
+                "claude    5h      {}{}   67%  in 2h 34m",
+                "█".repeat(14),
+                "░".repeat(6)
+            )
+        );
+        assert!(lines[2].starts_with("claude    weekly  ████░"), "{text}");
+        assert!(lines[3].ends_with("14%  in 4h 10m"), "{text}");
+        assert_eq!(lines[5], "at reset    claude 5h lands near 81%");
+        assert_eq!(lines[6], "this month  $41.20 across 3 machines");
+        assert!(!text.contains('\x1b'), "{text:?}");
+    }
+
+    #[test]
+    fn a_login_each_and_the_one_running_out_first() {
+        let mut work = sample_row("Claude");
+        work.credential = Some(CredentialInfo {
+            name: Some("work".into()),
+            ..CredentialInfo::default()
+        });
+        work.weekly_pace = Some(pace(140.0, Some(5400)));
+        let mut perso = sample_row("Claude");
+        perso.credential = Some(CredentialInfo {
+            name: Some("perso".into()),
+            ..CredentialInfo::default()
+        });
+        let mut grouped = work.clone();
+        grouped.credentials = vec![work, perso];
+
+        let text = printed(&[grouped], &[]);
+
+        assert!(text.contains("claude/work   5h"), "{text}");
+        assert!(text.contains("claude/perso  weekly"), "{text}");
+        assert!(
+            text.contains("at reset    claude/work weekly runs out in 1h 30m"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("this month"),
+            "no cost, no month line: {text}"
+        );
+    }
+
+    #[test]
+    fn nothing_to_show_says_where_to_look() {
+        assert!(printed(&[], &[]).starts_with("no usage yet"));
+        let failed = ProviderFetchError::new("codex".into(), "token expired");
+        assert_eq!(printed(&[], &[failed]), "codex: token expired\n");
+    }
+
+    #[test]
+    fn spans_and_resets_read_short() {
+        assert_eq!(span(300), "5h");
+        assert_eq!(span(10080), "weekly");
+        assert_eq!(span(43200), "monthly");
+        assert_eq!(span(120), "2h");
+        assert_eq!(short_reset("in 16d 3h 11m"), "in 16d 3h");
+        assert_eq!(short_reset("\u{2014}"), "");
+        assert_eq!(short_reset("resets at 18:00"), "resets at 18:00");
+    }
+}

@@ -186,8 +186,10 @@ pub fn write_cache_full(
     store: Option<&StoreSeen>,
 ) -> Result<()> {
     let store = store.cloned().unwrap_or_else(|| StoreSeen::now(config));
+    let mut payloads = payloads.to_vec();
+    crate::window_history::record(path, &mut payloads, Utc::now());
     let data = CachedData::Full {
-        payloads: payloads.to_vec(),
+        payloads,
         errors: errors.to_vec(),
         costs: costs.clone(),
         sync: sync.cloned().map(Box::new),

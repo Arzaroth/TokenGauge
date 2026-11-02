@@ -474,6 +474,7 @@ mod tests {
             reset_description: None,
             resets_at: Some(at.to_rfc3339()),
             window_minutes: Some(300),
+            burn: None,
         }
     }
 
@@ -530,6 +531,7 @@ mod tests {
             reset_description: Some("Jan 20 at 12:59PM".to_string()),
             resets_at: Some(future.to_rfc3339()),
             window_minutes: Some(300),
+            burn: None,
         };
         let (used, minutes, reset) = format_window(Some(window));
         assert_eq!(used, Some(42));
@@ -553,6 +555,7 @@ mod tests {
             reset_description: Some("ignored".to_string()),
             resets_at: Some(future.to_rfc3339()),
             window_minutes: Some(10080),
+            burn: None,
         };
         let (_, _, reset) = format_window(Some(window));
         assert!(
@@ -569,6 +572,7 @@ mod tests {
             reset_description: Some("Jan 20 at 12:59PM".to_string()),
             resets_at: None,
             window_minutes: Some(300),
+            burn: None,
         };
         let (used, minutes, reset) = format_window(Some(window));
         assert_eq!(used, Some(42));
@@ -583,6 +587,7 @@ mod tests {
             reset_description: None,
             resets_at: None,
             window_minutes: None,
+            burn: None,
         };
         let (used, _, _) = format_window(Some(window));
         assert_eq!(used, Some(100)); // clamped to 100
@@ -603,6 +608,7 @@ mod tests {
             reset_description: None,
             resets_at: None,
             window_minutes: Some(60),
+            burn: None,
         };
         let (_, _, reset) = format_window(Some(window));
         assert_eq!(reset, "—");
@@ -617,6 +623,7 @@ mod tests {
             reset_description: None,
             resets_at: Some(future.to_rfc3339()),
             window_minutes: Some(60),
+            burn: None,
         };
         let (_, _, reset) = format_window(Some(window));
         // Allow for slight timing variations (44-45m)
@@ -637,6 +644,7 @@ mod tests {
             reset_description: Some("Jan 20 at 12:59PM".to_string()),
             resets_at: Some(past.to_rfc3339()),
             window_minutes: Some(10080),
+            burn: None,
         };
         let (_, _, reset) = format_window(Some(window));
         assert_eq!(reset, "now");
@@ -650,6 +658,7 @@ mod tests {
             reset_description: None,
             resets_at: Some(soon.to_rfc3339()),
             window_minutes: Some(300),
+            burn: None,
         };
         let (_, _, reset) = format_window(Some(window));
         assert_eq!(reset, "now");
@@ -677,6 +686,7 @@ mod tests {
             reset_description: None,
             resets_at: Some((now + chrono::Duration::minutes(reset_in_minutes)).to_rfc3339()),
             window_minutes: Some(10080),
+            burn: None,
         };
         ProviderPayload {
             stale_reason: None,
@@ -807,6 +817,7 @@ mod tests {
                     reset_description: None,
                     resets_at: None,
                     window_minutes: Some(300),
+                    burn: None,
                 }),
                 banked_resets: Some(banked.clone()),
                 ..UsageSnapshot::at(chrono::Utc::now())

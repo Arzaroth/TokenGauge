@@ -370,6 +370,7 @@ mod tests {
                     reset_description: None,
                     resets_at: resets_at.map(str::to_string),
                     window_minutes: Some(300),
+                    burn: None,
                 }),
                 secondary: None,
                 tertiary: None,

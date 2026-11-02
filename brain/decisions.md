@@ -217,6 +217,34 @@ stored, so a page started after the last fetch shows on the next render; the
 check never spawns `remuda`. Tests never read the developer's runtime directory.
 See [features/remuda-page.md](features/remuda-page.md).
 
+### 0007 Window history is kept beside the snapshot
+
+**Decision.** TokenGauge records how full each window has been since it
+opened, one trail per provider, credential and window, in
+`tokengauge-window-history.json` beside the snapshot, and puts each window's
+recent `burn` in the snapshot. The pace projects at that burn. remuda reads
+both, under decision 0003's snapshot contract.
+
+**Why.** A pace drawn from one snapshot can only assume a window filled
+evenly, so a morning's burst reads as a run-out the afternoon never brings.
+TokenGauge fetches every window, active and stored, and owns the figures;
+recording them where they are fetched gives every frontend the better
+projection through the panel spec, with no frontend change.
+
+**Rejected.**
+- *remuda records it*: `remuda serve` reads the snapshot every few seconds and
+  could keep the history, but only remuda's page would gain, and the badge on
+  every TokenGauge frontend would go on extrapolating the average.
+- *The trail inside the snapshot*: every frontend reads the snapshot on a short
+  cycle, and a week of samples per window is weight none of them draws.
+- *A history kept across resets*: the burn needs the current instance only.
+  Past windows can be added when something draws them.
+
+**Consequences.** `burn` and the history file are part of decision 0003's
+snapshot contract, pinned by
+`window_history::tests::the_keys_remuda_reads_are_spelled_as_decision_0003_says`.
+The file is written with the snapshot and does not bump the revision.
+
 ## Panel and frontends
 
 - **One panel spec, resolved in core; frontends own chrome only.** Five toolkits

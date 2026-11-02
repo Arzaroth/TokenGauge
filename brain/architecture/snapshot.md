@@ -20,6 +20,7 @@ own:
 | `tokengauge-revision` | bumped on every write; what frontends watch |
 | `tokengauge-refreshing` | the refresh sentinel (a fetch is in flight) |
 | `tokengauge-notify-state.json` | which notification thresholds already fired |
+| `tokengauge-window-history.json` | each window's trail since it opened ([../features/window-history.md](../features/window-history.md)); written with the snapshot, without a revision bump |
 | `tokengauge-prices.json`, `tokengauge-prices-missed.json` | the fetched price table and the unpriced set ([cost.md](cost.md)) |
 | `tokengauge-fleet.json`, `tokengauge-fleet.lock`, `tokengauge-backfilled`, `tokengauge-backfill-retry` | the fleet store, its writer lock, the backfill marker, and when a backfill whose read had gaps may run again ([sync.md](sync.md)) |
 | `tokengauge-device-id`, `tokengauge-sync-key` | device identity and fleet key |

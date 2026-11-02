@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::payload::{ProviderPayload, UsageSnapshot, UsageWindow};
+use crate::payload::{Burn, ProviderPayload, UsageSnapshot, UsageWindow};
 use crate::statefiles::write_atomic;
 
 /// A weekly window fetched every ten minutes changes at most about a thousand
@@ -154,6 +154,37 @@ impl Trail {
     }
 }
 
+const HOUR_MS: f64 = 3_600_000.0;
+
+/// How fast `trail` has been filling over the last seventh of its window (an
+/// hour at least): the last day of a week, the last hour of five. A window is
+/// empty when it opens, so its start is a sample every trail has, and a trail
+/// younger than the span measures from there: with no history at all, the
+/// burn is the window's average since it opened.
+fn burn(trail: &Trail, reading: &Reading) -> Option<Burn> {
+    let minutes = i64::from(reading.minutes);
+    let start = reading.resets_at.timestamp_millis() - minutes * 60_000;
+    let at = reading.at.timestamp_millis();
+    let span = (minutes / 7).max(60) * 60_000;
+    let from = (at - span).max(start);
+    let (since, used) = trail
+        .samples
+        .iter()
+        .rev()
+        .find(|(t, _)| *t <= from)
+        .copied()
+        .unwrap_or((start, 0));
+    let hours = (at - since) as f64 / HOUR_MS;
+    if hours <= 0.0 {
+        return None;
+    }
+    let per_hour = (f64::from(reading.used) - f64::from(used)).max(0.0) / hours;
+    Some(Burn {
+        per_hour: (per_hour * 100.0).round() / 100.0,
+        over_minutes: u32::try_from((at - since) / 60_000).unwrap_or(u32::MAX),
+    })
+}
+
 /// Every window a usage snapshot reports, by the name its trail goes by.
 pub(crate) fn windows_mut(usage: &mut UsageSnapshot) -> Vec<(String, &mut UsageWindow)> {
     let mut windows = Vec::new();
@@ -181,7 +212,8 @@ pub(crate) fn windows_mut(usage: &mut UsageSnapshot) -> Vec<(String, &mut UsageW
     windows
 }
 
-/// Adds what this fetch saw to the history beside `cache_file`. A payload
+/// Adds what this fetch saw to the history beside `cache_file`, and sets each
+/// window's burn from its trail. A payload
 /// served stale saw nothing new, so it adds nothing. The time of a reading is
 /// the payload's own, not the write's: a stored credential's figures are
 /// carried between its fetches, and a carried figure is not a new sample.
@@ -202,7 +234,8 @@ pub fn record(cache_file: &Path, payloads: &mut [ProviderPayload], now: DateTime
             .map_or(now, |at| at.with_timezone(&Utc));
         for (name, window) in windows_mut(usage) {
             if let Some(reading) = Reading::of(window, at) {
-                history.observe(&provider, credential.as_deref(), &name, &reading);
+                let trail = history.observe(&provider, credential.as_deref(), &name, &reading);
+                window.burn = burn(trail, &reading);
             }
         }
     }
@@ -416,5 +449,86 @@ mod tests {
             now,
         );
         assert!(!history_path(&m.cache).exists());
+    }
+
+    fn burn_after(m: &Machine, fetches: &[(i64, u8)], reset: DateTime<Utc>, minutes: u32) -> Burn {
+        let mut last = None;
+        for (at_minutes, used) in fetches {
+            let at = reset - Duration::minutes(i64::from(minutes)) + Duration::minutes(*at_minutes);
+            last = Some(m.fetch(vec![payload(None, at, window(*used, reset, minutes))], at));
+        }
+        let usage = last.unwrap().remove(0).usage.unwrap();
+        usage.primary.unwrap().burn.unwrap()
+    }
+
+    #[test]
+    fn with_no_history_the_burn_is_the_average_since_the_window_opened() {
+        let m = Machine::new("burn-average");
+        let reset = Utc::now() + Duration::hours(3);
+        let burn = burn_after(&m, &[(120, 30)], reset, 300);
+        assert_eq!(burn.per_hour, 15.0);
+        assert_eq!(burn.over_minutes, 120);
+    }
+
+    #[test]
+    fn a_burst_then_a_quiet_spell_reads_as_quiet() {
+        let m = Machine::new("burn-quiet");
+        let reset = Utc::now() + Duration::hours(2);
+        let burn = burn_after(&m, &[(10, 10), (50, 40), (110, 40), (180, 40)], reset, 300);
+        assert_eq!(burn.per_hour, 0.0);
+        assert_eq!(
+            burn.over_minutes, 130,
+            "the figure has held since minute 50"
+        );
+
+        let m = Machine::new("burn-steady");
+        let burn = burn_after(&m, &[(10, 2), (120, 20), (150, 25), (180, 30)], reset, 300);
+        assert_eq!(burn.per_hour, 10.0, "{burn:?}");
+        assert_eq!(burn.over_minutes, 60);
+    }
+
+    #[test]
+    fn a_week_is_measured_over_its_last_day() {
+        let m = Machine::new("burn-week");
+        let reset = Utc::now() + Duration::days(2);
+        let day = 24 * 60;
+        let burn = burn_after(&m, &[(day, 10), (3 * day, 20), (5 * day, 44)], reset, 10080);
+        assert_eq!(burn.over_minutes, u32::try_from(2 * day).unwrap());
+        assert_eq!(burn.per_hour, 0.5);
+    }
+
+    #[test]
+    fn the_keys_remuda_reads_are_spelled_as_decision_0003_says() {
+        let m = Machine::new("keys");
+        let now = Utc::now();
+        let fetched = m.fetch(
+            vec![payload(
+                Some("work"),
+                now,
+                window(40, now + Duration::hours(2), 300),
+            )],
+            now,
+        );
+        let window = serde_json::to_value(&fetched[0].usage.as_ref().unwrap().primary).unwrap();
+        let burn = window["burn"].as_object().unwrap();
+        assert!(burn.contains_key("perHour") && burn.contains_key("overMinutes"));
+
+        let text = std::fs::read_to_string(history_path(&m.cache)).unwrap();
+        let file: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let trail = file["trails"][0].as_object().unwrap();
+        let mut keys: Vec<&str> = trail.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "credential",
+                "provider",
+                "resetsAt",
+                "samples",
+                "window",
+                "windowMinutes"
+            ]
+        );
+        assert!(trail["samples"][0].as_array().is_some_and(|s| s.len() == 2));
     }
 }

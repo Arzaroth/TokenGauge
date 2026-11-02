@@ -1474,6 +1474,51 @@ mod tests {
         assert!(!back.contains(7));
     }
 
+    /// A pre-release build of the keys wrote them call by call, as
+    /// `{provider: {key: hour}}`. Read as a store error, that discarded every
+    /// past day the slice held for the sake of an index the next read rebuilds.
+    #[test]
+    fn unreadable_counted_keys_cost_the_keys_not_the_store() {
+        let mut store = FleetStore::default();
+        store.upsert_local(
+            &device("a"),
+            hour("2026-08-01T00"),
+            &[event("claude", "m", hour("2026-08-02T10"), 100, Some(1))],
+            1,
+        );
+        let mut json = serde_json::to_value(&store).unwrap();
+        let slice = &mut json["devices"]["a"];
+        assert!(slice["counted"].is_object(), "the fixture carries keys");
+        slice["counted"] = serde_json::json!({"claude": {"1014577875095342": "2026-08-02T10"}});
+        slice["countedFrom"] = serde_json::json!({"claude": "2026-08-01T00"});
+
+        let back: FleetStore = serde_json::from_value(json).unwrap();
+        let slice = &back.devices["a"];
+        assert_eq!(tokens_for(&back, "a"), 100, "the buckets survive");
+        assert!(slice.counted.is_empty());
+        assert!(
+            slice.counted_from.is_empty(),
+            "without its keys, a floor would read every call as uncounted"
+        );
+    }
+
+    #[test]
+    fn counted_keys_round_trip_through_the_store_file() {
+        let mut store = FleetStore::default();
+        store.upsert_local(
+            &device("a"),
+            hour("2026-08-01T00"),
+            &[event("claude", "m", hour("2026-08-02T10"), 100, Some(1))],
+            1,
+        );
+        let back: FleetStore =
+            serde_json::from_str(&serde_json::to_string(&store).unwrap()).unwrap();
+        let (before, after) = (&store.devices["a"], &back.devices["a"]);
+        assert!(!after.counted.is_empty());
+        assert_eq!(after.counted, before.counted);
+        assert_eq!(after.counted_from, before.counted_from);
+    }
+
     /// A rolled-up day is its UTC date for every reader. Read through local
     /// time, Jan 31 at UTC noon is Feb 1 at UTC+14, and moves to another month.
     #[test]

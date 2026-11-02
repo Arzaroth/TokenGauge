@@ -18,7 +18,7 @@ writes a credential it does not own.
 | Crate / dir | What |
 | --- | --- |
 | `crates/tokengauge-core` | Everything TokenGauge knows: providers, credentials, fetch, cost, sync, history, panel, snapshot, doctor. No frontend logic beyond the spec. |
-| `crates/tokengauge-waybar` | The `tokengauge` binary: waybar output, `--json`, the daemon, CLI flags, sync and export commands. |
+| `crates/tokengauge-waybar` | The `tokengauge` binary: the terminal table, waybar output (`--waybar`), `--json`, the daemon, CLI flags, sync and export commands. |
 | `crates/tokengauge-tui` | `tokengauge-tui` (ratatui). |
 | `crates/tokengauge-tray` | `tokengauge-tray` (egui + tray-icon), Windows and macOS only. |
 | `plasma/`, `gnome/`, `omarchy/` | The three desktop payloads (QML, TypeScript, QML). |

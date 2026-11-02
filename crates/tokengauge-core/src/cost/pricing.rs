@@ -15,6 +15,8 @@ use anyhow::{Context, Result};
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 
+use selvedge::usage::export::TypeCosts;
+
 use super::TokenCounts;
 use crate::model_to_provider;
 
@@ -182,6 +184,22 @@ impl ModelPrice {
             + self.cache_write_5m * t.cache_write_5m as f64
             + write_1h * t.cache_write_1h as f64
             + self.cache_read * t.cache_read as f64
+    }
+
+    /// [`ModelPrice::cost`], split by the rate each token was billed at.
+    pub fn cost_by_type(&self, t: &TokenCounts) -> TypeCosts {
+        let write_1h = if self.cache_write_1h > 0.0 {
+            self.cache_write_1h
+        } else {
+            self.cache_write_5m
+        };
+        TypeCosts {
+            input: self.input * t.input as f64,
+            output: self.output * t.output as f64,
+            cache_write: self.cache_write_5m * t.cache_write_5m as f64
+                + write_1h * t.cache_write_1h as f64,
+            cache_read: self.cache_read * t.cache_read as f64,
+        }
     }
 
     /// One request, at the long-context tier when its prompt ran past it.
@@ -649,6 +667,32 @@ pub fn load_with_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cost_by_rate_adds_up_to_the_cost() {
+        let price = ModelPrice {
+            input: 1e-6,
+            output: 2e-6,
+            cache_write_5m: 3e-6,
+            cache_write_1h: 0.0,
+            cache_read: 4e-7,
+            long_context: None,
+        };
+        let tokens = TokenCounts {
+            input: 10,
+            output: 20,
+            cache_write_5m: 30,
+            cache_write_1h: 40,
+            cache_read: 50,
+        };
+        let split = price.cost_by_type(&tokens);
+        assert!((split.total() - price.cost(&tokens)).abs() < 1e-12);
+        assert!(
+            (split.cache_write - 70.0 * 3e-6).abs() < 1e-12,
+            "a missing 1h price bills as the 5m one"
+        );
+        assert!((split.cache_read - 50.0 * 4e-7).abs() < 1e-12);
+    }
 
     #[test]
     fn an_override_moves_only_the_fields_it_names() {

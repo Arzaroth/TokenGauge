@@ -18,6 +18,7 @@ use super::contribution::{
 use super::hour::Hour;
 use crate::cost::pricing::{PriceArchive, PriceTable, month_key};
 use crate::cost::{Source, TokenCounts, UsageEvent};
+use selvedge::usage::export::{self as usage_export, Row as UsageRow, TypeCosts, UsageExport};
 
 /// The calendar step a history series advances by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -978,6 +979,81 @@ impl FleetStore {
     /// [`HOURLY_RETENTION_DAYS`] half the store has no hour left to report and
     /// a column that is exact for a month and rounded for a year is worse than
     /// one that is honest throughout.
+    /// What `--usage-json` prints: the record per local day, provider, model,
+    /// login and source, across every device, each rate priced at its month's
+    /// prices. A model with no price for its month has no cost at all, a gap
+    /// rather than a zero.
+    pub fn usage_export(
+        &self,
+        since: Option<NaiveDate>,
+        offset: FixedOffset,
+        prices: &PriceTable,
+        archive: &PriceArchive,
+        now_ms: i64,
+    ) -> UsageExport {
+        type Key = (NaiveDate, String, String, Option<String>, Source);
+        let dropped = self.dropped_days();
+        let mut tables: HashMap<String, PriceTable> = HashMap::new();
+        let mut folded: BTreeMap<Key, (TokenCounts, u64, Option<TypeCosts>)> = BTreeMap::new();
+        let mut covers_from: Option<NaiveDate> = None;
+        for (id, slice) in &self.devices {
+            for bucket in &slice.buckets {
+                if is_dropped(&dropped, bucket, id) {
+                    continue;
+                }
+                let date = bucket_date(bucket, offset);
+                covers_from = Some(covers_from.map_or(date, |from| from.min(date)));
+                if since.is_some_and(|from| date < from) {
+                    continue;
+                }
+                let month = month_key(date);
+                let table = tables
+                    .entry(month.clone())
+                    .or_insert_with(|| prices.as_of(archive, &month));
+                let entry = folded
+                    .entry((
+                        date,
+                        bucket.provider.clone(),
+                        bucket.model.clone(),
+                        bucket.login.clone(),
+                        bucket.source,
+                    ))
+                    .or_insert((TokenCounts::default(), 0, Some(TypeCosts::default())));
+                entry.0.add(&bucket.tokens);
+                entry.1 += bucket.sessions;
+                match table.get(&bucket.model) {
+                    Some(price) => {
+                        if let Some(usd) = entry.2.as_mut() {
+                            usd.add(&price.cost_by_type(&bucket.tokens));
+                        }
+                    }
+                    None => entry.2 = None,
+                }
+            }
+        }
+        UsageExport {
+            schema_version: usage_export::SCHEMA_VERSION,
+            generated_at: now_ms,
+            currency: "USD".into(),
+            covers_from: covers_from.map(|date| date.to_string()),
+            rows: folded
+                .into_iter()
+                .map(
+                    |((date, provider, model, login, source), (tokens, sessions, usd))| UsageRow {
+                        date: date.to_string(),
+                        provider,
+                        model,
+                        login,
+                        source,
+                        sessions,
+                        tokens,
+                        usd,
+                    },
+                )
+                .collect(),
+        }
+    }
+
     pub fn export_rows(
         &self,
         since: Option<NaiveDate>,
@@ -2244,6 +2320,74 @@ mod tests {
         assert_eq!(rows[0].device, "laptop");
         assert_eq!(rows[1].device, "laptop");
         assert_ne!(rows[0].device_id, rows[1].device_id);
+    }
+
+    #[test]
+    fn the_usage_export_splits_by_login_and_source_across_devices() {
+        let at = hour("2026-08-24T09");
+        let mut store = FleetStore::default();
+        let mut proxied = event("claude", "claude-sonnet-4-5", at, 50, Some(3));
+        proxied.login = Some("aa".into());
+        proxied.source = Source::Proxy;
+        let mut started = event("claude", "claude-sonnet-4-5", at, 100, Some(1));
+        started.login = Some("aa".into());
+        started.starts_session = true;
+        store.upsert_local(&device("a"), at, &[started, proxied], 0);
+        let mut other = event("claude", "claude-sonnet-4-5", at, 100, Some(2));
+        other.login = Some("aa".into());
+        store.upsert_local(&device("b"), at, &[other], 0);
+        store.upsert_local(
+            &device("c"),
+            at,
+            &[event("claude", "not-a-model-anyone-prices", at, 9, Some(4))],
+            0,
+        );
+
+        let export = store.usage_export(
+            None,
+            FixedOffset::east_opt(0).expect("offset"),
+            &PriceTable::vendored(),
+            &PriceArchive::vendored(),
+            7,
+        );
+
+        assert_eq!(export.schema_version, usage_export::SCHEMA_VERSION);
+        assert_eq!(export.covers_from.as_deref(), Some("2026-08-24"));
+        type Seen<'a> = (&'a str, Option<&'a str>, Source, u64, u64, bool);
+        let rows: Vec<Seen> = export
+            .rows
+            .iter()
+            .map(|r| {
+                (
+                    r.model.as_str(),
+                    r.login.as_deref(),
+                    r.source,
+                    r.tokens.output,
+                    r.sessions,
+                    r.usd.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("claude-sonnet-4-5", Some("aa"), Source::Cli, 200, 1, true),
+                ("claude-sonnet-4-5", Some("aa"), Source::Proxy, 50, 0, true),
+                ("not-a-model-anyone-prices", None, Source::Cli, 9, 0, false),
+            ]
+        );
+        let usd = export.rows[0].usd.expect("priced");
+        assert!(usd.output > 0.0 && usd.input == 0.0);
+
+        let later = store.usage_export(
+            Some("2026-08-25".parse().expect("date")),
+            FixedOffset::east_opt(0).expect("offset"),
+            &PriceTable::vendored(),
+            &PriceArchive::vendored(),
+            7,
+        );
+        assert!(later.rows.is_empty());
+        assert_eq!(later.covers_from.as_deref(), Some("2026-08-24"));
     }
 
     #[test]

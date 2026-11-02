@@ -34,18 +34,18 @@ const COLUMNS: &[&str] = &[
     "usd",
 ];
 
-pub(crate) fn run(
-    config: &TokenGaugeConfig,
-    format: ExportFormat,
-    since: Option<&str>,
-) -> Result<()> {
-    let since = since
+fn parse_since(since: Option<&str>) -> Result<Option<NaiveDate>> {
+    since
         .map(|text| {
             text.parse::<NaiveDate>()
                 .with_context(|| format!("--since wants a date as YYYY-MM-DD, not `{text}`"))
         })
-        .transpose()?;
+        .transpose()
+}
 
+fn load(
+    config: &TokenGaugeConfig,
+) -> Result<(tokengauge_core::sync::FleetStore, pricing::PriceTable)> {
     let (store, error) = tokengauge_core::sync::store::load(&config.cache_file);
     // A store that would not parse exports an empty file, which downstream
     // reads as "nothing was spent". Say so on stderr and fail, rather than let
@@ -53,12 +53,42 @@ pub(crate) fn run(
     if let Some(error) = error {
         anyhow::bail!("{error}");
     }
-
     let prices = pricing::load(
         &config.cache_file,
         std::time::Duration::from_secs(config.ccusage_timeout_secs),
         false,
     );
+    Ok((store, prices))
+}
+
+/// `--usage-json`: the document `selvedge::usage::export` declares, for
+/// remuda's usage page, which draws it and prices nothing itself.
+pub(crate) fn usage(config: &TokenGaugeConfig, since: Option<&str>) -> Result<()> {
+    let since = parse_since(since)?;
+    let (store, prices) = load(config)?;
+    let now = chrono::Local::now();
+    let export = store.usage_export(
+        since,
+        *now.offset(),
+        &prices,
+        pricing::archive(),
+        now.timestamp_millis(),
+    );
+    let stdout = io::stdout();
+    let mut out = io::BufWriter::new(stdout.lock());
+    serde_json::to_writer(&mut out, &export)?;
+    writeln!(out)?;
+    out.flush()?;
+    Ok(())
+}
+
+pub(crate) fn run(
+    config: &TokenGaugeConfig,
+    format: ExportFormat,
+    since: Option<&str>,
+) -> Result<()> {
+    let since = parse_since(since)?;
+    let (store, prices) = load(config)?;
     let now = chrono::Local::now();
     let rows = store.export_rows(since, *now.offset(), &prices, pricing::archive());
 

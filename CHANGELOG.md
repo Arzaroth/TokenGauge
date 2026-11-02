@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   proxy by clients that keep no transcript are counted too, once. Codex
   sessions name their own login. The record keeps the split and the number of
   sessions for 400 days, ready for remuda's usage page.
+- `tokengauge --usage-json [--since YYYY-MM-DD]` prints that record as one JSON
+  document, a row per day, provider, model, login and source, with the
+  sessions begun and the cost of each rate. remuda's usage page draws it.
 
 ## [0.51.0] - 2026-11-01
 

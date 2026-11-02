@@ -65,7 +65,7 @@ const _: () = assert!(HOURLY_RETENTION_DAYS >= WIRE_RETENTION_DAYS);
 
 /// What one device has contributed, as this machine holds it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "StoredSlice")]
 pub struct DeviceSlice {
     pub device: DeviceRecord,
     pub updated_at_ms: i64,
@@ -91,6 +91,61 @@ pub struct DeviceSlice {
     /// nothing either way.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub counted_from: BTreeMap<String, Hour>,
+}
+
+/// A [`DeviceSlice`] as the store file holds it. `counted` is an index the
+/// next whole read rebuilds, while the buckets beside it are the only record
+/// of their days, so keys in a shape this build cannot read are dropped rather
+/// than failing the store. `counted_from` goes with them: kept alone, it would
+/// say every call from there on is uncounted.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredSlice {
+    device: DeviceRecord,
+    updated_at_ms: i64,
+    covers_from: Option<Hour>,
+    #[serde(default)]
+    buckets: Vec<Bucket>,
+    #[serde(default)]
+    days: Vec<DayDigest>,
+    #[serde(default)]
+    adopted: Vec<Adopted>,
+    #[serde(default)]
+    counted: StoredCounted,
+    #[serde(default)]
+    counted_from: BTreeMap<String, Hour>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredCounted {
+    Keys(BTreeMap<String, BTreeMap<Hour, KeySet>>),
+    Unreadable(serde::de::IgnoredAny),
+}
+
+impl Default for StoredCounted {
+    fn default() -> Self {
+        Self::Keys(BTreeMap::new())
+    }
+}
+
+impl From<StoredSlice> for DeviceSlice {
+    fn from(stored: StoredSlice) -> Self {
+        let (counted, counted_from) = match stored.counted {
+            StoredCounted::Keys(counted) => (counted, stored.counted_from),
+            StoredCounted::Unreadable(_) => (BTreeMap::new(), BTreeMap::new()),
+        };
+        Self {
+            device: stored.device,
+            updated_at_ms: stored.updated_at_ms,
+            covers_from: stored.covers_from,
+            buckets: stored.buckets,
+            days: stored.days,
+            adopted: stored.adopted,
+            counted,
+            counted_from,
+        }
+    }
 }
 
 /// The keys of the calls one hour of one provider counts, folded to 32 bits
@@ -1417,6 +1472,51 @@ mod tests {
         assert_eq!(back, keys);
         assert!(back.contains(0xdead_beef_0000_0001));
         assert!(!back.contains(7));
+    }
+
+    /// A pre-release build of the keys wrote them call by call, as
+    /// `{provider: {key: hour}}`. Read as a store error, that discarded every
+    /// past day the slice held for the sake of an index the next read rebuilds.
+    #[test]
+    fn unreadable_counted_keys_cost_the_keys_not_the_store() {
+        let mut store = FleetStore::default();
+        store.upsert_local(
+            &device("a"),
+            hour("2026-08-01T00"),
+            &[event("claude", "m", hour("2026-08-02T10"), 100, Some(1))],
+            1,
+        );
+        let mut json = serde_json::to_value(&store).unwrap();
+        let slice = &mut json["devices"]["a"];
+        assert!(slice["counted"].is_object(), "the fixture carries keys");
+        slice["counted"] = serde_json::json!({"claude": {"1014577875095342": "2026-08-02T10"}});
+        slice["countedFrom"] = serde_json::json!({"claude": "2026-08-01T00"});
+
+        let back: FleetStore = serde_json::from_value(json).unwrap();
+        let slice = &back.devices["a"];
+        assert_eq!(tokens_for(&back, "a"), 100, "the buckets survive");
+        assert!(slice.counted.is_empty());
+        assert!(
+            slice.counted_from.is_empty(),
+            "without its keys, a floor would read every call as uncounted"
+        );
+    }
+
+    #[test]
+    fn counted_keys_round_trip_through_the_store_file() {
+        let mut store = FleetStore::default();
+        store.upsert_local(
+            &device("a"),
+            hour("2026-08-01T00"),
+            &[event("claude", "m", hour("2026-08-02T10"), 100, Some(1))],
+            1,
+        );
+        let back: FleetStore =
+            serde_json::from_str(&serde_json::to_string(&store).unwrap()).unwrap();
+        let (before, after) = (&store.devices["a"], &back.devices["a"]);
+        assert!(!after.counted.is_empty());
+        assert_eq!(after.counted, before.counted);
+        assert_eq!(after.counted_from, before.counted_from);
     }
 
     /// A rolled-up day is its UTC date for every reader. Read through local

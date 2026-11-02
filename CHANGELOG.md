@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Spend history no longer disappears when the fleet store holds dedup keys in
+  a shape the running build cannot read. The whole store used to be set aside
+  as `tokengauge-fleet.json.rejected` and history restarted from whatever
+  transcripts were left; now only the keys are dropped, and the next read
+  rebuilds them.
+
 ## [0.53.0] - 2026-11-02
 
 ### Added

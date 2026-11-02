@@ -194,6 +194,33 @@ mod tests {
         assert!(no_config_but_covered.label.contains("Plasma, GNOME"));
     }
 
+    #[test]
+    fn a_module_still_running_plain_tokengauge_is_flagged() {
+        let path = Path::new("/home/u/.config/waybar/config.jsonc");
+        let old = r#"{
+  // the gauge
+  "custom/tokengauge": { "exec": "tokengauge", "return-type": "json" }
+}"#;
+        let check = bar_wiring_check(path, Some(old), &[]);
+        assert!(!check.ok);
+        assert!(
+            check.detail.contains("tokengauge --waybar"),
+            "{}",
+            check.detail
+        );
+
+        let new = r#"{"custom/tokengauge": {"exec": "tokengauge --waybar"}}"#;
+        assert!(bar_wiring_check(path, Some(new), &[]).ok);
+        let full = r#"{"custom/tokengauge": {"exec": "/usr/bin/tokengauge"}}"#;
+        assert!(!bar_wiring_check(path, Some(full), &[]).ok);
+        let alias = r#"{"custom/tokengauge": {"exec": "tokengauge-waybar"}}"#;
+        assert!(
+            bar_wiring_check(path, Some(alias), &[]).ok,
+            "the old name still prints the payload"
+        );
+        assert_eq!(module_exec(r#"{"modules-right":["clock"]}"#), None);
+    }
+
     /// The check is about the launcher being on PATH, so it has to name the
     /// binary it could not find rather than the whole command line.
     #[test]

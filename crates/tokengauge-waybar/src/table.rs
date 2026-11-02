@@ -18,6 +18,7 @@ struct Line {
     used: u8,
     reset: String,
     pace: Option<UsagePace>,
+    stale: bool,
 }
 
 /// A window's length the way a person says it.
@@ -82,6 +83,7 @@ fn lines_of(who: &str, row: &ProviderRow, out: &mut Vec<Line>) {
                 used,
                 reset: short_reset(reset),
                 pace,
+                stale: row.stale,
             });
         }
     }
@@ -214,8 +216,13 @@ pub fn render(
             "provider", "window", "used"
         )?;
         for l in &lines {
+            let cached = if l.stale {
+                format!("  {dim}(last figures, the fetch failed){reset}")
+            } else {
+                String::new()
+            };
             let line = format!(
-                "{:who$}  {:window$}  {} {:>4}%  {}",
+                "{:who$}  {:window$}  {} {:>4}%  {}{cached}",
                 l.who,
                 l.window,
                 bar(l.used, ink),

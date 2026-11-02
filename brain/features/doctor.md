@@ -12,7 +12,7 @@ A grouped diagnostic checklist: `tokengauge --doctor` (Linux, macOS) or
 | Dependencies | ccusage runner; `notify-send` and `xdg-open` on Linux |
 | Filesystem | resolved snapshot path, writable directory, fleet store size and reach |
 | Providers | enabled list and a live fetch per provider |
-| Bar wiring | waybar module wired (`tokengauge` on Linux only) |
+| Bar wiring | waybar module wired, its `exec` either `tokengauge --waybar` or the legacy `tokengauge-waybar` name, read from the module's definition (`tokengauge` on Linux only) |
 | Fleet sync | key, per-device status, overlap pairs, cloned ids, narrower provider sets, orphan candidates, providers that cannot sync |
 | Updates | installed version, update available |
 | Desktop UIs | Plasma / GNOME / Omarchy payload versions (Linux only) |

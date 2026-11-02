@@ -22,7 +22,18 @@ feature.
 
 ## Per-surface notes
 
-- **Waybar.** Bar text per provider with brand icons and CSS tier classes
+- **Terminal.** Plain `tokengauge` prints a table (`table.rs`): a line per
+  window, one per stored login where a provider has several, with a bar, the
+  percent and a two-unit reset, marked when its figures are kept from before a
+  failed fetch; then the window that runs out soonest, else one already
+  spent, else the one projecting furthest past where it stands; then the
+  month's cost, counted once per provider, across the machines fleet sync
+  reports, shown even when no window is. Coloured through `term::Ink` on a terminal unless
+  `NO_COLOR` is set. Its rows come the way the bar's do (the cache while
+  another process refreshes, else `maybe_refresh`).
+- **Waybar.** Runs `tokengauge --waybar`, or the bare `tokengauge-waybar`
+  name configs from before 0.23 use (`Args::waybar_alias`); `--doctor` flags
+  a module whose `exec` is still plain `tokengauge`. Bar text per provider with brand icons and CSS tier classes
   (`tokengauge-warn`, `-crit`, `-error`, `-stale`). Scroll rotates providers,
   left-click runs `--click` (the TUI in a terminal, resolved by
   `launch::tui_command`: `[waybar] tui_command`, `omarchy-launch-or-focus-tui`,
@@ -57,7 +68,7 @@ feature.
 
 ## Sources
 
-- `crates/tokengauge-waybar/src/{main,render,snapshot,daemon}.rs`
+- `crates/tokengauge-waybar/src/{main,render,snapshot,daemon,table}.rs`, `crates/tokengauge-core/src/term.rs`
 - `crates/tokengauge-tui/src/{app,ui,history_view,sync_view,refresh}.rs`
 - `crates/tokengauge-tray/src/main.rs`
 - `plasma/org.tokengauge.plasmoid/contents/ui/{main,Service,FullRep,CompactRep,ConfigGeneral}.qml`

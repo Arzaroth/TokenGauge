@@ -54,6 +54,31 @@ fn waybar_config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("~/.config/waybar/config.jsonc"))
 }
 
+/// The `exec` of the `custom/tokengauge` module, read straight from the
+/// config's text: it is JSON with comments, and only this one string matters.
+fn module_exec(contents: &str) -> Option<&str> {
+    let key = "\"custom/tokengauge\"";
+    let module = contents.match_indices(key).find_map(|(at, _)| {
+        let rest = contents[at + key.len()..].trim_start().strip_prefix(':')?;
+        rest.trim_start()
+            .starts_with('{')
+            .then_some(rest.trim_start())
+    })?;
+    let module = &module[..module.find('}').unwrap_or(module.len())];
+    let after = &module[module.find("\"exec\"")? + "\"exec\"".len()..];
+    let after = after.trim_start().strip_prefix(':')?.trim_start();
+    let value = after.strip_prefix('"')?;
+    Some(&value[..value.find('"')?])
+}
+
+/// An exec that runs the binary, under its own name, with no flag at all.
+fn runs_plain(exec: &str) -> bool {
+    let mut words = exec.split_whitespace();
+    let program = words.next().unwrap_or_default();
+    let name = program.rsplit('/').next().unwrap_or(program);
+    name == "tokengauge" && words.next().is_none()
+}
+
 /// `contents` is `None` when there is no waybar config to read.
 ///
 /// Waybar is one surface of several now, so its module is only missing-and-
@@ -63,6 +88,11 @@ fn waybar_config_path() -> PathBuf {
 fn bar_wiring_check(waybar_cfg: &Path, contents: Option<&str>, drawn_by: &[&str]) -> DoctorCheck {
     let drawn_by_text = drawn_by.join(", ");
     match contents {
+        Some(contents) if module_exec(contents).is_some_and(runs_plain) => DoctorCheck {
+            label: format!("module wired in {}", waybar_cfg.display()),
+            ok: false,
+            detail: "its exec runs plain tokengauge, which prints a table since 0.53: make it \"tokengauge --waybar\", or run scripts/install.sh again".into(),
+        },
         Some(contents) => {
             let wired = contents.contains("custom/tokengauge");
             DoctorCheck {
@@ -167,6 +197,41 @@ mod tests {
         let no_config_but_covered = bar_wiring_check(path, None, &["Plasma", "GNOME"]);
         assert!(no_config_but_covered.ok);
         assert!(no_config_but_covered.label.contains("Plasma, GNOME"));
+    }
+
+    #[test]
+    fn a_module_still_running_plain_tokengauge_is_flagged() {
+        let path = Path::new("/home/u/.config/waybar/config.jsonc");
+        let old = r#"{
+  // the gauge
+  "custom/tokengauge": { "exec": "tokengauge", "return-type": "json" }
+}"#;
+        let check = bar_wiring_check(path, Some(old), &[]);
+        assert!(!check.ok);
+        assert!(
+            check.detail.contains("tokengauge --waybar"),
+            "{}",
+            check.detail
+        );
+
+        let new = r#"{"custom/tokengauge": {"exec": "tokengauge --waybar"}}"#;
+        assert!(bar_wiring_check(path, Some(new), &[]).ok);
+        let full = r#"{"custom/tokengauge": {"exec": "/usr/bin/tokengauge"}}"#;
+        assert!(!bar_wiring_check(path, Some(full), &[]).ok);
+        let alias = r#"{"custom/tokengauge": {"exec": "tokengauge-waybar"}}"#;
+        assert!(
+            bar_wiring_check(path, Some(alias), &[]).ok,
+            "the old name still prints the payload"
+        );
+        assert_eq!(module_exec(r#"{"modules-right":["clock"]}"#), None);
+
+        let listed_first = r#"{
+  "modules-right": ["custom/tokengauge", "clock"],
+  "clock": {"format": "{:%H:%M}"},
+  "custom/tokengauge": {"exec": "tokengauge"}
+}"#;
+        assert_eq!(module_exec(listed_first), Some("tokengauge"));
+        assert!(!bar_wiring_check(path, Some(listed_first), &[]).ok);
     }
 
     /// The check is about the launcher being on PATH, so it has to name the

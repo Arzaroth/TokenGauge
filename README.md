@@ -95,6 +95,26 @@ curl -fsSL https://raw.githubusercontent.com/Arzaroth/TokenGauge/master/scripts/
 
 `TOKENGAUGE_PLACEMENT=left` also works. The choice is persisted in `~/.config/tokengauge/config.toml` under `[waybar] placement`; re-running the installer with a different `--placement` migrates the module to the other side.
 
+## At a terminal
+
+Plain `tokengauge` prints where every window stands:
+
+```
+provider      window  used                        resets
+claude        5h      ████████████░░░░░░░░   58%  in 1h 52m
+claude        weekly  ████████░░░░░░░░░░░░   36%  in 3d 4h
+codex         5h      ███░░░░░░░░░░░░░░░░░   14%  in 4h 10m
+
+at reset    claude 5h lands near 81%
+this month  $41.20 across 3 machines
+```
+
+A provider with several stored logins gets a line per login (`claude/work`).
+`at reset` is the window heading furthest past where it stands, and `this
+month` the month's cost, across machines when fleet sync is on. It is
+coloured on a terminal unless `NO_COLOR` is set. Waybar runs
+`tokengauge --waybar` for its payload.
+
 ## Mouse + keyboard
 
 ### Waybar mouse buttons
@@ -450,11 +470,11 @@ systemctl --user enable --now tokengauge-daemon
 
 When the daemon is running:
 
-- The 60-second waybar polls become near-instant: the bare `tokengauge` binary fetches the daemon's in-memory state via a Unix socket instead of fetching usage and spawning ccusage on every tick.
+- The 60-second waybar polls become near-instant: `tokengauge --waybar` fetches the daemon's in-memory state via a Unix socket instead of fetching usage and spawning ccusage on every tick.
 - Right-click refresh, scroll rotate, and middle/back click for dashboard/status all route through the daemon so the next waybar snapshot reflects the new state immediately.
 - Threshold notifications fire from the daemon even if you never interact with waybar.
 
-Waybar config is unchanged - same `exec: tokengauge` with `interval: 60`. The binary auto-detects the socket and uses it; without the daemon it falls back to direct fetch.
+Waybar config is unchanged - same `exec: tokengauge --waybar` with `interval: 60`. The binary auto-detects the socket and uses it; without the daemon it falls back to direct fetch.
 
 The daemon also reloads its config on `SIGHUP` (`pkill -HUP -f 'tokengauge(-waybar)? --daemon'` - the old binary name still
 starts daemons from an existing unit) so theme / refresh_secs / providers / click action changes take effect without a restart.
@@ -619,7 +639,7 @@ add this to `~/.config/waybar/config.jsonc`:
 
 ```jsonc
 "custom/tokengauge": {
-  "exec": "tokengauge",
+  "exec": "tokengauge --waybar",
   "return-type": "json",
   "interval": 60,
   "signal": 8,

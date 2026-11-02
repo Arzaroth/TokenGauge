@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Plain `tokengauge` prints where every window stands, as a table: a line per
+  window and per stored login, with a bar, the percent and when it resets,
+  then the window heading furthest past where it stands and the month's cost
+  across machines. Coloured on a terminal unless `NO_COLOR` is set.
+
+### Changed
+
+- **Waybar now runs `tokengauge --waybar`.** Plain `tokengauge` used to print
+  the waybar payload; it now prints the table above, so a waybar module whose
+  `exec` is still `tokengauge` shows the table's text until it is changed.
+  Make it `"exec": "tokengauge --waybar"`, or run the installer again, which
+  rewrites the module after backing the config up. `tokengauge --doctor` says
+  when a module still needs it. Configs from before 0.23 that run
+  `tokengauge-waybar` keep working unchanged.
+
 ## [0.52.0] - 2026-11-02
 
 ### Added

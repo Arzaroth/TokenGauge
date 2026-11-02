@@ -4,6 +4,7 @@ mod export;
 mod render;
 mod snapshot;
 mod sync_cli;
+mod table;
 
 use daemon::*;
 use doctor::*;
@@ -71,9 +72,17 @@ pub struct Args {
     click: bool,
     /// Emit the full snapshot as one JSON object (rows, errors, enabled,
     /// primary, theme, window) for non-waybar frontends such as the KDE
-    /// Plasma applet. Does not affect the default waybar output line.
+    /// Plasma applet.
     #[arg(long)]
     json: bool,
+    /// Print one waybar payload: what a waybar `custom/tokengauge` module
+    /// runs. With no flag at all, tokengauge prints a table for a terminal.
+    #[arg(long)]
+    waybar: bool,
+    /// Started as `tokengauge-waybar`, the name configs from before 0.23 run,
+    /// where no flag still means the waybar payload.
+    #[arg(skip)]
+    waybar_alias: bool,
     /// Block until the snapshot on disk changes, then exit 0. Lets a frontend
     /// whose toolkit cannot watch a file long-poll (`--wait-change && --json`)
     /// instead of re-reading on a timer.
@@ -219,9 +228,10 @@ enum Action {
     Refresh,
     Rotate(RotateDir),
     Open(OpenTarget),
-    /// No action flag: emit one waybar payload and exit. The default because
-    /// this is what waybar itself runs, on a timer, with no arguments.
+    /// `--waybar`: emit one waybar payload and exit.
     Bar,
+    /// No action flag: the table for a terminal.
+    Table,
 }
 
 impl Action {
@@ -281,6 +291,9 @@ impl Action {
         if let Some(format) = args.export {
             add!("--export", Action::Export(format));
         }
+        if args.waybar {
+            add!("--waybar", Action::Bar);
+        }
         if args.usage_json {
             add!("--usage-json", Action::UsageJson);
         }
@@ -313,12 +326,25 @@ impl Action {
         if args.since.is_some() && args.export.is_none() && !args.usage_json {
             anyhow::bail!("--since only applies to --export and --usage-json");
         }
-        Ok(asked.pop().map(|(_, action)| action).unwrap_or(Action::Bar))
+        let default = if args.waybar_alias {
+            Action::Bar
+        } else {
+            Action::Table
+        };
+        Ok(asked.pop().map(|(_, action)| action).unwrap_or(default))
     }
 }
 
 fn main() -> Result<()> {
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.waybar_alias = std::env::args_os()
+        .next()
+        .and_then(|zero| {
+            Path::new(&zero)
+                .file_name()
+                .map(|name| name == "tokengauge-waybar")
+        })
+        .unwrap_or(false);
     let config_path = args
         .config
         .clone()
@@ -400,6 +426,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Action::Bar => emit_bar(&config),
+        Action::Table => emit_table(&config),
     }
 }
 
@@ -435,6 +462,20 @@ fn emit_bar(config: &TokenGaugeConfig) -> Result<()> {
     let rows = payload_to_rows_with_costs(payloads, &costs);
     let output = render_output(config, &rows, &errors, false);
     println!("{}", serde_json::to_string(&output)?);
+    Ok(())
+}
+
+/// The table plain `tokengauge` prints. A refresh another process is running
+/// is not waited on: the cache it will replace is what there is.
+fn emit_table(config: &TokenGaugeConfig) -> Result<()> {
+    let (rows, errors) = if refresh_in_progress(&refresh_sentinel_path(&config.cache_file)) {
+        rows_from_cache(config)
+    } else {
+        let (payloads, errors, costs) = maybe_refresh(config)?;
+        (payload_to_rows_with_costs(payloads, &costs), errors)
+    };
+    let ink = tokengauge_core::term::Ink::new(tokengauge_core::term::styled());
+    table::render(&rows, &errors, &ink, &mut std::io::stdout().lock())?;
     Ok(())
 }
 
@@ -849,10 +890,22 @@ mod tests {
         ));
     }
 
-    /// No flags is what waybar itself runs, on a timer.
+    /// No flags is a person at a terminal; waybar asks with --waybar, or
+    /// through the old `tokengauge-waybar` name.
     #[test]
-    fn no_flags_draws_the_bar() {
-        assert!(matches!(action_for(&[]).expect("default"), Action::Bar));
+    fn no_flags_prints_the_table_and_waybar_asks_for_its_payload() {
+        assert!(matches!(action_for(&[]).expect("default"), Action::Table));
+        assert!(matches!(
+            action_for(&["--waybar"]).expect("bar"),
+            Action::Bar
+        ));
+        assert!(action_for(&["--waybar", "--json"]).is_err());
+        let mut alias = Args::parse_from(["tokengauge-waybar"]);
+        alias.waybar_alias = true;
+        assert!(matches!(
+            Action::from_args(&alias).expect("alias"),
+            Action::Bar
+        ));
     }
 
     #[test]

@@ -49,12 +49,8 @@ pub fn handle_doctor(
 }
 
 pub fn render(lines: &[DoctorLine]) -> i32 {
-    let isatty = std::io::IsTerminal::is_terminal(&std::io::stdout());
-    let (green, red, dim, reset) = if isatty {
-        ("\x1b[32m", "\x1b[31m", "\x1b[2m", "\x1b[0m")
-    } else {
-        ("", "", "", "")
-    };
+    let ink = crate::term::Ink::new(crate::term::styled());
+    let (green, red, dim, reset) = (ink.good, ink.bad, ink.dim, ink.reset);
 
     println!("TokenGauge doctor");
     for line in visible(lines) {

@@ -222,6 +222,7 @@ fn window_pace(
         window.window_minutes,
         window.resets_at.as_deref(),
         anchor,
+        window.burn.as_ref(),
     )
 }
 

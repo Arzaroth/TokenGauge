@@ -122,21 +122,40 @@ fn bar(used: u8, ink: &Ink) -> String {
 /// The window heading furthest past where it stands: run out before its reset,
 /// or land highest at it.
 fn pace_line(lines: &[Line]) -> Option<String> {
+    let which = |l: &Line| format!("{} {}", l.who, l.window);
+    let runs_out = |l: &Line| {
+        l.pace
+            .filter(|p| !p.will_last_to_reset && l.used < 100)
+            .and_then(|p| p.eta_seconds)
+    };
+    if let Some((line, eta)) = lines
+        .iter()
+        .filter_map(|l| runs_out(l).map(|eta| (l, eta)))
+        .min_by_key(|(_, eta)| *eta)
+    {
+        return Some(format!(
+            "{} runs out in {}",
+            which(line),
+            format_duration(eta / 60, 2)
+        ));
+    }
+    if let Some(spent) = lines.iter().find(|l| l.used >= 100) {
+        return Some(if spent.reset.is_empty() {
+            format!("{} is spent", which(spent))
+        } else {
+            format!("{} is spent until it resets {}", which(spent), spent.reset)
+        });
+    }
     let (line, pace) = lines
         .iter()
         .filter_map(|l| l.pace.map(|p| (l, p)))
         .filter(|(l, p)| p.projected_percent > f64::from(l.used) + 0.5)
         .max_by(|a, b| a.1.projected_percent.total_cmp(&b.1.projected_percent))?;
-    let which = format!("{} {}", line.who, line.window);
-    Some(
-        match pace.eta_seconds.filter(|_| !pace.will_last_to_reset) {
-            Some(eta) => format!("{which} runs out in {}", format_duration(eta / 60, 2)),
-            None => format!(
-                "{which} lands near {}%",
-                pace.projected_percent.round().min(100.0)
-            ),
-        },
-    )
+    Some(format!(
+        "{} lands near {}%",
+        which(line),
+        pace.projected_percent.round().min(100.0)
+    ))
 }
 
 /// The month's cost, counted once per provider, and how many machines it
@@ -168,7 +187,8 @@ pub fn render(
     let Ink {
         dim, accent, reset, ..
     } = *ink;
-    if lines.is_empty() && errors.is_empty() {
+    let month = month_line(rows);
+    if lines.is_empty() && errors.is_empty() && month.is_none() {
         return writeln!(
             out,
             "no usage yet: enable a provider in the config, or run `tokengauge --doctor`"
@@ -206,7 +226,6 @@ pub fn render(
         }
     }
     let pace = pace_line(&lines);
-    let month = month_line(rows);
     if pace.is_some() || month.is_some() {
         writeln!(out)?;
     }

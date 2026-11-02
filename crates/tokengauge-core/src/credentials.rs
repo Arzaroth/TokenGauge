@@ -102,7 +102,7 @@ impl StoredCredential {
     pub fn account_digest(&self) -> Option<String> {
         self.account_id
             .as_deref()
-            .map(|id| hex_sha256(id.as_bytes())[..16].to_string())
+            .map(selvedge::usage::account_digest)
     }
 
     /// Whether the sidecar was written for these tokens.

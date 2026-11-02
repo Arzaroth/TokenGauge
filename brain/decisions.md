@@ -138,7 +138,9 @@ keeping inactive tokens alive are the switcher's job.
 - *Symlinking the CLI's file into the store*: a CLI that writes with temp file +
   rename replaces the symlink and the store silently stops following.
 - *Per-credential cost*: transcripts carry no credential identity, so cost,
-  events, buckets, history and sync stay provider-scoped.
+  events, buckets, history and sync stay provider-scoped. Superseded by
+  [0006](#0006-spend-is-attributed-from-what-remuda-recorded): remuda now writes
+  down which login spent what, and spend is split by login from then on.
 - *A credential as its own provider* (`claude-2`): the provider is the unit of
   enable/disable, cost readers and brand, none of which multiply.
 
@@ -303,3 +305,42 @@ not write into a home.
 - *Install the schema XML into `/usr/share/glib-2.0/schemas` and let the
   distribution compile it*: the shell reads an extension's own `schemas/` first
   and fails when it holds no compiled blob.
+
+### 0006 Spend is attributed from what remuda recorded
+
+**Decision.** Each billed request carries the login that spent it, as an
+account digest, from what remuda writes into its store: its attribution
+ledger (`.attribution.jsonl`) and its proxy's request log
+(`.proxy-requests.jsonl`). Both formats, and the rule for reading the ledger,
+are `selvedge::usage`, shared with the writer. The rule, in order:
+
+1. a request remuda's proxy logged takes the login the log names;
+2. a Codex request takes the seat its rollout names (`creator_user_id` and
+   `creator_account_id` in `session_meta`, which remuda files a login under as
+   `<user>__<account>`);
+3. a Claude request whose session a `remuda run` claimed takes that run's
+   login;
+4. anything else takes the login the ledger says the CLI's files held when it
+   was billed;
+5. before the ledger's first line, nobody's.
+
+A proxied request that Claude Code's transcript also holds (same message id
+and request id) adds no tokens; one no transcript holds is an event of its own
+(`source: proxy`). Buckets carry `l` (the login), `s` (sessions begun in the
+bucket) and `src`, each left out when empty, so the wire format and
+`SCHEMA_VERSION` stay as they were and an older peer keeps the totals.
+
+**Why.** The usage page remuda draws wants spend per login, and the only
+process that knows which login a request spent is the one that installed it.
+Nothing is inferred backwards from the switch log: it cannot see `remuda run`
+sessions beside the live login, nor a login changed outside remuda.
+
+**Rejected.**
+- *Attributing the past from remuda's switch log*: wrong for every run session
+  and every outside change, and indistinguishable from right once written.
+- *A login per bucket from the device's live credential at read time*: a read
+  covers a month, across switches.
+- *The account id itself in the record*: the record syncs between machines, and
+  no account id reaches anything written; the 16-hex digest is enough to match
+  remuda's sidecars.
+

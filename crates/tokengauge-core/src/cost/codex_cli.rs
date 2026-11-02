@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::Deserialize;
 
-use super::{TokenCounts, UsageEvent, dedup_key, jsonl_files};
+use super::{Firsts, TokenCounts, UsageEvent, dedup_key, first_seen, jsonl_files};
 use crate::model_to_provider;
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +67,12 @@ struct Payload {
     /// child's own. Absent on every ordinary session.
     #[serde(default)]
     subagent_history_start_ordinal: Option<u64>,
+    /// `session_meta`: the seat the session ran on, which remuda files a
+    /// Codex login under as `<user>__<account>`.
+    #[serde(default)]
+    creator_user_id: Option<String>,
+    #[serde(default)]
+    creator_account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -252,6 +258,7 @@ pub fn read_events(
     roots: &[PathBuf],
     since: NaiveDate,
     seen: &mut HashSet<u64>,
+    firsts: &mut Firsts,
     gaps: &mut Vec<PathBuf>,
 ) -> Vec<UsageEvent> {
     let mut events = Vec::new();
@@ -264,7 +271,7 @@ pub fn read_events(
     let mut totals: HashMap<String, Cumulative> = HashMap::new();
     for root in roots {
         for file in jsonl_files(root, since, gaps) {
-            if !read_file(&file, since, seen, &mut totals, &mut events) {
+            if !read_file(&file, since, seen, &mut totals, firsts, &mut events) {
                 gaps.push(file.clone());
             }
         }
@@ -277,6 +284,7 @@ pub(super) fn read_file(
     since: NaiveDate,
     seen: &mut HashSet<u64>,
     totals: &mut HashMap<String, Cumulative>,
+    firsts: &mut Firsts,
     events: &mut Vec<UsageEvent>,
 ) -> bool {
     let Ok(contents) = std::fs::read_to_string(path) else {
@@ -304,6 +312,7 @@ pub(super) fn read_file(
     let mut bare_rows = 0usize;
     // Set only by a subagent rollout. See trap 6.
     let mut subagent_start: Option<u64> = None;
+    let mut login: Option<String> = None;
 
     for line in contents.lines() {
         let Ok(record) = serde_json::from_str::<Record>(line) else {
@@ -335,6 +344,7 @@ pub(super) fn read_file(
             let Some(at) = at else {
                 continue;
             };
+            first_seen(firsts, &session_id, at);
             let date = at.with_timezone(&Local).date_naive();
             if date < since {
                 continue;
@@ -368,6 +378,10 @@ pub(super) fn read_file(
                 tokens,
                 key: Some(key),
                 one_request: false,
+                session: Some(session_id.clone()),
+                starts_session: false,
+                login: login.clone(),
+                source: crate::cost::Source::Cli,
             });
             continue;
         };
@@ -378,6 +392,17 @@ pub(super) fn read_file(
             }
             if let Some(start) = payload.subagent_history_start_ordinal {
                 subagent_start = Some(start);
+            }
+            if let (Some(user), Some(account)) = (
+                payload.creator_user_id.as_deref().filter(|u| !u.is_empty()),
+                payload
+                    .creator_account_id
+                    .as_deref()
+                    .filter(|a| !a.is_empty()),
+            ) {
+                login = Some(selvedge::usage::account_digest(&format!(
+                    "{user}__{account}"
+                )));
             }
             if model.is_none()
                 && let Some(m) = payload.model.as_deref()
@@ -440,6 +465,7 @@ pub(super) fn read_file(
         let Ok(timestamp) = record.timestamp.parse::<DateTime<Utc>>() else {
             continue;
         };
+        first_seen(firsts, &session_id, timestamp);
         let date = timestamp.with_timezone(&Local).date_naive();
         if date < since {
             continue;
@@ -467,6 +493,10 @@ pub(super) fn read_file(
             tokens,
             key: Some(key),
             one_request,
+            session: Some(session_id.clone()),
+            starts_session: false,
+            login: login.clone(),
+            source: crate::cost::Source::Cli,
         });
     }
 
@@ -511,7 +541,14 @@ mod tests {
         let mut seen = HashSet::new();
         let mut totals = HashMap::new();
         let mut events = Vec::new();
-        read_file(&path, since, &mut seen, &mut totals, &mut events);
+        read_file(
+            &path,
+            since,
+            &mut seen,
+            &mut totals,
+            &mut Firsts::new(),
+            &mut events,
+        );
         let _ = std::fs::remove_dir_all(&dir);
         events
     }
@@ -550,6 +587,31 @@ mod tests {
         let events = read(&lines);
         let one: Vec<bool> = events.iter().map(|e| e.one_request).collect();
         assert_eq!(one, [true, true, false]);
+    }
+
+    #[test]
+    fn a_codex_session_is_the_login_of_the_seat_it_names() {
+        let meta = r#"{"timestamp":"2026-05-11T06:17:00.000Z","type":"session_meta","payload":{"id":"sess-1","creator_user_id":"user-1","creator_account_id":"acct-1"}}"#;
+        let lines = [
+            meta,
+            CONTEXT,
+            &token_count("2026-05-11T06:18:00.000Z", 100, 0, 10),
+        ]
+        .join("\n");
+        let events = read(&lines);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].session.as_deref(), Some("sess-1"));
+        assert_eq!(
+            events[0].login,
+            Some(selvedge::usage::account_digest("user-1__acct-1"))
+        );
+
+        let anonymous = [
+            CONTEXT,
+            &token_count("2026-05-11T06:18:00.000Z", 100, 0, 10),
+        ]
+        .join("\n");
+        assert_eq!(read(&anonymous)[0].login, None);
     }
 
     fn ordinal_token_count(ordinal: u64, ts: &str, input: u64, output: u64) -> String {
@@ -728,8 +790,22 @@ mod tests {
         let mut seen = HashSet::new();
         let mut totals = HashMap::new();
         let mut events = Vec::new();
-        read_file(&a, day(2026, 1, 1), &mut seen, &mut totals, &mut events);
-        read_file(&b, day(2026, 1, 1), &mut seen, &mut totals, &mut events);
+        read_file(
+            &a,
+            day(2026, 1, 1),
+            &mut seen,
+            &mut totals,
+            &mut Firsts::new(),
+            &mut events,
+        );
+        read_file(
+            &b,
+            day(2026, 1, 1),
+            &mut seen,
+            &mut totals,
+            &mut Firsts::new(),
+            &mut events,
+        );
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(events.len(), 2);
@@ -767,8 +843,22 @@ mod tests {
         let mut seen = HashSet::new();
         let mut totals = HashMap::new();
         let mut events = Vec::new();
-        read_file(&a, day(2026, 1, 1), &mut seen, &mut totals, &mut events);
-        read_file(&b, day(2026, 1, 1), &mut seen, &mut totals, &mut events);
+        read_file(
+            &a,
+            day(2026, 1, 1),
+            &mut seen,
+            &mut totals,
+            &mut Firsts::new(),
+            &mut events,
+        );
+        read_file(
+            &b,
+            day(2026, 1, 1),
+            &mut seen,
+            &mut totals,
+            &mut Firsts::new(),
+            &mut events,
+        );
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(events.len(), 2);

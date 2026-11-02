@@ -17,7 +17,7 @@ use super::contribution::{
 };
 use super::hour::Hour;
 use crate::cost::pricing::{PriceArchive, PriceTable, month_key};
-use crate::cost::{TokenCounts, UsageEvent};
+use crate::cost::{Source, TokenCounts, UsageEvent};
 
 /// The calendar step a history series advances by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -603,29 +603,38 @@ impl FleetStore {
             for from in slice.counted_from.values_mut() {
                 *from = (*from).max(floor);
             }
-            let mut rolled: BTreeMap<(NaiveDate, String, String), TokenCounts> = BTreeMap::new();
+            type Day = (NaiveDate, String, String, Option<String>, Source);
+            let mut rolled: BTreeMap<Day, (TokenCounts, u64)> = BTreeMap::new();
             let mut kept: Vec<Bucket> = Vec::with_capacity(slice.buckets.len());
             for bucket in slice.buckets.drain(..) {
                 if bucket.hour >= floor {
                     kept.push(bucket);
                     continue;
                 }
-                rolled
-                    .entry((bucket.hour.utc_date(), bucket.provider, bucket.model))
-                    .or_default()
-                    .add(&bucket.tokens);
+                let day = rolled
+                    .entry((
+                        bucket.hour.utc_date(),
+                        bucket.provider,
+                        bucket.model,
+                        bucket.login,
+                        bucket.source,
+                    ))
+                    .or_default();
+                day.0.add(&bucket.tokens);
+                day.1 += bucket.sessions;
             }
-            kept.extend(
-                rolled
-                    .into_iter()
-                    .map(|((date, provider, model), tokens)| Bucket {
-                        hour: Hour::midday(date),
-                        provider,
-                        model,
-                        granularity: Granularity::Day,
-                        tokens,
-                    }),
-            );
+            kept.extend(rolled.into_iter().map(
+                |((date, provider, model, login, source), (tokens, sessions))| Bucket {
+                    hour: Hour::midday(date),
+                    provider,
+                    model,
+                    granularity: Granularity::Day,
+                    login,
+                    sessions,
+                    source,
+                    tokens,
+                },
+            ));
             kept.sort_by(sort_key);
             slice.buckets = kept;
         }
@@ -806,13 +815,21 @@ impl FleetStore {
                     && b.hour == hour
                     && b.provider == event.provider
                     && b.model == event.model
+                    && b.login == event.login
+                    && b.source == event.source
             }) {
-                Some(bucket) => bucket.tokens.add(&event.tokens),
+                Some(bucket) => {
+                    bucket.tokens.add(&event.tokens);
+                    bucket.sessions += u64::from(event.starts_session);
+                }
                 None => slice.buckets.push(Bucket {
                     hour,
                     provider: event.provider.to_string(),
                     model: event.model.clone(),
                     granularity: Granularity::Hour,
+                    login: event.login.clone(),
+                    sessions: u64::from(event.starts_session),
+                    source: event.source,
                     tokens: event.tokens,
                 }),
             }
@@ -1102,6 +1119,10 @@ fn bucket_event(bucket: &Bucket, offset: FixedOffset) -> Option<UsageEvent> {
         tokens: bucket.tokens,
         key: None,
         one_request: false,
+        session: None,
+        starts_session: false,
+        login: bucket.login.clone(),
+        source: bucket.source,
     })
 }
 
@@ -1282,6 +1303,9 @@ mod tests {
             provider: "claude".into(),
             model: "m".into(),
             granularity: Granularity::Day,
+            login: None,
+            sessions: 0,
+            source: crate::cost::Source::Cli,
             tokens: TokenCounts {
                 output: 100,
                 ..Default::default()
@@ -1328,6 +1352,9 @@ mod tests {
             provider: "claude".into(),
             model: "m".into(),
             granularity: Granularity::Day,
+            login: None,
+            sessions: 0,
+            source: crate::cost::Source::Cli,
             tokens: TokenCounts::default(),
         };
         let east = FixedOffset::east_opt(14 * 3600).unwrap();
@@ -1354,6 +1381,10 @@ mod tests {
             },
             key,
             one_request: false,
+            session: None,
+            starts_session: false,
+            login: None,
+            source: crate::cost::Source::Cli,
         }
     }
 
@@ -1496,6 +1527,9 @@ mod tests {
                 provider: "claude".into(),
                 model: "opus".into(),
                 granularity: Granularity::Day,
+                login: None,
+                sessions: 0,
+                source: crate::cost::Source::Cli,
                 tokens: TokenCounts {
                     output: 1000,
                     ..Default::default()
@@ -1539,6 +1573,9 @@ mod tests {
                 provider: "claude".into(),
                 model: "opus".into(),
                 granularity: Granularity::Day,
+                login: None,
+                sessions: 0,
+                source: crate::cost::Source::Cli,
                 tokens: TokenCounts {
                     output: out,
                     ..Default::default()
@@ -2041,6 +2078,80 @@ mod tests {
                 .iter()
                 .any(|b| b.granularity == Granularity::Hour && b.tokens.total() == 800),
             "yesterday is still an hour"
+        );
+    }
+
+    fn attributed(at: Hour, out: u64, key: u64, login: Option<&str>, starts: bool) -> UsageEvent {
+        UsageEvent {
+            login: login.map(str::to_owned),
+            starts_session: starts,
+            ..event("claude", "m", at, out, Some(key))
+        }
+    }
+
+    #[test]
+    fn each_login_keeps_its_own_buckets_through_the_roll_up() {
+        let now = hour("2026-08-25T12").start();
+        let old = hour("2026-01-14T03");
+        let mut store = FleetStore::default();
+        let mut proxy = attributed(hour("2026-01-14T05"), 7, 4, Some("aa"), false);
+        proxy.source = Source::Proxy;
+        store.upsert_local(
+            &device("a"),
+            old,
+            &[
+                attributed(old, 100, 1, Some("aa"), true),
+                attributed(hour("2026-01-14T04"), 200, 2, Some("bb"), true),
+                attributed(hour("2026-01-14T09"), 400, 3, Some("aa"), false),
+                proxy,
+            ],
+            0,
+        );
+        assert_eq!(store.devices["a"].buckets.len(), 4);
+
+        store.compact(now, WIRE_RETENTION_DAYS);
+
+        let days: Vec<(Option<&str>, Source, u64, u64)> = store.devices["a"]
+            .buckets
+            .iter()
+            .map(|b| (b.login.as_deref(), b.source, b.tokens.total(), b.sessions))
+            .collect();
+        assert_eq!(
+            days,
+            [
+                (Some("aa"), Source::Cli, 500, 1),
+                (Some("aa"), Source::Proxy, 7, 0),
+                (Some("bb"), Source::Cli, 200, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bucket_with_no_login_reads_writes_and_hashes_as_before() {
+        let plain = r#"{"h":"2026-08-25T14","p":"claude","m":"opus","o":60}"#;
+        let bucket: Bucket = serde_json::from_str(plain).unwrap();
+        assert_eq!((bucket.login.as_deref(), bucket.sessions), (None, 0));
+        assert_eq!(bucket.source, Source::Cli);
+        assert_eq!(serde_json::to_string(&bucket).unwrap(), plain);
+
+        let mut store = FleetStore::new();
+        store.upsert_local(
+            &device("a"),
+            hour("2026-08-01T00"),
+            &[event("claude", "opus", hour("2026-08-25T14"), 60, Some(1))],
+            1,
+        );
+        let now = hour("2026-08-25T15").start();
+        let providers = vec!["claude".to_string()];
+        let first = store
+            .contribution("a", now, &providers, WIRE_RETENTION_DAYS)
+            .expect("slice");
+        let mut attributed = first.clone();
+        attributed.buckets[0].login = Some("aa".into());
+        assert_ne!(content_hash(&first), content_hash(&attributed));
+        assert_eq!(
+            serde_json::to_string(&attributed.buckets[0]).unwrap(),
+            r#"{"h":"2026-08-25T14","p":"claude","m":"opus","l":"aa","o":60}"#
         );
     }
 

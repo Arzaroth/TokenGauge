@@ -452,7 +452,7 @@ fn native_costs(
         mut events,
         since,
         gaps,
-    } = cost::read_window(today);
+    } = cost::read_window(today, config.credentials.store_root());
     let outcome = sync::refresh(config, &events, since, &gaps);
     events.retain(|event| !outcome.held.contains(&event.provider));
     events.extend(outcome.events);
@@ -617,7 +617,7 @@ pub fn diagnose_costs(
 ) -> CostDiagnostics {
     let today = Local::now().date_naive();
     let started = Instant::now();
-    let report = cost::fetch_native(cache_file, timeout, today);
+    let report = cost::fetch_native(cache_file, timeout, today, None);
     let elapsed = started.elapsed();
 
     let month_totals = |costs: &HashMap<String, CostInfo>| -> HashMap<String, (u64, f64)> {

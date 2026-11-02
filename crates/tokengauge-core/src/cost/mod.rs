@@ -26,6 +26,7 @@ pub mod codex_cli;
 pub mod grok_cli;
 pub mod kimi_cli;
 pub mod pricing;
+pub mod remuda;
 
 /// Where cost figures come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -41,46 +42,10 @@ pub enum CostSource {
     Ccusage,
 }
 
-/// Tokens billed at each rate. Every reader normalises onto this, which is why
-/// `input` here means *fresh* input: Codex reports cached tokens inside its
-/// input count and Anthropic reports them beside it.
-/// Field names are the sync wire format: a contribution is re-uploaded on every
-/// change, and these five keys repeat once per bucket.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TokenCounts {
-    #[serde(rename = "i", default, skip_serializing_if = "is_zero")]
-    pub input: u64,
-    #[serde(rename = "o", default, skip_serializing_if = "is_zero")]
-    pub output: u64,
-    #[serde(rename = "cw5", default, skip_serializing_if = "is_zero")]
-    pub cache_write_5m: u64,
-    #[serde(rename = "cw1h", default, skip_serializing_if = "is_zero")]
-    pub cache_write_1h: u64,
-    #[serde(rename = "cr", default, skip_serializing_if = "is_zero")]
-    pub cache_read: u64,
-}
-
-fn is_zero(value: &u64) -> bool {
-    *value == 0
-}
-
-impl TokenCounts {
-    pub fn total(&self) -> u64 {
-        self.input + self.output + self.cache_write_5m + self.cache_write_1h + self.cache_read
-    }
-
-    pub fn cache_creation(&self) -> u64 {
-        self.cache_write_5m + self.cache_write_1h
-    }
-
-    pub(crate) fn add(&mut self, other: &TokenCounts) {
-        self.input += other.input;
-        self.output += other.output;
-        self.cache_write_5m += other.cache_write_5m;
-        self.cache_write_1h += other.cache_write_1h;
-        self.cache_read += other.cache_read;
-    }
-}
+/// Tokens billed at each rate, `input` fresh. The field names are the sync
+/// wire format, and remuda's records count in it too, so it lives in selvedge.
+pub use selvedge::usage::TokenCounts;
+pub use selvedge::usage::export::Source;
 
 /// One billed call.
 #[derive(Debug, Clone)]
@@ -102,6 +67,15 @@ pub struct UsageEvent {
     /// of several requests, or a peer's hourly bucket, cannot, and is rated at
     /// the base price.
     pub one_request: bool,
+    /// The CLI session the request was made in, when the transcript names one.
+    pub session: Option<String>,
+    /// The session's first billed request, which is where a session is
+    /// counted, so a window read again never counts it twice.
+    pub starts_session: bool,
+    /// The login that spent it, as an account digest, once attributed.
+    pub login: Option<String>,
+    /// Read from a transcript, or seen only by remuda's proxy.
+    pub source: Source,
 }
 
 /// A rated event, kept only long enough to measure the current session window.
@@ -228,8 +202,18 @@ fn window_start(today: NaiveDate) -> NaiveDate {
 }
 
 /// Read every transcript in the window and rate it.
-pub fn fetch_native(cache_file: &Path, timeout: Duration, today: NaiveDate) -> NativeCostReport {
-    rate(&read_window(today).events, cache_file, timeout, today)
+pub fn fetch_native(
+    cache_file: &Path,
+    timeout: Duration,
+    today: NaiveDate,
+    remuda: Option<PathBuf>,
+) -> NativeCostReport {
+    rate(
+        &read_window(today, remuda).events,
+        cache_file,
+        timeout,
+        today,
+    )
 }
 
 /// What one read of the transcripts found.
@@ -247,8 +231,8 @@ pub struct TranscriptRead {
 }
 
 /// Read every transcript in the window.
-pub fn read_window(today: NaiveDate) -> TranscriptRead {
-    read_checked(&Roots::discover(), window_start(today))
+pub fn read_window(today: NaiveDate, remuda: Option<PathBuf>) -> TranscriptRead {
+    read_checked(&Roots::with_remuda(remuda), window_start(today))
 }
 
 /// Every transcript day the store could still hold, for the one-time backfill.
@@ -260,11 +244,11 @@ pub fn read_window(today: NaiveDate) -> TranscriptRead {
 /// holding a fortnight no matter how much history the CLIs actually kept.
 ///
 /// Run once, behind [`crate::statefiles::backfill_due`]. Never on a poll.
-pub fn read_history(today: NaiveDate) -> TranscriptRead {
+pub fn read_history(today: NaiveDate, remuda: Option<PathBuf>) -> TranscriptRead {
     let since = today
         .checked_sub_days(Days::new(crate::sync::STORE_RETENTION_DAYS as u64))
         .unwrap_or(today);
-    read_checked(&Roots::discover(), since)
+    read_checked(&Roots::with_remuda(remuda), since)
 }
 
 /// Rate a set of events, wherever they were read.
@@ -308,6 +292,49 @@ pub fn rate_with_prices(
     }
 }
 
+/// The earliest billed request of each session a read came across, whether or
+/// not it fell inside the read's window.
+pub type Firsts = HashMap<String, DateTime<Utc>>;
+
+pub(crate) fn first_seen(firsts: &mut Firsts, session: &str, at: DateTime<Utc>) {
+    firsts
+        .entry(session.to_owned())
+        .and_modify(|first| *first = (*first).min(at))
+        .or_insert(at);
+}
+
+/// Each session counts once, on its earliest request in the read. A session
+/// whose first record falls before the window began there, and none of its
+/// events is marked. The kept copy of a streamed message carries a later
+/// time than its first record, so the start is the earliest event, not one
+/// whose time matches the record.
+fn mark_starts(events: &mut [UsageEvent], firsts: &Firsts, since: NaiveDate) {
+    let mut earliest: HashMap<&str, usize> = HashMap::new();
+    for (index, event) in events.iter().enumerate() {
+        let Some(session) = event.session.as_deref() else {
+            continue;
+        };
+        let began_inside = firsts
+            .get(session)
+            .is_none_or(|first| first.with_timezone(&Local).date_naive() >= since);
+        if !began_inside {
+            continue;
+        }
+        earliest
+            .entry(session)
+            .and_modify(|kept| {
+                if event.at < events[*kept].at {
+                    *kept = index;
+                }
+            })
+            .or_insert(index);
+    }
+    let starts: Vec<usize> = earliest.into_values().collect();
+    for index in starts {
+        events[index].starts_session = true;
+    }
+}
+
 /// Where each reader looks.
 ///
 /// One field per reader rather than one argument per reader: adding a CLI is
@@ -320,6 +347,9 @@ pub struct Roots {
     pub codex: Vec<PathBuf>,
     pub kimi: Vec<PathBuf>,
     pub grok: Vec<PathBuf>,
+    /// remuda's store, whose ledger and proxy log say which login spent what.
+    /// Not a transcript tree, so not in [`Roots::all`].
+    pub remuda: Option<PathBuf>,
 }
 
 impl Roots {
@@ -330,6 +360,15 @@ impl Roots {
             codex: codex_cli::roots(),
             kimi: kimi_cli::roots(),
             grok: grok_cli::roots(),
+            remuda: None,
+        }
+    }
+
+    /// [`Roots::discover`], with remuda's store when there is one.
+    pub fn with_remuda(remuda: Option<PathBuf>) -> Self {
+        Self {
+            remuda,
+            ..Self::discover()
         }
     }
 
@@ -359,12 +398,20 @@ pub fn read_checked(roots: &Roots, since: NaiveDate) -> TranscriptRead {
     let mut codex_seen = HashSet::new();
     let mut kimi_seen = HashSet::new();
     let mut grok_seen = HashSet::new();
+    let mut firsts = Firsts::new();
     let mut gaps = Vec::new();
-    let mut events = claude_code::read_events(&roots.claude, since, &mut claude_seen, &mut gaps);
+    let mut events = claude_code::read_events(
+        &roots.claude,
+        since,
+        &mut claude_seen,
+        &mut firsts,
+        &mut gaps,
+    );
     events.extend(codex_cli::read_events(
         &roots.codex,
         since,
         &mut codex_seen,
+        &mut firsts,
         &mut gaps,
     ));
     events.extend(kimi_cli::read_events(
@@ -379,6 +426,11 @@ pub fn read_checked(roots: &Roots, since: NaiveDate) -> TranscriptRead {
         &mut grok_seen,
         &mut gaps,
     ));
+    if let Some(store) = &roots.remuda {
+        remuda::merge_requests(store, since, &mut events, &claude_seen, &mut gaps);
+        remuda::attribute(store, &mut events, &mut gaps);
+    }
+    mark_starts(&mut events, &firsts, since);
     gaps.sort();
     gaps.dedup();
     TranscriptRead {
@@ -694,6 +746,10 @@ mod tests {
             },
             key: None,
             one_request,
+            session: None,
+            starts_session: false,
+            login: None,
+            source: crate::cost::Source::Cli,
         };
         let usd = |events: &[UsageEvent]| {
             build_report(events, &prices, today).costs["claude"].monthly_usd
@@ -773,6 +829,10 @@ mod tests {
             },
             key: None,
             one_request: false,
+            session: None,
+            starts_session: false,
+            login: None,
+            source: crate::cost::Source::Cli,
         }
     }
 

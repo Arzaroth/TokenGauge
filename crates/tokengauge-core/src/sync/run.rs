@@ -158,7 +158,7 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
         events,
         since,
         gaps,
-    } = crate::cost::read_history(today);
+    } = crate::cost::read_history(today, config.credentials.store_root());
     let now = Utc::now();
     let identity = crate::device_identity(&config.cache_file);
     let device = DeviceRecord::new(&identity, &config.sync.label);
@@ -668,6 +668,9 @@ mod tests {
                 provider: "claude".into(),
                 model: "opus".into(),
                 granularity: Granularity::Hour,
+                login: None,
+                sessions: 0,
+                source: crate::cost::Source::Cli,
                 tokens: Default::default(),
             }],
             days: Vec::new(),

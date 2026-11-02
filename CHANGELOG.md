@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Spend is split by login from now on. With remuda 0.29.0 or later beside it,
+  each request is put to the login that spent it, read from what remuda
+  writes down: the login a switch installed, the one a `remuda run` session
+  ran on, and the one its API proxy spent. Requests made through remuda's
+  proxy by clients that keep no transcript are counted too, once. Codex
+  sessions name their own login. The record keeps the split and the number of
+  sessions for 400 days, ready for remuda's usage page.
+
 ## [0.51.0] - 2026-11-01
 
 ### Changed

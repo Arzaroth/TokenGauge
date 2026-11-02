@@ -393,7 +393,7 @@ if [[ -f "$WAYBAR_CONFIG" ]]; then
   # based on [waybar].click_action in the user's config.
   module_filter='
     ."custom/tokengauge" = {
-      "exec": "tokengauge",
+      "exec": "tokengauge --waybar",
       "return-type": "json",
       "interval": 60,
       "signal": 8,

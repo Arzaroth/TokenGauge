@@ -1,5 +1,5 @@
 "custom/tokengauge": {
-  "exec": "tokengauge",
+  "exec": "tokengauge --waybar",
   "return-type": "json",
   "interval": 60,
   "signal": 8,

@@ -54,6 +54,26 @@ fn waybar_config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("~/.config/waybar/config.jsonc"))
 }
 
+/// The `exec` of the `custom/tokengauge` module, read straight from the
+/// config's text: it is JSON with comments, and only this one string matters.
+fn module_exec(contents: &str) -> Option<&str> {
+    let module = &contents[contents.find("\"custom/tokengauge\"")?..];
+    let module = &module[module.find('{')?..];
+    let module = &module[..module.find('}').unwrap_or(module.len())];
+    let after = &module[module.find("\"exec\"")? + "\"exec\"".len()..];
+    let after = after.trim_start().strip_prefix(':')?.trim_start();
+    let value = after.strip_prefix('"')?;
+    Some(&value[..value.find('"')?])
+}
+
+/// An exec that runs the binary, under its own name, with no flag at all.
+fn runs_plain(exec: &str) -> bool {
+    let mut words = exec.split_whitespace();
+    let program = words.next().unwrap_or_default();
+    let name = program.rsplit('/').next().unwrap_or(program);
+    name == "tokengauge" && words.next().is_none()
+}
+
 /// `contents` is `None` when there is no waybar config to read.
 ///
 /// Waybar is one surface of several now, so its module is only missing-and-
@@ -63,6 +83,11 @@ fn waybar_config_path() -> PathBuf {
 fn bar_wiring_check(waybar_cfg: &Path, contents: Option<&str>, drawn_by: &[&str]) -> DoctorCheck {
     let drawn_by_text = drawn_by.join(", ");
     match contents {
+        Some(contents) if module_exec(contents).is_some_and(runs_plain) => DoctorCheck {
+            label: format!("module wired in {}", waybar_cfg.display()),
+            ok: false,
+            detail: "its exec runs plain tokengauge, which prints a table since 0.53: make it \"tokengauge --waybar\", or run scripts/install.sh again".into(),
+        },
         Some(contents) => {
             let wired = contents.contains("custom/tokengauge");
             DoctorCheck {

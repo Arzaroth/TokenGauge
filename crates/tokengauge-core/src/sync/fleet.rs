@@ -65,7 +65,7 @@ const _: () = assert!(HOURLY_RETENTION_DAYS >= WIRE_RETENTION_DAYS);
 
 /// What one device has contributed, as this machine holds it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "StoredSlice")]
 pub struct DeviceSlice {
     pub device: DeviceRecord,
     pub updated_at_ms: i64,
@@ -91,6 +91,61 @@ pub struct DeviceSlice {
     /// nothing either way.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub counted_from: BTreeMap<String, Hour>,
+}
+
+/// A [`DeviceSlice`] as the store file holds it. `counted` is an index the
+/// next whole read rebuilds, while the buckets beside it are the only record
+/// of their days, so keys in a shape this build cannot read are dropped rather
+/// than failing the store. `counted_from` goes with them: kept alone, it would
+/// say every call from there on is uncounted.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredSlice {
+    device: DeviceRecord,
+    updated_at_ms: i64,
+    covers_from: Option<Hour>,
+    #[serde(default)]
+    buckets: Vec<Bucket>,
+    #[serde(default)]
+    days: Vec<DayDigest>,
+    #[serde(default)]
+    adopted: Vec<Adopted>,
+    #[serde(default)]
+    counted: StoredCounted,
+    #[serde(default)]
+    counted_from: BTreeMap<String, Hour>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredCounted {
+    Keys(BTreeMap<String, BTreeMap<Hour, KeySet>>),
+    Unreadable(serde::de::IgnoredAny),
+}
+
+impl Default for StoredCounted {
+    fn default() -> Self {
+        Self::Keys(BTreeMap::new())
+    }
+}
+
+impl From<StoredSlice> for DeviceSlice {
+    fn from(stored: StoredSlice) -> Self {
+        let (counted, counted_from) = match stored.counted {
+            StoredCounted::Keys(counted) => (counted, stored.counted_from),
+            StoredCounted::Unreadable(_) => (BTreeMap::new(), BTreeMap::new()),
+        };
+        Self {
+            device: stored.device,
+            updated_at_ms: stored.updated_at_ms,
+            covers_from: stored.covers_from,
+            buckets: stored.buckets,
+            days: stored.days,
+            adopted: stored.adopted,
+            counted,
+            counted_from,
+        }
+    }
 }
 
 /// The keys of the calls one hour of one provider counts, folded to 32 bits

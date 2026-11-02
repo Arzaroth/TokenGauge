@@ -58,6 +58,7 @@ pub mod rows;
 pub mod snapshot;
 pub mod statefiles;
 pub mod sync;
+pub mod term;
 pub mod theme;
 
 // Flat at the root, because that is how every caller already spells them: a

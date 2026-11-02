@@ -98,7 +98,10 @@ maintained on every fetch whether or not sync is on (the gate is in
   never published, kept compact because the store is rewritten on every
   fetch) and, per provider, the hour from which that list is complete
   (`counted_from`); a whole read rewrites both with its replace and
-  compaction prunes them with the hourly buckets. Totals or a larger-of rule
+  compaction prunes them with the hourly buckets. Keys in a shape the build
+  cannot read are dropped with their `counted_from` on load
+  (`fleet::StoredSlice`), never failing the store: the index rebuilds, the
+  buckets beside it do not. Totals or a larger-of rule
   cannot do this: new usage covers for a missing hour, and distinct usage
   shares an hour with what is missing. Where the keys say nothing (before a
   whole read recorded them, or past the hourly window), a read with gaps only

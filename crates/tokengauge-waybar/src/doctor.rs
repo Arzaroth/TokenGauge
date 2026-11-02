@@ -57,8 +57,13 @@ fn waybar_config_path() -> PathBuf {
 /// The `exec` of the `custom/tokengauge` module, read straight from the
 /// config's text: it is JSON with comments, and only this one string matters.
 fn module_exec(contents: &str) -> Option<&str> {
-    let module = &contents[contents.find("\"custom/tokengauge\"")?..];
-    let module = &module[module.find('{')?..];
+    let key = "\"custom/tokengauge\"";
+    let module = contents.match_indices(key).find_map(|(at, _)| {
+        let rest = contents[at + key.len()..].trim_start().strip_prefix(':')?;
+        rest.trim_start()
+            .starts_with('{')
+            .then_some(rest.trim_start())
+    })?;
     let module = &module[..module.find('}').unwrap_or(module.len())];
     let after = &module[module.find("\"exec\"")? + "\"exec\"".len()..];
     let after = after.trim_start().strip_prefix(':')?.trim_start();

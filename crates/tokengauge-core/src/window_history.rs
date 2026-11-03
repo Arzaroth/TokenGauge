@@ -781,6 +781,23 @@ mod tests {
     }
 
     #[test]
+    fn a_week_whose_name_now_holds_another_account_is_not_recorded() {
+        let m = Machine::new("closed_other_account");
+        let start = Utc::now();
+        let week = start + Duration::days(3);
+        let on = |account: &str, hours: i64, used: u8| {
+            let at = start + Duration::hours(hours);
+            let mut p = payload(Some("work"), at, window(used, week, 10080));
+            p.credential.account_digest = Some(account.to_owned());
+            m.fetch(vec![p], at);
+        };
+        on("a", 0, 40);
+        on("b", 1, 5);
+        assert!(m.history().closed.is_empty());
+        assert_eq!(samples(&m.history()), [vec![5]]);
+    }
+
+    #[test]
     fn a_record_is_kept_a_year() {
         let m = Machine::new("closed_year");
         let start = Utc::now();

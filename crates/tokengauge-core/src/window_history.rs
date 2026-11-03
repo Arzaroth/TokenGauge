@@ -277,7 +277,10 @@ pub fn record(cache_file: &Path, payloads: &mut [ProviderPayload], now: DateTime
                     &name,
                     &reading,
                 );
-                window.burn = burn(trail, &reading);
+                window.burn = trail
+                    .same_account(account.as_deref())
+                    .then(|| burn(trail, &reading))
+                    .flatten();
             }
         }
     }
@@ -501,12 +504,14 @@ mod tests {
             let at = start + Duration::minutes(minutes);
             let mut p = payload(Some("work"), at, window(used, reset, 300));
             p.credential.account_digest = Some(account.to_owned());
-            m.fetch(vec![p], start + Duration::minutes(30));
+            m.fetch(vec![p], start + Duration::minutes(30))
         };
         on("b", 10, 5);
         on("b", 20, 8);
-        on("a", 15, 40);
+        let late = on("a", 15, 40);
         assert_eq!(samples(&m.history()), [vec![5, 8]]);
+        let window = late[0].usage.as_ref().unwrap().primary.as_ref().unwrap();
+        assert!(window.burn.is_none(), "b's trail measured a's reading");
     }
 
     #[test]

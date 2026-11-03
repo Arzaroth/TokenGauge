@@ -381,8 +381,8 @@ still says `20x`, but that was its 5-hour session, which Ultra no longer has. Th
 so the header says `estimate`. A Team seat counts as 1.25 Pros (standard) or
 6.25 (premium), as Anthropic sells them, going by what Anthropic's profile
 reports for the login: a rate-limit tier naming a multiplier is a premium
-seat, whatever the seat tier is called. Codex plans weigh against Plus: Pro 100, 200 and 500 count as 5,
-10 and 25, a Business seat as 1 and a Business Premium seat as 5. A plan with no
+seat, whatever the seat tier is called. Codex plans weigh against Plus: Pro 100, 200 and 500 count as 10,
+20 and 50, a Business seat as 1 and a Business Premium seat as 10. A plan with no
 known multiplier (Claude or ChatGPT Enterprise, ChatGPT Free) is left out of it
 and marked `not in total`.
 

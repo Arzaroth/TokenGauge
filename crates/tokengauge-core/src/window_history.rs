@@ -39,6 +39,10 @@ pub struct Trail {
     /// credential matches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<String>,
+    /// The credential's `accountDigest`, so a name re-captured for another
+    /// account starts its own trail. TokenGauge's own: no reader needs it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_digest: Option<String>,
     /// `primary`, `secondary`, `tertiary`, or an extra window's id (its
     /// title when it has none).
     pub window: String,
@@ -91,6 +95,13 @@ impl Trail {
             || (self.resets_at > reading.at && reading.used >= used && last >= reading.start())
     }
 
+    fn same_account(&self, account: Option<&str>) -> bool {
+        match (self.account_digest.as_deref(), account) {
+            (Some(was), Some(is)) => was == is,
+            _ => true,
+        }
+    }
+
     fn observe(&mut self, reading: &Reading) {
         let ms = reading.at.timestamp_millis();
         if self.samples.last().is_some_and(|(at, _)| *at >= ms) {
@@ -120,15 +131,20 @@ impl WindowHistory {
     pub(crate) fn observe(
         &mut self,
         provider: &str,
-        credential: Option<&str>,
+        credential: (Option<&str>, Option<&str>),
         window: &str,
         reading: &Reading,
     ) -> &Trail {
+        let (name, account) = credential;
         let found = self.trails.iter().position(|t| {
-            t.provider == provider && t.credential.as_deref() == credential && t.window == window
+            t.provider == provider && t.credential.as_deref() == name && t.window == window
         });
         let index = match found {
-            Some(i) if self.trails[i].continues(reading) => i,
+            Some(i)
+                if self.trails[i].same_account(account) && self.trails[i].continues(reading) =>
+            {
+                i
+            }
             Some(i) => {
                 self.trails[i] = Trail::new(provider, credential, window, reading);
                 i
@@ -151,10 +167,16 @@ impl WindowHistory {
 }
 
 impl Trail {
-    fn new(provider: &str, credential: Option<&str>, window: &str, reading: &Reading) -> Trail {
+    fn new(
+        provider: &str,
+        (name, account): (Option<&str>, Option<&str>),
+        window: &str,
+        reading: &Reading,
+    ) -> Trail {
         Trail {
             provider: provider.to_owned(),
-            credential: credential.map(str::to_owned),
+            credential: name.map(str::to_owned),
+            account_digest: account.map(str::to_owned),
             window: window.to_owned(),
             window_minutes: reading.minutes,
             resets_at: reading.resets_at,
@@ -233,6 +255,7 @@ pub fn record(cache_file: &Path, payloads: &mut [ProviderPayload], now: DateTime
     for payload in payloads.iter_mut().filter(|p| !p.stale) {
         let provider = payload.provider.clone();
         let credential = payload.credential.name.clone();
+        let account = payload.credential.account_digest.clone();
         let Some(usage) = payload.usage.as_mut() else {
             continue;
         };
@@ -243,7 +266,12 @@ pub fn record(cache_file: &Path, payloads: &mut [ProviderPayload], now: DateTime
             .map_or(now, |at| at.with_timezone(&Utc));
         for (name, window) in windows_mut(usage) {
             if let Some(reading) = Reading::of(window, at) {
-                let trail = history.observe(&provider, credential.as_deref(), &name, &reading);
+                let trail = history.observe(
+                    &provider,
+                    (credential.as_deref(), account.as_deref()),
+                    &name,
+                    &reading,
+                );
                 window.burn = burn(trail, &reading);
             }
         }
@@ -439,6 +467,23 @@ mod tests {
         let reopened = later - Duration::minutes(10) + Duration::hours(5);
         m.fetch(vec![payload(None, later, window(25, reopened, 300))], later);
         assert_eq!(samples(&m.history()), [vec![25]]);
+    }
+
+    #[test]
+    fn a_name_captured_for_another_account_starts_a_new_trail() {
+        let m = Machine::new("another_account");
+        let start = Utc::now();
+        let reset = start + Duration::hours(4);
+        let on = |account: &str, minutes: i64, used: u8| {
+            let at = start + Duration::minutes(minutes);
+            let mut p = payload(Some("work"), at, window(used, reset, 300));
+            p.credential.account_digest = Some(account.to_owned());
+            m.fetch(vec![p], at);
+        };
+        on("a", 0, 10);
+        on("a", 10, 20);
+        on("b", 20, 30);
+        assert_eq!(samples(&m.history()), [vec![30]]);
     }
 
     #[test]

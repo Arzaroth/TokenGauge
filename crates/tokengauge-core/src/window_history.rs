@@ -5,7 +5,8 @@
 //! before it, so a pace drawn from it alone can only assume the window filled
 //! evenly since it opened. The trail is what a pace needs to tell a morning's
 //! burst from a steady afternoon. It holds the current instance of each window
-//! only: a trail ends when its window resets.
+//! only: a trail ends when its window resets, and a window a day or longer
+//! leaves a closing record behind, kept a year, of how full it got.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,11 @@ use crate::statefiles::write_atomic;
 /// times; past this the oldest samples go first.
 const MAX_SAMPLES: usize = 2000;
 
+/// A five-hour window closes five times a day: only those of a day or longer
+/// are kept once closed.
+const CLOSED_MIN_MINUTES: u32 = 1440;
+const CLOSED_KEEP_DAYS: i64 = 366;
+
 pub fn history_path(cache_file: &Path) -> PathBuf {
     let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
     parent.join("tokengauge-window-history.json")
@@ -29,6 +35,28 @@ pub fn history_path(cache_file: &Path) -> PathBuf {
 pub struct WindowHistory {
     #[serde(default)]
     pub trails: Vec<Trail>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub closed: Vec<ClosedWindow>,
+}
+
+/// How full a window instance got before it reset, early or when due.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClosedWindow {
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_digest: Option<String>,
+    pub window: String,
+    pub window_minutes: u32,
+    pub opened_at: DateTime<Utc>,
+    /// When it was due to reset. A banked reset ends it sooner; the next
+    /// instance's `openedAt` says when.
+    pub resets_at: DateTime<Utc>,
+    /// The last figure seen, and when.
+    pub used: u8,
+    pub seen_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -149,7 +177,11 @@ impl WindowHistory {
         let index = match found {
             Some(i) if self.trails[i].continues(reading, account) => i,
             Some(i) => {
-                self.trails[i] = Trail::new(provider, credential, window, reading);
+                let ended = std::mem::replace(
+                    &mut self.trails[i],
+                    Trail::new(provider, credential, window, reading),
+                );
+                self.closed.extend(ended.closed());
                 i
             }
             None => {
@@ -165,11 +197,32 @@ impl WindowHistory {
     /// Drops the trails whose window has reset: nothing reports on them any
     /// more, and a credential removed from the store leaves its trails behind.
     fn prune(&mut self, now: DateTime<Utc>) {
-        self.trails.retain(|t| t.resets_at > now);
+        let (open, ended): (Vec<Trail>, Vec<Trail>) = std::mem::take(&mut self.trails)
+            .into_iter()
+            .partition(|t| t.resets_at > now);
+        self.trails = open;
+        self.closed.extend(ended.iter().filter_map(Trail::closed));
+        let horizon = now - chrono::Duration::days(CLOSED_KEEP_DAYS);
+        self.closed.retain(|c| c.resets_at > horizon);
     }
 }
 
 impl Trail {
+    fn closed(&self) -> Option<ClosedWindow> {
+        let &(ms, used) = self.samples.last()?;
+        (self.window_minutes >= CLOSED_MIN_MINUTES).then(|| ClosedWindow {
+            provider: self.provider.clone(),
+            credential: self.credential.clone(),
+            account_digest: self.account_digest.clone(),
+            window: self.window.clone(),
+            window_minutes: self.window_minutes,
+            opened_at: self.resets_at - chrono::Duration::minutes(i64::from(self.window_minutes)),
+            resets_at: self.resets_at,
+            used,
+            seen_at: DateTime::from_timestamp_millis(ms).unwrap_or(self.resets_at),
+        })
+    }
+
     fn new(
         provider: &str,
         (name, account): (Option<&str>, Option<&str>),

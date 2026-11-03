@@ -588,15 +588,16 @@ fn billing_period(client: &reqwest::blocking::Client, token: &str) -> Option<u32
     period_minutes(&resp.json().ok()?)
 }
 
-/// A plan's weight by its price per $10, since xAI publishes no multiplier
-/// between tiers: SuperGrok $30, Plus $100, Heavy $300.
-fn tier_weight(label: &str) -> Option<u32> {
-    match label {
-        "SuperGrok" => Some(3),
-        "SuperGrok Plus" => Some(10),
-        "SuperGrok Heavy" => Some(30),
-        _ => None,
-    }
+/// A plan's weight as `selvedge::catalog` has it: by its price per $10,
+/// since xAI publishes no multiplier between tiers.
+fn tier_weight(label: &str) -> Option<f64> {
+    let id = match label {
+        "SuperGrok" => "supergrok",
+        "SuperGrok Plus" => "supergrok_plus",
+        "SuperGrok Heavy" => "supergrok_heavy",
+        _ => return None,
+    };
+    selvedge::catalog::weight("grok", id)
 }
 
 /// The plan as the CLI's settings name it. The billing response carries no
@@ -665,7 +666,7 @@ fn usage_for(
     let weight = tier.as_deref().and_then(tier_weight);
     let period = billing_period(&client, &creds.access_token);
     let mut payload = to_payload(billing, period, tier.or(creds.login_method), now);
-    payload.credential.plan_weight = weight.map(f64::from);
+    payload.credential.plan_weight = weight;
     Ok(payload)
 }
 
@@ -937,9 +938,9 @@ mod tests {
     #[test]
     fn a_tier_weighs_its_price() {
         let weight = |raw: &str| tier_label(raw).as_deref().and_then(tier_weight);
-        assert_eq!(weight("SuperGrok"), Some(3));
-        assert_eq!(weight("SuperGrok Plus"), Some(10));
-        assert_eq!(weight("SUPERGROK_HEAVY"), Some(30));
+        assert_eq!(weight("SuperGrok"), Some(3.0));
+        assert_eq!(weight("SuperGrok Plus"), Some(10.0));
+        assert_eq!(weight("SUPERGROK_HEAVY"), Some(30.0));
         assert_eq!(weight("Enterprise"), None);
     }
 

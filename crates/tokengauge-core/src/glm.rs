@@ -87,18 +87,19 @@ struct QuotaData {
 /// unit z.ai sells every plan in: Lite 10,000, Pro 60,000, Max 140,000. A
 /// team seat is sold in the same unit (66,000 and 155,000) but its `level`
 /// has not been seen, so it reads as sent and has no weight.
-fn tier(raw: &str) -> Option<(&'static str, u32)> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "lite" => Some(("Lite", 10)),
-        "pro" => Some(("Pro", 60)),
-        "max" => Some(("Max", 140)),
-        _ => None,
-    }
+fn tier(raw: &str) -> Option<(&'static str, f64)> {
+    let (name, id) = match raw.trim().to_ascii_lowercase().as_str() {
+        "lite" => ("Lite", "lite"),
+        "pro" => ("Pro", "pro"),
+        "max" => ("Max", "max"),
+        _ => return None,
+    };
+    Some((name, selvedge::catalog::weight("glm", id)?))
 }
 
 /// The plan's label and weight: `level` names the tier, and `planName` is
 /// read the same way when it carries one, else shown as it is.
-fn plan(data: &QuotaData) -> (Option<String>, Option<u32>) {
+fn plan(data: &QuotaData) -> (Option<String>, Option<f64>) {
     let level = match &data.level {
         Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
         Some(Value::Number(n)) => Some(n.to_string()),
@@ -304,7 +305,7 @@ fn to_payload(resp: QuotaResponse, now: DateTime<Utc>) -> Result<ProviderPayload
             ..UsageSnapshot::at(now)
         },
     );
-    payload.credential.plan_weight = weight.map(f64::from);
+    payload.credential.plan_weight = weight;
     Ok(payload)
 }
 

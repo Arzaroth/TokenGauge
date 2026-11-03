@@ -528,7 +528,7 @@ pub(crate) fn fetch_stored(
                 },
             );
             payload.credential.state = Some(state);
-            payload.credential.plan_weight = plan_weight(plan.as_deref()).map(f64::from);
+            payload.credential.plan_weight = plan_weight(plan.as_deref());
             Ok(payload)
         }
     }
@@ -913,7 +913,7 @@ fn to_payload(
         },
     );
     payload.credits = credits;
-    payload.credential.plan_weight = weight.map(f64::from);
+    payload.credential.plan_weight = weight;
     Ok(payload)
 }
 
@@ -944,24 +944,15 @@ fn plan_label(plan_type: &str) -> String {
     format!("ChatGPT {name}")
 }
 
-/// A plan's nominal multiplier against Plus, by the `plan_type` the wire
-/// sends: Pro 100, 200 and 500 (`prolite`, `pro`, `promax`) are 10x, 20x and
-/// 50x, a Business seat (`team`) is a Plus's allowance and a Business Premium
-/// seat (`self_serve_business_prolite`) a Pro 100's. OpenAI doubled every Pro
-/// tier and Business Premium on 2026-10-29, and Plus and Business were left as
-/// they were.
+/// A plan's nominal multiplier against Plus, as `selvedge::catalog` has it
+/// for the `plan_type` the wire sends.
 ///
-/// `None` for anything else - free, Go, a usage-based Business seat,
-/// Enterprise (which the wire calls `business`), EDU, a plan not seen before.
-/// Guessing 1x would understate a large plan without saying so.
-fn plan_weight(plan_type: Option<&str>) -> Option<u32> {
-    match plan_type?.to_ascii_lowercase().as_str() {
-        "plus" | "team" => Some(1),
-        "prolite" | "self_serve_business_prolite" => Some(10),
-        "pro" => Some(20),
-        "promax" => Some(50),
-        _ => None,
-    }
+/// `None` for a plan the catalog does not weigh - free, Go, a usage-based
+/// Business seat, Enterprise (which the wire calls `business`), EDU, a plan
+/// not seen before. Guessing 1x would understate a large plan without saying
+/// so.
+fn plan_weight(plan_type: Option<&str>) -> Option<f64> {
+    selvedge::catalog::weight("codex", &plan_type?.to_ascii_lowercase())
 }
 
 // ---------------------------------------------------------------------------
@@ -1183,13 +1174,13 @@ mod tests {
     /// The combined header weighs a Pro 200 and a Plus as 10 to 1.
     #[test]
     fn a_plan_weighs_its_nominal_multiplier() {
-        assert_eq!(plan_weight(Some("plus")), Some(1));
-        assert_eq!(plan_weight(Some("prolite")), Some(10));
-        assert_eq!(plan_weight(Some("pro")), Some(20));
-        assert_eq!(plan_weight(Some("promax")), Some(50));
-        assert_eq!(plan_weight(Some("team")), Some(1));
-        assert_eq!(plan_weight(Some("self_serve_business_prolite")), Some(10));
-        assert_eq!(plan_weight(Some("Pro")), Some(20));
+        assert_eq!(plan_weight(Some("plus")), Some(1.0));
+        assert_eq!(plan_weight(Some("prolite")), Some(10.0));
+        assert_eq!(plan_weight(Some("pro")), Some(20.0));
+        assert_eq!(plan_weight(Some("promax")), Some(50.0));
+        assert_eq!(plan_weight(Some("team")), Some(1.0));
+        assert_eq!(plan_weight(Some("self_serve_business_prolite")), Some(10.0));
+        assert_eq!(plan_weight(Some("Pro")), Some(20.0));
         for unweighted in [
             "free",
             "go",

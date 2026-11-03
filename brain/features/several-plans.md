@@ -35,7 +35,9 @@ up by plan multiplier. The mechanism and the remuda contracts are
 
 Nominal multipliers the plans are sold with, so the combined figure is an
 estimate. A plan with no known weight stays out of the total and is marked
-`not in total`, never guessed at 1x.
+`not in total`, never guessed at 1x. The figures are `selvedge::catalog`'s,
+dated and sourced there, so remuda weighs a plan the same way; each provider
+here only names the plan its wire or credentials report by the catalog's id.
 
 | Provider | Base | Weights |
 | --- | --- | --- |

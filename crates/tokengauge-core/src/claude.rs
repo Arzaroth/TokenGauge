@@ -633,7 +633,8 @@ fn plan_weight(subscription_type: Option<&str>, tier: Option<&str>) -> Option<f6
         .or_else(|| tier.and_then(tier_multiplier).map(f64::from))
         .or_else(|| {
             (sub.contains("pro") && !["max", "enterprise"].iter().any(|k| sub.contains(k)))
-                .then_some(1.0)
+                .then(|| selvedge::catalog::weight("claude", "pro"))
+                .flatten()
         })
 }
 

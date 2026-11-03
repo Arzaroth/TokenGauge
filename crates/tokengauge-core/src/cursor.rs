@@ -244,19 +244,14 @@ fn plan_label(membership: &str) -> String {
     format!("Cursor {name}")
 }
 
-/// A plan's nominal multiplier against Pro: Pro+ is sold as 3x its Agent
-/// limits and Ultra as 20x.
+/// A plan's nominal multiplier against Pro, as `selvedge::catalog` has it
+/// for the `membershipType`.
 ///
 /// `None` for a Teams seat: Standard is a Pro's allowance and Premium five
 /// times that, but the seat type is not in `membershipType`, and guessing 1x
 /// would understate a Premium seat without saying so.
-fn plan_weight(membership: &str) -> Option<u32> {
-    match membership.to_ascii_lowercase().as_str() {
-        "pro" | "pro_student" => Some(1),
-        "pro_plus" => Some(3),
-        "ultra" => Some(20),
-        _ => None,
-    }
+fn plan_weight(membership: &str) -> Option<f64> {
+    selvedge::catalog::weight("cursor", &membership.to_ascii_lowercase())
 }
 
 fn summary_url(override_base: Option<&str>) -> Result<String> {
@@ -560,7 +555,7 @@ fn to_payload(
             ..UsageSnapshot::at(now)
         },
     );
-    payload.credential.plan_weight = weight.map(f64::from);
+    payload.credential.plan_weight = weight;
 
     // On-demand spend past the included allowance: a cap, with money on both
     // sides of it. Only when the user has actually turned it on - a disabled

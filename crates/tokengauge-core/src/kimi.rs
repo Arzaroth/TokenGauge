@@ -185,10 +185,10 @@ struct UsageResponse {
 }
 
 /// The membership's name and weight against Plus, the way kimi.com sells the
-/// current plans (Pro 2x, Max 5x, Ultra 10x). The older catalog
+/// current plans, weighed by `selvedge::catalog`. The older catalog
 /// (`GOODS_VERSION_V1`) is named after tempos and sold as no multiple, so it
 /// has no weight. A level not listed reads as sent.
-fn plan(resp: &UsageResponse) -> Option<(String, Option<u32>)> {
+fn plan(resp: &UsageResponse) -> Option<(String, Option<f64>)> {
     let level = resp
         .user
         .as_ref()?
@@ -209,10 +209,10 @@ fn plan(resp: &UsageResponse) -> Option<(String, Option<u32>)> {
         ("intermediate", true) => ("Allegretto", None),
         ("advanced", true) => ("Allegro", None),
         ("free", false) => ("Free", None),
-        ("plus", false) => ("Plus", Some(1)),
-        ("pro", false) => ("Pro", Some(2)),
-        ("max", false) => ("Max", Some(5)),
-        ("ultra", false) => ("Ultra", Some(10)),
+        ("plus", false) => ("Plus", selvedge::catalog::weight("kimi", "plus")),
+        ("pro", false) => ("Pro", selvedge::catalog::weight("kimi", "pro")),
+        ("max", false) => ("Max", selvedge::catalog::weight("kimi", "max")),
+        ("ultra", false) => ("Ultra", selvedge::catalog::weight("kimi", "ultra")),
         _ => return Some((level.to_string(), None)),
     };
     Some((format!("Kimi {name}"), weight))
@@ -463,7 +463,7 @@ fn to_payload(
             ..UsageSnapshot::at(now)
         },
     );
-    payload.credential.plan_weight = weight.map(f64::from);
+    payload.credential.plan_weight = weight;
     Ok(payload)
 }
 

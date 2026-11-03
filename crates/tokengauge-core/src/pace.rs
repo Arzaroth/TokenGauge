@@ -116,9 +116,10 @@ impl UsagePace {
         let delta = actual - expected;
 
         let rate = burn.map_or(actual / elapsed, |b| b.per_hour / 3600.0); // percent per second
-        let (eta_seconds, will_last_to_reset) = if rate > 0.0 {
-            let remaining = (100.0 - actual).max(0.0);
-            let candidate = remaining / rate;
+        let (eta_seconds, will_last_to_reset) = if actual >= 100.0 {
+            (Some(0), false)
+        } else if rate > 0.0 {
+            let candidate = (100.0 - actual) / rate;
             if candidate >= time_until_reset {
                 (None, true)
             } else {
@@ -271,5 +272,17 @@ mod tests {
             UsagePace::for_window(35, Some(300), Some(&reset), now, Some(&burning(0.0))).unwrap();
         assert!(pace.will_last_to_reset);
         assert_eq!(pace.badge(), "ends ~35%");
+    }
+
+    #[test]
+    fn a_full_window_is_empty_now_however_quiet_it_went() {
+        let now = Utc::now();
+        let reset = at(now, 150);
+        let quiet =
+            UsagePace::for_window(100, Some(300), Some(&reset), now, Some(&burning(0.0))).unwrap();
+        let average = UsagePace::for_window(100, Some(300), Some(&reset), now, None).unwrap();
+        assert_eq!(quiet.eta_seconds, Some(0));
+        assert!(!quiet.will_last_to_reset);
+        assert_eq!(quiet.badge(), average.badge());
     }
 }

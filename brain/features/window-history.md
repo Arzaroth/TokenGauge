@@ -19,7 +19,8 @@ account starts its own trail.
   `window_history::record` before serialising them, so the daemon, the TUI, the
   tray and `--refresh` all record without knowing it.
 - **One sample per change.** A value holds until the next sample. A sample is
-  timed by the payload's `updated_at`, not the write: a stored credential's
+  timed by the payload's `updated_at` (never later than the write), not the
+  write: a stored credential's
   figures are carried between its own fetches, and a carried figure is not a
   new sample. A stale payload adds nothing, and neither does a reading older
   than the trail's last sample, which an overlapping fetch can deliver late.
@@ -38,9 +39,11 @@ account starts its own trail.
 
 ## The burn
 
-At the same write, each window gets `burn`, on the payloads the caller goes on
-to draw as well as in the snapshot: `perHour`, the
-percent of the window spent per hour, and `overMinutes`, the stretch it was
+At the same write, each window a fresh payload reports with a figure, a
+duration and a reset gets `burn`, on the payloads the caller goes on to draw as
+well as in the snapshot. A stale payload gets none, nor does a reading taken
+before its window opened or exactly as it opened, which has no time to measure
+over. `burn` holds `perHour`, the percent of the window spent per hour, and `overMinutes`, the stretch it was
 measured over. The stretch is the last seventh of the window, an hour at least:
 the last hour of five, the last day of a week. It starts at the latest sample
 at or before the stretch's start.

@@ -120,11 +120,14 @@ impl Trail {
 }
 
 impl WindowHistory {
-    pub fn read(path: &Path) -> WindowHistory {
-        fs::read_to_string(path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+    /// `None` when the file is there but could not be read: it may hold
+    /// trails, and writing over it would lose them.
+    pub fn read(path: &Path) -> Option<WindowHistory> {
+        match fs::read_to_string(path) {
+            Ok(text) => Some(serde_json::from_str(&text).unwrap_or_default()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(WindowHistory::default()),
+            Err(_) => None,
+        }
     }
 
     /// The trail `reading` belongs to, started afresh when its window reset.
@@ -250,7 +253,9 @@ pub(crate) fn windows_mut(usage: &mut UsageSnapshot) -> Vec<(String, &mut UsageW
 /// carried between its fetches, and a carried figure is not a new sample.
 pub fn record(cache_file: &Path, payloads: &mut [ProviderPayload], now: DateTime<Utc>) {
     let path = history_path(cache_file);
-    let mut history = WindowHistory::read(&path);
+    let read = WindowHistory::read(&path);
+    let readable = read.is_some();
+    let mut history = read.unwrap_or_default();
     let before = history.clone();
     for payload in payloads.iter_mut().filter(|p| !p.stale) {
         let provider = payload.provider.clone();
@@ -277,7 +282,8 @@ pub fn record(cache_file: &Path, payloads: &mut [ProviderPayload], now: DateTime
         }
     }
     history.prune(now);
-    if history != before
+    if readable
+        && history != before
         && let Ok(text) = serde_json::to_string(&history)
     {
         let _ = write_atomic(&path, text.as_bytes());
@@ -352,7 +358,7 @@ mod tests {
         }
 
         fn history(&self) -> WindowHistory {
-            WindowHistory::read(&history_path(&self.cache))
+            WindowHistory::read(&history_path(&self.cache)).unwrap()
         }
     }
 
@@ -523,6 +529,33 @@ mod tests {
         assert_eq!(m.history().trails.len(), 1);
         m.fetch(Vec::new(), now + Duration::hours(3));
         assert!(m.history().trails.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_history_that_could_not_be_read_is_not_written_over() {
+        use std::os::unix::fs::PermissionsExt;
+        let m = Machine::new("unreadable");
+        let now = Utc::now();
+        let reset = now + Duration::hours(4);
+        m.fetch(vec![payload(None, now, window(10, reset, 300))], now);
+        let path = history_path(&m.cache);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        let later = now + Duration::minutes(10);
+        let fetched = m.fetch(vec![payload(None, later, window(20, reset, 300))], later);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(samples(&m.history())[0][0], 10);
+        assert!(
+            fetched[0]
+                .usage
+                .as_ref()
+                .unwrap()
+                .primary
+                .as_ref()
+                .unwrap()
+                .burn
+                .is_some()
+        );
     }
 
     #[test]

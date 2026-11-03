@@ -1339,6 +1339,7 @@ pub(crate) mod tests {
                     reset_description: None,
                     resets_at: Some((now + chrono::Duration::hours(2)).to_rfc3339()),
                     window_minutes: Some(300),
+                    burn: None,
                 }),
                 ..crate::UsageSnapshot::at(now - chrono::Duration::minutes(5))
             },
@@ -1404,6 +1405,7 @@ pub(crate) mod tests {
                         reset_description: None,
                         resets_at: Some((now + chrono::Duration::hours(2)).to_rfc3339()),
                         window_minutes: Some(minutes),
+                        burn: None,
                     }),
                     ..crate::UsageSnapshot::at(now - chrono::Duration::minutes(15))
                 },

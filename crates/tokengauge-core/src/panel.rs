@@ -2330,7 +2330,7 @@ mod tests {
         let reset = (now + chrono::Duration::minutes(150)).to_rfc3339();
         let mut r = row();
         // Half a 5h window elapsed at 80% used -> far ahead of an even burn.
-        r.session_pace = crate::UsagePace::for_window(80, Some(300), Some(&reset), now);
+        r.session_pace = crate::UsagePace::for_window(80, Some(300), Some(&reset), now, None);
         r.cost = Some(cost());
         let spec = panel_spec(&r);
 

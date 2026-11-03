@@ -172,6 +172,7 @@ impl Window {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string),
             window_minutes: None,
+            burn: None,
         })
     }
 }

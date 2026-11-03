@@ -849,6 +849,7 @@ mod tests {
                     reset_description: None,
                     resets_at: Some(resets_at.into()),
                     window_minutes: Some(minutes),
+                    burn: None,
                 }),
                 secondary: None,
                 tertiary: None,

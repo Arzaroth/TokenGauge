@@ -237,6 +237,7 @@ fn to_window(l: &Limit, now: DateTime<Utc>) -> Option<UsageWindow> {
         reset_description: None,
         resets_at,
         window_minutes,
+        burn: None,
     })
 }
 

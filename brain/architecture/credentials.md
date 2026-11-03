@@ -130,8 +130,21 @@ Each `payloads[]` entry gains:
   `available` (how many) and `expiresAt` (the soonest grant's expiry, RFC 3339
   as Anthropic wrote it, or null). Absent otherwise
   ([../features/banked-resets.md](../features/banked-resets.md)).
+- `usage.<window>.burn` - on each window with a reset and a duration (the
+  extra windows' included): `perHour`, the percent of the window spent per
+  hour lately, and `overMinutes`, the stretch it was measured over
+  ([../features/window-history.md](../features/window-history.md)). Absent on
+  a window without both, and on a snapshot from before 0.54.
 - `accountDigest` - TokenGauge's own guard against carrying one account's figures
   under a name that now holds another; remuda need not read it.
+
+Beside the snapshot, `tokengauge-window-history.json` holds `trails`, each
+with `provider`, `credential` (absent for an unmatched live login), `window`
+(`primary`, `secondary`, `tertiary`, or an extra window's id or title),
+`windowMinutes`, `resetsAt` (RFC 3339) and `samples`, `[ms, percent]` pairs
+oldest first, one per change. A trail holds the window's current instance
+only. A trail may also carry `accountDigest`, TokenGauge's own as on the
+payload.
 
 Each top-level `errors[]` entry gains `credential` and `active`; a stored
 credential's message starts with its name (`perso: ...`). A payload served stale
@@ -140,7 +153,8 @@ after a failed fetch keeps `credential` and `active`, with `stale: true` and
 carries a token or an email.
 
 `payload::tests::the_credential_keys_remuda_reads_are_spelled_as_decision_0003_says`
-and `payload::tests::the_banked_reset_keys_remuda_reads_are_spelled_as_decision_0003_says`
+`payload::tests::the_banked_reset_keys_remuda_reads_are_spelled_as_decision_0003_says`
+and `window_history::tests::the_keys_remuda_reads_are_spelled_as_decision_0003_says`
 pin the names: renaming one is a change to decision 0003 and to remuda. Every
 test config turns the store off (`CredentialsConfig::off()`, or
 `[credentials] store = ""`).

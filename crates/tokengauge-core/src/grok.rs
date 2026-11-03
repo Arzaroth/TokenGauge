@@ -482,6 +482,7 @@ fn to_payload(
         reset_description: None,
         resets_at: billing.resets_at,
         window_minutes: Some(period_minutes.unwrap_or(WEEK_MINUTES)),
+        burn: None,
     };
     ProviderPayload::live(
         "grok",

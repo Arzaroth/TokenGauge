@@ -1,11 +1,16 @@
 //! Usage "pace": are you burning a window's quota faster or slower than a
 //! steady even-consumption rate would allow before it resets?
 //!
-//! Computed from a single snapshot - used %, window duration, reset time, now -
-//! so it needs no historical series. Ported from CodexBar's `UsagePace`.
+//! Ahead or behind is measured against that even rate, from a single snapshot -
+//! used %, window duration, reset time, now. Where the window lands at reset is
+//! projected at the window's recent burn when the snapshot carries one
+//! ([`crate::window_history`]), and at its average since it opened when not.
+//! Ported from CodexBar's `UsagePace`.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+
+use crate::payload::Burn;
 
 /// Hide pace until this fraction of the window has elapsed - early-window
 /// numbers are noise.
@@ -88,6 +93,7 @@ impl UsagePace {
         window_minutes: Option<u32>,
         resets_at: Option<&str>,
         now: DateTime<Utc>,
+        burn: Option<&Burn>,
     ) -> Option<Self> {
         let minutes = window_minutes.filter(|m| *m > 0)?;
         let reset = DateTime::parse_from_rfc3339(resets_at?)
@@ -109,10 +115,11 @@ impl UsagePace {
         let actual = f64::from(used_percent).clamp(0.0, 100.0);
         let delta = actual - expected;
 
-        let (eta_seconds, will_last_to_reset) = if actual > 0.0 {
-            let rate = actual / elapsed; // percent per second
-            let remaining = (100.0 - actual).max(0.0);
-            let candidate = remaining / rate;
+        let rate = burn.map_or(actual / elapsed, |b| b.per_hour / 3600.0); // percent per second
+        let (eta_seconds, will_last_to_reset) = if actual >= 100.0 {
+            (Some(0), false)
+        } else if rate > 0.0 {
+            let candidate = (100.0 - actual) / rate;
             if candidate >= time_until_reset {
                 (None, true)
             } else {
@@ -126,7 +133,7 @@ impl UsagePace {
         Some(Self {
             stage: stage_for_delta(delta),
             delta_percent: delta,
-            projected_percent: (actual / elapsed * duration_secs).clamp(0.0, 100.0),
+            projected_percent: (actual + rate * time_until_reset).clamp(0.0, 100.0),
             eta_seconds,
             will_last_to_reset,
             early: elapsed < duration_secs * EARLY_FRACTION && actual <= 50.0,
@@ -166,16 +173,16 @@ mod tests {
         let now = Utc::now();
         let week = 10080;
         // 10% into the week, 30% spent: far ahead, but early.
-        let early = UsagePace::for_window(30, Some(week), Some(&at(now, 9072)), now).unwrap();
+        let early = UsagePace::for_window(30, Some(week), Some(&at(now, 9072)), now, None).unwrap();
         assert!(early.stage.is_ahead());
         assert!(early.early);
         assert_eq!(crate::Tone::for_pace(&early), crate::Tone::Warn);
         // The same burst past half the allowance is not early any more.
-        let spent = UsagePace::for_window(60, Some(week), Some(&at(now, 9072)), now).unwrap();
+        let spent = UsagePace::for_window(60, Some(week), Some(&at(now, 9072)), now, None).unwrap();
         assert!(!spent.early);
         assert_eq!(crate::Tone::for_pace(&spent), crate::Tone::Critical);
         // Nor is it a fifth of the way in.
-        let later = UsagePace::for_window(40, Some(week), Some(&at(now, 8064)), now).unwrap();
+        let later = UsagePace::for_window(40, Some(week), Some(&at(now, 8064)), now, None).unwrap();
         assert!(!later.early);
         assert_eq!(crate::Tone::for_pace(&later), crate::Tone::Critical);
     }
@@ -184,7 +191,7 @@ mod tests {
     fn ahead_of_pace_flags_deficit() {
         let now = Utc::now();
         // 5h window, half elapsed (expected ~50%), but 80% used -> far ahead.
-        let pace = UsagePace::for_window(80, Some(300), Some(&at(now, 150)), now).unwrap();
+        let pace = UsagePace::for_window(80, Some(300), Some(&at(now, 150)), now, None).unwrap();
         assert!(pace.stage.is_ahead());
         assert!(pace.delta_percent > 12.0);
         // Burning at 80%/150min -> runs out before the 150 min remaining.
@@ -197,7 +204,7 @@ mod tests {
     fn behind_pace_flags_reserve_and_lasts() {
         let now = Utc::now();
         // Half elapsed, only 10% used -> far behind, lasts to reset.
-        let pace = UsagePace::for_window(10, Some(300), Some(&at(now, 150)), now).unwrap();
+        let pace = UsagePace::for_window(10, Some(300), Some(&at(now, 150)), now, None).unwrap();
         assert!(pace.stage.is_behind());
         assert!(pace.will_last_to_reset);
         // 10% at half the window -> lands near 20% at reset.
@@ -209,19 +216,73 @@ mod tests {
     fn none_before_3pct_elapsed() {
         let now = Utc::now();
         // 5h window, only 1 min elapsed (< 3%).
-        assert!(UsagePace::for_window(1, Some(300), Some(&at(now, 299)), now).is_none());
+        assert!(UsagePace::for_window(1, Some(300), Some(&at(now, 299)), now, None).is_none());
     }
 
     #[test]
     fn none_without_window_or_reset() {
         let now = Utc::now();
-        assert!(UsagePace::for_window(50, None, Some(&at(now, 100)), now).is_none());
-        assert!(UsagePace::for_window(50, Some(300), None, now).is_none());
+        assert!(UsagePace::for_window(50, None, Some(&at(now, 100)), now, None).is_none());
+        assert!(UsagePace::for_window(50, Some(300), None, now, None).is_none());
     }
 
     #[test]
     fn none_when_past_reset() {
         let now = Utc::now();
-        assert!(UsagePace::for_window(50, Some(300), Some(&at(now, -5)), now).is_none());
+        assert!(UsagePace::for_window(50, Some(300), Some(&at(now, -5)), now, None).is_none());
+    }
+
+    fn burning(per_hour: f64) -> Burn {
+        Burn {
+            per_hour,
+            over_minutes: 60,
+        }
+    }
+
+    #[test]
+    fn a_window_that_slowed_down_lands_where_its_recent_burn_takes_it() {
+        let now = Utc::now();
+        // Half the five hours gone and 80% spent: far ahead of the even rate,
+        // and empty within the hour at its average. Lately it moves 4% an hour.
+        let reset = at(now, 150);
+        let pace =
+            UsagePace::for_window(80, Some(300), Some(&reset), now, Some(&burning(4.0))).unwrap();
+        assert!(pace.stage.is_ahead());
+        assert!(pace.will_last_to_reset);
+        assert_eq!(pace.badge(), "ends ~90%");
+    }
+
+    #[test]
+    fn a_window_that_sped_up_runs_out_at_its_recent_burn() {
+        let now = Utc::now();
+        // 10% at half time would end near 20%; at 40% an hour it is gone in 2h 15m.
+        let reset = at(now, 150);
+        let pace =
+            UsagePace::for_window(10, Some(300), Some(&reset), now, Some(&burning(40.0))).unwrap();
+        assert!(pace.stage.is_behind());
+        assert!(!pace.will_last_to_reset);
+        assert_eq!(pace.badge(), "empty in 2h 15m");
+    }
+
+    #[test]
+    fn a_window_that_stopped_moving_ends_where_it_is() {
+        let now = Utc::now();
+        let reset = at(now, 150);
+        let pace =
+            UsagePace::for_window(35, Some(300), Some(&reset), now, Some(&burning(0.0))).unwrap();
+        assert!(pace.will_last_to_reset);
+        assert_eq!(pace.badge(), "ends ~35%");
+    }
+
+    #[test]
+    fn a_full_window_is_empty_now_however_quiet_it_went() {
+        let now = Utc::now();
+        let reset = at(now, 150);
+        let quiet =
+            UsagePace::for_window(100, Some(300), Some(&reset), now, Some(&burning(0.0))).unwrap();
+        let average = UsagePace::for_window(100, Some(300), Some(&reset), now, None).unwrap();
+        assert_eq!(quiet.eta_seconds, Some(0));
+        assert!(!quiet.will_last_to_reset);
+        assert_eq!(quiet.badge(), average.badge());
     }
 }

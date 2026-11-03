@@ -60,6 +60,7 @@ pub mod statefiles;
 pub mod sync;
 pub mod term;
 pub mod theme;
+pub mod window_history;
 
 // Flat at the root, because that is how every caller already spells them: a
 // split that renamed `tokengauge_core::ProviderRow` would be a split nobody

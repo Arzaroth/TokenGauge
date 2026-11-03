@@ -549,6 +549,7 @@ fn to_window(win: Option<&Win>, minutes: u32) -> Option<UsageWindow> {
         reset_description: None,
         resets_at: w.resets_at.clone(),
         window_minutes: Some(minutes),
+        burn: None,
     })
 }
 
@@ -713,6 +714,7 @@ fn routines_window(rest: &Map<String, Value>) -> Option<ExtraRateWindow> {
                 reset_description: None,
                 resets_at: w.resets_at,
                 window_minutes: Some(10080),
+                burn: None,
             },
             false,
         ),
@@ -722,6 +724,7 @@ fn routines_window(rest: &Map<String, Value>) -> Option<ExtraRateWindow> {
                 reset_description: None,
                 resets_at: None,
                 window_minutes: Some(10080),
+                burn: None,
             },
             true,
         ),
@@ -776,6 +779,7 @@ fn scoped_weekly_windows(limits: &[Limit]) -> Vec<ExtraRateWindow> {
                 reset_description: None,
                 resets_at: limit.resets_at.clone(),
                 window_minutes: Some(10080),
+                burn: None,
             }),
             placeholder: false,
         });

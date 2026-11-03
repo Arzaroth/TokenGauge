@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Pace follows how fast a window has been filling lately, not its average
+  since it opened: a morning's burst followed by a quiet afternoon now ends
+  near where it stands instead of reading as a run-out. TokenGauge keeps each
+  window's history in `tokengauge-window-history.json` beside the snapshot,
+  and the snapshot gives each window its recent `burn`. Until a window has
+  some history, its pace is what it was.
+
 ## [0.53.1] - 2026-11-02
 
 ### Fixed

@@ -68,6 +68,17 @@ pub struct UsageWindow {
     pub resets_at: Option<String>,
     #[serde(default)]
     pub window_minutes: Option<u32>,
+    /// How fast the window has been filling lately, from its recorded history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burn: Option<Burn>,
+}
+
+/// Percent of the window spent per hour over the last `over_minutes`.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Burn {
+    pub per_hour: f64,
+    pub over_minutes: u32,
 }
 
 /// What a provider selling credit reports.

@@ -3,10 +3,17 @@
 For every usage window (model-scoped weeklies included), where it lands at reset
 if the current burn continues: `ends ~16%`, or `empty in 2h 15m` when it runs out
 first. Shown next to each reset on every frontend, as a badge resolved in
-`panel.rs`.
+`panel.rs`. A port of CodexBar's `UsagePace.swift`.
 
-- Computed from one snapshot (used %, window duration, reset instant, now), so it
-  needs no history. A port of CodexBar's `UsagePace.swift`.
+- **The projection follows the recent burn.** A window carrying a `burn`
+  ([window-history.md](window-history.md)) is projected at it: `used + burn x
+  time left`, and empty when that passes 100% before the reset, or now when it
+  is already full, however quiet it has gone. A morning's burst
+  followed by a quiet afternoon ends near where it stands rather than being
+  extrapolated at its morning rate. A window with no burn is projected at its
+  average since it opened, which is also what the burn is with no history.
+- **Ahead or behind needs no history**: used % against the even rate
+  (`elapsed / duration`), from one snapshot.
 - `UsagePace::for_window` returns nothing with no reset time, no duration, past
   the reset, before the window began, or under 3% of the window elapsed
   (`MIN_ELAPSED_FRACTION`): early numbers are noise.

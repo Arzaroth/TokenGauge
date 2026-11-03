@@ -858,6 +858,7 @@ mod tests {
                     reset_description: None,
                     resets_at: Some((chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339()),
                     window_minutes: Some(300),
+                    burn: None,
                 }),
                 secondary: None,
                 tertiary: None,
@@ -873,7 +874,7 @@ mod tests {
         };
         write_cache_full(
             &cache,
-            &[payload],
+            &mut [payload],
             &[],
             &HashMap::new(),
             &config,
@@ -950,6 +951,7 @@ mod tests {
                     reset_description: None,
                     resets_at: Some((chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339()),
                     window_minutes: Some(300),
+                    burn: None,
                 }),
                 secondary: None,
                 tertiary: None,
@@ -965,7 +967,7 @@ mod tests {
         };
         write_cache_full(
             &cache,
-            &[payload],
+            &mut [payload],
             &[],
             &HashMap::new(),
             &config,
@@ -1004,7 +1006,7 @@ mod tests {
         let dir = unique_test_dir("fetch-wait-wake");
         let cache = dir.join("cache.json");
         let config = test_config(cache.clone());
-        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
+        write_cache_full(&cache, &mut [], &[], &HashMap::new(), &config, None, None).unwrap();
 
         let doomed = cache.clone();
         let killer = thread::spawn(move || {

@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use tokengauge_core::cost::pricing;
 use tokengauge_core::statefiles;
 use tokengauge_core::sync;
+use tokengauge_core::window_history;
 
 /// Every file the core derives from a snapshot path, by the name it derives.
 ///
@@ -46,6 +47,7 @@ fn derived(cache_file: &Path) -> Vec<(&'static str, PathBuf)> {
         ("fleet store", sync::store::store_path(cache_file)),
         ("fleet store lock", sync::store::lock_path(cache_file)),
         ("fleet key", sync::crypto::key_path(cache_file)),
+        ("window history", window_history::history_path(cache_file)),
     ]
 }
 
@@ -158,6 +160,7 @@ fn the_names_on_disk_are_the_names_users_already_have() {
             "tokengauge-fleet.json",
             "tokengauge-fleet.lock",
             "tokengauge-sync-key",
+            "tokengauge-window-history.json",
         ]
     );
 }

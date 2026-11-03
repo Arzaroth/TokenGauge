@@ -733,7 +733,8 @@ jobs:
         env:
           RPM: ${{ matrix.rpm }}
         run: |
-          docker run --rm -e RPM -v "$PWD/dist:/d:ro" -v "$PWD/scripts:/s:ro" fedora:latest sh -ec '
+          docker run --rm -e RPM -v "$PWD/dist:/d:ro" -v "$PWD/scripts:/s:ro" -v "$PWD/packaging:/p:ro" fedora:latest sh -ec '
+            rpm --import /p/tokengauge.asc
             rpm -i /d/tokengauge-*."$RPM".rpm
             rpm -V tokengauge
             sh /s/check-package.sh

@@ -30,6 +30,14 @@ account starts its own trail.
   reset that came early and was climbed past before the next fetch. Trails
   whose window has reset are dropped, so a credential removed from the store
   leaves nothing behind for long.
+- **A closed window leaves a record**: when a window of a day or longer ends,
+  early or when due, `closed` gains its `provider`, `credential`, `window`,
+  `windowMinutes`, `openedAt`, the `resetsAt` it was due at, `used`, the last
+  figure seen, and `seenAt`, when it was seen, with the `accountDigest` when
+  there was one. A record is kept a year after its reset. A trail that ends
+  because its name now holds another account leaves none: its week did not
+  close. Five-hour windows
+  leave none: they close five times a day, and nothing reads them once closed.
 - At most 2000 samples per trail; a weekly window fetched every ten minutes
   changes about a thousand times at most.
 - A file that is there but cannot be read is left alone rather than written

@@ -144,7 +144,13 @@ with `provider`, `credential` (absent for an unmatched live login), `window`
 `windowMinutes`, `resetsAt` (RFC 3339) and `samples`, `[ms, percent]` pairs
 oldest first, one per change. A trail holds the window's current instance
 only. A trail may also carry `accountDigest`, TokenGauge's own as on the
-payload.
+payload. `closed` lists the windows of a day or longer that have ended, each
+kept a year: `provider`, `credential` (absent for an unmatched live login),
+`window`, `windowMinutes`, `openedAt` and `resetsAt` (RFC 3339, the reset it
+was due at; a banked reset ends it sooner), `used` (the last percent seen),
+`seenAt` (RFC 3339, when) and `accountDigest` when the trail had one. A trail
+ended because its name now holds another account leaves no record. Absent
+until a window has closed, and on a file from before 0.56.
 
 Each top-level `errors[]` entry gains `credential` and `active`; a stored
 credential's message starts with its name (`perso: ...`). A payload served stale

@@ -37,8 +37,10 @@ with no frontend code:
 - Cost and token sections show fleet totals for the providers that sync, session
   cost and burn rate included (the 5h window is the active credential's, the same
   on every machine signed into it). A fleet whose machines are signed into
-  different credentials of one provider is the case this gets wrong: transcripts
-  carry no credential to split by.
+  different credentials of one provider is the case this gets wrong: these rows
+  are per provider. Spend is split by login only where remuda recorded who spent
+  it ([decision 0006](../decisions.md#0006-spend-is-attributed-from-what-remuda-recorded)),
+  which each bucket carries through sync and `--usage-json` reports.
 - `tokens_by_device` (`Bars`, month-to-date to match `tokens_by_model`): a row per
   device, tokens as value, money in the badge, share as the bar, relative age in
   the suffix when behind. Appears as soon as sync is on, even with one device

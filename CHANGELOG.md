@@ -7,12 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-11-04
+
 ### Added
 
 - `tokengauge-window-history.json` keeps a record of each window of a day or
   longer once it ends: how full it got and when it opened and reset, for a
-  year. Nothing draws it yet; remuda will read it to show what a week of a
-  plan bought.
+  year. remuda's Usage tab reads it to show what a week of each plan bought.
+- Plan weights come from selvedge's dated catalog, shared with remuda; no
+  weight changes.
 
 ## [0.55.0] - 2026-11-03
 

@@ -59,6 +59,10 @@ pub(crate) struct Reading {
 }
 
 impl Reading {
+    fn start(&self) -> i64 {
+        self.resets_at.timestamp_millis() - i64::from(self.minutes) * 60_000
+    }
+
     pub(crate) fn of(window: &UsageWindow, at: DateTime<Utc>) -> Option<Reading> {
         let resets_at = DateTime::parse_from_rfc3339(window.resets_at.as_deref()?)
             .ok()?
@@ -74,22 +78,27 @@ impl Reading {
 }
 
 impl Trail {
-    /// The same instance until its reset has passed or its figure went down,
-    /// which only a reset does (a banked one included).
+    /// The same instance until its reset has passed, its figure went down
+    /// (which only a reset does, a banked one included), or the reading's
+    /// window opened after the trail's last sample. A reading older than that
+    /// sample came from an overlapping fetch and ends nothing.
     fn continues(&self, reading: &Reading) -> bool {
-        self.resets_at > reading.at
-            && self
-                .samples
-                .last()
-                .is_none_or(|(_, used)| reading.used >= *used)
+        let Some(&(last, used)) = self.samples.last() else {
+            return self.resets_at > reading.at;
+        };
+        let at = reading.at.timestamp_millis();
+        at <= last
+            || (self.resets_at > reading.at && reading.used >= used && last >= reading.start())
     }
 
     fn observe(&mut self, reading: &Reading) {
+        let ms = reading.at.timestamp_millis();
+        if self.samples.last().is_some_and(|(at, _)| *at >= ms) {
+            return;
+        }
         self.resets_at = reading.resets_at;
         self.window_minutes = reading.minutes;
-        let ms = reading.at.timestamp_millis();
         match self.samples.last() {
-            Some((at, _)) if *at >= ms => {}
             Some((_, used)) if *used == reading.used => {}
             _ => self.samples.push((ms, reading.used)),
         }
@@ -163,7 +172,7 @@ const HOUR_MS: f64 = 3_600_000.0;
 /// burn is the window's average since it opened.
 fn burn(trail: &Trail, reading: &Reading) -> Option<Burn> {
     let minutes = i64::from(reading.minutes);
-    let start = reading.resets_at.timestamp_millis() - minutes * 60_000;
+    let start = reading.start();
     let at = reading.at.timestamp_millis();
     let span = (minutes / 7).max(60) * 60_000;
     let from = (at - span).max(start);
@@ -412,6 +421,41 @@ mod tests {
         let banked = later + Duration::minutes(20);
         m.fetch(vec![payload(None, banked, window(0, second, 300))], banked);
         assert_eq!(samples(&m.history()), [vec![0]]);
+    }
+
+    #[test]
+    fn a_window_that_reset_early_starts_a_new_trail_even_when_it_reads_higher() {
+        let m = Machine::new("early_reset");
+        let start = Utc::now();
+        m.fetch(
+            vec![payload(
+                None,
+                start,
+                window(20, start + Duration::hours(4), 300),
+            )],
+            start,
+        );
+        let later = start + Duration::minutes(30);
+        let reopened = later - Duration::minutes(10) + Duration::hours(5);
+        m.fetch(vec![payload(None, later, window(25, reopened, 300))], later);
+        assert_eq!(samples(&m.history()), [vec![25]]);
+    }
+
+    #[test]
+    fn a_reading_older_than_the_trail_leaves_it_alone() {
+        let m = Machine::new("older_reading");
+        let start = Utc::now();
+        let reset = start + Duration::hours(4);
+        for (minutes, used) in [(0, 10), (20, 30)] {
+            let at = start + Duration::minutes(minutes);
+            m.fetch(vec![payload(None, at, window(used, reset, 300))], at);
+        }
+        let older = start + Duration::minutes(10);
+        m.fetch(
+            vec![payload(None, older, window(20, reset, 300))],
+            start + Duration::minutes(25),
+        );
+        assert_eq!(samples(&m.history()), [vec![10, 30]]);
     }
 
     #[test]

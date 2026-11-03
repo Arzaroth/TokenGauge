@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- ChatGPT Pro 100, 200 and 500 now weigh 10, 20 and 50 Plus allowances, and a
+  Business Premium seat 10, since OpenAI doubled their limits on 29 October.
+  Plus and Business seats still weigh 1.
+
 ## [0.54.0] - 2026-11-03
 
 ### Changed

@@ -945,9 +945,11 @@ fn plan_label(plan_type: &str) -> String {
 }
 
 /// A plan's nominal multiplier against Plus, by the `plan_type` the wire
-/// sends: Pro 100, 200 and 500 (`prolite`, `pro`, `promax`) are 5x, 10x and
-/// 25x, a Business seat (`team`) is a Plus's allowance and a Business Premium
-/// seat (`self_serve_business_prolite`) a Pro 100's.
+/// sends: Pro 100, 200 and 500 (`prolite`, `pro`, `promax`) are 10x, 20x and
+/// 50x, a Business seat (`team`) is a Plus's allowance and a Business Premium
+/// seat (`self_serve_business_prolite`) a Pro 100's. OpenAI doubled every Pro
+/// tier and Business Premium on 2026-10-29, and Plus and Business were left as
+/// they were.
 ///
 /// `None` for anything else - free, Go, a usage-based Business seat,
 /// Enterprise (which the wire calls `business`), EDU, a plan not seen before.
@@ -955,9 +957,9 @@ fn plan_label(plan_type: &str) -> String {
 fn plan_weight(plan_type: Option<&str>) -> Option<u32> {
     match plan_type?.to_ascii_lowercase().as_str() {
         "plus" | "team" => Some(1),
-        "prolite" | "self_serve_business_prolite" => Some(5),
-        "pro" => Some(10),
-        "promax" => Some(25),
+        "prolite" | "self_serve_business_prolite" => Some(10),
+        "pro" => Some(20),
+        "promax" => Some(50),
         _ => None,
     }
 }
@@ -1182,12 +1184,12 @@ mod tests {
     #[test]
     fn a_plan_weighs_its_nominal_multiplier() {
         assert_eq!(plan_weight(Some("plus")), Some(1));
-        assert_eq!(plan_weight(Some("prolite")), Some(5));
-        assert_eq!(plan_weight(Some("pro")), Some(10));
-        assert_eq!(plan_weight(Some("promax")), Some(25));
+        assert_eq!(plan_weight(Some("prolite")), Some(10));
+        assert_eq!(plan_weight(Some("pro")), Some(20));
+        assert_eq!(plan_weight(Some("promax")), Some(50));
         assert_eq!(plan_weight(Some("team")), Some(1));
-        assert_eq!(plan_weight(Some("self_serve_business_prolite")), Some(5));
-        assert_eq!(plan_weight(Some("Pro")), Some(10));
+        assert_eq!(plan_weight(Some("self_serve_business_prolite")), Some(10));
+        assert_eq!(plan_weight(Some("Pro")), Some(20));
         for unweighted in [
             "free",
             "go",
@@ -1255,19 +1257,19 @@ mod tests {
         let sold = |label: &str, weight| (Some(label.to_string()), weight);
         assert_eq!(
             plan(r#""promax""#, None),
-            sold("ChatGPT Pro 500", Some(25.0))
+            sold("ChatGPT Pro 500", Some(50.0))
         );
         assert_eq!(
             plan("null", Some("prolite")),
-            sold("ChatGPT Pro 100", Some(5.0))
+            sold("ChatGPT Pro 100", Some(10.0))
         );
         assert_eq!(
             plan(r#""""#, Some("prolite")),
-            sold("ChatGPT Pro 100", Some(5.0))
+            sold("ChatGPT Pro 100", Some(10.0))
         );
         assert_eq!(
             plan(r#""pro""#, Some("plus")),
-            sold("ChatGPT Pro 200", Some(10.0))
+            sold("ChatGPT Pro 200", Some(20.0))
         );
         assert_eq!(plan(r#""free""#, None), sold("ChatGPT Free", None));
     }
@@ -1600,7 +1602,7 @@ mod tests {
             jwt_with(r#"{"https://api.openai.com/auth":{"chatgpt_plan_type":"prolite"}}"#),
         );
         let payload = fetch_stored(&with_plan, Duration::from_secs(1), now).unwrap();
-        assert_eq!(payload.credential.plan_weight, Some(5.0));
+        assert_eq!(payload.credential.plan_weight, Some(10.0));
         assert_eq!(
             payload.usage.unwrap().login_method.as_deref(),
             Some("ChatGPT Pro 100")
@@ -1636,7 +1638,7 @@ mod tests {
         )
         .unwrap();
         let payload = to_payload(body, Utc::now(), cred.source, cred.plan_hint).unwrap();
-        assert_eq!(payload.credential.plan_weight, Some(5.0));
+        assert_eq!(payload.credential.plan_weight, Some(10.0));
     }
 
     #[test]

@@ -1466,10 +1466,10 @@ mod gui {
                     shared.lock().unwrap_or_else(|e| e.into_inner()).fetching = true;
                     ctx.request_repaint();
                     refresh_secs = config.refresh_secs.max(30);
-                    let result = fetch_all_providers(&config);
+                    let mut result = fetch_all_providers(&config);
                     let _ = write_cache_full(
                         &config.cache_file,
-                        &result.payloads,
+                        &mut result.payloads,
                         &result.errors,
                         &result.costs,
                         &config,

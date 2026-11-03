@@ -176,9 +176,12 @@ pub fn read_cache_full(path: &Path) -> Result<CachedData> {
 /// The provider set recorded is the one the fetch ran with, not the set that
 /// answered: a provider that errored still counts as covered, or a failing
 /// provider would put every reader into a refetch loop.
+///
+/// Each window's burn is set on `payloads` too, so a caller drawing them shows
+/// the pace a reader of the snapshot will.
 pub fn write_cache_full(
     path: &Path,
-    payloads: &[ProviderPayload],
+    payloads: &mut [ProviderPayload],
     errors: &[ProviderFetchError],
     costs: &HashMap<String, CostInfo>,
     config: &TokenGaugeConfig,
@@ -186,10 +189,9 @@ pub fn write_cache_full(
     store: Option<&StoreSeen>,
 ) -> Result<()> {
     let store = store.cloned().unwrap_or_else(|| StoreSeen::now(config));
-    let mut payloads = payloads.to_vec();
-    crate::window_history::record(path, &mut payloads, Utc::now());
+    crate::window_history::record(path, payloads, Utc::now());
     let data = CachedData::Full {
-        payloads,
+        payloads: payloads.to_vec(),
         errors: errors.to_vec(),
         costs: costs.clone(),
         sync: sync.cloned().map(Box::new),
@@ -490,7 +492,7 @@ mod tests {
             credentials: CredentialsConfig::off(),
             ..TokenGaugeConfig::default()
         };
-        write_cache_full(path, &[], &[], &HashMap::new(), &config, None, None)
+        write_cache_full(path, &mut [], &[], &HashMap::new(), &config, None, None)
             .expect("write cache");
     }
 
@@ -677,7 +679,7 @@ mod tests {
         put(&store, "claude", "work", "{}", "u-1");
         let config = store_config(&cache, &store);
 
-        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
+        write_cache_full(&cache, &mut [], &[], &HashMap::new(), &config, None, None).unwrap();
         assert!(!cache_is_stale(&config), "a snapshot fresh from the fetch");
         let meta = read_cache_full(&cache).unwrap().meta().unwrap().clone();
         assert_eq!(meta.credentials["claude"], ["work"]);
@@ -689,7 +691,7 @@ mod tests {
             "a credential added since the write"
         );
 
-        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
+        write_cache_full(&cache, &mut [], &[], &HashMap::new(), &config, None, None).unwrap();
         assert!(!cache_is_stale(&config));
         // Switched before the write: the snapshot already describes it.
         std::fs::write(store.join(".last-switch.json"), r#"{"claude": 1}"#).unwrap();
@@ -703,7 +705,7 @@ mod tests {
         .unwrap();
         assert!(cache_is_stale(&config), "a switch after the write");
 
-        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
+        write_cache_full(&cache, &mut [], &[], &HashMap::new(), &config, None, None).unwrap();
         let ahead = crate::now_ms() + 3_600_000;
         std::fs::write(
             store.join(".last-switch.json"),
@@ -729,7 +731,7 @@ mod tests {
         let store = temp_store("seats");
         put(&store, "claude", "work", "{}", "u-1");
         let config = store_config(&cache, &store);
-        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
+        write_cache_full(&cache, &mut [], &[], &HashMap::new(), &config, None, None).unwrap();
 
         let mut json: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&cache).unwrap()).unwrap();
@@ -741,6 +743,50 @@ mod tests {
 
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&store);
+    }
+
+    #[test]
+    fn the_writer_sets_the_burn_on_the_payloads_it_was_given() {
+        let dir = cache_test_dir("writer-burn");
+        let cache = dir.join("tokengauge-usage.json");
+        let now = Utc::now();
+        let mut payloads: Vec<ProviderPayload> = serde_json::from_value(serde_json::json!([{
+            "provider": "claude",
+            "usage": {
+                "updatedAt": now.to_rfc3339(),
+                "primary": {
+                    "usedPercent": 30,
+                    "resetsAt": (now + chrono::Duration::hours(3)).to_rfc3339(),
+                    "windowMinutes": 300
+                }
+            }
+        }]))
+        .unwrap();
+        let config = TokenGaugeConfig::default();
+        write_cache_full(
+            &cache,
+            &mut payloads,
+            &[],
+            &HashMap::new(),
+            &config,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let given = payloads[0]
+            .usage
+            .as_ref()
+            .unwrap()
+            .primary
+            .as_ref()
+            .unwrap();
+        let (written, _, _) = read_cache_full(&cache).unwrap().into_parts();
+        let written = written[0].usage.as_ref().unwrap().primary.as_ref().unwrap();
+        assert_eq!(given.burn.as_ref().map(|b| b.per_hour), Some(15.0));
+        assert_eq!(given.burn, written.burn);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A store change made while the fetch ran is after what the fetch read,
@@ -758,7 +804,7 @@ mod tests {
         put(&store, "claude", "perso", "{}", "u-2");
         write_cache_full(
             &cache,
-            &[],
+            &mut [],
             &[],
             &HashMap::new(),
             &config,
@@ -778,7 +824,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         write_cache_full(
             &cache,
-            &[],
+            &mut [],
             &[],
             &HashMap::new(),
             &config,

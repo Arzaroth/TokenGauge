@@ -874,7 +874,7 @@ mod tests {
         };
         write_cache_full(
             &cache,
-            &[payload],
+            &mut [payload],
             &[],
             &HashMap::new(),
             &config,
@@ -967,7 +967,7 @@ mod tests {
         };
         write_cache_full(
             &cache,
-            &[payload],
+            &mut [payload],
             &[],
             &HashMap::new(),
             &config,
@@ -1006,7 +1006,7 @@ mod tests {
         let dir = unique_test_dir("fetch-wait-wake");
         let cache = dir.join("cache.json");
         let config = test_config(cache.clone());
-        write_cache_full(&cache, &[], &[], &HashMap::new(), &config, None, None).unwrap();
+        write_cache_full(&cache, &mut [], &[], &HashMap::new(), &config, None, None).unwrap();
 
         let doomed = cache.clone();
         let killer = thread::spawn(move || {

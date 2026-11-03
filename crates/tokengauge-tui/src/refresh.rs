@@ -41,7 +41,7 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
         Some(c) if !force && !stale => c.into_parts(),
         _ => {
             let FetchResult {
-                payloads,
+                mut payloads,
                 errors,
                 costs,
                 sync,
@@ -49,7 +49,7 @@ fn fetch_rows_with_config(config_override: Option<PathBuf>, force: bool) -> Resu
             } = fetch_all_providers(&config);
             write_cache_full(
                 &config.cache_file,
-                &payloads,
+                &mut payloads,
                 &errors,
                 &costs,
                 &config,

@@ -513,7 +513,7 @@ pub(crate) fn fetch_and_write(config: &TokenGaugeConfig, wipe_snapshot: bool) ->
     }
     if let Err(e) = write_cache_full(
         &config.cache_file,
-        &result.payloads,
+        &mut result.payloads,
         &result.errors,
         &result.costs,
         config,

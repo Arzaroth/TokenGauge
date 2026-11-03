@@ -181,7 +181,9 @@ impl WindowHistory {
                     &mut self.trails[i],
                     Trail::new(provider, credential, window, reading),
                 );
-                self.closed.extend(ended.closed());
+                if ended.same_account(account) {
+                    self.closed.extend(ended.closed());
+                }
                 i
             }
             None => {

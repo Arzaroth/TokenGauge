@@ -72,12 +72,13 @@ impl Reading {
             .ok()?
             .with_timezone(&Utc);
         let minutes = window.window_minutes.filter(|m| *m > 0)?;
-        (resets_at > at).then_some(Reading {
+        let reading = Reading {
             used: window.used_percent?.min(100),
             minutes,
             resets_at,
             at,
-        })
+        };
+        (resets_at > at && at.timestamp_millis() >= reading.start()).then_some(reading)
     }
 }
 
@@ -268,7 +269,7 @@ pub fn record(cache_file: &Path, payloads: &mut [ProviderPayload], now: DateTime
             .updated_at
             .as_deref()
             .and_then(|iso| DateTime::parse_from_rfc3339(iso).ok())
-            .map_or(now, |at| at.with_timezone(&Utc));
+            .map_or(now, |at| at.with_timezone(&Utc).min(now));
         for (name, window) in windows_mut(usage) {
             if let Some(reading) = Reading::of(window, at) {
                 let trail = history.observe(
@@ -556,6 +557,21 @@ mod tests {
                 .burn
                 .is_some()
         );
+    }
+
+    #[test]
+    fn a_reading_before_its_window_opened_or_after_the_write_adds_nothing_odd() {
+        let m = Machine::new("outside_window");
+        let now = Utc::now();
+        let reset = now + Duration::hours(6);
+        m.fetch(vec![payload(None, now, window(10, reset, 300))], now);
+        assert!(!history_path(&m.cache).exists());
+
+        let reset = now + Duration::hours(4);
+        let ahead = now + Duration::minutes(30);
+        m.fetch(vec![payload(None, ahead, window(10, reset, 300))], now);
+        let trail = &m.history().trails[0];
+        assert_eq!(trail.samples, [(now.timestamp_millis(), 10)]);
     }
 
     #[test]

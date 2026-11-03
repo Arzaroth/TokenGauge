@@ -143,7 +143,8 @@ with `provider`, `credential` (absent for an unmatched live login), `window`
 (`primary`, `secondary`, `tertiary`, or an extra window's id or title),
 `windowMinutes`, `resetsAt` (RFC 3339) and `samples`, `[ms, percent]` pairs
 oldest first, one per change. A trail holds the window's current instance
-only.
+only. A trail may also carry `accountDigest`, TokenGauge's own as on the
+payload.
 
 Each top-level `errors[]` entry gains `credential` and `active`; a stored
 credential's message starts with its name (`perso: ...`). A payload served stale

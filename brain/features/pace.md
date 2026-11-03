@@ -7,7 +7,8 @@ first. Shown next to each reset on every frontend, as a badge resolved in
 
 - **The projection follows the recent burn.** A window carrying a `burn`
   ([window-history.md](window-history.md)) is projected at it: `used + burn x
-  time left`, and empty when that passes 100% before the reset. A morning's burst
+  time left`, and empty when that passes 100% before the reset, or now when it
+  is already full, however quiet it has gone. A morning's burst
   followed by a quiet afternoon ends near where it stands rather than being
   extrapolated at its morning rate. A window with no burn is projected at its
   average since it opened, which is also what the burn is with no history.

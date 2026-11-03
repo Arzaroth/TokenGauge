@@ -722,6 +722,74 @@ mod tests {
         assert_eq!(burn.per_hour, 0.5);
     }
 
+    fn closed(history: &WindowHistory) -> Vec<(String, u8)> {
+        history
+            .closed
+            .iter()
+            .map(|c| (c.window.clone(), c.used))
+            .collect()
+    }
+
+    #[test]
+    fn a_week_that_resets_is_recorded_and_a_five_hour_window_is_not() {
+        let m = Machine::new("closed_week");
+        let start = Utc::now();
+        let week = start + Duration::days(2);
+        let session = start + Duration::hours(2);
+        let mut both = payload(Some("work"), start, window(10, session, 300));
+        both.usage.as_mut().unwrap().secondary = Some(window(40, week, 10080));
+        m.fetch(vec![both], start);
+        let later = start + Duration::hours(1);
+        let mut both = payload(Some("work"), later, window(30, session, 300));
+        both.usage.as_mut().unwrap().secondary = Some(window(55, week, 10080));
+        m.fetch(vec![both], later);
+        assert!(m.history().closed.is_empty());
+
+        m.fetch(Vec::new(), week + Duration::minutes(1));
+        let history = m.history();
+        assert!(history.trails.is_empty());
+        assert_eq!(closed(&history), [("secondary".to_owned(), 55)]);
+        let record = &history.closed[0];
+        assert_eq!(record.credential.as_deref(), Some("work"));
+        assert_eq!(record.window_minutes, 10080);
+        assert_eq!(record.resets_at, week);
+        assert_eq!(record.opened_at, week - Duration::days(7));
+        assert_eq!(record.seen_at.timestamp_millis(), later.timestamp_millis());
+    }
+
+    #[test]
+    fn a_week_reset_early_is_recorded_when_the_next_one_opens() {
+        let m = Machine::new("closed_banked");
+        let start = Utc::now();
+        let week = start + Duration::days(3);
+        m.fetch(vec![payload(None, start, window(70, week, 10080))], start);
+        let after = start + Duration::hours(1);
+        m.fetch(
+            vec![payload(
+                None,
+                after,
+                window(0, after + Duration::days(7), 10080),
+            )],
+            after,
+        );
+        let history = m.history();
+        assert_eq!(closed(&history), [("primary".to_owned(), 70)]);
+        assert_eq!(history.closed[0].resets_at, week);
+        assert_eq!(samples(&history), [vec![0]]);
+    }
+
+    #[test]
+    fn a_record_is_kept_a_year() {
+        let m = Machine::new("closed_year");
+        let start = Utc::now();
+        let week = start + Duration::days(1);
+        m.fetch(vec![payload(None, start, window(20, week, 10080))], start);
+        m.fetch(Vec::new(), week + Duration::days(365));
+        assert_eq!(m.history().closed.len(), 1);
+        m.fetch(Vec::new(), week + Duration::days(367));
+        assert!(m.history().closed.is_empty());
+    }
+
     #[test]
     fn the_keys_remuda_reads_are_spelled_as_decision_0003_says() {
         let m = Machine::new("keys");
@@ -755,5 +823,30 @@ mod tests {
             ]
         );
         assert!(trail["samples"][0].as_array().is_some_and(|s| s.len() == 2));
+
+        let week = now + Duration::days(1);
+        m.fetch(
+            vec![payload(Some("perso"), now, self::window(40, week, 10080))],
+            now,
+        );
+        m.fetch(Vec::new(), week + Duration::minutes(1));
+        let text = std::fs::read_to_string(history_path(&m.cache)).unwrap();
+        let file: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let record = file["closed"][0].as_object().unwrap();
+        let mut keys: Vec<&str> = record.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "credential",
+                "openedAt",
+                "provider",
+                "resetsAt",
+                "seenAt",
+                "used",
+                "window",
+                "windowMinutes"
+            ]
+        );
     }
 }

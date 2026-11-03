@@ -43,7 +43,8 @@ At the same write, each window a fresh payload reports with a figure, a
 duration and a reset gets `burn`, on the payloads the caller goes on to draw as
 well as in the snapshot. A stale payload gets none, nor does a reading taken
 before its window opened or exactly as it opened, which has no time to measure
-over. `burn` holds `perHour`, the percent of the window spent per hour, and `overMinutes`, the stretch it was
+over, one at or after its reset, or a late reading from an account other than
+the one its trail now follows. `burn` holds `perHour`, the percent of the window spent per hour, and `overMinutes`, the stretch it was
 measured over. The stretch is the last seventh of the window, an hour at least:
 the last hour of five, the last day of a week. It starts at the latest sample
 at or before the stretch's start.

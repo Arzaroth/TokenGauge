@@ -85,15 +85,18 @@ impl Reading {
 impl Trail {
     /// The same instance until its reset has passed, its figure went down
     /// (which only a reset does, a banked one included), or the reading's
-    /// window opened after the trail's last sample. A reading older than that
-    /// sample came from an overlapping fetch and ends nothing.
-    fn continues(&self, reading: &Reading) -> bool {
+    /// window opened after the trail's last sample, or it belongs to another
+    /// account. A reading older than that sample came from an overlapping
+    /// fetch and ends nothing.
+    fn continues(&self, reading: &Reading, account: Option<&str>) -> bool {
         let Some(&(last, used)) = self.samples.last() else {
-            return self.resets_at > reading.at;
+            return self.same_account(account) && self.resets_at > reading.at;
         };
-        let at = reading.at.timestamp_millis();
-        at <= last
-            || (self.resets_at > reading.at && reading.used >= used && last >= reading.start())
+        reading.at.timestamp_millis() < last
+            || (self.same_account(account)
+                && self.resets_at > reading.at
+                && reading.used >= used
+                && last >= reading.start())
     }
 
     fn same_account(&self, account: Option<&str>) -> bool {
@@ -144,11 +147,7 @@ impl WindowHistory {
             t.provider == provider && t.credential.as_deref() == name && t.window == window
         });
         let index = match found {
-            Some(i)
-                if self.trails[i].same_account(account) && self.trails[i].continues(reading) =>
-            {
-                i
-            }
+            Some(i) if self.trails[i].continues(reading, account) => i,
             Some(i) => {
                 self.trails[i] = Trail::new(provider, credential, window, reading);
                 i
@@ -491,6 +490,23 @@ mod tests {
         on("a", 10, 20);
         on("b", 20, 30);
         assert_eq!(samples(&m.history()), [vec![30]]);
+    }
+
+    #[test]
+    fn a_late_reading_from_the_previous_account_leaves_the_new_trail_alone() {
+        let m = Machine::new("late_account");
+        let start = Utc::now();
+        let reset = start + Duration::hours(4);
+        let on = |account: &str, minutes: i64, used: u8| {
+            let at = start + Duration::minutes(minutes);
+            let mut p = payload(Some("work"), at, window(used, reset, 300));
+            p.credential.account_digest = Some(account.to_owned());
+            m.fetch(vec![p], start + Duration::minutes(30));
+        };
+        on("b", 10, 5);
+        on("b", 20, 8);
+        on("a", 15, 40);
+        assert_eq!(samples(&m.history()), [vec![5, 8]]);
     }
 
     #[test]

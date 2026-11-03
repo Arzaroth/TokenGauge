@@ -214,7 +214,7 @@ fn burn(trail: &Trail, reading: &Reading) -> Option<Burn> {
     }
     let per_hour = (f64::from(reading.used) - f64::from(used)).max(0.0) / hours;
     Some(Burn {
-        per_hour: (per_hour * 100.0).round() / 100.0,
+        per_hour,
         over_minutes: u32::try_from((at - since) / 60_000).unwrap_or(u32::MAX),
     })
 }
@@ -607,6 +607,19 @@ mod tests {
         let burn = burn_after(&m, &[(10, 2), (120, 20), (150, 25), (180, 30)], reset, 300);
         assert_eq!(burn.per_hour, 10.0, "{burn:?}");
         assert_eq!(burn.over_minutes, 60);
+    }
+
+    #[test]
+    fn a_slow_burn_is_kept_whole() {
+        let m = Machine::new("burn-slow");
+        let reset = Utc::now() + Duration::days(6);
+        let burn = burn_after(&m, &[(10 * 60, 1)], reset, 10080);
+        assert_eq!(burn.per_hour, 0.1);
+
+        let m = Machine::new("burn-slower");
+        let reset = Utc::now() + Duration::hours(1);
+        let burn = burn_after(&m, &[(167 * 60, 1)], reset, 10080);
+        assert_eq!(burn.per_hour, 1.0 / 167.0);
     }
 
     #[test]

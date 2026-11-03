@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.55.0] - 2026-11-03
+
 ### Changed
 
 - ChatGPT Pro 100, 200 and 500 now weigh 10, 20 and 50 Plus allowances, and a

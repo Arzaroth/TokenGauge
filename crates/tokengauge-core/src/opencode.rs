@@ -97,6 +97,13 @@ impl Login {
             Self::Key(token) | Self::Access(token) => token,
         }
     }
+
+    fn source(&self) -> &'static str {
+        match self {
+            Self::Key(_) => "api key",
+            Self::Access(_) => "oauth",
+        }
+    }
 }
 
 /// The Go key in opencode's `auth.json`, which holds every provider's login.
@@ -109,7 +116,7 @@ fn file_key(text: &str) -> Result<Option<String>> {
     Ok(ACCOUNT_IDS.iter().find_map(|id| {
         let entry = auth.get(*id)?;
         let kind = entry.get("type").and_then(serde_json::Value::as_str);
-        if !matches!(kind, None | Some("api")) {
+        if kind != Some("api") {
             return None;
         }
         entry
@@ -142,44 +149,51 @@ fn row_login(value: &str, now_ms: i64) -> Option<Login> {
 
 /// The Go login in opencode 2's database, opened read-only: the database is
 /// opencode's, and a refresh token in it rotates on use. Once opencode has
-/// imported `auth.json` it reads only the database, so the outer `None` - no
-/// database, one that cannot be read, or one before that import - is the only
-/// case `auth.json` is asked. Each integration's login is the row opencode
+/// imported `auth.json` it reads only the database, so `None` - no database,
+/// or one before that import - is the only case `auth.json` is asked, and a
+/// database that cannot be read is an error rather than a reason to send the
+/// key opencode stopped using. Each integration's login is the row opencode
 /// selects, the active one, else the newest.
-fn database_login(path: &Path, now_ms: i64) -> Option<Option<Login>> {
+fn database_login(path: &Path, now_ms: i64) -> Result<Option<Option<Login>>> {
     use rusqlite::{Connection, OpenFlags, OptionalExtension};
-    let conn = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .ok()?;
-    conn.busy_timeout(Duration::from_millis(500)).ok()?;
-    let imported: bool = conn
-        .query_row(
-            "SELECT EXISTS (SELECT 1 FROM migration WHERE id LIKE '%_import_legacy_credentials')",
+    if !path.exists() {
+        return Ok(None);
+    }
+    let read = || -> rusqlite::Result<Option<Option<Login>>> {
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(Duration::from_millis(500))?;
+        let migrated: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'migration')",
             [],
             |row| row.get(0),
-        )
-        .ok()?;
-    if !imported {
-        return None;
-    }
-    let mut selected = conn
-        .prepare(
+        )?;
+        let imported = migrated
+            && conn.query_row(
+                "SELECT EXISTS (SELECT 1 FROM migration WHERE id LIKE '%_import_legacy_credentials')",
+                [],
+                |row| row.get(0),
+            )?;
+        if !imported {
+            return Ok(None);
+        }
+        let mut selected = conn.prepare(
             "SELECT value FROM credential WHERE integration_id = ?1 \
              ORDER BY active DESC, time_created DESC, id DESC LIMIT 1",
-        )
-        .ok()?;
-    for id in ACCOUNT_IDS {
-        let value = selected
-            .query_row([id], |row| row.get::<_, String>(0))
-            .optional()
-            .ok()?;
-        if let Some(login) = value.and_then(|value| row_login(&value, now_ms)) {
-            return Some(Some(login));
+        )?;
+        for id in ACCOUNT_IDS {
+            let value = selected
+                .query_row([id], |row| row.get::<_, String>(0))
+                .optional()?;
+            if let Some(login) = value.and_then(|value| row_login(&value, now_ms)) {
+                return Ok(Some(Some(login)));
+            }
         }
-    }
-    Some(None)
+        Ok(Some(None))
+    };
+    read().map_err(|_| anyhow!("opencode's opencode.db could not be read"))
 }
 
 /// No file is no key; a file that cannot be read says why.
@@ -201,7 +215,7 @@ pub(crate) fn login() -> Result<(Login, &'static str)> {
     }
     let key_missing =
         || anyhow!("opencode key missing - `/connect` it in opencode, or set OPENCODE_API_KEY");
-    if let Some(login) = database_login(&database_path(), Utc::now().timestamp_millis()) {
+    if let Some(login) = database_login(&database_path(), Utc::now().timestamp_millis())? {
         return login
             .map(|login| (login, "opencode.db"))
             .ok_or_else(key_missing);
@@ -291,6 +305,7 @@ impl Window {
 fn to_payload(
     body: UsageResponse,
     now: DateTime<Utc>,
+    source: &str,
     unauthorized_hint: &str,
 ) -> Result<ProviderPayload> {
     if body.error.is_some() {
@@ -322,7 +337,7 @@ fn to_payload(
 
     Ok(ProviderPayload::live(
         "opencode",
-        "api key",
+        source,
         UsageSnapshot {
             primary: rolling,
             secondary: weekly,
@@ -346,6 +361,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         login.token(),
         timeout,
         now,
+        login.source(),
         "check OPENCODE_API_KEY, or `/connect` opencode Go again",
     )?])
 }
@@ -373,6 +389,7 @@ pub(crate) fn fetch_stored(
         &stored_key(text)?,
         timeout,
         now,
+        "api key",
         "opencode refused the stored key (`remuda login -p opencode` replaces it)",
     )
 }
@@ -381,6 +398,7 @@ fn usage_for(
     key: &str,
     timeout: Duration,
     now: DateTime<Utc>,
+    source: &str,
     unauthorized_hint: &str,
 ) -> Result<ProviderPayload> {
     let url = endpoint_for(env_clean(ENDPOINT_ENV).as_deref())?;
@@ -402,7 +420,7 @@ fn usage_for(
     let body: UsageResponse =
         serde_json::from_str(&text).context("opencode usage JSON was invalid")?;
 
-    to_payload(body, now, unauthorized_hint)
+    to_payload(body, now, source, unauthorized_hint)
 }
 
 #[cfg(test)]
@@ -530,13 +548,13 @@ mod tests {
         ];
         let path = database("newest", true, &rows);
         assert_eq!(
-            database_login(&path, NOW_MS),
+            database_login(&path, NOW_MS).unwrap(),
             Some(Some(Login::Key("go".into())))
         );
         rows.push(("opencode-go", Some(true), 1, &active));
         let path = database("active", true, &rows);
         assert_eq!(
-            database_login(&path, NOW_MS),
+            database_login(&path, NOW_MS).unwrap(),
             Some(Some(Login::Key("go-active".into())))
         );
 
@@ -551,34 +569,38 @@ mod tests {
             ],
         );
         assert_eq!(
-            database_login(&path, NOW_MS),
+            database_login(&path, NOW_MS).unwrap(),
             Some(Some(Login::Key("legacy".into())))
         );
 
         let path = database("empty", true, &[("anthropic", Some(true), 1, &other)]);
-        assert_eq!(database_login(&path, NOW_MS), Some(None));
+        assert_eq!(database_login(&path, NOW_MS).unwrap(), Some(None));
     }
 
     #[test]
     fn auth_json_is_asked_only_without_a_database_that_imported_it() {
         let go = r#"{"type": "key", "key": "go"}"#;
         let path = database("pending", false, &[("opencode-go", Some(true), 1, go)]);
-        assert_eq!(database_login(&path, NOW_MS), None);
+        assert_eq!(database_login(&path, NOW_MS).unwrap(), None);
 
         let dir = std::env::temp_dir().join(format!("tg-opencode-none-{}", std::process::id()));
-        assert_eq!(database_login(&dir.join("opencode.db"), NOW_MS), None);
+        assert_eq!(
+            database_login(&dir.join("opencode.db"), NOW_MS).unwrap(),
+            None
+        );
         assert!(!dir.join("opencode.db").exists());
 
         std::fs::create_dir_all(&dir).unwrap();
         let junk = dir.join("junk.db");
         std::fs::write(&junk, "not a database").unwrap();
-        assert_eq!(database_login(&junk, NOW_MS), None);
+        assert!(database_login(&junk, NOW_MS).is_err());
     }
 
     fn parse(raw: &str) -> Result<ProviderPayload> {
         to_payload(
             serde_json::from_str(raw).expect("fixture parses"),
             at(),
+            "api key",
             "check OPENCODE_API_KEY",
         )
     }

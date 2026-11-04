@@ -1141,6 +1141,18 @@ mod tests {
             9e-07,
             "the download wins"
         );
+
+        let moved = PriceTable::from_json(
+            r#"{"moonshotai/kimi-k2-thinking": {"input_cost_per_token": 1e-06,
+                                                "output_cost_per_token": 5e-06}}"#,
+        )
+        .unwrap()
+        .or_vendored();
+        assert_eq!(
+            moved.get("kimi-k2-thinking").unwrap().input,
+            1e-06,
+            "a model moved to another vendor path keeps the downloaded price"
+        );
     }
 
     #[test]
@@ -1362,6 +1374,29 @@ mod tests {
         let expected = 300_000.0 * 2.5e-05 + 1_000.0 * 1.125e-04;
         assert!((fast.cost_of_request(&long) - expected).abs() < 1e-9);
         assert!(fast.cost_of_request(&long) > price.cost_of_request(&long));
+    }
+
+    #[test]
+    fn a_long_context_price_a_tier_omits_moves_with_the_tier() {
+        let mut raw: serde_json::Value = serde_json::from_str(GPT_TIERED).unwrap();
+        raw["input_cost_per_token_above_272k_tokens_priority"] = 3e-05.into();
+        let price: ModelPrice = serde_json::from_value(raw).unwrap();
+        let tier = price.at_tier(ServiceTier::Priority).long_context.unwrap();
+        assert_eq!(tier.input, 3e-05);
+        assert!((tier.output - 4.5e-05 * 2.5).abs() < 1e-15);
+    }
+
+    #[test]
+    fn a_tier_listing_only_a_cache_price_is_kept() {
+        let price: ModelPrice = serde_json::from_str(
+            r#"{"input_cost_per_token": 5e-06, "output_cost_per_token": 3e-05,
+                "cache_read_input_token_cost": 5e-07,
+                "cache_read_input_token_cost_priority": 1e-06}"#,
+        )
+        .unwrap();
+        let fast = price.at_tier(ServiceTier::Priority);
+        assert_eq!(fast.cache_read, 1e-06);
+        assert_eq!(fast.input, 5e-06);
     }
 
     #[test]

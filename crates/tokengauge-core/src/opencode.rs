@@ -473,6 +473,10 @@ mod tests {
             file_key(r#"{"opencode": {"type": "wellknown", "key": "OPENCODE_TOKEN"}}"#).unwrap(),
             None
         );
+        assert_eq!(
+            file_key(r#"{"opencode-go": {"key": "untyped"}}"#).unwrap(),
+            None
+        );
     }
 
     const NOW_MS: i64 = 1_800_000_000_000;
@@ -594,6 +598,31 @@ mod tests {
         let junk = dir.join("junk.db");
         std::fs::write(&junk, "not a database").unwrap();
         assert!(database_login(&junk, NOW_MS).is_err());
+    }
+
+    #[test]
+    fn an_imported_database_that_cannot_be_read_is_an_error_not_auth_json() {
+        let path = database("broken", true, &[]);
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch("DROP TABLE credential")
+            .unwrap();
+        let err = database_login(&path, NOW_MS).unwrap_err();
+        assert_eq!(err.to_string(), "opencode's opencode.db could not be read");
+
+        let dir = path.parent().unwrap();
+        let unmigrated = dir.join("unmigrated.db");
+        rusqlite::Connection::open(&unmigrated)
+            .unwrap()
+            .execute_batch("CREATE TABLE other (id TEXT)")
+            .unwrap();
+        assert_eq!(database_login(&unmigrated, NOW_MS).unwrap(), None);
+    }
+
+    #[test]
+    fn a_row_says_whether_it_was_read_with_a_key_or_an_oauth_login() {
+        assert_eq!(Login::Key("k".into()).source(), "api key");
+        assert_eq!(Login::Access("t".into()).source(), "oauth");
     }
 
     fn parse(raw: &str) -> Result<ProviderPayload> {

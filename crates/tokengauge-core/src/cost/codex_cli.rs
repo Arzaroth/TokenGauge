@@ -922,8 +922,80 @@ mod tests {
         };
         let plain = session("sessions/r.jsonl", text.clone().into_bytes());
         let compressed = session("sessions/r.jsonl.zst", compress(&text));
+        let archived = session("archived_sessions/r.jsonl", text.clone().into_bytes());
         assert!(plain.ends_with("r.jsonl"), "{plain}");
         assert_eq!(plain, compressed);
+        assert_eq!(plain, archived);
+    }
+
+    /// A session resumed after it was archived continues from the archived
+    /// rollout, whichever root is listed first.
+    #[test]
+    fn an_archived_rollout_is_read_before_the_session_resumed_from_it() {
+        let part = |ts: &str, input: u64| {
+            let meta = format!(
+                r#"{{"timestamp":"{ts}","type":"session_meta","payload":{{"id":"resumed"}}}}"#
+            );
+            format!("{meta}\n{CONTEXT}\n{}\n", token_count(ts, input, 0, 0)).into_bytes()
+        };
+        let (dir, roots) = home(
+            "resumed",
+            &[
+                (
+                    "sessions/2026/05/11/rollout-2026-05-11T12-00-00-resumed.jsonl",
+                    part("2026-05-11T12:00:00.000Z", 150),
+                ),
+                (
+                    "archived_sessions/rollout-2026-05-09T12-00-00-resumed.jsonl",
+                    part("2026-05-09T12:00:00.000Z", 100),
+                ),
+            ],
+        );
+        let mut by_day: Vec<(NaiveDate, u64)> = read_events(
+            &roots,
+            day(2026, 1, 1),
+            &mut HashSet::new(),
+            &mut Firsts::new(),
+            &mut Vec::new(),
+        )
+        .iter()
+        .map(|e| (e.date, e.tokens.input))
+        .collect();
+        by_day.sort();
+        assert_eq!(by_day, vec![(day(2026, 5, 9), 100), (day(2026, 5, 11), 50)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rollout_whose_plain_copy_cannot_be_read_is_read_compressed() {
+        let (dir, roots) = home(
+            "unreadable",
+            &[
+                ("sessions/r.jsonl", b"\xff\xfe".to_vec()),
+                ("sessions/r.jsonl.zst", compress(&rollout("r", 9))),
+            ],
+        );
+        assert_eq!(inputs(&roots), vec![9]);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (dir, roots) = home(
+            "unreadable-both",
+            &[
+                ("sessions/r.jsonl", b"\xff\xfe".to_vec()),
+                ("sessions/r.jsonl.zst", b"not zstd".to_vec()),
+            ],
+        );
+        let mut gaps = Vec::new();
+        let read = read_events(
+            &roots,
+            day(2026, 1, 1),
+            &mut HashSet::new(),
+            &mut Firsts::new(),
+            &mut gaps,
+        );
+        assert!(read.is_empty());
+        assert_eq!(gaps.len(), 2, "{gaps:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn settings(ts: &str, tier: Option<&str>) -> String {

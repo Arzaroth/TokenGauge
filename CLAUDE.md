@@ -330,8 +330,9 @@ Rules that are easy to regress:
   `auth.json` once (the `*_import_legacy_credentials` migration) and never
   reads it again, so a database past that import is the only answer, even an
   empty one: a stale `auth.json` beside it would name a key opencode no longer
-  uses. An unreadable database, or one before the import, reads as no login
-  rather than an error, and `auth.json` is asked. Per integration
+  uses. A database before the import (no `migration` table, or no such row)
+  reads as no login and `auth.json` is asked; one that exists and cannot be
+  read is an error, never that fallback. Per integration
   (`opencode-go` before opencode 1's `opencode` id) the login is the row
   opencode itself selects, `active` first, then newest `time_created`, then
   `id`: an imported row has `active` NULL, and requiring `active = 1` missed

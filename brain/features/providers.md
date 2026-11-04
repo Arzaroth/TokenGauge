@@ -30,9 +30,10 @@ Notes:
   `rusqlite`: the row opencode selects for `opencode-go`, then for `opencode`
   (opencode 1's id), `active` first, then newest, a `key` or an `oauth` login
   inside its `expires`. Once the database has imported `auth.json` it is the
-  only answer; with no database, one that cannot be read, or one before that
-  import, `auth.json` (`opencode-go`, then `opencode`, an `api` entry only) is
-  asked. An OAuth access token names no account, since it rotates
+  only answer; with no database, or one before that import, `auth.json`
+  (`opencode-go`, then `opencode`, an `api` entry only) is asked, and a
+  database that cannot be read is an error. A row fetched with an OAuth token
+  has source `oauth`. An OAuth access token names no account, since it rotates
   (`Login::Access`). remuda switches the key in that same row.
 - **Cursor** has no public API; TokenGauge calls the dashboard's
   `/api/usage-summary` with the token `cursor-agent` leaves, in its `auth.json`

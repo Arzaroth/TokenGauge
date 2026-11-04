@@ -1,7 +1,12 @@
 //! Codex rollout transcripts.
 //!
-//! `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. A different shape from
-//! Claude Code's, with five traps in it:
+//! `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, and the same tree under
+//! `~/.codex/archived_sessions`. Codex compresses a finished rollout to
+//! `.jsonl.zst` and deletes the plain file, and restores the plain file
+//! before it drops the archive when a session resumes, so a rollout is read
+//! once: the plain copy over the compressed one, and `sessions` over
+//! `archived_sessions`, as ccusage does. A different shape from Claude
+//! Code's, with five traps in it:
 //!
 //! 1. `total_token_usage` is **cumulative for the session**, climbing into the
 //!    tens of millions. Its per-event delta is the billed unit.
@@ -29,12 +34,13 @@
 //! and it changes mid-session.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::Deserialize;
 
-use super::{Firsts, TokenCounts, UsageEvent, dedup_key, first_seen, jsonl_files};
+use super::{Firsts, TokenCounts, UsageEvent, dedup_key, first_seen, transcript_files};
 use crate::model_to_provider;
 
 #[derive(Debug, Deserialize)]
@@ -244,14 +250,51 @@ pub fn roots() -> Vec<PathBuf> {
         && !home.trim().is_empty()
     {
         roots.push(Path::new(home.trim()).join("sessions"));
+        roots.push(Path::new(home.trim()).join("archived_sessions"));
     }
     if roots.is_empty()
         && let Some(home) = dirs::home_dir()
     {
         roots.push(home.join(".codex").join("sessions"));
+        roots.push(home.join(".codex").join("archived_sessions"));
     }
     roots.retain(|r| r.is_dir());
     roots
+}
+
+fn is_compressed(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "zst")
+        && path
+            .file_stem()
+            .is_some_and(|stem| Path::new(stem).extension().is_some_and(|e| e == "jsonl"))
+}
+
+fn is_rollout(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "jsonl") || is_compressed(path)
+}
+
+/// The rollout a file holds, whichever form it is in.
+fn plain_path(path: &Path) -> PathBuf {
+    if is_compressed(path) {
+        path.with_extension("")
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// A rollout's text. A `.zst` may hold several frames back to back.
+fn read_rollout(path: &Path) -> Option<String> {
+    if !is_compressed(path) {
+        return std::fs::read_to_string(path).ok();
+    }
+    let compressed = std::fs::read(path).ok()?;
+    let mut input = compressed.as_slice();
+    let mut text = Vec::new();
+    while !input.is_empty() {
+        let mut frame = ruzstd::decoding::StreamingDecoder::new(&mut input).ok()?;
+        frame.read_to_end(&mut text).ok()?;
+    }
+    String::from_utf8(text).ok()
 }
 
 pub fn read_events(
@@ -265,12 +308,21 @@ pub fn read_events(
     // Running totals per session, not per file: a session continued into a
     // second rollout picks its cumulative up where the first left off, and
     // starting from zero there would bill its entire history again as one
-    // delta. `jsonl_files` sorts by path, and rollouts are named
+    // delta. `transcript_files` sorts by path, and rollouts are named
     // `YYYY/MM/DD/rollout-<ISO timestamp>-<id>`, so that order is chronological
-    // and the earlier file is always read first.
+    // and the earlier file is always read first. The sort also puts
+    // `x.jsonl` before `x.jsonl.zst`.
     let mut totals: HashMap<String, Cumulative> = HashMap::new();
+    // A rollout by its Codex home and its plain path under `sessions` or
+    // `archived_sessions`, so each is read in one form only.
+    let mut rollouts: HashSet<(PathBuf, PathBuf)> = HashSet::new();
     for root in roots {
-        for file in jsonl_files(root, since, gaps) {
+        let home = root.parent().unwrap_or(root).to_path_buf();
+        for file in transcript_files(root, since, gaps, is_rollout) {
+            let relative = plain_path(file.strip_prefix(root).unwrap_or(&file));
+            if !rollouts.insert((home.clone(), relative)) {
+                continue;
+            }
             if !read_file(&file, since, seen, &mut totals, firsts, &mut events) {
                 gaps.push(file.clone());
             }
@@ -287,7 +339,7 @@ pub(super) fn read_file(
     firsts: &mut Firsts,
     events: &mut Vec<UsageEvent>,
 ) -> bool {
-    let Ok(contents) = std::fs::read_to_string(path) else {
+    let Some(contents) = read_rollout(path) else {
         return false;
     };
 
@@ -297,7 +349,9 @@ pub(super) fn read_file(
     let appended_from = events.len();
     // A rollout with no session_meta is its own bucket; there is nothing to
     // continue it from.
-    let mut session_id = path.to_string_lossy().into_owned();
+    // Named as the plain file, so a rollout compressed between two reads
+    // keeps the dedup keys built from it.
+    let mut session_id = plain_path(path).to_string_lossy().into_owned();
     let mut model: Option<String> = None;
     // Index into `events` of rows emitted before any `turn_context` announced a
     // model. A session states its model on the first turn, so these are filled

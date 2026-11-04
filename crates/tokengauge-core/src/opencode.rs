@@ -156,8 +156,10 @@ fn row_login(value: &str, now_ms: i64) -> Option<Login> {
 /// selects, the active one, else the newest.
 fn database_login(path: &Path, now_ms: i64) -> Result<Option<Option<Login>>> {
     use rusqlite::{Connection, OpenFlags, OptionalExtension};
-    if !path.exists() {
-        return Ok(None);
+    match std::fs::metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(anyhow!("opencode's opencode.db could not be read")),
+        Ok(_) => {}
     }
     let read = || -> rusqlite::Result<Option<Option<Login>>> {
         let conn = Connection::open_with_flags(

@@ -121,6 +121,18 @@ pub fn dedup_key(a: &str, b: &str) -> u64 {
 /// A directory or entry that is there and cannot be read is pushed to `gaps`:
 /// skipping it reads as nothing in it, which is not the same as nothing there.
 pub(crate) fn jsonl_files(root: &Path, since: NaiveDate, gaps: &mut Vec<PathBuf>) -> Vec<PathBuf> {
+    transcript_files(root, since, gaps, |path| {
+        path.extension().is_some_and(|e| e == "jsonl")
+    })
+}
+
+/// [`jsonl_files`], for the files `keep` names.
+pub(crate) fn transcript_files(
+    root: &Path,
+    since: NaiveDate,
+    gaps: &mut Vec<PathBuf>,
+    keep: impl Fn(&Path) -> bool,
+) -> Vec<PathBuf> {
     let cutoff = since
         .checked_sub_days(Days::new(1))
         .and_then(|d| d.and_hms_opt(0, 0, 0))
@@ -153,7 +165,7 @@ pub(crate) fn jsonl_files(root: &Path, since: NaiveDate, gaps: &mut Vec<PathBuf>
                 stack.push(path);
                 continue;
             }
-            if path.extension().is_none_or(|e| e != "jsonl") {
+            if !keep(&path) {
                 continue;
             }
             if let Some(cutoff) = cutoff

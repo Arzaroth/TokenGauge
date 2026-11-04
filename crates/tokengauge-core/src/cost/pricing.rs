@@ -515,6 +515,17 @@ impl PriceTable {
         Self::from_json(VENDORED_PRICES).expect("vendored price table parses")
     }
 
+    /// This table, with the compiled-in price of every model it lacks.
+    /// LiteLLM drops entries for models their vendor still sells -
+    /// `moonshot/kimi-k2-thinking` went in 2026-10 - and a model the table
+    /// has stopped carrying is not a model that costs nothing.
+    fn or_vendored(mut self) -> Self {
+        for (name, price) in Self::vendored().models {
+            self.models.entry(name).or_insert(price);
+        }
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn from_models<'a>(models: impl IntoIterator<Item = (&'a str, ModelPrice)>) -> Self {
         Self {
@@ -707,7 +718,7 @@ fn download(timeout: Duration) -> Result<PriceTable> {
     if table.is_empty() {
         anyhow::bail!("price table download held no usable models");
     }
-    Ok(table)
+    Ok(table.or_vendored())
 }
 
 /// Where a loaded table came from. An offline machine quietly rating everything

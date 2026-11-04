@@ -232,6 +232,13 @@ def write_pair(files):
 
 def main():
     current = slice_table(get_json(RAW.format(ref="main")))
+    # LiteLLM drops entries for models their vendor still sells
+    # (`moonshot/kimi-k2-thinking`, 2026-10). The last price this table
+    # carried stands, as `PriceTable::or_vendored` keeps it at runtime.
+    if OUT.exists():
+        for name, entry in json.loads(OUT.read_text()).items():
+            current.setdefault(name, entry)
+        current = dict(sorted(current.items()))
 
     for provider in ("claude", "codex", "kimi", "grok", "glm"):
         count = sum(1 for k in current if attribute(k) == provider)

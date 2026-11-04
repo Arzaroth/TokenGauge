@@ -434,6 +434,147 @@ mod tests {
         assert!(!err.to_string().contains("go-secret"), "{err}");
     }
 
+    #[test]
+    fn opencode_1s_own_id_and_only_an_api_entry_carry_a_key() {
+        assert_eq!(
+            file_key(r#"{"opencode": {"type": "api", "key": "legacy"}}"#)
+                .unwrap()
+                .as_deref(),
+            Some("legacy")
+        );
+        assert_eq!(
+            file_key(
+                r#"{"opencode": {"type": "api", "key": "legacy"},
+                    "opencode-go": {"type": "api", "key": "go"}}"#
+            )
+            .unwrap()
+            .as_deref(),
+            Some("go")
+        );
+        assert_eq!(
+            file_key(r#"{"opencode": {"type": "wellknown", "key": "OPENCODE_TOKEN"}}"#).unwrap(),
+            None
+        );
+    }
+
+    const NOW_MS: i64 = 1_800_000_000_000;
+
+    #[test]
+    fn a_credential_row_is_a_key_or_an_unexpired_oauth_login() {
+        assert_eq!(
+            row_login(r#"{"type": "key", "key": " k "}"#, NOW_MS),
+            Some(Login::Key("k".into()))
+        );
+        let oauth = |expires: i64| {
+            format!(r#"{{"type": "oauth", "access": "tok", "refresh": "r", "expires": {expires}}}"#)
+        };
+        assert_eq!(
+            row_login(&oauth(NOW_MS + 1), NOW_MS),
+            Some(Login::Access("tok".into()))
+        );
+        assert_eq!(row_login(&oauth(NOW_MS - 1), NOW_MS), None);
+        assert_eq!(row_login(r#"{"type": "key", "key": ""}"#, NOW_MS), None);
+        assert_eq!(row_login("not json", NOW_MS), None);
+    }
+
+    type Row<'a> = (&'a str, Option<bool>, i64, &'a str);
+
+    fn database(name: &str, imported: bool, rows: &[Row]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tg-opencode-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("opencode.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL); \
+             INSERT INTO migration VALUES ('20260611192811_lush_chimera', 0); \
+             CREATE TABLE credential (id text PRIMARY KEY, integration_id text, \
+             label text NOT NULL, value text NOT NULL, connector_id text, method_id text, \
+             active integer, time_created integer NOT NULL, time_updated integer NOT NULL);",
+        )
+        .unwrap();
+        if imported {
+            conn.execute(
+                "INSERT INTO migration VALUES ('20260805200742_import_legacy_credentials', 0)",
+                [],
+            )
+            .unwrap();
+        }
+        for (i, (integration, active, created, value)) in rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO credential VALUES (?1, ?2, 'l', ?3, NULL, NULL, ?4, ?5, ?5)",
+                rusqlite::params![i.to_string(), integration, value, active, created],
+            )
+            .unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn the_database_gives_the_login_opencode_selects() {
+        let key = |k: &str| format!(r#"{{"type": "key", "key": "{k}"}}"#);
+        let expired = r#"{"type": "oauth", "access": "old", "expires": 1}"#;
+        let (legacy, imported_old, imported_new, active, other) = (
+            key("legacy"),
+            key("go-old"),
+            key("go"),
+            key("go-active"),
+            key("other"),
+        );
+
+        let mut rows: Vec<Row> = vec![
+            ("opencode", Some(true), 3, &legacy),
+            ("opencode-go", None, 2, &imported_old),
+            ("opencode-go", None, 5, &imported_new),
+            ("anthropic", Some(true), 9, &other),
+        ];
+        let path = database("newest", true, &rows);
+        assert_eq!(
+            database_login(&path, NOW_MS),
+            Some(Some(Login::Key("go".into())))
+        );
+        rows.push(("opencode-go", Some(true), 1, &active));
+        let path = database("active", true, &rows);
+        assert_eq!(
+            database_login(&path, NOW_MS),
+            Some(Some(Login::Key("go-active".into())))
+        );
+
+        let inactive = key("inactive");
+        let path = database(
+            "expired",
+            true,
+            &[
+                ("opencode-go", Some(true), 3, expired),
+                ("opencode-go", Some(false), 9, &inactive),
+                ("opencode", Some(true), 2, &legacy),
+            ],
+        );
+        assert_eq!(
+            database_login(&path, NOW_MS),
+            Some(Some(Login::Key("legacy".into())))
+        );
+
+        let path = database("empty", true, &[("anthropic", Some(true), 1, &other)]);
+        assert_eq!(database_login(&path, NOW_MS), Some(None));
+    }
+
+    #[test]
+    fn auth_json_is_asked_only_without_a_database_that_imported_it() {
+        let go = r#"{"type": "key", "key": "go"}"#;
+        let path = database("pending", false, &[("opencode-go", Some(true), 1, go)]);
+        assert_eq!(database_login(&path, NOW_MS), None);
+
+        let dir = std::env::temp_dir().join(format!("tg-opencode-none-{}", std::process::id()));
+        assert_eq!(database_login(&dir.join("opencode.db"), NOW_MS), None);
+        assert!(!dir.join("opencode.db").exists());
+
+        std::fs::create_dir_all(&dir).unwrap();
+        let junk = dir.join("junk.db");
+        std::fs::write(&junk, "not a database").unwrap();
+        assert_eq!(database_login(&junk, NOW_MS), None);
+    }
+
     fn parse(raw: &str) -> Result<ProviderPayload> {
         to_payload(
             serde_json::from_str(raw).expect("fixture parses"),

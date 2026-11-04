@@ -141,6 +141,14 @@ A window the provider does not report (`used: None`) and a `placeholder: true`
 extra window are both omitted. Every panel used to disagree about this; now none
 of them decide it.
 
+### A balance carries its unit
+
+`Credits.unit` says what a balance counts, and `panel.rs` alone turns it into
+words. Codex's `credits.balance` is a count of Codex credits, and drawing it
+through the money formatter read a 62,500-credit balance as `$62500.00` on
+every surface. A fetcher that reports a balance sets the unit; USD is the
+default, which is also what a snapshot written before the field reads as.
+
 ## Snapshot, staleness, and how a change reaches a frontend
 
 The snapshot lives at `$XDG_STATE_HOME/tokengauge/tokengauge-usage.json`
@@ -317,6 +325,19 @@ Rules that are easy to regress:
   `team_standard`, then the token.
   The rule is `selvedge::plans::team_seat`, shared with remuda, and it
   applies only while the login's token is still on Team (`may_hold_seat`).
+- **opencode 2 keeps its login in `opencode.db`.** The variable wins, then the
+  database (opened read-only), then `auth.json`. opencode 2 imports
+  `auth.json` once (the `*_import_legacy_credentials` migration) and never
+  reads it again, so a database past that import is the only answer, even an
+  empty one: a stale `auth.json` beside it would name a key opencode no longer
+  uses. An unreadable database, or one before the import, reads as no login
+  rather than an error, and `auth.json` is asked. Per integration
+  (`opencode-go` before opencode 1's `opencode` id) the login is the row
+  opencode itself selects, `active` first, then newest `time_created`, then
+  `id`: an imported row has `active` NULL, and requiring `active = 1` missed
+  it. remuda switches the key in that same row, so the two must agree. An
+  OAuth login counts only inside `expires`, and its access token names no
+  account: it rotates, and a digest of it would be a new login each refresh.
 - **An API key is filed under a digest of itself.** GLM and opencode Go have no
   account behind a key, so remuda names one `key-` and the first 16 hex digits
   of its SHA-256, and `credentials::key_account` must say the same, or the
@@ -349,7 +370,7 @@ Rules that are easy to regress:
 ## Costs are read, not shelled out for
 
 `crates/tokengauge-core/src/cost/` parses the transcripts the CLIs already
-write - `~/.claude/projects`, `~/.codex/sessions`,
+write - `~/.claude/projects`, `~/.codex/sessions` and `archived_sessions`,
 `~/.kimi-code/sessions/**/wire.jsonl` and `~/.grok/sessions/**/updates.jsonl` -
 and rates them against LiteLLM's price table (`pricing.rs`: fetched, cached
 beside the snapshot, with `prices.json` vendored in for a cold or offline
@@ -380,6 +401,27 @@ bills every token of a request past its threshold at the tier, so
 `cost_of_request` runs only on a `UsageEvent` with `one_request` (a Claude
 message, a Codex rollout response). A Kimi or Grok turn, a `codex exec` row and
 a fleet bucket are sums of requests: tiering one bills all of it at the premium.
+
+**A service tier is a fact about a thread.** Codex's Fast mode is the priority
+tier, billed 2x to 2.5x, and the only record of it is the
+`thread_settings_applied` event in the rollout, so the reader stamps every call
+with the tier in force (`UsageEvent.service_tier`) and `ModelPrice::at_tier`
+rates it. A fleet bucket carries no tier and rates at standard, as it does for
+long-context tiers. Ignoring the tier read a `/fast` user's spend at about half.
+
+**A Codex rollout is read once, whatever form it is in.** Codex 0.163 compresses
+a finished rollout to `.jsonl.zst` and deletes the plain file, and `/archive`
+moves it to `archived_sessions`. Neither was read, and the fleet store,
+replacing from the oldest event a read found, would have dropped those days.
+The plain copy wins over the compressed one and `sessions` over
+`archived_sessions`, keyed by the path under either root, which is ccusage's
+rule: read both and the counts drift from it.
+
+**A model LiteLLM dropped keeps its price.** LiteLLM removed
+`moonshot/kimi-k2-thinking` while Moonshot still sells it, which rated it at
+$0 online. A download is topped up from the vendored table
+(`PriceTable::or_vendored`) and `make-prices.py` keeps dropped entries; take
+either out and the zero comes back.
 
 The token counts must match ccusage exactly - they come from the same files.
 Three things assert it, at widening cost: `tests/cost_fixture.rs` diffs the

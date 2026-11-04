@@ -29,6 +29,9 @@ Sources of truth: `Cargo.toml` (workspace), `crates/*/Cargo.toml`,
   runtime anywhere.
 - `sha2`, `hmac`, `chacha20poly1305`, `flate2`: device ids, the sync envelope,
   SigV4.
+- `rusqlite` (bundled SQLite, so no system library): opencode 2's
+  `opencode.db`, opened read-only.
+- `ruzstd`, a pure-Rust decoder: Codex rollouts compressed to `.jsonl.zst`.
 - `keyring` 3, native backends only, on macOS and Windows (Claude's OS credential
   store); nothing on Linux, so no dbus.
 - `selvedge` (git, pinned by tag) without default features; `self-update`

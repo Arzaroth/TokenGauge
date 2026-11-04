@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A Codex credit balance reads as credits (`62,500`), not dollars
+  (`$62500.00`).
+- opencode Go finds a login made in opencode 2, which keeps it in
+  `opencode.db` rather than `auth.json`, reading the account opencode itself
+  uses when it holds several, and a key filed under opencode 1's `opencode`
+  id.
+- Codex sessions compressed to `.jsonl.zst`, which Codex 0.163 and later does
+  to every finished session, and sessions moved to `archived_sessions` count
+  towards cost and history again.
+- Codex calls made in Fast mode are priced at the priority tier, 2x to 2.5x
+  the standard price, instead of at standard.
+- A Cursor X Subscription shows its weekly pool shared with Grok, instead of
+  a monthly figure stuck at 0%.
+- `kimi-k2-thinking` is priced again: LiteLLM dropped it from its table, and
+  TokenGauge now keeps the last price it carried for any model it drops.
+- The omarchy widget's bar animations turn off with the shell's animations
+  (omarchy 4.5).
+
+### Security
+
+- A z.ai error that quotes the API key no longer carries the key into the
+  snapshot or the panel.
+
 ## [0.56.0] - 2026-11-04
 
 ### Added

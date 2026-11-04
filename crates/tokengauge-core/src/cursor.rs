@@ -852,6 +852,53 @@ mod tests {
         )
     }
 
+    fn sand(raw: &str) -> Option<UsageWindow> {
+        serde_json::from_str::<SandUsage>(raw)
+            .expect("fixture parses")
+            .shared_pool(at())
+    }
+
+    /// CodexBar #4695, from the bodies posted in #4545.
+    #[test]
+    fn an_x_subscription_draws_its_weekly_pool_in_place_of_the_month() {
+        let unified = r#"{"currentPeriodStart":"2026-10-15T10:27:36.178Z",
+            "nextResetTimestampUtc":"2026-10-22T10:27:36.178Z","usagePercent":10.2058,
+            "hasAvailableUsage":true,"includedLimitZero":false,"isUnified":true}"#;
+        let pool = sand(unified).expect("a pool");
+        assert_eq!(pool.used_percent, Some(10));
+        assert_eq!(pool.window_minutes, Some(10_080));
+        assert_eq!(pool.resets_at.as_deref(), Some("2026-10-22T10:27:36.178Z"));
+
+        let usage =
+            to_payload(serde_json::from_str(FULL).unwrap(), None, Some(pool), at()).unwrap();
+        let snapshot = usage.usage.unwrap();
+        assert_eq!(snapshot.primary.unwrap().window_minutes, Some(10_080));
+        assert!(snapshot.secondary.is_none());
+        assert!(snapshot.tertiary.is_none());
+        assert!(
+            usage.credits.and_then(|c| c.limit).is_some(),
+            "on-demand spend is still the month's"
+        );
+    }
+
+    #[test]
+    fn only_a_unified_allowance_with_a_reset_ahead_is_a_pool() {
+        for raw in [
+            r#"{"nextResetTimestampUtc":"2026-10-22T10:27:36Z","usagePercent":10,"includedLimitZero":false,"isUnified":false}"#,
+            r#"{"nextResetTimestampUtc":"2026-10-22T10:27:36Z","usagePercent":10,"includedLimitZero":false}"#,
+            r#"{"nextResetTimestampUtc":"2026-10-22T10:27:36Z","usagePercent":10,"includedLimitZero":true,"isUnified":true}"#,
+            r#"{"usagePercent":10,"hasNonZeroIncludedLimit":true,"isUnified":true}"#,
+            r#"{"nextResetTimestampUtc":"not a date","usagePercent":10,"hasNonZeroIncludedLimit":true,"isUnified":true}"#,
+            r#"{"nextResetTimestampUtc":"2026-09-01T00:00:00Z","usagePercent":10,"hasNonZeroIncludedLimit":true,"isUnified":true}"#,
+        ] {
+            assert!(sand(raw).is_none(), "{raw}");
+        }
+        assert!(
+            sand(r#"{"nextResetTimestampUtc":"2026-10-22T10:27:36Z","usagePercent":10,"hasNonZeroIncludedLimit":true,"isUnified":true}"#)
+                .is_some()
+        );
+    }
+
     const FULL: &str = r#"{
         "membershipType": "pro",
         "isUnlimited": false,

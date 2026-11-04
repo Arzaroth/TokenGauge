@@ -29,13 +29,15 @@ pub struct ProviderRow {
     pub weekly_pace: Option<UsagePace>,
     pub tertiary_used: Option<u8>,
     pub tertiary_reset: String,
-    /// A prepaid balance in USD, for the providers that sell one instead of a
-    /// window. [`crate::panel`] formats it; a row does not.
+    /// A prepaid balance in `credit_unit`, for the providers that sell one
+    /// instead of a window. [`crate::panel`] formats it; a row does not.
     pub credits: Option<f64>,
     /// A named cap drawing on that same balance, for the providers that have
     /// both. Kept beside `credits` rather than replacing it, so the shape of
     /// `credits` in the snapshot every frontend parses does not move.
     pub credit_limit: Option<CreditLimit>,
+    #[serde(skip_serializing_if = "CreditUnit::is_usd")]
+    pub credit_unit: CreditUnit,
     pub source: String,
     pub updated: String,
     pub updated_iso: Option<String>,
@@ -162,6 +164,7 @@ fn vacant(row: &ProviderRow) -> ProviderRow {
         tertiary_reset: "—".into(),
         credits: None,
         credit_limit: None,
+        credit_unit: CreditUnit::Usd,
         plan_label: None,
         extra_windows: Vec::new(),
         stale: false,
@@ -414,9 +417,9 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
             .collect();
     }
 
-    let (credits, credit_limit) = match payload.credits {
-        Some(credits) => (credits.remaining, credits.limit),
-        None => (None, None),
+    let (credits, credit_limit, credit_unit) = match payload.credits {
+        Some(credits) => (credits.remaining, credits.limit, credits.unit),
+        None => (None, None, CreditUnit::Usd),
     };
 
     let source = match (payload.version, payload.source) {
@@ -440,6 +443,7 @@ fn provider_to_row(payload: ProviderPayload) -> ProviderRow {
         tertiary_reset,
         credits,
         credit_limit,
+        credit_unit,
         source,
         updated,
         updated_iso,
@@ -849,6 +853,7 @@ mod tests {
             credits: Some(Credits {
                 remaining: Some(42.567),
                 limit: None,
+                unit: CreditUnit::Usd,
             }),
             error: None,
             stale: false,

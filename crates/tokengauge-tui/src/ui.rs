@@ -1046,6 +1046,7 @@ mod tests {
             tertiary_reset: "—".into(),
             credits: None,
             credit_limit: None,
+            credit_unit: tokengauge_core::CreditUnit::Usd,
             source: "oauth".into(),
             updated: "now".into(),
             updated_iso: None,

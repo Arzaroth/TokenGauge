@@ -27,8 +27,8 @@ use serde_json::{Map, Value};
 use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::check_status;
 use crate::{
-    BankedResets, CredentialState, CreditLimit, CreditLimitKind, Credits, ExtraRateWindow,
-    ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8, slug,
+    BankedResets, CredentialState, CreditLimit, CreditLimitKind, CreditUnit, Credits,
+    ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8, slug,
 };
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
@@ -881,6 +881,7 @@ fn to_payload(
         credits: spend_cap.map(|limit| Credits {
             remaining: None,
             limit: Some(limit),
+            unit: CreditUnit::Usd,
         }),
         error: None,
         stale: false,

@@ -51,7 +51,7 @@ use serde::Deserialize;
 
 use crate::provider::check_status;
 use crate::{
-    CreditLimit, CreditLimitKind, Credits, ProviderPayload, UsageSnapshot, UsageWindow,
+    CreditLimit, CreditLimitKind, CreditUnit, Credits, ProviderPayload, UsageSnapshot, UsageWindow,
     http_client, pct_u8,
 };
 
@@ -250,6 +250,7 @@ fn to_payload(credits: CreditsData, key: KeyData, now: DateTime<Utc>) -> Provide
         payload.credits = Some(Credits {
             remaining: balance,
             limit: cap,
+            unit: CreditUnit::Usd,
         });
     }
 

@@ -18,8 +18,8 @@ use serde_json::{Value, json};
 use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::{check_status, epoch_to_rfc3339, json_int, json_num, jwt_claims, trimmed};
 use crate::{
-    CredentialState, Credits, ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow,
-    http_client, pct_u8, slug,
+    CredentialState, CreditUnit, Credits, ExtraRateWindow, ProviderPayload, UsageSnapshot,
+    UsageWindow, http_client, pct_u8, slug,
 };
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -870,6 +870,7 @@ fn to_payload(
             remaining: Some(b),
             // Codex sells a plain balance with no cap in front of it.
             limit: None,
+            unit: CreditUnit::Credits,
         });
 
     let mut extra_rate_windows: Vec<ExtraRateWindow> = spend_row.into_iter().collect();

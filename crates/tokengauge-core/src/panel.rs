@@ -20,8 +20,8 @@ use serde::Serialize;
 
 use crate::sync::DeviceCost;
 use crate::{
-    CostInfo, CreditLimit, CreditLimitKind, DayModelCost, ModelCost, PanelConfig, PlansTotal,
-    ProviderRow, format_tokens,
+    CostInfo, CreditLimit, CreditLimitKind, CreditUnit, DayModelCost, ModelCost, PanelConfig,
+    PlansTotal, ProviderRow, format_tokens,
 };
 
 /// Colour tier for a row, resolved from the value rather than from a palette -
@@ -285,7 +285,11 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
     // A provider can have one without the other: a plan sells a window and a
     // reader prices its transcripts, while a prepaid provider sells a balance
     // and writes nothing to read.
-    let cost_rows = cost_rows(row.cost.as_ref(), row.credits, row.credit_limit.as_ref());
+    let cost_rows = cost_rows(
+        row.cost.as_ref(),
+        row.credits.map(|b| (b, row.credit_unit)),
+        row.credit_limit.as_ref(),
+    );
     if !cost_rows.is_empty() {
         out.push(Section {
             id: "cost",
@@ -972,7 +976,7 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
 
 fn cost_rows(
     cost: Option<&CostInfo>,
-    credits: Option<f64>,
+    credits: Option<(f64, CreditUnit)>,
     credit_limit: Option<&CreditLimit>,
 ) -> Vec<PanelRow> {
     let mut out = Vec::new();
@@ -983,8 +987,12 @@ fn cost_rows(
     // Under the spend it is being drawn down by. A credit balance is what a
     // provider selling credits has instead of a window, so for such a provider
     // this is the only row in the section; for Codex it sits below a month's spend.
-    if let Some(remaining) = credits {
-        out.push(PanelRow::new("Credits", balance(remaining)));
+    if let Some((remaining, unit)) = credits {
+        let value = match unit {
+            CreditUnit::Usd => balance(remaining),
+            CreditUnit::Credits | CreditUnit::Other => credit_count(remaining),
+        };
+        out.push(PanelRow::new("Credits", value));
     }
 
     // A cap drawing on that balance goes under it, because it is the narrower
@@ -1283,6 +1291,34 @@ fn ellipsize(text: &str, max: usize) -> String {
 /// dollars. A month's spend is a magnitude, where the cents are noise; a
 /// balance is what is left to spend it from, counting down to zero, and $100.49
 /// rounded to $100 misstates it.
+/// A balance counted in a provider's own credits: grouped, and with decimals
+/// only when it has them, because 62500.00 credits reads as money.
+fn credit_count(value: f64) -> String {
+    if !value.is_finite() {
+        return "-".to_string();
+    }
+    let fixed = format!("{:.2}", value.abs());
+    let (whole, fraction) = fixed.split_once('.').unwrap_or((&fixed, "00"));
+    let mut grouped = String::new();
+    for (i, digit) in whole.chars().enumerate() {
+        if i > 0 && (whole.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    let fraction = fraction.trim_end_matches('0');
+    let sign = if value < 0.0 && fixed != "0.00" {
+        "-"
+    } else {
+        ""
+    };
+    if fraction.is_empty() {
+        format!("{sign}{grouped}")
+    } else {
+        format!("{sign}{grouped}.{fraction}")
+    }
+}
+
 fn balance(value: f64) -> String {
     if !value.is_finite() {
         return "-".to_string();
@@ -1401,6 +1437,7 @@ mod tests {
         ProviderRow {
             stale_reason: None,
             credit_limit: None,
+            credit_unit: CreditUnit::Usd,
             provider: "Claude".into(),
             session_used: Some(31),
             session_window_minutes: Some(300),

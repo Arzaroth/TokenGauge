@@ -41,8 +41,8 @@ use serde_json::Value;
 use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::{check_status, jwt_claims};
 use crate::{
-    CredentialState, CreditLimit, CreditLimitKind, Credits, ProviderPayload, UsageSnapshot,
-    UsageWindow, http_client, pct_u8,
+    CredentialState, CreditLimit, CreditLimitKind, CreditUnit, Credits, ProviderPayload,
+    UsageSnapshot, UsageWindow, http_client, pct_u8,
 };
 
 const DEFAULT_BASE_URL: &str = "https://cursor.com";
@@ -574,6 +574,7 @@ fn to_payload(
                     limit,
                     resets: resets.map(str::to_string),
                 }),
+                unit: CreditUnit::Usd,
             });
         }
     }

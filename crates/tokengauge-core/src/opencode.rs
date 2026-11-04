@@ -21,19 +21,24 @@
 //! aggregation itself rather than making a reader do it per model.
 //!
 //! The credential is `OPENCODE_API_KEY`, minted at opencode.ai/auth and pasted
-//! into the TUI with `/connect`, which files it in opencode's own
-//! `$XDG_DATA_HOME/opencode/auth.json` as `"opencode-go": {"type": "api",
-//! "key": ...}` beside every other provider's login. The variable wins, as it
-//! does for opencode; the file is the second source.
+//! into the TUI with `/connect`. opencode 2 files it in its own
+//! `$XDG_DATA_HOME/opencode/opencode.db` (or `OPENCODE_DB`), table
+//! `credential`, as an `opencode-go` row holding `{"type": "key", "key": ...}`
+//! or an OAuth login `{"type": "oauth", "access": ..., "expires": <ms>}`;
+//! opencode 1 filed it in `auth.json` beside it as
+//! `"opencode-go": {"type": "api", "key": ...}`, which opencode 2 imports once
+//! and never reads again. Both versions may have filed the account under the
+//! older `opencode` id. The variable wins, as it does for opencode, then the
+//! database once it has imported the file, else the file.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use crate::credentials::{LiveLogin, key_login, stored_key};
+use crate::credentials::{LiveLogin, LoginTokens, key_login, stored_key};
 use crate::provider::check_status;
 use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
@@ -53,30 +58,128 @@ fn env_clean(name: &str) -> Option<String> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
+/// The ids opencode files the Go account under, the Go integration first.
+const ACCOUNT_IDS: &[&str] = &["opencode-go", "opencode"];
+
 /// opencode keeps XDG paths on every platform, macOS included, so this is
 /// not `dirs::data_dir()`, which would be `~/Library/Application Support`.
-pub(crate) fn auth_path() -> PathBuf {
+fn data_dir() -> PathBuf {
     std::env::var_os("XDG_DATA_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/share"))
         .join("opencode")
-        .join("auth.json")
+}
+
+pub(crate) fn auth_path() -> PathBuf {
+    data_dir().join("auth.json")
+}
+
+/// opencode's database, or the one `OPENCODE_DB` names.
+pub(crate) fn database_path() -> PathBuf {
+    let data = data_dir();
+    std::env::var_os("OPENCODE_DB")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| data.join("opencode.db"), |db| data.join(db))
+}
+
+/// What opencode holds for the Go account. An OAuth access token is accepted
+/// by the usage endpoint as a key is, but it rotates, so it names no account.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Login {
+    Key(String),
+    Access(String),
+}
+
+impl Login {
+    fn token(&self) -> &str {
+        match self {
+            Self::Key(token) | Self::Access(token) => token,
+        }
+    }
 }
 
 /// The Go key in opencode's `auth.json`, which holds every provider's login.
 /// A file that is not JSON is an error of its own, never quoted: it holds
-/// every provider's login.
+/// every provider's login. Only an `api` entry carries a key: a `wellknown`
+/// one's `key` names an environment variable.
 fn file_key(text: &str) -> Result<Option<String>> {
     let auth: serde_json::Value = serde_json::from_str(text)
         .map_err(|_| anyhow!("opencode's auth.json is not valid JSON"))?;
-    Ok(auth
-        .get("opencode-go")
-        .and_then(|e| e.get("key"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|k| !k.is_empty())
-        .map(str::to_string))
+    Ok(ACCOUNT_IDS.iter().find_map(|id| {
+        let entry = auth.get(*id)?;
+        let kind = entry.get("type").and_then(serde_json::Value::as_str);
+        if !matches!(kind, None | Some("api")) {
+            return None;
+        }
+        entry
+            .get("key")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+            .map(str::to_string)
+    }))
+}
+
+/// A `credential` row's value: a key, or an OAuth login still inside its
+/// expiry.
+fn row_login(value: &str, now_ms: i64) -> Option<Login> {
+    let value: serde_json::Value = serde_json::from_str(value).ok()?;
+    let text = |name: &str| {
+        value
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+    };
+    match value.get("type")?.as_str()? {
+        "key" | "api" => text("key").map(Login::Key),
+        "oauth" if value.get("expires")?.as_i64()? > now_ms => text("access").map(Login::Access),
+        _ => None,
+    }
+}
+
+/// The Go login in opencode 2's database, opened read-only: the database is
+/// opencode's, and a refresh token in it rotates on use. Once opencode has
+/// imported `auth.json` it reads only the database, so the outer `None` - no
+/// database, one that cannot be read, or one before that import - is the only
+/// case `auth.json` is asked. Each integration's login is the row opencode
+/// selects, the active one, else the newest.
+fn database_login(path: &Path, now_ms: i64) -> Option<Option<Login>> {
+    use rusqlite::{Connection, OpenFlags, OptionalExtension};
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    conn.busy_timeout(Duration::from_millis(500)).ok()?;
+    let imported: bool = conn
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM migration WHERE id LIKE '%_import_legacy_credentials')",
+            [],
+            |row| row.get(0),
+        )
+        .ok()?;
+    if !imported {
+        return None;
+    }
+    let mut selected = conn
+        .prepare(
+            "SELECT value FROM credential WHERE integration_id = ?1 \
+             ORDER BY active DESC, time_created DESC, id DESC LIMIT 1",
+        )
+        .ok()?;
+    for id in ACCOUNT_IDS {
+        let value = selected
+            .query_row([id], |row| row.get::<_, String>(0))
+            .optional()
+            .ok()?;
+        if let Some(login) = value.and_then(|value| row_login(&value, now_ms)) {
+            return Some(Some(login));
+        }
+    }
+    Some(None)
 }
 
 /// No file is no key; a file that cannot be read says why.
@@ -91,13 +194,21 @@ fn stored_file_key() -> Result<Option<String>> {
     }
 }
 
-pub(crate) fn api_key() -> Result<String> {
+/// The Go login and where it was found.
+pub(crate) fn login() -> Result<(Login, &'static str)> {
     if let Some(key) = API_KEY_ENVS.iter().find_map(|name| env_clean(name)) {
-        return Ok(key);
+        return Ok((Login::Key(key), "environment"));
     }
-    stored_file_key()?.ok_or_else(|| {
-        anyhow!("opencode key missing - `/connect` it in opencode, or set OPENCODE_API_KEY")
-    })
+    let key_missing =
+        || anyhow!("opencode key missing - `/connect` it in opencode, or set OPENCODE_API_KEY");
+    if let Some(login) = database_login(&database_path(), Utc::now().timestamp_millis()) {
+        return login
+            .map(|login| (login, "opencode.db"))
+            .ok_or_else(key_missing);
+    }
+    stored_file_key()?
+        .map(|key| (Login::Key(key), "auth.json"))
+        .ok_or_else(key_missing)
 }
 
 /// The usage endpoint, from an override a self-hosted gateway may set.
@@ -230,9 +341,9 @@ fn to_payload(
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
-    let key = api_key()?;
+    let (login, _) = login()?;
     Ok(vec![usage_for(
-        &key,
+        login.token(),
         timeout,
         now,
         "check OPENCODE_API_KEY, or `/connect` opencode Go again",
@@ -240,7 +351,17 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
 }
 
 pub(crate) fn live_login() -> LiveLogin {
-    key_login(api_key().ok())
+    match login() {
+        Ok((Login::Key(key), _)) => key_login(Some(key)),
+        Ok((Login::Access(token), _)) => LiveLogin {
+            account: None,
+            tokens: LoginTokens {
+                access: Some(token),
+                refresh: None,
+            },
+        },
+        Err(_) => key_login(None),
+    }
 }
 
 pub(crate) fn fetch_stored(

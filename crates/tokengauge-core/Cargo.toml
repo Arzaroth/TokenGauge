@@ -20,6 +20,9 @@ sha2 = "0.10"
 chacha20poly1305 = "0.10"
 hmac = "0.12"
 flate2 = "1"
+# opencode 2 keeps its logins in a SQLite database. Bundled, so no system
+# libsqlite3 is needed on any platform the release builds for.
+rusqlite = { version = "0.41.1", default-features = false, features = ["bundled"] }
 # ponytail. Not feature-gated - tray needs it and popover already links GTK4,
 # so the weight is noise; gate later only if popover build bites. It is why a
 # default build still links reqwest: `self-update` governs self_update, not the

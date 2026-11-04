@@ -747,6 +747,138 @@ mod tests {
         assert_eq!(events[1].tokens.output, 200);
     }
 
+    fn compress(text: &str) -> Vec<u8> {
+        ruzstd::encoding::compress_to_vec(
+            text.as_bytes(),
+            ruzstd::encoding::CompressionLevel::Fastest,
+        )
+    }
+
+    fn rollout(id: &str, input: u64) -> String {
+        format!(
+            "{{\"timestamp\":\"2026-05-11T06:17:00.000Z\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"{id}\"}}}}\n{CONTEXT}\n{}\n",
+            token_count("2026-05-11T06:18:00.000Z", input, 0, 10),
+        )
+    }
+
+    /// A Codex home with `sessions` and `archived_sessions`, each file given
+    /// as its path under the home and its bytes.
+    fn home(name: &str, files: &[(&str, Vec<u8>)]) -> (PathBuf, Vec<PathBuf>) {
+        let dir = std::env::temp_dir().join(format!(
+            "tokengauge-codex-home-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (path, bytes) in files {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+        let roots = ["sessions", "archived_sessions"]
+            .iter()
+            .map(|r| dir.join(r))
+            .filter(|r| r.is_dir())
+            .collect();
+        (dir, roots)
+    }
+
+    fn inputs(roots: &[PathBuf]) -> Vec<u64> {
+        let mut gaps = Vec::new();
+        let mut inputs: Vec<u64> = read_events(
+            roots,
+            day(2026, 1, 1),
+            &mut HashSet::new(),
+            &mut Firsts::new(),
+            &mut gaps,
+        )
+        .iter()
+        .map(|e| e.tokens.input)
+        .collect();
+        assert!(gaps.is_empty(), "{gaps:?}");
+        inputs.sort();
+        inputs
+    }
+
+    #[test]
+    fn a_compressed_rollout_reads_as_its_plain_text() {
+        let text = rollout("zst", 1000);
+        let (dir, roots) = home(
+            "zst",
+            &[("sessions/2026/05/11/rollout-a.jsonl.zst", compress(&text))],
+        );
+        assert_eq!(inputs(&roots), vec![1000]);
+
+        let mut frames = compress(&text[..text.len() / 2]);
+        frames.extend(compress(&text[text.len() / 2..]));
+        assert_eq!(
+            read_rollout_bytes(&dir, "frames.jsonl.zst", &frames).as_deref(),
+            Some(text.as_str())
+        );
+        assert_eq!(
+            read_rollout_bytes(&dir, "junk.jsonl.zst", b"not zstd"),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn read_rollout_bytes(dir: &Path, name: &str, bytes: &[u8]) -> Option<String> {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        read_rollout(&path)
+    }
+
+    /// Codex keeps both forms for a while, and ccusage reads one of them.
+    #[test]
+    fn a_rollout_is_read_once_whichever_forms_and_directories_hold_it() {
+        let (dir, roots) = home(
+            "once",
+            &[
+                ("sessions/both.jsonl", rollout("both", 1).into_bytes()),
+                ("sessions/both.jsonl.zst", compress(&rollout("both-zst", 2))),
+                ("sessions/compressed.jsonl.zst", compress(&rollout("c", 3))),
+                ("sessions/other.zst", compress(&rollout("other", 4))),
+                (
+                    "archived_sessions/compressed.jsonl",
+                    rollout("c-arch", 5).into_bytes(),
+                ),
+                (
+                    "archived_sessions/both.jsonl.zst",
+                    compress(&rollout("b-arch", 6)),
+                ),
+                (
+                    "archived_sessions/archived.jsonl.zst",
+                    compress(&rollout("a", 7)),
+                ),
+            ],
+        );
+        assert_eq!(inputs(&roots), vec![1, 3, 7]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rollout_without_a_session_keeps_its_id_once_compressed() {
+        let text = format!(
+            "{CONTEXT}\n{}\n",
+            token_count("2026-05-11T06:18:00.000Z", 100, 0, 10)
+        );
+        let session = |file: &str, bytes: Vec<u8>| {
+            let (dir, roots) = home("no-session", &[(file, bytes)]);
+            let read = read_events(
+                &roots,
+                day(2026, 1, 1),
+                &mut HashSet::new(),
+                &mut Firsts::new(),
+                &mut Vec::new(),
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+            read[0].session.clone().expect("a session")
+        };
+        let plain = session("sessions/r.jsonl", text.clone().into_bytes());
+        let compressed = session("sessions/r.jsonl.zst", compress(&text));
+        assert!(plain.ends_with("r.jsonl"), "{plain}");
+        assert_eq!(plain, compressed);
+    }
+
     /// The since filter has to run *after* the running total is advanced, or a
     /// session that started before the window absorbs all of its own history
     /// into the first reading inside it. Every other test here uses a `since`

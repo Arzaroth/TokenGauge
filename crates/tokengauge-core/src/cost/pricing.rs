@@ -1104,6 +1104,26 @@ mod tests {
     /// from the cost row it is indistinguishable from a current table - so the
     /// loader has to say which one it handed back.
     #[test]
+    fn a_model_the_download_dropped_keeps_its_compiled_in_price() {
+        let live = PriceTable::from_json(
+            r#"{"moonshot/kimi-k2.6": {"input_cost_per_token": 9e-07,
+                                       "output_cost_per_token": 4e-06}}"#,
+        )
+        .unwrap();
+        assert!(live.get("kimi-k2-thinking").is_none());
+        let live = live.or_vendored();
+        assert_eq!(
+            live.get("kimi-k2-thinking"),
+            PriceTable::vendored().get("kimi-k2-thinking")
+        );
+        assert_eq!(
+            live.get("kimi-k2.6").unwrap().input,
+            9e-07,
+            "the download wins"
+        );
+    }
+
+    #[test]
     fn the_loader_says_which_of_the_four_it_fell_through_to() {
         let dir = std::env::temp_dir().join(format!(
             "tokengauge-price-source-{}-{:?}",

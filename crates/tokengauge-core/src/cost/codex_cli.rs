@@ -318,26 +318,42 @@ pub fn read_events(
     // Running totals per session, not per file: a session continued into a
     // second rollout picks its cumulative up where the first left off, and
     // starting from zero there would bill its entire history again as one
-    // delta. `transcript_files` sorts by path, and rollouts are named
-    // `YYYY/MM/DD/rollout-<ISO timestamp>-<id>`, so that order is chronological
-    // and the earlier file is always read first. The sort also puts
-    // `x.jsonl` before `x.jsonl.zst`.
+    // delta. Rollouts are named `rollout-<ISO timestamp>-<id>`, so sorting
+    // every root's files by name reads the earlier file first, whether it was
+    // archived or not. A rollout in two places is read from the first root,
+    // and as `x.jsonl` before `x.jsonl.zst`.
     let mut totals: HashMap<String, Cumulative> = HashMap::new();
     // A rollout by its Codex home and its plain path under `sessions` or
     // `archived_sessions`, so each is read in one form only.
-    let mut rollouts: HashSet<(PathBuf, PathBuf)> = HashSet::new();
-    for root in roots {
-        let home = root.parent().unwrap_or(root).to_path_buf();
+    let mut files: Vec<((PathBuf, PathBuf), usize, PathBuf)> = Vec::new();
+    for (order, root) in roots.iter().enumerate() {
+        let home = root.parent().unwrap_or(root);
         for file in transcript_files(root, since, gaps, is_rollout) {
             let relative = plain_path(file.strip_prefix(root).unwrap_or(&file));
-            if !rollouts.insert((home.clone(), relative)) {
-                continue;
-            }
-            if !read_file(&file, since, seen, &mut totals, firsts, &mut events) {
-                gaps.push(file.clone());
-            }
+            files.push(((home.to_path_buf(), relative), order, file));
         }
     }
+    files.sort_by(|(a, a_order, a_file), (b, b_order, b_file)| {
+        (a.1.file_name(), a_order, a_file).cmp(&(b.1.file_name(), b_order, b_file))
+    });
+    let mut read: HashSet<(PathBuf, PathBuf)> = HashSet::new();
+    let mut unread: Vec<((PathBuf, PathBuf), PathBuf)> = Vec::new();
+    for (rollout, _, file) in files {
+        if read.contains(&rollout) {
+            continue;
+        }
+        if read_file(&file, since, seen, &mut totals, firsts, &mut events) {
+            read.insert(rollout);
+        } else {
+            unread.push((rollout, file));
+        }
+    }
+    gaps.extend(
+        unread
+            .into_iter()
+            .filter(|(rollout, _)| !read.contains(rollout))
+            .map(|(_, file)| file),
+    );
     events
 }
 
@@ -359,9 +375,14 @@ pub(super) fn read_file(
     let appended_from = events.len();
     // A rollout with no session_meta is its own bucket; there is nothing to
     // continue it from.
-    // Named as the plain file, so a rollout compressed between two reads
-    // keeps the dedup keys built from it.
-    let mut session_id = plain_path(path).to_string_lossy().into_owned();
+    // Named as the plain file, so a rollout compressed or archived between two
+    // reads keeps the dedup keys built from it.
+    let plain = plain_path(path);
+    let mut session_id = plain
+        .file_name()
+        .unwrap_or(plain.as_os_str())
+        .to_string_lossy()
+        .into_owned();
     let mut model: Option<String> = None;
     let mut tier = ServiceTier::Standard;
     // Index into `events` of rows emitted before any `turn_context` announced a

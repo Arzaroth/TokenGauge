@@ -621,6 +621,18 @@ mod tests {
         assert_eq!(database_login(&unmigrated, NOW_MS).unwrap(), None);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_database_whose_directory_cannot_be_searched_is_an_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = database("hidden", true, &[]);
+        let dir = path.parent().unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let read = database_login(&path, NOW_MS);
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(read.is_err());
+    }
+
     #[test]
     fn a_row_says_whether_it_was_read_with_a_key_or_an_oauth_login() {
         assert_eq!(Login::Key("k".into()).source(), "api key");

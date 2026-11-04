@@ -1,7 +1,12 @@
 //! Codex rollout transcripts.
 //!
-//! `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. A different shape from
-//! Claude Code's, with five traps in it:
+//! `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, and the same tree under
+//! `~/.codex/archived_sessions`. Codex compresses a finished rollout to
+//! `.jsonl.zst` and deletes the plain file, and restores the plain file
+//! before it drops the archive when a session resumes, so a rollout is read
+//! once: the plain copy over the compressed one, and `sessions` over
+//! `archived_sessions`, as ccusage does. A different shape from Claude
+//! Code's, with five traps in it:
 //!
 //! 1. `total_token_usage` is **cumulative for the session**, climbing into the
 //!    tens of millions. Its per-event delta is the billed unit.
@@ -29,12 +34,14 @@
 //! and it changes mid-session.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::Deserialize;
 
-use super::{Firsts, TokenCounts, UsageEvent, dedup_key, first_seen, jsonl_files};
+use super::pricing::ServiceTier;
+use super::{Firsts, TokenCounts, UsageEvent, dedup_key, first_seen, transcript_files};
 use crate::model_to_provider;
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +80,15 @@ struct Payload {
     creator_user_id: Option<String>,
     #[serde(default)]
     creator_account_id: Option<String>,
+    /// `thread_settings_applied` only.
+    #[serde(default)]
+    thread_settings: Option<ThreadSettings>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThreadSettings {
+    #[serde(default)]
+    service_tier: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -244,14 +260,51 @@ pub fn roots() -> Vec<PathBuf> {
         && !home.trim().is_empty()
     {
         roots.push(Path::new(home.trim()).join("sessions"));
+        roots.push(Path::new(home.trim()).join("archived_sessions"));
     }
     if roots.is_empty()
         && let Some(home) = dirs::home_dir()
     {
         roots.push(home.join(".codex").join("sessions"));
+        roots.push(home.join(".codex").join("archived_sessions"));
     }
     roots.retain(|r| r.is_dir());
     roots
+}
+
+fn is_compressed(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "zst")
+        && path
+            .file_stem()
+            .is_some_and(|stem| Path::new(stem).extension().is_some_and(|e| e == "jsonl"))
+}
+
+fn is_rollout(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "jsonl") || is_compressed(path)
+}
+
+/// The rollout a file holds, whichever form it is in.
+fn plain_path(path: &Path) -> PathBuf {
+    if is_compressed(path) {
+        path.with_extension("")
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// A rollout's text. A `.zst` may hold several frames back to back.
+fn read_rollout(path: &Path) -> Option<String> {
+    if !is_compressed(path) {
+        return std::fs::read_to_string(path).ok();
+    }
+    let compressed = std::fs::read(path).ok()?;
+    let mut input = compressed.as_slice();
+    let mut text = Vec::new();
+    while !input.is_empty() {
+        let mut frame = ruzstd::decoding::StreamingDecoder::new(&mut input).ok()?;
+        frame.read_to_end(&mut text).ok()?;
+    }
+    String::from_utf8(text).ok()
 }
 
 pub fn read_events(
@@ -265,17 +318,42 @@ pub fn read_events(
     // Running totals per session, not per file: a session continued into a
     // second rollout picks its cumulative up where the first left off, and
     // starting from zero there would bill its entire history again as one
-    // delta. `jsonl_files` sorts by path, and rollouts are named
-    // `YYYY/MM/DD/rollout-<ISO timestamp>-<id>`, so that order is chronological
-    // and the earlier file is always read first.
+    // delta. Rollouts are named `rollout-<ISO timestamp>-<id>`, so sorting
+    // every root's files by name reads the earlier file first, whether it was
+    // archived or not. A rollout in two places is read from the first root,
+    // and as `x.jsonl` before `x.jsonl.zst`.
     let mut totals: HashMap<String, Cumulative> = HashMap::new();
-    for root in roots {
-        for file in jsonl_files(root, since, gaps) {
-            if !read_file(&file, since, seen, &mut totals, firsts, &mut events) {
-                gaps.push(file.clone());
-            }
+    // A rollout by its Codex home and its plain path under `sessions` or
+    // `archived_sessions`, so each is read in one form only.
+    let mut files: Vec<((PathBuf, PathBuf), usize, PathBuf)> = Vec::new();
+    for (order, root) in roots.iter().enumerate() {
+        let home = root.parent().unwrap_or(root);
+        for file in transcript_files(root, since, gaps, is_rollout) {
+            let relative = plain_path(file.strip_prefix(root).unwrap_or(&file));
+            files.push(((home.to_path_buf(), relative), order, file));
         }
     }
+    files.sort_by(|(a, a_order, a_file), (b, b_order, b_file)| {
+        (a.1.file_name(), a_order, a_file).cmp(&(b.1.file_name(), b_order, b_file))
+    });
+    let mut read: HashSet<(PathBuf, PathBuf)> = HashSet::new();
+    let mut unread: Vec<((PathBuf, PathBuf), PathBuf)> = Vec::new();
+    for (rollout, _, file) in files {
+        if read.contains(&rollout) {
+            continue;
+        }
+        if read_file(&file, since, seen, &mut totals, firsts, &mut events) {
+            read.insert(rollout);
+        } else {
+            unread.push((rollout, file));
+        }
+    }
+    gaps.extend(
+        unread
+            .into_iter()
+            .filter(|(rollout, _)| !read.contains(rollout))
+            .map(|(_, file)| file),
+    );
     events
 }
 
@@ -287,7 +365,7 @@ pub(super) fn read_file(
     firsts: &mut Firsts,
     events: &mut Vec<UsageEvent>,
 ) -> bool {
-    let Ok(contents) = std::fs::read_to_string(path) else {
+    let Some(contents) = read_rollout(path) else {
         return false;
     };
 
@@ -297,8 +375,16 @@ pub(super) fn read_file(
     let appended_from = events.len();
     // A rollout with no session_meta is its own bucket; there is nothing to
     // continue it from.
-    let mut session_id = path.to_string_lossy().into_owned();
+    // Named as the plain file, so a rollout compressed or archived between two
+    // reads keeps the dedup keys built from it.
+    let plain = plain_path(path);
+    let mut session_id = plain
+        .file_name()
+        .unwrap_or(plain.as_os_str())
+        .to_string_lossy()
+        .into_owned();
     let mut model: Option<String> = None;
+    let mut tier = ServiceTier::Standard;
     // Index into `events` of rows emitted before any `turn_context` announced a
     // model. A session states its model on the first turn, so these are filled
     // in from the first one seen rather than dropped.
@@ -378,6 +464,7 @@ pub(super) fn read_file(
                 tokens,
                 key: Some(key),
                 one_request: false,
+                service_tier: ServiceTier::Standard,
                 session: Some(session_id.clone()),
                 starts_session: false,
                 login: login.clone(),
@@ -417,6 +504,19 @@ pub(super) fn read_file(
                 for index in pending.drain(..) {
                     events[index].model = m.to_string();
                 }
+            }
+            continue;
+        }
+        // Fast mode, and a turn resumed on another tier. Settings that name no
+        // tier leave the one before standing; Codex writes those for its
+        // auto-review threads.
+        if payload.kind == "thread_settings_applied" {
+            if let Some(name) = payload
+                .thread_settings
+                .as_ref()
+                .and_then(|settings| settings.service_tier.as_deref())
+            {
+                tier = ServiceTier::from_codex(name).unwrap_or_default();
             }
             continue;
         }
@@ -493,6 +593,7 @@ pub(super) fn read_file(
             tokens,
             key: Some(key),
             one_request,
+            service_tier: tier,
             session: Some(session_id.clone()),
             starts_session: false,
             login: login.clone(),
@@ -691,6 +792,250 @@ mod tests {
         // The second reading is a running total, not a second bill.
         assert_eq!(events[1].tokens.input, 1500);
         assert_eq!(events[1].tokens.output, 200);
+    }
+
+    fn compress(text: &str) -> Vec<u8> {
+        ruzstd::encoding::compress_to_vec(
+            text.as_bytes(),
+            ruzstd::encoding::CompressionLevel::Fastest,
+        )
+    }
+
+    fn rollout(id: &str, input: u64) -> String {
+        format!(
+            "{{\"timestamp\":\"2026-05-11T06:17:00.000Z\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"{id}\"}}}}\n{CONTEXT}\n{}\n",
+            token_count("2026-05-11T06:18:00.000Z", input, 0, 10),
+        )
+    }
+
+    /// A Codex home with `sessions` and `archived_sessions`, each file given
+    /// as its path under the home and its bytes.
+    fn home(name: &str, files: &[(&str, Vec<u8>)]) -> (PathBuf, Vec<PathBuf>) {
+        let dir = std::env::temp_dir().join(format!(
+            "tokengauge-codex-home-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (path, bytes) in files {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+        let roots = ["sessions", "archived_sessions"]
+            .iter()
+            .map(|r| dir.join(r))
+            .filter(|r| r.is_dir())
+            .collect();
+        (dir, roots)
+    }
+
+    fn inputs(roots: &[PathBuf]) -> Vec<u64> {
+        let mut gaps = Vec::new();
+        let mut inputs: Vec<u64> = read_events(
+            roots,
+            day(2026, 1, 1),
+            &mut HashSet::new(),
+            &mut Firsts::new(),
+            &mut gaps,
+        )
+        .iter()
+        .map(|e| e.tokens.input)
+        .collect();
+        assert!(gaps.is_empty(), "{gaps:?}");
+        inputs.sort();
+        inputs
+    }
+
+    #[test]
+    fn a_compressed_rollout_reads_as_its_plain_text() {
+        let text = rollout("zst", 1000);
+        let (dir, roots) = home(
+            "zst",
+            &[("sessions/2026/05/11/rollout-a.jsonl.zst", compress(&text))],
+        );
+        assert_eq!(inputs(&roots), vec![1000]);
+
+        let mut frames = compress(&text[..text.len() / 2]);
+        frames.extend(compress(&text[text.len() / 2..]));
+        assert_eq!(
+            read_rollout_bytes(&dir, "frames.jsonl.zst", &frames).as_deref(),
+            Some(text.as_str())
+        );
+        assert_eq!(
+            read_rollout_bytes(&dir, "junk.jsonl.zst", b"not zstd"),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn read_rollout_bytes(dir: &Path, name: &str, bytes: &[u8]) -> Option<String> {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        read_rollout(&path)
+    }
+
+    /// Codex keeps both forms for a while, and ccusage reads one of them.
+    #[test]
+    fn a_rollout_is_read_once_whichever_forms_and_directories_hold_it() {
+        let (dir, roots) = home(
+            "once",
+            &[
+                ("sessions/both.jsonl", rollout("both", 1).into_bytes()),
+                ("sessions/both.jsonl.zst", compress(&rollout("both-zst", 2))),
+                ("sessions/compressed.jsonl.zst", compress(&rollout("c", 3))),
+                ("sessions/other.zst", compress(&rollout("other", 4))),
+                (
+                    "archived_sessions/compressed.jsonl",
+                    rollout("c-arch", 5).into_bytes(),
+                ),
+                (
+                    "archived_sessions/both.jsonl.zst",
+                    compress(&rollout("b-arch", 6)),
+                ),
+                (
+                    "archived_sessions/archived.jsonl.zst",
+                    compress(&rollout("a", 7)),
+                ),
+            ],
+        );
+        assert_eq!(inputs(&roots), vec![1, 3, 7]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rollout_without_a_session_keeps_its_id_once_compressed() {
+        let text = format!(
+            "{CONTEXT}\n{}\n",
+            token_count("2026-05-11T06:18:00.000Z", 100, 0, 10)
+        );
+        let session = |file: &str, bytes: Vec<u8>| {
+            let (dir, roots) = home("no-session", &[(file, bytes)]);
+            let read = read_events(
+                &roots,
+                day(2026, 1, 1),
+                &mut HashSet::new(),
+                &mut Firsts::new(),
+                &mut Vec::new(),
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+            read[0].session.clone().expect("a session")
+        };
+        let plain = session("sessions/r.jsonl", text.clone().into_bytes());
+        let compressed = session("sessions/r.jsonl.zst", compress(&text));
+        let archived = session("archived_sessions/r.jsonl", text.clone().into_bytes());
+        assert!(plain.ends_with("r.jsonl"), "{plain}");
+        assert_eq!(plain, compressed);
+        assert_eq!(plain, archived);
+    }
+
+    /// A session resumed after it was archived continues from the archived
+    /// rollout, whichever root is listed first.
+    #[test]
+    fn an_archived_rollout_is_read_before_the_session_resumed_from_it() {
+        let part = |ts: &str, input: u64| {
+            let meta = format!(
+                r#"{{"timestamp":"{ts}","type":"session_meta","payload":{{"id":"resumed"}}}}"#
+            );
+            format!("{meta}\n{CONTEXT}\n{}\n", token_count(ts, input, 0, 0)).into_bytes()
+        };
+        let (dir, roots) = home(
+            "resumed",
+            &[
+                (
+                    "sessions/2026/05/11/rollout-2026-05-11T12-00-00-resumed.jsonl",
+                    part("2026-05-11T12:00:00.000Z", 150),
+                ),
+                (
+                    "archived_sessions/rollout-2026-05-09T12-00-00-resumed.jsonl",
+                    part("2026-05-09T12:00:00.000Z", 100),
+                ),
+            ],
+        );
+        let mut by_day: Vec<(NaiveDate, u64)> = read_events(
+            &roots,
+            day(2026, 1, 1),
+            &mut HashSet::new(),
+            &mut Firsts::new(),
+            &mut Vec::new(),
+        )
+        .iter()
+        .map(|e| (e.date, e.tokens.input))
+        .collect();
+        by_day.sort();
+        assert_eq!(by_day, vec![(day(2026, 5, 9), 100), (day(2026, 5, 11), 50)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rollout_whose_plain_copy_cannot_be_read_is_read_compressed() {
+        let (dir, roots) = home(
+            "unreadable",
+            &[
+                ("sessions/r.jsonl", b"\xff\xfe".to_vec()),
+                ("sessions/r.jsonl.zst", compress(&rollout("r", 9))),
+            ],
+        );
+        assert_eq!(inputs(&roots), vec![9]);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (dir, roots) = home(
+            "unreadable-both",
+            &[
+                ("sessions/r.jsonl", b"\xff\xfe".to_vec()),
+                ("sessions/r.jsonl.zst", b"not zstd".to_vec()),
+            ],
+        );
+        let mut gaps = Vec::new();
+        let read = read_events(
+            &roots,
+            day(2026, 1, 1),
+            &mut HashSet::new(),
+            &mut Firsts::new(),
+            &mut gaps,
+        );
+        assert!(read.is_empty());
+        assert_eq!(gaps.len(), 2, "{gaps:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn settings(ts: &str, tier: Option<&str>) -> String {
+        let tier = tier
+            .map(|t| format!(r#","service_tier":"{t}""#))
+            .unwrap_or_default();
+        format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"thread_settings_applied","thread_settings":{{"model":"gpt-5.5"{tier}}}}}}}"#
+        )
+    }
+
+    /// CodexBar #4814: Fast mode is recorded per thread, and a turn resumed
+    /// on another tier switches it.
+    #[test]
+    fn a_call_is_tagged_with_the_tier_its_thread_ran_on() {
+        let lines = [
+            CONTEXT.to_string(),
+            token_count("2026-05-11T06:18:00.000Z", 100, 0, 10),
+            settings("2026-05-11T06:18:30.000Z", Some("priority")),
+            token_count("2026-05-11T06:19:00.000Z", 200, 0, 20),
+            settings("2026-05-11T06:19:30.000Z", None),
+            token_count("2026-05-11T06:20:00.000Z", 300, 0, 30),
+            settings("2026-05-11T06:20:30.000Z", Some("default")),
+            token_count("2026-05-11T06:21:00.000Z", 400, 0, 40),
+            settings("2026-05-11T06:21:30.000Z", Some("fast")),
+            settings("2026-05-11T06:21:40.000Z", Some("hyperspeed")),
+            token_count("2026-05-11T06:22:00.000Z", 500, 0, 50),
+        ]
+        .join("\n");
+        let tiers: Vec<ServiceTier> = read(&lines).iter().map(|e| e.service_tier).collect();
+        assert_eq!(
+            tiers,
+            vec![
+                ServiceTier::Standard,
+                ServiceTier::Priority,
+                ServiceTier::Priority,
+                ServiceTier::Standard,
+                ServiceTier::Standard,
+            ]
+        );
     }
 
     /// The since filter has to run *after* the running total is advanced, or a

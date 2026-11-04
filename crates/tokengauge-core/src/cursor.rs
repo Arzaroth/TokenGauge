@@ -41,8 +41,8 @@ use serde_json::Value;
 use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::{check_status, jwt_claims};
 use crate::{
-    CredentialState, CreditLimit, CreditLimitKind, Credits, ProviderPayload, UsageSnapshot,
-    UsageWindow, http_client, pct_u8,
+    CredentialState, CreditLimit, CreditLimitKind, CreditUnit, Credits, ProviderPayload,
+    UsageSnapshot, UsageWindow, http_client, pct_u8,
 };
 
 const DEFAULT_BASE_URL: &str = "https://cursor.com";
@@ -462,6 +462,50 @@ struct OnDemand {
     limit: Option<f64>,
 }
 
+/// `get-sand-usage-status`, the Grok Bot allowance. On an X Subscription it
+/// is the one weekly pool Cursor and Grok share, and `usage-summary` goes on
+/// reporting a monthly cycle that no longer limits anything (CodexBar #4695).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SandUsage {
+    #[serde(default)]
+    next_reset_timestamp_utc: Option<String>,
+    #[serde(default)]
+    usage_percent: Option<f64>,
+    #[serde(default)]
+    has_non_zero_included_limit: Option<bool>,
+    #[serde(default)]
+    included_limit_zero: Option<bool>,
+    #[serde(default)]
+    is_unified: Option<bool>,
+}
+
+const WEEK_MINUTES: u32 = 10_080;
+
+impl SandUsage {
+    /// The shared weekly pool, when the account has one: unified, with an
+    /// included allowance rather than a trial, and a reset still ahead.
+    fn shared_pool(&self, now: DateTime<Utc>) -> Option<UsageWindow> {
+        if self.is_unified != Some(true) {
+            return None;
+        }
+        let included = self
+            .included_limit_zero
+            .map(|zero| !zero)
+            .or(self.has_non_zero_included_limit);
+        if included != Some(true) {
+            return None;
+        }
+        let resets = self.next_reset_timestamp_utc.as_deref()?.trim();
+        if DateTime::parse_from_rfc3339(resets).ok()? <= now {
+            return None;
+        }
+        let mut pool = window(self.usage_percent, Some(resets))?;
+        pool.window_minutes = Some(WEEK_MINUTES);
+        Some(pool)
+    }
+}
+
 /// A percentage that is one. Cursor's own dashboard treats these as
 /// authoritative, so a value outside 0-100 is the endpoint having drifted
 /// rather than a reading worth drawing.
@@ -484,6 +528,7 @@ fn window(value: Option<f64>, resets_at: Option<&str>) -> Option<UsageWindow> {
 fn to_payload(
     body: UsageSummary,
     budget: Option<Budget>,
+    pool: Option<UsageWindow>,
     now: DateTime<Utc>,
 ) -> Result<ProviderPayload> {
     // A team seat reports its usage under `teamUsage` and an individual under
@@ -508,9 +553,10 @@ fn to_payload(
 
     // The headline leads, then the two pools it is made of. All three share one
     // billing cycle, so they share one reset.
-    // A member's budget replaces the pools the summary reported as zero.
-    let (primary, secondary, tertiary) = match budget {
-        Some(b) => (
+    // A member's budget replaces the pools the summary reported as zero, and
+    // a shared weekly pool the monthly ones it no longer reads.
+    let (primary, secondary, tertiary) = match (budget, pool) {
+        (Some(b), _) => (
             window(
                 Some((b.used_usd / b.limit_usd * 100.0).clamp(0.0, 100.0)),
                 resets,
@@ -518,7 +564,8 @@ fn to_payload(
             None,
             None,
         ),
-        None => (
+        (None, Some(pool)) => (Some(pool), None, None),
+        (None, None) => (
             window(plan.total_percent_used, resets),
             window(plan.auto_percent_used, resets),
             window(plan.api_percent_used, resets),
@@ -574,6 +621,7 @@ fn to_payload(
                     limit,
                     resets: resets.map(str::to_string),
                 }),
+                unit: CreditUnit::Usd,
             });
         }
     }
@@ -625,7 +673,32 @@ fn usage_for(
         .wants_member_budget()
         .then(|| team_budget(&client, origin, &cookie))
         .flatten();
-    to_payload(body, budget, now)
+    let pool = budget
+        .is_none()
+        .then(|| shared_pool(&client, origin, &cookie, now))
+        .flatten();
+    to_payload(body, budget, pool, now)
+}
+
+/// The X Subscription's weekly pool. Optional: an account without one, or a
+/// request that fails, leaves the summary standing.
+fn shared_pool(
+    client: &reqwest::blocking::Client,
+    origin: &str,
+    cookie: &str,
+    now: DateTime<Utc>,
+) -> Option<UsageWindow> {
+    let request = client
+        .post(format!("{origin}/api/dashboard/get-sand-usage-status"))
+        .json(&serde_json::json!({}));
+    let resp = dashboard_request(request, origin, cookie)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<SandUsage>().ok()?.shared_pool(now)
 }
 
 /// The signed-in member's budget, from the endpoints the team dashboard
@@ -774,8 +847,56 @@ mod tests {
         to_payload(
             serde_json::from_str(raw).expect("fixture parses"),
             None,
+            None,
             at(),
         )
+    }
+
+    fn sand(raw: &str) -> Option<UsageWindow> {
+        serde_json::from_str::<SandUsage>(raw)
+            .expect("fixture parses")
+            .shared_pool(at())
+    }
+
+    /// CodexBar #4695, from the bodies posted in #4545.
+    #[test]
+    fn an_x_subscription_draws_its_weekly_pool_in_place_of_the_month() {
+        let unified = r#"{"currentPeriodStart":"2026-10-15T10:27:36.178Z",
+            "nextResetTimestampUtc":"2026-10-22T10:27:36.178Z","usagePercent":10.2058,
+            "hasAvailableUsage":true,"includedLimitZero":false,"isUnified":true}"#;
+        let pool = sand(unified).expect("a pool");
+        assert_eq!(pool.used_percent, Some(10));
+        assert_eq!(pool.window_minutes, Some(10_080));
+        assert_eq!(pool.resets_at.as_deref(), Some("2026-10-22T10:27:36.178Z"));
+
+        let usage =
+            to_payload(serde_json::from_str(FULL).unwrap(), None, Some(pool), at()).unwrap();
+        let snapshot = usage.usage.unwrap();
+        assert_eq!(snapshot.primary.unwrap().window_minutes, Some(10_080));
+        assert!(snapshot.secondary.is_none());
+        assert!(snapshot.tertiary.is_none());
+        assert!(
+            usage.credits.and_then(|c| c.limit).is_some(),
+            "on-demand spend is still the month's"
+        );
+    }
+
+    #[test]
+    fn only_a_unified_allowance_with_a_reset_ahead_is_a_pool() {
+        for raw in [
+            r#"{"nextResetTimestampUtc":"2026-10-22T10:27:36Z","usagePercent":10,"includedLimitZero":false,"isUnified":false}"#,
+            r#"{"nextResetTimestampUtc":"2026-10-22T10:27:36Z","usagePercent":10,"includedLimitZero":false}"#,
+            r#"{"nextResetTimestampUtc":"2026-10-22T10:27:36Z","usagePercent":10,"includedLimitZero":true,"isUnified":true}"#,
+            r#"{"usagePercent":10,"hasNonZeroIncludedLimit":true,"isUnified":true}"#,
+            r#"{"nextResetTimestampUtc":"not a date","usagePercent":10,"hasNonZeroIncludedLimit":true,"isUnified":true}"#,
+            r#"{"nextResetTimestampUtc":"2026-09-01T00:00:00Z","usagePercent":10,"hasNonZeroIncludedLimit":true,"isUnified":true}"#,
+        ] {
+            assert!(sand(raw).is_none(), "{raw}");
+        }
+        assert!(
+            sand(r#"{"nextResetTimestampUtc":"2026-10-22T10:27:36Z","usagePercent":10,"hasNonZeroIncludedLimit":true,"isUnified":true}"#)
+                .is_some()
+        );
     }
 
     const FULL: &str = r#"{
@@ -1228,6 +1349,7 @@ mod tests {
                 used_usd: 75.0,
                 limit_usd: 150.0,
             }),
+            None,
             at(),
         )
         .unwrap()

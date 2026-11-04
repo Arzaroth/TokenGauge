@@ -21,19 +21,24 @@
 //! aggregation itself rather than making a reader do it per model.
 //!
 //! The credential is `OPENCODE_API_KEY`, minted at opencode.ai/auth and pasted
-//! into the TUI with `/connect`, which files it in opencode's own
-//! `$XDG_DATA_HOME/opencode/auth.json` as `"opencode-go": {"type": "api",
-//! "key": ...}` beside every other provider's login. The variable wins, as it
-//! does for opencode; the file is the second source.
+//! into the TUI with `/connect`. opencode 2 files it in its own
+//! `$XDG_DATA_HOME/opencode/opencode.db` (or `OPENCODE_DB`), table
+//! `credential`, as an `opencode-go` row holding `{"type": "key", "key": ...}`
+//! or an OAuth login `{"type": "oauth", "access": ..., "expires": <ms>}`;
+//! opencode 1 filed it in `auth.json` beside it as
+//! `"opencode-go": {"type": "api", "key": ...}`, which opencode 2 imports once
+//! and never reads again. Both versions may have filed the account under the
+//! older `opencode` id. The variable wins, as it does for opencode, then the
+//! database once it has imported the file, else the file.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use crate::credentials::{LiveLogin, key_login, stored_key};
+use crate::credentials::{LiveLogin, LoginTokens, key_login, stored_key};
 use crate::provider::check_status;
 use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
@@ -53,30 +58,144 @@ fn env_clean(name: &str) -> Option<String> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
+/// The ids opencode files the Go account under, the Go integration first.
+const ACCOUNT_IDS: &[&str] = &["opencode-go", "opencode"];
+
 /// opencode keeps XDG paths on every platform, macOS included, so this is
 /// not `dirs::data_dir()`, which would be `~/Library/Application Support`.
-pub(crate) fn auth_path() -> PathBuf {
+fn data_dir() -> PathBuf {
     std::env::var_os("XDG_DATA_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/share"))
         .join("opencode")
-        .join("auth.json")
+}
+
+pub(crate) fn auth_path() -> PathBuf {
+    data_dir().join("auth.json")
+}
+
+/// opencode's database, or the one `OPENCODE_DB` names.
+pub(crate) fn database_path() -> PathBuf {
+    let data = data_dir();
+    std::env::var_os("OPENCODE_DB")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| data.join("opencode.db"), |db| data.join(db))
+}
+
+/// What opencode holds for the Go account. An OAuth access token is accepted
+/// by the usage endpoint as a key is, but it rotates, so it names no account.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Login {
+    Key(String),
+    Access(String),
+}
+
+impl Login {
+    fn token(&self) -> &str {
+        match self {
+            Self::Key(token) | Self::Access(token) => token,
+        }
+    }
+
+    fn source(&self) -> &'static str {
+        match self {
+            Self::Key(_) => "api key",
+            Self::Access(_) => "oauth",
+        }
+    }
 }
 
 /// The Go key in opencode's `auth.json`, which holds every provider's login.
 /// A file that is not JSON is an error of its own, never quoted: it holds
-/// every provider's login.
+/// every provider's login. Only an `api` entry carries a key: a `wellknown`
+/// one's `key` names an environment variable.
 fn file_key(text: &str) -> Result<Option<String>> {
     let auth: serde_json::Value = serde_json::from_str(text)
         .map_err(|_| anyhow!("opencode's auth.json is not valid JSON"))?;
-    Ok(auth
-        .get("opencode-go")
-        .and_then(|e| e.get("key"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|k| !k.is_empty())
-        .map(str::to_string))
+    Ok(ACCOUNT_IDS.iter().find_map(|id| {
+        let entry = auth.get(*id)?;
+        let kind = entry.get("type").and_then(serde_json::Value::as_str);
+        if kind != Some("api") {
+            return None;
+        }
+        entry
+            .get("key")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+            .map(str::to_string)
+    }))
+}
+
+/// A `credential` row's value: a key, or an OAuth login still inside its
+/// expiry.
+fn row_login(value: &str, now_ms: i64) -> Option<Login> {
+    let value: serde_json::Value = serde_json::from_str(value).ok()?;
+    let text = |name: &str| {
+        value
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+    };
+    match value.get("type")?.as_str()? {
+        "key" | "api" => text("key").map(Login::Key),
+        "oauth" if value.get("expires")?.as_i64()? > now_ms => text("access").map(Login::Access),
+        _ => None,
+    }
+}
+
+/// The Go login in opencode 2's database, opened read-only: the database is
+/// opencode's, and a refresh token in it rotates on use. Once opencode has
+/// imported `auth.json` it reads only the database, so `None` - no database,
+/// or one before that import - is the only case `auth.json` is asked, and a
+/// database that cannot be read is an error rather than a reason to send the
+/// key opencode stopped using. Each integration's login is the row opencode
+/// selects, the active one, else the newest.
+fn database_login(path: &Path, now_ms: i64) -> Result<Option<Option<Login>>> {
+    use rusqlite::{Connection, OpenFlags, OptionalExtension};
+    match std::fs::metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(anyhow!("opencode's opencode.db could not be read")),
+        Ok(_) => {}
+    }
+    let read = || -> rusqlite::Result<Option<Option<Login>>> {
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(Duration::from_millis(500))?;
+        let migrated: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'migration')",
+            [],
+            |row| row.get(0),
+        )?;
+        let imported = migrated
+            && conn.query_row(
+                "SELECT EXISTS (SELECT 1 FROM migration WHERE id LIKE '%_import_legacy_credentials')",
+                [],
+                |row| row.get(0),
+            )?;
+        if !imported {
+            return Ok(None);
+        }
+        let mut selected = conn.prepare(
+            "SELECT value FROM credential WHERE integration_id = ?1 \
+             ORDER BY active DESC, time_created DESC, id DESC LIMIT 1",
+        )?;
+        for id in ACCOUNT_IDS {
+            let value = selected
+                .query_row([id], |row| row.get::<_, String>(0))
+                .optional()?;
+            if let Some(login) = value.and_then(|value| row_login(&value, now_ms)) {
+                return Ok(Some(Some(login)));
+            }
+        }
+        Ok(Some(None))
+    };
+    read().map_err(|_| anyhow!("opencode's opencode.db could not be read"))
 }
 
 /// No file is no key; a file that cannot be read says why.
@@ -91,13 +210,21 @@ fn stored_file_key() -> Result<Option<String>> {
     }
 }
 
-pub(crate) fn api_key() -> Result<String> {
+/// The Go login and where it was found.
+pub(crate) fn login() -> Result<(Login, &'static str)> {
     if let Some(key) = API_KEY_ENVS.iter().find_map(|name| env_clean(name)) {
-        return Ok(key);
+        return Ok((Login::Key(key), "environment"));
     }
-    stored_file_key()?.ok_or_else(|| {
-        anyhow!("opencode key missing - `/connect` it in opencode, or set OPENCODE_API_KEY")
-    })
+    let key_missing =
+        || anyhow!("opencode key missing - `/connect` it in opencode, or set OPENCODE_API_KEY");
+    if let Some(login) = database_login(&database_path(), Utc::now().timestamp_millis())? {
+        return login
+            .map(|login| (login, "opencode.db"))
+            .ok_or_else(key_missing);
+    }
+    stored_file_key()?
+        .map(|key| (Login::Key(key), "auth.json"))
+        .ok_or_else(key_missing)
 }
 
 /// The usage endpoint, from an override a self-hosted gateway may set.
@@ -180,6 +307,7 @@ impl Window {
 fn to_payload(
     body: UsageResponse,
     now: DateTime<Utc>,
+    source: &str,
     unauthorized_hint: &str,
 ) -> Result<ProviderPayload> {
     if body.error.is_some() {
@@ -211,7 +339,7 @@ fn to_payload(
 
     Ok(ProviderPayload::live(
         "opencode",
-        "api key",
+        source,
         UsageSnapshot {
             primary: rolling,
             secondary: weekly,
@@ -230,17 +358,28 @@ fn to_payload(
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let now = Utc::now();
-    let key = api_key()?;
+    let (login, _) = login()?;
     Ok(vec![usage_for(
-        &key,
+        login.token(),
         timeout,
         now,
+        login.source(),
         "check OPENCODE_API_KEY, or `/connect` opencode Go again",
     )?])
 }
 
 pub(crate) fn live_login() -> LiveLogin {
-    key_login(api_key().ok())
+    match login() {
+        Ok((Login::Key(key), _)) => key_login(Some(key)),
+        Ok((Login::Access(token), _)) => LiveLogin {
+            account: None,
+            tokens: LoginTokens {
+                access: Some(token),
+                refresh: None,
+            },
+        },
+        Err(_) => key_login(None),
+    }
 }
 
 pub(crate) fn fetch_stored(
@@ -252,6 +391,7 @@ pub(crate) fn fetch_stored(
         &stored_key(text)?,
         timeout,
         now,
+        "api key",
         "opencode refused the stored key (`remuda login -p opencode` replaces it)",
     )
 }
@@ -260,6 +400,7 @@ fn usage_for(
     key: &str,
     timeout: Duration,
     now: DateTime<Utc>,
+    source: &str,
     unauthorized_hint: &str,
 ) -> Result<ProviderPayload> {
     let url = endpoint_for(env_clean(ENDPOINT_ENV).as_deref())?;
@@ -281,7 +422,7 @@ fn usage_for(
     let body: UsageResponse =
         serde_json::from_str(&text).context("opencode usage JSON was invalid")?;
 
-    to_payload(body, now, unauthorized_hint)
+    to_payload(body, now, source, unauthorized_hint)
 }
 
 #[cfg(test)]
@@ -313,10 +454,199 @@ mod tests {
         assert!(!err.to_string().contains("go-secret"), "{err}");
     }
 
+    #[test]
+    fn opencode_1s_own_id_and_only_an_api_entry_carry_a_key() {
+        assert_eq!(
+            file_key(r#"{"opencode": {"type": "api", "key": "legacy"}}"#)
+                .unwrap()
+                .as_deref(),
+            Some("legacy")
+        );
+        assert_eq!(
+            file_key(
+                r#"{"opencode": {"type": "api", "key": "legacy"},
+                    "opencode-go": {"type": "api", "key": "go"}}"#
+            )
+            .unwrap()
+            .as_deref(),
+            Some("go")
+        );
+        assert_eq!(
+            file_key(r#"{"opencode": {"type": "wellknown", "key": "OPENCODE_TOKEN"}}"#).unwrap(),
+            None
+        );
+        assert_eq!(
+            file_key(r#"{"opencode-go": {"key": "untyped"}}"#).unwrap(),
+            None
+        );
+    }
+
+    const NOW_MS: i64 = 1_800_000_000_000;
+
+    #[test]
+    fn a_credential_row_is_a_key_or_an_unexpired_oauth_login() {
+        assert_eq!(
+            row_login(r#"{"type": "key", "key": " k "}"#, NOW_MS),
+            Some(Login::Key("k".into()))
+        );
+        let oauth = |expires: i64| {
+            format!(r#"{{"type": "oauth", "access": "tok", "refresh": "r", "expires": {expires}}}"#)
+        };
+        assert_eq!(
+            row_login(&oauth(NOW_MS + 1), NOW_MS),
+            Some(Login::Access("tok".into()))
+        );
+        assert_eq!(row_login(&oauth(NOW_MS - 1), NOW_MS), None);
+        assert_eq!(row_login(r#"{"type": "key", "key": ""}"#, NOW_MS), None);
+        assert_eq!(row_login("not json", NOW_MS), None);
+    }
+
+    type Row<'a> = (&'a str, Option<bool>, i64, &'a str);
+
+    fn database(name: &str, imported: bool, rows: &[Row]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tg-opencode-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("opencode.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL); \
+             INSERT INTO migration VALUES ('20260611192811_lush_chimera', 0); \
+             CREATE TABLE credential (id text PRIMARY KEY, integration_id text, \
+             label text NOT NULL, value text NOT NULL, connector_id text, method_id text, \
+             active integer, time_created integer NOT NULL, time_updated integer NOT NULL);",
+        )
+        .unwrap();
+        if imported {
+            conn.execute(
+                "INSERT INTO migration VALUES ('20260805200742_import_legacy_credentials', 0)",
+                [],
+            )
+            .unwrap();
+        }
+        for (i, (integration, active, created, value)) in rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO credential VALUES (?1, ?2, 'l', ?3, NULL, NULL, ?4, ?5, ?5)",
+                rusqlite::params![i.to_string(), integration, value, active, created],
+            )
+            .unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn the_database_gives_the_login_opencode_selects() {
+        let key = |k: &str| format!(r#"{{"type": "key", "key": "{k}"}}"#);
+        let expired = r#"{"type": "oauth", "access": "old", "expires": 1}"#;
+        let (legacy, imported_old, imported_new, active, other) = (
+            key("legacy"),
+            key("go-old"),
+            key("go"),
+            key("go-active"),
+            key("other"),
+        );
+
+        let mut rows: Vec<Row> = vec![
+            ("opencode", Some(true), 3, &legacy),
+            ("opencode-go", None, 2, &imported_old),
+            ("opencode-go", None, 5, &imported_new),
+            ("anthropic", Some(true), 9, &other),
+        ];
+        let path = database("newest", true, &rows);
+        assert_eq!(
+            database_login(&path, NOW_MS).unwrap(),
+            Some(Some(Login::Key("go".into())))
+        );
+        rows.push(("opencode-go", Some(true), 1, &active));
+        let path = database("active", true, &rows);
+        assert_eq!(
+            database_login(&path, NOW_MS).unwrap(),
+            Some(Some(Login::Key("go-active".into())))
+        );
+
+        let inactive = key("inactive");
+        let path = database(
+            "expired",
+            true,
+            &[
+                ("opencode-go", Some(true), 3, expired),
+                ("opencode-go", Some(false), 9, &inactive),
+                ("opencode", Some(true), 2, &legacy),
+            ],
+        );
+        assert_eq!(
+            database_login(&path, NOW_MS).unwrap(),
+            Some(Some(Login::Key("legacy".into())))
+        );
+
+        let path = database("empty", true, &[("anthropic", Some(true), 1, &other)]);
+        assert_eq!(database_login(&path, NOW_MS).unwrap(), Some(None));
+    }
+
+    #[test]
+    fn auth_json_is_asked_only_without_a_database_that_imported_it() {
+        let go = r#"{"type": "key", "key": "go"}"#;
+        let path = database("pending", false, &[("opencode-go", Some(true), 1, go)]);
+        assert_eq!(database_login(&path, NOW_MS).unwrap(), None);
+
+        let dir = std::env::temp_dir().join(format!("tg-opencode-none-{}", std::process::id()));
+        assert_eq!(
+            database_login(&dir.join("opencode.db"), NOW_MS).unwrap(),
+            None
+        );
+        assert!(!dir.join("opencode.db").exists());
+
+        std::fs::create_dir_all(&dir).unwrap();
+        let junk = dir.join("junk.db");
+        std::fs::write(&junk, "not a database").unwrap();
+        assert!(database_login(&junk, NOW_MS).is_err());
+    }
+
+    #[test]
+    fn an_imported_database_that_cannot_be_read_is_an_error_not_auth_json() {
+        let path = database("broken", true, &[]);
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch("DROP TABLE credential")
+            .unwrap();
+        let err = database_login(&path, NOW_MS).unwrap_err();
+        assert_eq!(err.to_string(), "opencode's opencode.db could not be read");
+
+        let dir = path.parent().unwrap();
+        let unmigrated = dir.join("unmigrated.db");
+        rusqlite::Connection::open(&unmigrated)
+            .unwrap()
+            .execute_batch("CREATE TABLE other (id TEXT)")
+            .unwrap();
+        assert_eq!(database_login(&unmigrated, NOW_MS).unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_database_whose_directory_cannot_be_searched_is_an_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = database("hidden", true, &[]);
+        let dir = path.parent().unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let enforced = std::fs::metadata(&path).is_err();
+        let read = database_login(&path, NOW_MS);
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if enforced {
+            assert!(read.is_err());
+        }
+    }
+
+    #[test]
+    fn a_row_says_whether_it_was_read_with_a_key_or_an_oauth_login() {
+        assert_eq!(Login::Key("k".into()).source(), "api key");
+        assert_eq!(Login::Access("t".into()).source(), "oauth");
+    }
+
     fn parse(raw: &str) -> Result<ProviderPayload> {
         to_payload(
             serde_json::from_str(raw).expect("fixture parses"),
             at(),
+            "api key",
             "check OPENCODE_API_KEY",
         )
     }

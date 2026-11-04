@@ -364,7 +364,17 @@ fn usage_for(
         return Err(anyhow!("z.ai empty response - check region/token"));
     }
     let body: QuotaResponse = serde_json::from_str(&text).context("z.ai usage JSON was invalid")?;
-    to_payload(body, now)
+    to_payload(body, now).map_err(|err| without_key(err, key))
+}
+
+/// z.ai's `msg` can quote the key the request was sent with, and the error
+/// lands in the snapshot as a `stale_reason`.
+fn without_key(err: anyhow::Error, key: &str) -> anyhow::Error {
+    let message = err.to_string();
+    if key.is_empty() || !message.contains(key) {
+        return err;
+    }
+    anyhow!(message.replace(key, "[key]"))
 }
 
 #[cfg(test)]
@@ -539,6 +549,14 @@ mod tests {
         let body = resp(r#"{"code": 401, "msg": "bad key"}"#);
         let err = to_payload(body, Utc::now()).unwrap_err().to_string();
         assert!(err.contains("bad key"), "{err}");
+    }
+
+    #[test]
+    fn an_error_quoting_the_key_does_not_carry_it() {
+        let body = resp(r#"{"code": 1001, "msg": "key sk-zai-123.abc is not valid"}"#);
+        let err = to_payload(body, Utc::now()).unwrap_err();
+        let err = without_key(err, "sk-zai-123.abc").to_string();
+        assert_eq!(err, "z.ai error: key [key] is not valid");
     }
 
     #[test]

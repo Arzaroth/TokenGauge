@@ -89,6 +89,8 @@ Panel {
   readonly property string errorText: present(usage.lastError)
 
 
+  // Style.duration is 0 when animations are off; shells before 4.5 have none.
+  function motion(ms) { return typeof Style.duration === "function" ? Style.duration(ms) : ms }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
   function alpha(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
 
@@ -301,7 +303,7 @@ Panel {
         visible: meterRow.fraction > 0
 
         Behavior on width {
-          NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+          NumberAnimation { duration: root.motion(160); easing.type: Easing.OutCubic }
         }
       }
     }
@@ -362,7 +364,7 @@ Panel {
       color: root.alpha(root.foreground, 0.14)
 
       Behavior on width {
-        NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+        NumberAnimation { duration: root.motion(160); easing.type: Easing.OutCubic }
       }
     }
 

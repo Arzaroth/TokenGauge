@@ -102,6 +102,28 @@ pub struct Credits {
     /// every provider that sells a plain balance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<CreditLimit>,
+    /// What the balance counts. Absent in every snapshot written before
+    /// Codex's balance was known to be credits rather than dollars.
+    #[serde(default, skip_serializing_if = "CreditUnit::is_usd")]
+    pub unit: CreditUnit,
+}
+
+/// Codex sells credits, a unit of its own with no exchange rate in the
+/// response, so its balance must not be drawn as money.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CreditUnit {
+    #[default]
+    Usd,
+    Credits,
+    #[serde(other)]
+    Other,
+}
+
+impl CreditUnit {
+    pub fn is_usd(&self) -> bool {
+        *self == Self::Usd
+    }
 }
 
 /// What kind of cap it is. A semantic tier, not a label: `panel.rs` turns it

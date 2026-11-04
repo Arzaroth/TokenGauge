@@ -18,8 +18,8 @@ use serde_json::{Value, json};
 use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::{check_status, epoch_to_rfc3339, json_int, json_num, jwt_claims, trimmed};
 use crate::{
-    CredentialState, Credits, ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow,
-    http_client, pct_u8, slug,
+    CredentialState, CreditUnit, Credits, ExtraRateWindow, ProviderPayload, UsageSnapshot,
+    UsageWindow, http_client, pct_u8, slug,
 };
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -870,6 +870,7 @@ fn to_payload(
             remaining: Some(b),
             // Codex sells a plain balance with no cap in front of it.
             limit: None,
+            unit: CreditUnit::Credits,
         });
 
     let mut extra_rate_windows: Vec<ExtraRateWindow> = spend_row.into_iter().collect();
@@ -1480,6 +1481,20 @@ mod tests {
         let non_spark = out.last().unwrap().window.as_ref().unwrap();
         assert!(non_spark.resets_at.is_none());
         assert!(non_spark.window_minutes.is_none());
+    }
+
+    #[test]
+    fn a_balance_is_counted_in_credits() {
+        let body: UsageResponse = serde_json::from_str(
+            r#"{"plan_type":"pro","rate_limit":{},"credits":{"balance":"62500"}}"#,
+        )
+        .unwrap();
+        let credits = to_payload(body, Utc::now(), "oauth", None)
+            .unwrap()
+            .credits
+            .expect("credits");
+        assert_eq!(credits.remaining, Some(62500.0));
+        assert_eq!(credits.unit, CreditUnit::Credits);
     }
 
     #[test]

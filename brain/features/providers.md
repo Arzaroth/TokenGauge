@@ -14,7 +14,7 @@ its live `auth.json`.
 | Grok | `~/.grok/auth.json` (`grok login`, `GROK_HOME`) | Pool (weekly or monthly, per the CLI's billing period), On-demand | yes | yes | by price |
 | GLM (z.ai) | `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`), `Z_AI_API_HOST`, `Z_AI_QUOTA_URL` | Weekly, 30-day, 5-hour | no (ccusage) | yes (key) | weekly credits |
 | OpenRouter | `OPENROUTER_API_KEY`; optional management key for the balance | Credit, Key limit | no (vendor-reported cost) | no | none |
-| opencode Go | `OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY` | 5-hour, Weekly, Monthly | no | yes (key) | none |
+| opencode Go | `OPENCODE_API_KEY` / `OPENCODE_GO_API_KEY`, then opencode 2's `opencode.db`, then opencode 1's `auth.json` | 5-hour, Weekly, Monthly | no | yes (key) | none |
 | Cursor | `CURSOR_ACCESS_TOKEN`, `~/.config/cursor/auth.json` (`~/.cursor/auth.json` on macOS, `CURSOR_CONFIG_DIR`) from `cursor-agent`, then the macOS Keychain | Included, Cursor models, Other models | no | yes | vs Pro |
 
 Notes:
@@ -25,7 +25,16 @@ Notes:
   key; a 403 drops it rather than failing) and an optional per-key cap become a
   window; `usage_daily/weekly/monthly` land in `CostInfo` as vendor-reported cost.
 - **opencode Go** is read; opencode Zen (the pay-as-you-go half) needs a browser
-  session and is not.
+  session and is not. opencode 2 files the login in `opencode.db` (table
+  `credential`, `OPENCODE_DB` overrides the name), read read-only through
+  `rusqlite`: the row opencode selects for `opencode-go`, then for `opencode`
+  (opencode 1's id), `active` first, then newest, a `key` or an `oauth` login
+  inside its `expires`. Once the database has imported `auth.json` it is the
+  only answer; with no database, or one before that import, `auth.json`
+  (`opencode-go`, then `opencode`, an `api` entry only) is asked, and a
+  database that cannot be read is an error. A row fetched with an OAuth token
+  has source `oauth`. An OAuth access token names no account, since it rotates
+  (`Login::Access`). remuda switches the key in that same row.
 - **Cursor** has no public API; TokenGauge calls the dashboard's
   `/api/usage-summary` with the token `cursor-agent` leaves, in its `auth.json`
   or, on macOS, the Keychain (`cursor-access-token` / `cursor-refresh-token`
@@ -57,6 +66,16 @@ Notes:
   (`reconcile`).
 - **Codex spend cap.** `individual_limit` is the extra row `codex-spend-limit`
   beside the rate windows, and still the primary when there are none.
+- **Codex credits are not dollars.** `credits.balance` counts Codex credits,
+  so the payload's `Credits.unit` is `credits` and the panel draws a grouped
+  count (`62,500`); every other balance is USD, the default an old snapshot
+  reads as.
+- **Cursor X Subscription.** `/api/dashboard/get-sand-usage-status` answers
+  `isUnified: true` on an account whose one weekly pool is shared with Grok,
+  while `usage-summary` goes on reporting a monthly cycle at 0%. With an
+  included allowance and a reset ahead, the pool is the Included gauge on a
+  7-day window and the two monthly pools are dropped (`SandUsage::shared_pool`).
+  Asked only when no member budget answered; any failure keeps the summary.
 - **Grok period.** The pool's `window_minutes` comes from cli-chat-proxy's
   `/v1/billing?format=credits` (`config.currentPeriod.type`, or the legacy
   monthly fields), best effort; a failure keeps 10080.

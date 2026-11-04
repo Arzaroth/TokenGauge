@@ -586,10 +586,13 @@ fn opencode_auth() -> AuthStatus {
             detail: format!("{var} set"),
             hint: "",
         },
-        None => match opencode::api_key() {
-            Ok(_) => AuthStatus {
+        None => match opencode::login() {
+            Ok((login, source)) => AuthStatus {
                 ok: true,
-                detail: format!("key in {}", opencode::auth_path().display()),
+                detail: match login {
+                    opencode::Login::Key(_) => format!("key in {source}"),
+                    opencode::Login::Access(_) => format!("OAuth login in {source}"),
+                },
                 hint: "",
             },
             Err(e) => AuthStatus {

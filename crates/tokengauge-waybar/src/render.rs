@@ -661,6 +661,7 @@ pub(crate) mod tests {
             tertiary_reset: "—".to_string(),
             credits: None,
             credit_limit: None,
+            credit_unit: tokengauge_core::CreditUnit::Usd,
             source: "oauth".to_string(),
             updated: "07:37".to_string(),
             updated_iso: None,

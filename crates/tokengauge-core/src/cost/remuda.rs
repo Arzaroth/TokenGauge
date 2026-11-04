@@ -65,6 +65,7 @@ pub fn merge_requests(
             tokens: request.tokens,
             key,
             one_request: true,
+            service_tier: Default::default(),
             session: None,
             starts_session: false,
             login,

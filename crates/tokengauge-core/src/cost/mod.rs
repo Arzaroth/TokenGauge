@@ -67,6 +67,8 @@ pub struct UsageEvent {
     /// of several requests, or a peer's hourly bucket, cannot, and is rated at
     /// the base price.
     pub one_request: bool,
+    /// The service tier it was billed on, where the transcript records one.
+    pub service_tier: pricing::ServiceTier,
     /// The CLI session the request was made in, when the transcript names one.
     pub session: Option<String>,
     /// The session's first billed request, which is where a session is
@@ -121,6 +123,18 @@ pub fn dedup_key(a: &str, b: &str) -> u64 {
 /// A directory or entry that is there and cannot be read is pushed to `gaps`:
 /// skipping it reads as nothing in it, which is not the same as nothing there.
 pub(crate) fn jsonl_files(root: &Path, since: NaiveDate, gaps: &mut Vec<PathBuf>) -> Vec<PathBuf> {
+    transcript_files(root, since, gaps, |path| {
+        path.extension().is_some_and(|e| e == "jsonl")
+    })
+}
+
+/// [`jsonl_files`], for the files `keep` names.
+pub(crate) fn transcript_files(
+    root: &Path,
+    since: NaiveDate,
+    gaps: &mut Vec<PathBuf>,
+    keep: impl Fn(&Path) -> bool,
+) -> Vec<PathBuf> {
     let cutoff = since
         .checked_sub_days(Days::new(1))
         .and_then(|d| d.and_hms_opt(0, 0, 0))
@@ -153,7 +167,7 @@ pub(crate) fn jsonl_files(root: &Path, since: NaiveDate, gaps: &mut Vec<PathBuf>
                 stack.push(path);
                 continue;
             }
-            if path.extension().is_none_or(|e| e != "jsonl") {
+            if !keep(&path) {
                 continue;
             }
             if let Some(cutoff) = cutoff
@@ -483,8 +497,10 @@ pub fn build_report(
 
     for event in events {
         let usd = match prices.get(&event.model) {
-            Some(price) if event.one_request => price.cost_of_request(&event.tokens),
-            Some(price) => price.cost(&event.tokens),
+            Some(price) if event.one_request => price
+                .at_tier(event.service_tier)
+                .cost_of_request(&event.tokens),
+            Some(price) => price.at_tier(event.service_tier).cost(&event.tokens),
             None => {
                 if event.tokens.total() > 0 {
                     unpriced.insert(event.model.clone());
@@ -746,6 +762,7 @@ mod tests {
             },
             key: None,
             one_request,
+            service_tier: Default::default(),
             session: None,
             starts_session: false,
             login: None,
@@ -756,6 +773,38 @@ mod tests {
         };
         assert!((usd(&[event(true)]) - 0.6).abs() < 1e-9);
         assert!((usd(&[event(false)]) - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_request_is_rated_on_the_service_tier_it_ran_on() {
+        let price: pricing::ModelPrice = serde_json::from_str(
+            r#"{"input_cost_per_token": 1e-06, "output_cost_per_token": 1e-06,
+                "input_cost_per_token_priority": 2.5e-06}"#,
+        )
+        .unwrap();
+        let prices = pricing::PriceTable::from_models([("gpt-5.5", price)]);
+        let today = Local::now().date_naive();
+        let event = |service_tier| UsageEvent {
+            provider: "codex",
+            model: "gpt-5.5".into(),
+            date: today,
+            at: Utc::now(),
+            tokens: TokenCounts {
+                input: 1_000_000,
+                ..Default::default()
+            },
+            key: None,
+            one_request: true,
+            service_tier,
+            session: None,
+            starts_session: false,
+            login: None,
+            source: crate::cost::Source::Cli,
+        };
+        let usd =
+            |events: &[UsageEvent]| build_report(events, &prices, today).costs["codex"].monthly_usd;
+        assert!((usd(&[event(pricing::ServiceTier::Standard)]) - 1.0).abs() < 1e-9);
+        assert!((usd(&[event(pricing::ServiceTier::Priority)]) - 2.5).abs() < 1e-9);
     }
 
     #[cfg(unix)]
@@ -829,6 +878,7 @@ mod tests {
             },
             key: None,
             one_request: false,
+            service_tier: Default::default(),
             session: None,
             starts_session: false,
             login: None,

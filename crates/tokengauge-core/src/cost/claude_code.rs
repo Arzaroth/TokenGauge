@@ -212,6 +212,7 @@ fn event_from(record: &Record, since: NaiveDate) -> Option<(Option<u64>, UsageEv
             at,
             key,
             one_request: true,
+            service_tier: Default::default(),
             session: (!record.session_id.is_empty()).then(|| record.session_id.clone()),
             starts_session: false,
             login: None,

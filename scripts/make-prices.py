@@ -51,11 +51,13 @@ FIELDS = (
     "cache_read_input_token_cost",
 )
 
-# Their long-context tiers, `pricing::long_context`: the same names with
-# `_above_<N>k_tokens` on the end and nothing after it. Service-tier variants
-# (`_priority`, `_batches`, `_flex`) are not read and not kept.
+# Their long-context tiers, `pricing::long_context`, and their service tiers,
+# `pricing::service_tiers`: the same names with `_above_<N>k_tokens`, a tier
+# suffix, or both on the end. `_batches` is not read and not kept.
 TIER = re.compile(
-    "^(" + "|".join(re.escape(f) for f in FIELDS) + r")_above_\d+k_tokens$"
+    "^("
+    + "|".join(re.escape(f) for f in FIELDS)
+    + r")(_above_\d+k_tokens)?(_priority|_flex|_ultrafast)?$"
 )
 
 PREFIXES = (
@@ -230,6 +232,13 @@ def write_pair(files):
 
 def main():
     current = slice_table(get_json(RAW.format(ref="main")))
+    # LiteLLM drops entries for models their vendor still sells
+    # (`moonshot/kimi-k2-thinking`, 2026-10). The last price this table
+    # carried stands, as `PriceTable::or_vendored` keeps it at runtime.
+    if OUT.exists():
+        for name, entry in json.loads(OUT.read_text()).items():
+            current.setdefault(name, entry)
+        current = dict(sorted(current.items()))
 
     for provider in ("claude", "codex", "kimi", "grok", "glm"):
         count = sum(1 for k in current if attribute(k) == provider)

@@ -104,6 +104,10 @@ commits; the **Avoid** list names the synonyms that blur it.
   every token of a request at once its prompt runs past a threshold
   (`_above_<N>k_tokens`). See [architecture/cost.md](architecture/cost.md#pricing).
   Avoid: 1M pricing, premium price, context surcharge.
+- **Service tier** - `ServiceTier`: the speed a request was served at, priced
+  apart by LiteLLM (`_priority`, `_flex`, `_ultrafast`). Codex's Fast mode is
+  the priority tier. See [architecture/cost.md](architecture/cost.md#pricing).
+  Avoid: fast pricing, speed multiplier, plan tier.
 - **One request** - `UsageEvent.one_request`: the event's tokens are a single
   API call (a Claude message, a Codex response), the only unit a long-context
   tier applies to. A turn of several calls and a fleet bucket are not.

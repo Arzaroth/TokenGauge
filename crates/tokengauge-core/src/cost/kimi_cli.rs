@@ -308,6 +308,7 @@ fn read_file(
             tokens,
             key: Some(key),
             one_request: false,
+            service_tier: Default::default(),
             session: None,
             starts_session: false,
             login: None,

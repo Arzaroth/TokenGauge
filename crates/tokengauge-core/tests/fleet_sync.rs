@@ -53,6 +53,7 @@ fn event(hours_ago: i64, out: u64, key: u64) -> UsageEvent {
         },
         key: Some(key),
         one_request: false,
+        service_tier: Default::default(),
         session: None,
         starts_session: false,
         login: None,

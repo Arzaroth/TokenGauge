@@ -52,6 +52,78 @@ pub struct ModelPrice {
     /// What a request whose prompt runs past a threshold is billed instead,
     /// for every token of it: Anthropic's past 200k, OpenAI's past 272k.
     pub long_context: Option<LongContext>,
+    /// What the same request costs on a faster or slower service tier.
+    pub tiers: ServiceTiers,
+}
+
+/// The service tier a request ran on. Codex's Fast mode is `Priority`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum ServiceTier {
+    #[default]
+    Standard,
+    Priority,
+    Flex,
+    Ultrafast,
+}
+
+impl ServiceTier {
+    /// Codex's spellings, ccusage's mapping: `fast` is the priority tier.
+    /// An unknown name is no tier at all, never the one before it.
+    pub fn from_codex(name: &str) -> Option<Self> {
+        match name {
+            "default" | "standard" => Some(Self::Standard),
+            "fast" | "priority" => Some(Self::Priority),
+            "flex" => Some(Self::Flex),
+            "ultrafast" => Some(Self::Ultrafast),
+            _ => None,
+        }
+    }
+}
+
+/// LiteLLM's suffixes for the three tiers it prices apart.
+const TIER_SUFFIXES: [(ServiceTier, &str); 3] = [
+    (ServiceTier::Priority, "_priority"),
+    (ServiceTier::Flex, "_flex"),
+    (ServiceTier::Ultrafast, "_ultrafast"),
+];
+
+/// A service tier's prices. A price left at zero is one the table does not
+/// list for the tier.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TierRates {
+    pub input: f64,
+    pub output: f64,
+    pub cache_write_5m: f64,
+    pub cache_write_1h: f64,
+    pub cache_read: f64,
+    pub long_context: Option<LongContext>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ServiceTiers {
+    pub priority: Option<TierRates>,
+    pub flex: Option<TierRates>,
+    pub ultrafast: Option<TierRates>,
+}
+
+impl ServiceTiers {
+    fn get(&self, tier: ServiceTier) -> Option<&TierRates> {
+        match tier {
+            ServiceTier::Standard => None,
+            ServiceTier::Priority => self.priority.as_ref(),
+            ServiceTier::Flex => self.flex.as_ref(),
+            ServiceTier::Ultrafast => self.ultrafast.as_ref(),
+        }
+    }
+
+    fn get_mut(&mut self, tier: ServiceTier) -> Option<&mut Option<TierRates>> {
+        match tier {
+            ServiceTier::Standard => None,
+            ServiceTier::Priority => Some(&mut self.priority),
+            ServiceTier::Flex => Some(&mut self.flex),
+            ServiceTier::Ultrafast => Some(&mut self.ultrafast),
+        }
+    }
 }
 
 /// A long-context tier. A price left at zero is one the tier does not move.
@@ -103,7 +175,57 @@ impl From<RawPrice> for ModelPrice {
             cache_write_5m: raw.cache_creation_input_token_cost,
             cache_write_1h: raw.cache_creation_input_token_cost_above_1hr,
             cache_read: raw.cache_read_input_token_cost,
-            long_context: long_context(&raw.rest),
+            long_context: long_context(&raw.rest, ""),
+            tiers: service_tiers(&raw.rest),
+        }
+    }
+}
+
+fn service_tiers(rest: &BTreeMap<String, serde_json::Value>) -> ServiceTiers {
+    let mut tiers = ServiceTiers::default();
+    for (tier, suffix) in TIER_SUFFIXES {
+        let price = |field: &str| {
+            rest.get(&format!("{field}{suffix}"))
+                .and_then(serde_json::Value::as_f64)
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .unwrap_or(0.0)
+        };
+        let rates = TierRates {
+            input: price(PRICE_FIELDS[0]),
+            output: price(PRICE_FIELDS[1]),
+            cache_write_5m: price(PRICE_FIELDS[2]),
+            cache_write_1h: price(PRICE_FIELDS[3]),
+            cache_read: price(PRICE_FIELDS[4]),
+            long_context: long_context(rest, suffix),
+        };
+        if (rates.input > 0.0 || rates.output > 0.0)
+            && let Some(slot) = tiers.get_mut(tier)
+        {
+            *slot = Some(rates);
+        }
+    }
+    tiers
+}
+
+/// Write a long-context tier back under LiteLLM's names.
+fn write_long_context(
+    rest: &mut BTreeMap<String, serde_json::Value>,
+    tier: &LongContext,
+    suffix: &str,
+) {
+    let prices = [
+        tier.input,
+        tier.output,
+        tier.cache_write_5m,
+        tier.cache_write_1h,
+        tier.cache_read,
+    ];
+    for (field, value) in PRICE_FIELDS.iter().zip(prices) {
+        if value > 0.0 {
+            rest.insert(
+                format!("{field}_above_{}k_tokens{suffix}", tier.above / 1000),
+                serde_json::Value::from(value),
+            );
         }
     }
 }
@@ -112,20 +234,26 @@ impl From<ModelPrice> for RawPrice {
     fn from(price: ModelPrice) -> Self {
         let mut rest = BTreeMap::new();
         if let Some(tier) = price.long_context {
+            write_long_context(&mut rest, &tier, "");
+        }
+        for (tier, suffix) in TIER_SUFFIXES {
+            let Some(rates) = price.tiers.get(tier) else {
+                continue;
+            };
             let prices = [
-                tier.input,
-                tier.output,
-                tier.cache_write_5m,
-                tier.cache_write_1h,
-                tier.cache_read,
+                rates.input,
+                rates.output,
+                rates.cache_write_5m,
+                rates.cache_write_1h,
+                rates.cache_read,
             ];
             for (field, value) in PRICE_FIELDS.iter().zip(prices) {
                 if value > 0.0 {
-                    rest.insert(
-                        format!("{field}_above_{}k_tokens", tier.above / 1000),
-                        serde_json::Value::from(value),
-                    );
+                    rest.insert(format!("{field}{suffix}"), serde_json::Value::from(value));
                 }
+            }
+            if let Some(long) = rates.long_context {
+                write_long_context(&mut rest, &long, suffix);
             }
         }
         Self {
@@ -139,12 +267,13 @@ impl From<ModelPrice> for RawPrice {
     }
 }
 
-/// The lowest threshold that reprices input. Variants with a further suffix
-/// (`_priority`, `_batches`, `_flex`) are service tiers this build does not
-/// tell apart, and are left alone.
-fn long_context(rest: &BTreeMap<String, serde_json::Value>) -> Option<LongContext> {
+/// The lowest threshold that reprices input, on the service tier `suffix`
+/// names (`""` for standard). `_batches` is never asked for: a CLI does not
+/// send batches.
+fn long_context(rest: &BTreeMap<String, serde_json::Value>, suffix: &str) -> Option<LongContext> {
+    let end = format!("k_tokens{suffix}");
     let tier_price = |field: &str, k: u64| {
-        rest.get(&format!("{field}_above_{k}k_tokens"))
+        rest.get(&format!("{field}_above_{k}k_tokens{suffix}"))
             .and_then(serde_json::Value::as_f64)
             .filter(|v| v.is_finite() && *v > 0.0)
             .unwrap_or(0.0)
@@ -153,7 +282,7 @@ fn long_context(rest: &BTreeMap<String, serde_json::Value>) -> Option<LongContex
         .keys()
         .filter_map(|key| {
             key.strip_prefix("input_cost_per_token_above_")?
-                .strip_suffix("k_tokens")?
+                .strip_suffix(end.as_str())?
                 .parse::<u64>()
                 .ok()
         })
@@ -202,6 +331,43 @@ impl ModelPrice {
         }
     }
 
+    /// This price on `tier`. A price the table lists for the tier stands; one
+    /// it leaves out moves with the tier's input price, and so does a
+    /// long-context tier the service tier has none of its own for. A model
+    /// with no prices for the tier keeps its standard ones: a premium is never
+    /// invented.
+    pub fn at_tier(&self, tier: ServiceTier) -> ModelPrice {
+        let Some(rates) = self.tiers.get(tier) else {
+            return *self;
+        };
+        let ratio = if rates.input > 0.0 && self.input > 0.0 {
+            rates.input / self.input
+        } else if rates.output > 0.0 && self.output > 0.0 {
+            rates.output / self.output
+        } else {
+            1.0
+        };
+        let or = |tiered: f64, base: f64| if tiered > 0.0 { tiered } else { base * ratio };
+        ModelPrice {
+            input: or(rates.input, self.input),
+            output: or(rates.output, self.output),
+            cache_write_5m: or(rates.cache_write_5m, self.cache_write_5m),
+            cache_write_1h: or(rates.cache_write_1h, self.cache_write_1h),
+            cache_read: or(rates.cache_read, self.cache_read),
+            long_context: rates
+                .long_context
+                .or(self.long_context.map(|long| LongContext {
+                    above: long.above,
+                    input: long.input * ratio,
+                    output: long.output * ratio,
+                    cache_write_5m: long.cache_write_5m * ratio,
+                    cache_write_1h: long.cache_write_1h * ratio,
+                    cache_read: long.cache_read * ratio,
+                })),
+            tiers: ServiceTiers::default(),
+        }
+    }
+
     /// One request, at the long-context tier when its prompt ran past it.
     pub fn cost_of_request(&self, t: &TokenCounts) -> f64 {
         let prompt = t.input + t.cache_read + t.cache_write_5m + t.cache_write_1h;
@@ -215,6 +381,7 @@ impl ModelPrice {
                     cache_write_1h: or(tier.cache_write_1h, self.cache_write_1h),
                     cache_read: or(tier.cache_read, self.cache_read),
                     long_context: None,
+                    tiers: ServiceTiers::default(),
                 }
                 .cost(t)
             }
@@ -463,6 +630,11 @@ impl PriceOverride {
             cache_write_1h: self.cache_write_1h.unwrap_or(base.cache_write_1h),
             cache_read: self.cache_read.unwrap_or(base.cache_read),
             long_context: if moved { None } else { base.long_context },
+            tiers: if moved {
+                ServiceTiers::default()
+            } else {
+                base.tiers
+            },
         }
     }
 }
@@ -677,6 +849,7 @@ mod tests {
             cache_write_1h: 0.0,
             cache_read: 4e-7,
             long_context: None,
+            tiers: ServiceTiers::default(),
         };
         let tokens = TokenCounts {
             input: 10,
@@ -1128,6 +1301,7 @@ mod tests {
             cache_write_1h: 4.0,
             cache_read: 0.5,
             long_context: None,
+            tiers: ServiceTiers::default(),
         };
         let counts = TokenCounts {
             input: 1,

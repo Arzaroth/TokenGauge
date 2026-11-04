@@ -40,6 +40,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::Deserialize;
 
+use super::pricing::ServiceTier;
 use super::{Firsts, TokenCounts, UsageEvent, dedup_key, first_seen, transcript_files};
 use crate::model_to_provider;
 
@@ -79,6 +80,15 @@ struct Payload {
     creator_user_id: Option<String>,
     #[serde(default)]
     creator_account_id: Option<String>,
+    /// `thread_settings_applied` only.
+    #[serde(default)]
+    thread_settings: Option<ThreadSettings>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThreadSettings {
+    #[serde(default)]
+    service_tier: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -353,6 +363,7 @@ pub(super) fn read_file(
     // keeps the dedup keys built from it.
     let mut session_id = plain_path(path).to_string_lossy().into_owned();
     let mut model: Option<String> = None;
+    let mut tier = ServiceTier::Standard;
     // Index into `events` of rows emitted before any `turn_context` announced a
     // model. A session states its model on the first turn, so these are filled
     // in from the first one seen rather than dropped.
@@ -432,6 +443,7 @@ pub(super) fn read_file(
                 tokens,
                 key: Some(key),
                 one_request: false,
+                service_tier: ServiceTier::Standard,
                 session: Some(session_id.clone()),
                 starts_session: false,
                 login: login.clone(),
@@ -471,6 +483,19 @@ pub(super) fn read_file(
                 for index in pending.drain(..) {
                     events[index].model = m.to_string();
                 }
+            }
+            continue;
+        }
+        // Fast mode, and a turn resumed on another tier. Settings that name no
+        // tier leave the one before standing; Codex writes those for its
+        // auto-review threads.
+        if payload.kind == "thread_settings_applied" {
+            if let Some(name) = payload
+                .thread_settings
+                .as_ref()
+                .and_then(|settings| settings.service_tier.as_deref())
+            {
+                tier = ServiceTier::from_codex(name).unwrap_or_default();
             }
             continue;
         }
@@ -547,6 +572,7 @@ pub(super) fn read_file(
             tokens,
             key: Some(key),
             one_request,
+            service_tier: tier,
             session: Some(session_id.clone()),
             starts_session: false,
             login: login.clone(),

@@ -67,6 +67,8 @@ pub struct UsageEvent {
     /// of several requests, or a peer's hourly bucket, cannot, and is rated at
     /// the base price.
     pub one_request: bool,
+    /// The service tier it was billed on, where the transcript records one.
+    pub service_tier: pricing::ServiceTier,
     /// The CLI session the request was made in, when the transcript names one.
     pub session: Option<String>,
     /// The session's first billed request, which is where a session is
@@ -495,8 +497,10 @@ pub fn build_report(
 
     for event in events {
         let usd = match prices.get(&event.model) {
-            Some(price) if event.one_request => price.cost_of_request(&event.tokens),
-            Some(price) => price.cost(&event.tokens),
+            Some(price) if event.one_request => price
+                .at_tier(event.service_tier)
+                .cost_of_request(&event.tokens),
+            Some(price) => price.at_tier(event.service_tier).cost(&event.tokens),
             None => {
                 if event.tokens.total() > 0 {
                     unpriced.insert(event.model.clone());
@@ -758,6 +762,7 @@ mod tests {
             },
             key: None,
             one_request,
+            service_tier: Default::default(),
             session: None,
             starts_session: false,
             login: None,
@@ -841,6 +846,7 @@ mod tests {
             },
             key: None,
             one_request: false,
+            service_tier: Default::default(),
             session: None,
             starts_session: false,
             login: None,

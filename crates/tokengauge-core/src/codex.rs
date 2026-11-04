@@ -1484,6 +1484,20 @@ mod tests {
     }
 
     #[test]
+    fn a_balance_is_counted_in_credits() {
+        let body: UsageResponse = serde_json::from_str(
+            r#"{"plan_type":"pro","rate_limit":{},"credits":{"balance":"62500"}}"#,
+        )
+        .unwrap();
+        let credits = to_payload(body, Utc::now(), "oauth", None)
+            .unwrap()
+            .credits
+            .expect("credits");
+        assert_eq!(credits.remaining, Some(62500.0));
+        assert_eq!(credits.unit, CreditUnit::Credits);
+    }
+
+    #[test]
     fn no_windows_no_credits_errors() {
         let body: UsageResponse =
             serde_json::from_str(r#"{"plan_type":"free","rate_limit":{}}"#).unwrap();

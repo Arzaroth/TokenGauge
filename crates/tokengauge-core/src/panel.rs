@@ -2108,6 +2108,32 @@ mod tests {
         assert_eq!(balance(f64::NAN), "-");
     }
 
+    #[test]
+    fn a_codex_balance_is_a_grouped_count_not_money() {
+        let mut r = row();
+        r.credits = Some(62500.0);
+        r.credit_unit = CreditUnit::Credits;
+        let spec = panel_spec(&r);
+        let cost = spec.iter().find(|s| s.id == "cost").expect("cost");
+        assert_eq!(cost.rows[0].label, "Credits");
+        assert_eq!(cost.rows[0].value, "62,500");
+
+        assert_eq!(credit_count(12.5), "12.5");
+        assert_eq!(credit_count(1_234_567.25), "1,234,567.25");
+        assert_eq!(credit_count(999.0), "999");
+        assert_eq!(credit_count(-1500.0), "-1,500");
+        assert_eq!(credit_count(f64::NAN), "-");
+    }
+
+    #[test]
+    fn a_snapshot_without_a_credit_unit_reads_as_dollars() {
+        let credits: crate::Credits = serde_json::from_str(r#"{"remaining": 4.5}"#).unwrap();
+        assert_eq!(credits.unit, CreditUnit::Usd);
+        let unknown: crate::Credits =
+            serde_json::from_str(r#"{"remaining": 4.5, "unit": "tokens"}"#).unwrap();
+        assert_eq!(unknown.unit, CreditUnit::Other);
+    }
+
     /// Under the spend it is being drawn down by, and above the sync status
     /// line, which is not one of the section's figures.
     #[test]

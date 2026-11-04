@@ -364,7 +364,17 @@ fn usage_for(
         return Err(anyhow!("z.ai empty response - check region/token"));
     }
     let body: QuotaResponse = serde_json::from_str(&text).context("z.ai usage JSON was invalid")?;
-    to_payload(body, now)
+    to_payload(body, now).map_err(|err| without_key(err, key))
+}
+
+/// z.ai's `msg` can quote the key the request was sent with, and the error
+/// lands in the snapshot as a `stale_reason`.
+fn without_key(err: anyhow::Error, key: &str) -> anyhow::Error {
+    let message = err.to_string();
+    if key.is_empty() || !message.contains(key) {
+        return err;
+    }
+    anyhow!(message.replace(key, "[key]"))
 }
 
 #[cfg(test)]

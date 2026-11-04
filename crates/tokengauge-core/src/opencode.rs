@@ -628,9 +628,12 @@ mod tests {
         let path = database("hidden", true, &[]);
         let dir = path.parent().unwrap();
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let enforced = std::fs::metadata(&path).is_err();
         let read = database_login(&path, NOW_MS);
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(read.is_err());
+        if enforced {
+            assert!(read.is_err());
+        }
     }
 
     #[test]

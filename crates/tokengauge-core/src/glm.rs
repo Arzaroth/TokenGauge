@@ -552,6 +552,14 @@ mod tests {
     }
 
     #[test]
+    fn an_error_quoting_the_key_does_not_carry_it() {
+        let body = resp(r#"{"code": 1001, "msg": "key sk-zai-123.abc is not valid"}"#);
+        let err = to_payload(body, Utc::now()).unwrap_err();
+        let err = without_key(err, "sk-zai-123.abc").to_string();
+        assert_eq!(err, "z.ai error: key [key] is not valid");
+    }
+
+    #[test]
     fn maps_time_limit_into_secondary() {
         let body = resp(
             r#"{"code": 0, "data": {"limits": [

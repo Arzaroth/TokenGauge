@@ -775,6 +775,38 @@ mod tests {
         assert!((usd(&[event(false)]) - 0.3).abs() < 1e-9);
     }
 
+    #[test]
+    fn a_request_is_rated_on_the_service_tier_it_ran_on() {
+        let price: pricing::ModelPrice = serde_json::from_str(
+            r#"{"input_cost_per_token": 1e-06, "output_cost_per_token": 1e-06,
+                "input_cost_per_token_priority": 2.5e-06}"#,
+        )
+        .unwrap();
+        let prices = pricing::PriceTable::from_models([("gpt-5.5", price)]);
+        let today = Local::now().date_naive();
+        let event = |service_tier| UsageEvent {
+            provider: "codex",
+            model: "gpt-5.5".into(),
+            date: today,
+            at: Utc::now(),
+            tokens: TokenCounts {
+                input: 1_000_000,
+                ..Default::default()
+            },
+            key: None,
+            one_request: true,
+            service_tier,
+            session: None,
+            starts_session: false,
+            login: None,
+            source: crate::cost::Source::Cli,
+        };
+        let usd =
+            |events: &[UsageEvent]| build_report(events, &prices, today).costs["codex"].monthly_usd;
+        assert!((usd(&[event(pricing::ServiceTier::Standard)]) - 1.0).abs() < 1e-9);
+        assert!((usd(&[event(pricing::ServiceTier::Priority)]) - 2.5).abs() < 1e-9);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_root_that_is_there_and_cannot_be_read_is_unreadable() {

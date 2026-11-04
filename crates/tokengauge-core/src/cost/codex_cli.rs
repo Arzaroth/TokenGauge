@@ -905,6 +905,46 @@ mod tests {
         assert_eq!(plain, compressed);
     }
 
+    fn settings(ts: &str, tier: Option<&str>) -> String {
+        let tier = tier
+            .map(|t| format!(r#","service_tier":"{t}""#))
+            .unwrap_or_default();
+        format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"thread_settings_applied","thread_settings":{{"model":"gpt-5.5"{tier}}}}}}}"#
+        )
+    }
+
+    /// CodexBar #4814: Fast mode is recorded per thread, and a turn resumed
+    /// on another tier switches it.
+    #[test]
+    fn a_call_is_tagged_with_the_tier_its_thread_ran_on() {
+        let lines = [
+            CONTEXT.to_string(),
+            token_count("2026-05-11T06:18:00.000Z", 100, 0, 10),
+            settings("2026-05-11T06:18:30.000Z", Some("priority")),
+            token_count("2026-05-11T06:19:00.000Z", 200, 0, 20),
+            settings("2026-05-11T06:19:30.000Z", None),
+            token_count("2026-05-11T06:20:00.000Z", 300, 0, 30),
+            settings("2026-05-11T06:20:30.000Z", Some("default")),
+            token_count("2026-05-11T06:21:00.000Z", 400, 0, 40),
+            settings("2026-05-11T06:21:30.000Z", Some("fast")),
+            settings("2026-05-11T06:21:40.000Z", Some("hyperspeed")),
+            token_count("2026-05-11T06:22:00.000Z", 500, 0, 50),
+        ]
+        .join("\n");
+        let tiers: Vec<ServiceTier> = read(&lines).iter().map(|e| e.service_tier).collect();
+        assert_eq!(
+            tiers,
+            vec![
+                ServiceTier::Standard,
+                ServiceTier::Priority,
+                ServiceTier::Priority,
+                ServiceTier::Standard,
+                ServiceTier::Standard,
+            ]
+        );
+    }
+
     /// The since filter has to run *after* the running total is advanced, or a
     /// session that started before the window absorbs all of its own history
     /// into the first reading inside it. Every other test here uses a `since`

@@ -1242,6 +1242,92 @@ mod tests {
         );
     }
 
+    /// LiteLLM's `gpt-5.5`, trimmed: a priority tier with no cache-write
+    /// price and no long-context tier of its own.
+    const GPT_TIERED: &str = r#"{
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 3e-05,
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token_above_272k_tokens": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 4.5e-05,
+        "input_cost_per_token_priority": 1.25e-05,
+        "output_cost_per_token_priority": 7.5e-05,
+        "cache_read_input_token_cost_priority": 1.25e-06,
+        "input_cost_per_token_flex": 2.5e-06,
+        "output_cost_per_token_flex": 1.5e-05,
+        "input_cost_per_token_batches": 2.5e-06
+    }"#;
+
+    #[test]
+    fn a_service_tier_is_read_off_the_entry_and_kept_in_the_cache() {
+        let price: ModelPrice = serde_json::from_str(GPT_TIERED).unwrap();
+        let priority = price.tiers.priority.unwrap();
+        assert_eq!(priority.input, 1.25e-05);
+        assert_eq!(priority.cache_read, 1.25e-06);
+        assert!(priority.long_context.is_none());
+        assert_eq!(price.tiers.flex.unwrap().output, 1.5e-05);
+        assert!(price.tiers.ultrafast.is_none());
+
+        let written = serde_json::to_value(price).unwrap();
+        assert!(written.get("output_cost_per_token_priority").is_some());
+        assert!(written.get("input_cost_per_token_batches").is_none());
+        assert_eq!(
+            serde_json::from_value::<ModelPrice>(written).unwrap(),
+            price
+        );
+    }
+
+    #[test]
+    fn a_priority_request_is_billed_at_the_priority_prices() {
+        let price: ModelPrice = serde_json::from_str(GPT_TIERED).unwrap();
+        let tokens = TokenCounts {
+            input: 1_000,
+            output: 100,
+            cache_read: 10_000,
+            ..TokenCounts::default()
+        };
+        let fast = price.at_tier(ServiceTier::Priority);
+        let expected = 1_000.0 * 1.25e-05 + 100.0 * 7.5e-05 + 10_000.0 * 1.25e-06;
+        assert!((fast.cost(&tokens) - expected).abs() < 1e-12);
+        assert_eq!(price.at_tier(ServiceTier::Standard), price);
+        assert_eq!(price.at_tier(ServiceTier::Ultrafast), price);
+    }
+
+    /// The table lists no long-context price on the priority tier, so the
+    /// standard one moves with the tier's input price rather than dropping a
+    /// long Fast request to the standard tier's long-context price.
+    #[test]
+    fn a_long_priority_request_keeps_its_long_context_premium() {
+        let price: ModelPrice = serde_json::from_str(GPT_TIERED).unwrap();
+        let long = TokenCounts {
+            input: 300_000,
+            output: 1_000,
+            ..TokenCounts::default()
+        };
+        let fast = price.at_tier(ServiceTier::Priority);
+        let tier = fast.long_context.unwrap();
+        assert_eq!(tier.above, 272_000);
+        assert!((tier.input - 2.5e-05).abs() < 1e-15);
+        let expected = 300_000.0 * 2.5e-05 + 1_000.0 * 1.125e-04;
+        assert!((fast.cost_of_request(&long) - expected).abs() < 1e-9);
+        assert!(fast.cost_of_request(&long) > price.cost_of_request(&long));
+    }
+
+    #[test]
+    fn codex_spells_the_tiers_two_ways() {
+        assert_eq!(ServiceTier::from_codex("fast"), Some(ServiceTier::Priority));
+        assert_eq!(
+            ServiceTier::from_codex("priority"),
+            Some(ServiceTier::Priority)
+        );
+        assert_eq!(
+            ServiceTier::from_codex("default"),
+            Some(ServiceTier::Standard)
+        );
+        assert_eq!(ServiceTier::from_codex("flex"), Some(ServiceTier::Flex));
+        assert_eq!(ServiceTier::from_codex("breakfast"), None);
+    }
+
     /// CodexBar #4302: a request whose prompt ran past the threshold is billed
     /// at the tier for every token of it, and one at the threshold is not.
     #[test]

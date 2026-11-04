@@ -198,9 +198,16 @@ fn service_tiers(rest: &BTreeMap<String, serde_json::Value>) -> ServiceTiers {
             cache_read: price(PRICE_FIELDS[4]),
             long_context: long_context(rest, suffix),
         };
-        if (rates.input > 0.0 || rates.output > 0.0)
-            && let Some(slot) = tiers.get_mut(tier)
-        {
+        let listed = [
+            rates.input,
+            rates.output,
+            rates.cache_write_5m,
+            rates.cache_write_1h,
+            rates.cache_read,
+        ]
+        .iter()
+        .any(|rate| *rate > 0.0);
+        if listed && let Some(slot) = tiers.get_mut(tier) {
             *slot = Some(rates);
         }
     }
@@ -348,22 +355,31 @@ impl ModelPrice {
             1.0
         };
         let or = |tiered: f64, base: f64| if tiered > 0.0 { tiered } else { base * ratio };
+        let long_context = match (rates.long_context, self.long_context) {
+            (Some(own), Some(base)) => Some(LongContext {
+                above: own.above,
+                input: or(own.input, base.input),
+                output: or(own.output, base.output),
+                cache_write_5m: or(own.cache_write_5m, base.cache_write_5m),
+                cache_write_1h: or(own.cache_write_1h, base.cache_write_1h),
+                cache_read: or(own.cache_read, base.cache_read),
+            }),
+            (own, base) => own.or(base.map(|long| LongContext {
+                above: long.above,
+                input: long.input * ratio,
+                output: long.output * ratio,
+                cache_write_5m: long.cache_write_5m * ratio,
+                cache_write_1h: long.cache_write_1h * ratio,
+                cache_read: long.cache_read * ratio,
+            })),
+        };
         ModelPrice {
             input: or(rates.input, self.input),
             output: or(rates.output, self.output),
             cache_write_5m: or(rates.cache_write_5m, self.cache_write_5m),
             cache_write_1h: or(rates.cache_write_1h, self.cache_write_1h),
             cache_read: or(rates.cache_read, self.cache_read),
-            long_context: rates
-                .long_context
-                .or(self.long_context.map(|long| LongContext {
-                    above: long.above,
-                    input: long.input * ratio,
-                    output: long.output * ratio,
-                    cache_write_5m: long.cache_write_5m * ratio,
-                    cache_write_1h: long.cache_write_1h * ratio,
-                    cache_read: long.cache_read * ratio,
-                })),
+            long_context,
             tiers: ServiceTiers::default(),
         }
     }
@@ -518,11 +534,15 @@ impl PriceTable {
     /// This table, with the compiled-in price of every model it lacks.
     /// LiteLLM drops entries for models their vendor still sells -
     /// `moonshot/kimi-k2-thinking` went in 2026-10 - and a model the table
-    /// has stopped carrying is not a model that costs nothing.
+    /// has stopped carrying is not a model that costs nothing. One it still
+    /// carries under another vendor path keeps that price.
     fn or_vendored(mut self) -> Self {
-        for (name, price) in Self::vendored().models {
-            self.models.entry(name).or_insert(price);
-        }
+        let missing: Vec<_> = Self::vendored()
+            .models
+            .into_iter()
+            .filter(|(name, _)| self.get(name.rsplit('/').next().unwrap_or(name)).is_none())
+            .collect();
+        self.models.extend(missing);
         self
     }
 

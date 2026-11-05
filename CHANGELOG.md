@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-11-05
+
 ### Added
 
 - Fleet sync shares each limit's history: a machine that was off or signed out

@@ -249,9 +249,10 @@ Each cycle that rebuilds costs, before `write_cache_full`:
 2. Pull peers conditionally and merge them into the store, then fold every
    device a peer's `adopted` names (`settle_adoptions`) and drop the peers
    whose object vanished (`drop_vanished`, below).
-3. Fold every peer's `windows` the store holds into the window history
-   (`window_history::fold_fleet`), from the store rather than from what was
-   just pulled, so a fold another writer raced away comes back next cycle.
+3. Rewrite the fleet view from this machine's window history and every
+   peer's `windows` the store holds (`window_history::refresh_fleet_view`),
+   from the store rather than from what was just pulled, so peers the store
+   dropped leave the view with it.
 4. Feed the store into `build_report` as synthetic events beside local ones.
 
 The merged `CostInfo` lands in the snapshot where the local one did, so every
@@ -355,8 +356,9 @@ retention:
 A trail ([../features/window-history.md](../features/window-history.md)) is
 filed by store name on its machine and by account digest on the wire. The
 store keeps each peer's `windows` as last published (`DeviceSlice.windows`,
-dropped once a trail's reset has passed), and a cycle folds them in
-(`WindowHistory::fold`):
+dropped once a trail's reset has passed), and they are folded with this
+machine's history into `tokengauge-window-fleet.json`, the fleet view, at
+every snapshot write and every cycle (`WindowHistory::fold` on a copy):
 
 - A peer trail joins a local trail of the same provider, account and window.
   A login no local trail holds is not taken in: remuda reads trails by name.
@@ -370,8 +372,11 @@ dropped once a trail's reset has passed), and a cycle folds them in
   opening alike); whichever machine saw it last keeps its figure. One for an
   account this machine holds takes the local name.
 
-The merged trail is what the burn, the pace and remuda's drain chart read, and
-what this machine publishes next, so a machine relays what it took in.
+The view is what the burn, the pace and remuda's drain chart read. It is never
+published: a machine shares its own history only, as it shares its own token
+buckets only, so nothing it took in is relayed. A key change drops every peer
+slice (`adopt_key`), and the next cycle or write removes the view with them,
+so nothing seen under the old key reaches the new fleet.
 
 ## Non-goals
 
@@ -391,7 +396,7 @@ against a fake transport (`crates/tokengauge-core/tests/fleet_sync.rs`).
 ## Sources
 
 - `crates/tokengauge-core/src/sync/{mod,contribution,fleet,hour,crypto,transport,s3,run,report,store,config}.rs` (`adopt`, `settle_adoptions`, `drop_vanished`, `store::lock`, `merge_local`, `KeySet`)
-- `crates/tokengauge-core/src/window_history.rs` (`SharedWindows`, `WindowHistory::fold`, `fold_fleet`)
+- `crates/tokengauge-core/src/window_history.rs` (`SharedWindows`, `WindowHistory::fold`, `record`, `refresh_fleet_view`)
 - `crates/tokengauge-core/src/fetch.rs` (`native_costs`), `crates/tokengauge-core/src/cost/mod.rs` (`window_start`, `dedup_key`, `read_checked`, `TranscriptRead`)
 - `crates/tokengauge-core/src/device.rs`, `crates/tokengauge-core/src/doctor.rs`
 - `crates/tokengauge-waybar/src/sync_cli.rs`, `crates/tokengauge-tui/src/sync_view.rs`

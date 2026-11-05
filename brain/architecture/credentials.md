@@ -156,6 +156,12 @@ was due at; a banked reset ends it sooner), `used` (the last percent seen),
 ended because its name now holds another account leaves no record. Absent
 until a window has closed, and on a file from before 0.56.
 
+With fleet sync on, `tokengauge-window-fleet.json` beside it has the same
+shape: this machine's history with the trails and closed windows of the rest
+of its fleet folded in. A reader that wants what the fleet saw reads it, and
+falls back to `tokengauge-window-history.json` when it is absent, as it is
+with sync off or no peer.
+
 Each top-level `errors[]` entry gains `credential` and `active`; a stored
 credential's message starts with its name (`perso: ...`). A payload served stale
 after a failed fetch keeps `credential` and `active`, with `stale: true` and

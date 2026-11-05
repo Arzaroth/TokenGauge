@@ -696,6 +696,7 @@ fn win_to_usage(w: Win) -> UsageWindow {
         resets_at: epoch_to_rfc3339(w.reset_at as f64),
         window_minutes: Some((w.limit_window_seconds / 60).max(0) as u32),
         burn: None,
+        opened_at: None,
     }
 }
 
@@ -710,6 +711,7 @@ fn add_usage(w: Win) -> UsageWindow {
         window_minutes: (w.limit_window_seconds > 0)
             .then_some((w.limit_window_seconds / 60) as u32),
         burn: None,
+        opened_at: None,
     }
 }
 
@@ -743,6 +745,7 @@ fn individual_to_window(il: &IndividualLimit) -> Option<UsageWindow> {
         resets_at,
         window_minutes: None,
         burn: None,
+        opened_at: None,
     })
 }
 

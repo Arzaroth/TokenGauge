@@ -323,6 +323,7 @@ fn to_window(detail: &Detail, window_minutes: Option<u32>) -> Option<UsageWindow
         resets_at: detail.reset_time.clone(),
         window_minutes,
         burn: None,
+        opened_at: None,
     })
 }
 
@@ -361,6 +362,7 @@ fn ratio_window(pool: Option<&RatioPool>, minutes: u32) -> Option<UsageWindow> {
         resets_at: pool.reset_time.clone(),
         window_minutes: Some(minutes),
         burn: None,
+        opened_at: None,
     })
 }
 

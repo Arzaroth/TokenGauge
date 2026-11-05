@@ -361,6 +361,7 @@ mod tests {
             resets_at: Some(resets_at.to_rfc3339()),
             window_minutes: Some(minutes),
             burn: None,
+            opened_at: None,
         }
     }
 

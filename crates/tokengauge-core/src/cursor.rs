@@ -522,6 +522,7 @@ fn window(value: Option<f64>, resets_at: Option<&str>) -> Option<UsageWindow> {
         resets_at: resets_at.map(str::to_string),
         window_minutes: None,
         burn: None,
+        opened_at: None,
     })
 }
 

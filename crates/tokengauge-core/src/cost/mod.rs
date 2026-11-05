@@ -900,6 +900,7 @@ mod tests {
                     resets_at: Some(resets_at.into()),
                     window_minutes: Some(minutes),
                     burn: None,
+                    opened_at: None,
                 }),
                 secondary: None,
                 tertiary: None,

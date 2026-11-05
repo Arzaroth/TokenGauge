@@ -300,6 +300,7 @@ impl Window {
                 .map(str::to_string),
             window_minutes: None,
             burn: None,
+            opened_at: None,
         })
     }
 }

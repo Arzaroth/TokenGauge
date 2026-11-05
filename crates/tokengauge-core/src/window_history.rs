@@ -1389,6 +1389,21 @@ mod tests {
     }
 
     #[test]
+    fn a_view_that_cannot_be_rebuilt_is_gone() {
+        let m = Machine::new("view_unreadable");
+        let view = fleet_view_path(&m.cache);
+        fs::write(&view, "{}").unwrap();
+        fs::create_dir_all(history_path(&m.cache)).unwrap();
+        let theirs = peer(Vec::new(), Vec::new());
+        refresh_fleet_view(&m.cache, &[&theirs], Utc::now());
+        assert!(!view.exists(), "a sync cycle drops it");
+
+        fs::write(&view, "{}").unwrap();
+        m.fetch(Vec::new(), Utc::now());
+        assert!(!view.exists(), "a write drops it");
+    }
+
+    #[test]
     fn what_is_shared_is_filed_by_account_and_never_by_name() {
         let (reset, h) = week();
         let now = Utc::now();

@@ -115,6 +115,16 @@ impl Reading {
     }
 }
 
+/// How far apart two sightings can place one instance's reset or opening:
+/// a twentieth of the window, an hour at most.
+fn tolerance_ms(minutes: u32) -> i64 {
+    (i64::from(minutes) * 3_000).min(3_600_000)
+}
+
+fn near(a: DateTime<Utc>, b: DateTime<Utc>, minutes: u32) -> bool {
+    (a - b).num_milliseconds().abs() <= tolerance_ms(minutes)
+}
+
 impl Trail {
     /// The same instance until its reset has passed, its figure went down
     /// (which only a reset does, a banked one included), or the reading's
@@ -137,6 +147,8 @@ impl Trail {
     fn refilled(&self, reading: &Reading, account: Option<&str>) -> Option<DateTime<Utc>> {
         let &(last, used) = self.samples.last()?;
         let refilled = self.same_account(account)
+            && self.window_minutes == reading.minutes
+            && near(self.resets_at, reading.resets_at, reading.minutes)
             && self.resets_at > reading.at
             && reading.used < used
             && last >= reading.start()
@@ -973,5 +985,24 @@ mod tests {
             .map(|c| (c.opened_at, c.used))
             .collect();
         assert_eq!(records, [(start, 70), (refilled, 12)]);
+    }
+
+    #[test]
+    fn a_drop_that_moved_the_reset_opens_the_window_where_it_begins() {
+        let m = Machine::new("moved_reset");
+        let reset = DateTime::from_timestamp(Utc::now().timestamp() + 3 * 86_400, 0).unwrap();
+        let start = reset - Duration::days(7);
+        let at = start + Duration::hours(72);
+        m.fetch(vec![payload(None, at, window(70, reset, 10080))], at);
+        let at = at + Duration::hours(2);
+        let moved = reset + Duration::days(1);
+        let window = m
+            .fetch(vec![payload(None, at, window(0, moved, 10080))], at)
+            .remove(0)
+            .usage
+            .unwrap()
+            .primary
+            .unwrap();
+        assert_eq!(window.opened_at, None);
     }
 }

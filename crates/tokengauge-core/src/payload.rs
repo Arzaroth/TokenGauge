@@ -71,6 +71,10 @@ pub struct UsageWindow {
     /// How fast the window has been filling lately, from its recorded history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub burn: Option<Burn>,
+    /// When the instance opened, set only when a reset left its reset instant
+    /// where it was: Claude's banked resets refill the week without moving it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_at: Option<String>,
 }
 
 /// Percent of the window spent per hour over the last `over_minutes`.

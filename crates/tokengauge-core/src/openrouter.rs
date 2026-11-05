@@ -175,6 +175,7 @@ fn to_payload(credits: CreditsData, key: KeyData, now: DateTime<Utc>) -> Provide
             resets_at: None,
             window_minutes: None,
             burn: None,
+            opened_at: None,
         }),
         _ => None,
     };
@@ -196,6 +197,7 @@ fn to_payload(credits: CreditsData, key: KeyData, now: DateTime<Utc>) -> Provide
             resets_at: None,
             window_minutes: None,
             burn: None,
+            opened_at: None,
         });
 
     // A free-tier key has no purchased credit, so a balance gauge would read

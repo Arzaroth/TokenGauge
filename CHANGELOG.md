@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A limit's projection after a quiet start follows how fast it is filling
+  now: a week left at 0% for days and then spent in an afternoon was measured
+  as if that afternoon's use had been spread over the whole week.
+- After a banked Claude reset, which refills the week without moving its
+  reset, the pace is measured from the refill: a fresh 0% three days before
+  the reset reads as on track rather than far behind, and its projection
+  follows the use since the refill.
+
 ## [0.57.0] - 2026-11-05
 
 ### Changed

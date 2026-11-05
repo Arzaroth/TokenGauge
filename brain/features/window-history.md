@@ -18,7 +18,11 @@ account starts its own trail.
 - **Recorded on every snapshot write**: `write_cache_full` hands the payloads to
   `window_history::record` before serialising them, so the daemon, the TUI, the
   tray and `--refresh` all record without knowing it.
-- **One sample per change.** A value holds until the next sample. A sample is
+- **When each figure was first and last seen.** A new figure adds a sample, and
+  the same figure seen again moves its last-seen sample forward, so a run of
+  one figure is two samples at most. A trail only rises, so the figure held
+  between two equal samples; between two that differ it moved at some point
+  nobody saw, a gap the machine was off for included. A sample is
   timed by the payload's `updated_at` (never later than the write), not the
   write: a stored credential's
   figures are carried between its own fetches, and a carried figure is not a
@@ -27,19 +31,24 @@ account starts its own trail.
 - **A trail ends when its window resets**: when its reset has passed, when
   the figure went down, which only a reset does (a banked one included), or
   when the reading's window opened after the trail's last sample, which is a
-  reset that came early and was climbed past before the next fetch. Trails
+  reset that came early and was climbed past before the next fetch. A trail
+  that went down with its reset still ahead, its window the same, was refilled
+  in place: Claude's banked resets refill a week without moving its reset.
+  The new trail records `openedAt`, the last moment the old one was seen, and
+  the snapshot's window carries it ([pace.md](pace.md)). Trails
   whose window has reset are dropped, so a credential removed from the store
   leaves nothing behind for long.
 - **A closed window leaves a record**: when a window of a day or longer ends,
   early or when due, `closed` gains its `provider`, `credential`, `window`,
-  `windowMinutes`, `openedAt`, the `resetsAt` it was due at, `used`, the last
+  `windowMinutes`, `openedAt` (the trail's, else a whole window before its
+  reset), the `resetsAt` it was due at, `used`, the last
   figure seen, and `seenAt`, when it was seen, with the `accountDigest` when
   there was one. A record is kept a year after its reset. A trail that ends
   because its name now holds another account leaves none: its week did not
   close. Five-hour windows
   leave none: they close five times a day, and nothing reads them once closed.
-- At most 2000 samples per trail; a weekly window fetched every ten minutes
-  changes about a thousand times at most.
+- At most 2000 samples per trail; a whole percent that only rises makes about
+  two hundred.
 - A file that is there but cannot be read is left alone rather than written
   over; one that does not parse starts afresh.
 - Writing it does not bump `tokengauge-revision`: it changes nothing a frontend
@@ -54,15 +63,16 @@ before its window opened or exactly as it opened, which has no time to measure
 over, one at or after its reset, or a late reading from an account other than
 the one its trail now follows. `burn` holds `perHour`, the percent of the window spent per hour, and `overMinutes`, the stretch it was
 measured over. The stretch is the last seventh of the window, an hour at least:
-the last hour of five, the last day of a week. It starts at the latest sample
-at or before the stretch's start.
+the last hour of five, the last day of a week, or since the window opened
+when that is sooner: its `openedAt` when it was refilled in place. The figure
+at the stretch's start is read off the trail: held between two equal samples,
+on a straight line between two that differ. A week left at 0% for three days
+then climbing is measured over its last day, not from its opening.
 
-A window is empty when it opens, so its start counts as a sample every trail
-has. A trail younger than the stretch is measured from there, and with no
-history at all the burn is the window's average since it opened, the rate the
-pace always assumed. That includes a window whose figure went down: its new
-trail has nothing before the stretch, so its burn is the average since the
-window opened until the trail has history. `perHour` is not rounded.
+A window is empty when it opens, so its opening counts as a sample every
+trail has. With no history at all the line runs from there to the reading, so
+the burn is the window's average since it opened, the rate the pace always
+assumed. `perHour` is not rounded.
 
 ## Sources
 

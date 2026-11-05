@@ -252,14 +252,21 @@ impl WindowHistory {
 
 impl Trail {
     fn closed(&self) -> Option<ClosedWindow> {
-        let &(ms, used) = self.samples.last()?;
+        self.closed_at(self.opened_at, *self.samples.last()?)
+    }
+
+    fn closed_at(
+        &self,
+        opened_at: Option<DateTime<Utc>>,
+        (ms, used): (i64, u8),
+    ) -> Option<ClosedWindow> {
         (self.window_minutes >= CLOSED_MIN_MINUTES).then(|| ClosedWindow {
             provider: self.provider.clone(),
             credential: self.credential.clone(),
             account_digest: self.account_digest.clone(),
             window: self.window.clone(),
             window_minutes: self.window_minutes,
-            opened_at: self.opened_at.unwrap_or(
+            opened_at: opened_at.unwrap_or(
                 self.resets_at - chrono::Duration::minutes(i64::from(self.window_minutes)),
             ),
             resets_at: self.resets_at,

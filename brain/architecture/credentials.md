@@ -135,6 +135,9 @@ Each `payloads[]` entry gains:
   hour lately, and `overMinutes`, the stretch it was measured over
   ([../features/window-history.md](../features/window-history.md)). Absent on
   a window without both, and on a snapshot from before 0.54.
+- `usage.<window>.openedAt` - RFC 3339, on a window refilled in place with its
+  reset left where it was (a banked Claude reset): when the instance opened.
+  Absent otherwise ([../features/window-history.md](../features/window-history.md)).
 - `accountDigest` - TokenGauge's own guard against carrying one account's figures
   under a name that now holds another; remuda need not read it.
 
@@ -142,8 +145,9 @@ Beside the snapshot, `tokengauge-window-history.json` holds `trails`, each
 with `provider`, `credential` (absent for an unmatched live login), `window`
 (`primary`, `secondary`, `tertiary`, or an extra window's id or title),
 `windowMinutes`, `resetsAt` (RFC 3339) and `samples`, `[ms, percent]` pairs
-oldest first, one per change. A trail holds the window's current instance
-only. A trail may also carry `accountDigest`, TokenGauge's own as on the
+oldest first, when each percent was first and last seen. A trail holds the
+window's current instance only, and `openedAt` (RFC 3339) when it was refilled
+in place. A trail may also carry `accountDigest`, TokenGauge's own as on the
 payload. `closed` lists the windows of a day or longer that have ended, each
 kept a year: `provider`, `credential` (absent for an unmatched live login),
 `window`, `windowMinutes`, `openedAt` and `resetsAt` (RFC 3339, the reset it

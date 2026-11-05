@@ -13,7 +13,10 @@ first. Shown next to each reset on every frontend, as a badge resolved in
   extrapolated at its morning rate. A window with no burn is projected at its
   average since it opened, which is also what the burn is with no history.
 - **Ahead or behind needs no history**: used % against the even rate
-  (`elapsed / duration`), from one snapshot.
+  (`elapsed / duration`), from one snapshot. A window refilled in place runs
+  from its `openedAt` to its reset: three days after a banked reset, 0% is on
+  track, not far behind. A window that reset when due runs its full length
+  however late it was first spent from, since days left idle are quota lost.
 - `UsagePace::for_window` returns nothing with no reset time, no duration, past
   the reset, before the window began, or under 3% of the window elapsed
   (`MIN_ELAPSED_FRACTION`): early numbers are noise.

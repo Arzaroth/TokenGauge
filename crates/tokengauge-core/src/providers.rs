@@ -44,6 +44,8 @@ pub struct ProviderUrls {
 pub struct ProviderIcon {
     pub glyph: &'static str,
     pub color_hex: &'static str,
+    /// What the mark is drawn in, or `None` for the frontend's foreground.
+    pub mark_hex: Option<&'static str>,
 }
 
 /// Everything the rest of the crate needs to know about one provider.
@@ -320,15 +322,18 @@ pub fn provider_cli_name(provider: &str) -> Option<&'static str> {
 
 pub fn provider_icon(label: &str) -> ProviderIcon {
     match provider_meta(label) {
-        Some(meta) => ProviderIcon {
-            glyph: meta.glyph,
-            color_hex: selvedge::brands::brand(meta.id)
-                .and_then(|b| b.color)
-                .unwrap_or(crate::NEUTRAL_HEX),
-        },
+        Some(meta) => {
+            let brand = selvedge::brands::brand(meta.id);
+            ProviderIcon {
+                glyph: meta.glyph,
+                color_hex: brand.and_then(|b| b.color).unwrap_or(crate::NEUTRAL_HEX),
+                mark_hex: brand.and_then(|b| b.mark_color()),
+            }
+        }
         None => ProviderIcon {
             glyph: "\u{f06a9}",
             color_hex: crate::NEUTRAL_HEX,
+            mark_hex: None,
         },
     }
 }
@@ -693,9 +698,11 @@ fn icon_svg_in(dir: &Path, slug: &str, fill: bool) -> Option<PathBuf> {
     if !fill {
         return path.exists().then_some(path);
     }
-    let svg = selvedge::brands::brand(slug)?
-        .svg
-        .replace("currentColor", PROVIDER_ICON_FG);
+    let brand = selvedge::brands::brand(slug)?;
+    let svg = brand.svg.replace(
+        "currentColor",
+        brand.mark_color().unwrap_or(PROVIDER_ICON_FG),
+    );
     if std::fs::read_to_string(&path).is_ok_and(|on_disk| on_disk == svg) {
         return Some(path);
     }
@@ -890,6 +897,26 @@ mod tests {
 
         assert_eq!(icon_svg_in(&dir, "codex", false), None);
         assert!(!dir.join("ProviderIcon-codex.svg").exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_logo_is_drawn_in_its_own_colour_and_a_black_and_white_one_in_the_foreground() {
+        let dir = std::env::temp_dir().join(format!("tg-icon-ink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let claude = std::fs::read_to_string(icon_svg_in(&dir, "claude", true).unwrap()).unwrap();
+        assert!(claude.contains("#DE7356"));
+        assert!(!claude.contains(PROVIDER_ICON_FG));
+
+        let codex = std::fs::read_to_string(icon_svg_in(&dir, "codex", true).unwrap()).unwrap();
+        assert!(codex.contains(PROVIDER_ICON_FG));
+        assert!(!codex.contains(provider_icon("codex").color_hex));
+
+        assert_eq!(provider_icon("claude").mark_hex, Some("#DE7356"));
+        assert_eq!(provider_icon("kimi").mark_hex, None);
+        assert_eq!(provider_icon("grok").mark_hex, None);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

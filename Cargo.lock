@@ -5136,7 +5136,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokengauge-core"
-version = "0.56.1"
+version = "0.57.0"
 dependencies = [
  "anyhow",
  "chacha20poly1305",
@@ -5158,7 +5158,7 @@ dependencies = [
 
 [[package]]
 name = "tokengauge-tray"
-version = "0.56.1"
+version = "0.57.0"
 dependencies = [
  "anyhow",
  "eframe",
@@ -5169,7 +5169,7 @@ dependencies = [
 
 [[package]]
 name = "tokengauge-tui"
-version = "0.56.1"
+version = "0.57.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5184,7 +5184,7 @@ dependencies = [
 
 [[package]]
 name = "tokengauge-waybar"
-version = "0.56.1"
+version = "0.57.0"
 dependencies = [
  "anyhow",
  "chrono",

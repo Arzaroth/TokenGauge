@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-11-05
+
 ### Changed
 
 - Codex and OpenRouter show their current logos: Codex's cloud with a prompt

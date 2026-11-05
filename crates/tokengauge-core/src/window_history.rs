@@ -412,6 +412,7 @@ pub fn record(
     });
     history.prune(now);
     if !readable {
+        drop_view(cache_file);
         return;
     }
     if history != before
@@ -648,9 +649,16 @@ impl WindowHistory {
 /// and what the fleet store holds now. Run on every sync cycle, so peers the
 /// store dropped, a key change's among them, leave the view with it.
 pub fn refresh_fleet_view(cache_file: &Path, peers: &[&SharedWindows], now: DateTime<Utc>) {
-    if let Some(history) = WindowHistory::read(&history_path(cache_file)) {
-        write_view(cache_file, &history, peers, now);
+    match WindowHistory::read(&history_path(cache_file)) {
+        Some(history) => write_view(cache_file, &history, peers, now),
+        None => drop_view(cache_file),
     }
+}
+
+/// A view that cannot be rebuilt is gone rather than left to stand for a
+/// fleet the store may no longer hold.
+fn drop_view(cache_file: &Path) {
+    let _ = fs::remove_file(fleet_view_path(cache_file));
 }
 
 /// With no fleet the view is gone, and readers fall back to the history.
@@ -660,11 +668,11 @@ fn write_view(
     peers: &[&SharedWindows],
     now: DateTime<Utc>,
 ) {
-    let path = fleet_view_path(cache_file);
     if peers.is_empty() {
-        let _ = fs::remove_file(&path);
+        drop_view(cache_file);
         return;
     }
+    let path = fleet_view_path(cache_file);
     let mut view = history.with_fleet(peers, now);
     view.prune(now);
     if WindowHistory::read(&path).as_ref() != Some(&view)

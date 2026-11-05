@@ -1347,6 +1347,40 @@ mod tests {
     }
 
     #[test]
+    fn the_fleets_samples_shape_the_burn_and_stay_out_of_this_machines_history() {
+        let (reset, h) = week();
+        let at = |hours: i64| DateTime::from_timestamp_millis(h(hours)).unwrap();
+        let fetch = |m: &Machine, peers: &[&SharedWindows], hours: i64, used: u8| {
+            let mut payloads = vec![payload(Some("work"), at(hours), window(used, reset, 10080))];
+            payloads[0].credential.account_digest = Some("a".into());
+            record(&m.cache, &mut payloads, peers, at(hours));
+            payloads[0].usage.as_ref().unwrap().primary.clone().unwrap()
+        };
+        let theirs = peer(
+            vec![Trail {
+                window: "primary".into(),
+                ..trail_of(None, "a", reset, &[(h(100), 10), (h(110), 40)])
+            }],
+            Vec::new(),
+        );
+
+        let alone = Machine::new("fleet_alone");
+        fetch(&alone, &[], 1, 0);
+        let alone = fetch(&alone, &[], 119, 50).burn.unwrap().per_hour;
+
+        let m = Machine::new("fleet_view");
+        fetch(&m, &[], 1, 0);
+        let burn = fetch(&m, &[&theirs], 119, 50).burn.unwrap().per_hour;
+        assert!(burn > 1.5 && alone < 0.5, "{burn} against {alone}");
+        assert_eq!(samples(&m.history()), [vec![0, 50]]);
+        let view = WindowHistory::read(&fleet_view_path(&m.cache)).unwrap();
+        assert_eq!(samples(&view), [vec![0, 10, 40, 50]]);
+
+        fetch(&m, &[], 119 + 1, 50);
+        assert!(!fleet_view_path(&m.cache).exists(), "no fleet, no view");
+    }
+
+    #[test]
     fn what_is_shared_is_filed_by_account_and_never_by_name() {
         let (reset, h) = week();
         let now = Utc::now();

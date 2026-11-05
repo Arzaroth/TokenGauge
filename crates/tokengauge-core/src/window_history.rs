@@ -387,7 +387,8 @@ pub fn record(cache_file: &Path, payloads: &mut [ProviderPayload], now: DateTime
                 );
                 let ours = trail.same_account(account.as_deref());
                 window.burn = ours.then(|| burn(trail, &reading)).flatten();
-                window.opened_at = trail.opened_at.filter(|_| ours).map(|at| at.to_rfc3339());
+                let opened = trail.opened_at.filter(|at| ours && *at <= reading.at);
+                window.opened_at = opened.map(|at| at.to_rfc3339()).or(window.opened_at.take());
             }
         }
     }
@@ -1004,5 +1005,43 @@ mod tests {
             .primary
             .unwrap();
         assert_eq!(window.opened_at, None);
+    }
+
+    #[test]
+    fn a_reading_from_before_the_refill_is_not_opened_by_it() {
+        let m = Machine::new("before_refill");
+        let reset = DateTime::from_timestamp(Utc::now().timestamp() + 3 * 86_400, 0).unwrap();
+        let start = reset - Duration::days(7);
+        let fetch = |hours: i64, used: u8| {
+            let at = start + Duration::hours(hours);
+            m.fetch(vec![payload(None, at, window(used, reset, 10080))], at)
+                .remove(0)
+                .usage
+                .unwrap()
+                .primary
+                .unwrap()
+        };
+        fetch(72, 70);
+        fetch(74, 0);
+        assert_eq!(fetch(71, 70).opened_at, None);
+    }
+
+    #[test]
+    fn a_carried_opening_survives_an_unreadable_history() {
+        let m = Machine::new("carried_opening");
+        fs::create_dir_all(history_path(&m.cache)).unwrap();
+        let reset = DateTime::from_timestamp(Utc::now().timestamp() + 3 * 86_400, 0).unwrap();
+        let at = reset - Duration::days(2);
+        let opened = (reset - Duration::days(3)).to_rfc3339();
+        let mut carried = window(12, reset, 10080);
+        carried.opened_at = Some(opened.clone());
+        let window = m
+            .fetch(vec![payload(None, at, carried)], at)
+            .remove(0)
+            .usage
+            .unwrap()
+            .primary
+            .unwrap();
+        assert_eq!(window.opened_at, Some(opened));
     }
 }

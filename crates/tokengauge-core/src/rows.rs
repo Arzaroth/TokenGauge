@@ -224,6 +224,7 @@ fn window_pace(
         window.used_percent?,
         window.window_minutes,
         window.resets_at.as_deref(),
+        window.opened_at.as_deref(),
         anchor,
         window.burn.as_ref(),
     )

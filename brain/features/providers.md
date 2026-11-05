@@ -87,12 +87,20 @@ Notes:
   `upstream-check` skill watches it.
 - Each provider's mark and colour come from `selvedge::brands`, shared with
   remuda. `provider_icon` takes its colour from there (a black-and-white brand,
-  Grok, Z.ai or opencode, gets `NEUTRAL_HEX`). `provider_icon_svg_path`
-  writes the mark, its `currentColor` in the neutral foreground, to
+  Grok, Z.ai or opencode, gets `NEUTRAL_HEX`) and its `mark_hex` from the
+  brand's `mark_color`: Claude's mark is drawn in its orange, every other one
+  in the foreground, so Codex, Cursor, Kimi and OpenRouter keep their colour as
+  an accent only. `--json` carries both, as `color` and `mark_color`.
+  `provider_icon_svg_path` writes the mark, its `currentColor` in the mark
+  colour or else the neutral foreground, to
   `$XDG_DATA_HOME/tokengauge/icons` (`~/.local/share/tokengauge/icons` when
   that is unset or relative), rewriting one that differs from this build's,
   for the frontends to load by path. A non-empty `TOKENGAUGE_ICON_DIR` is the
   caller's: a mark there is only read, never written or refreshed.
+- The neutral foreground suits a dark panel only. The Quickshell widget masks
+  the mark with `mark_color` or its theme's foreground instead of drawing the
+  file as written, so a black-and-white mark follows a light Omarchy theme;
+  that mask paints Kimi's blue dot in the foreground too.
 - Middle-click opens a provider's dashboard and back-button its status page
   (`ProviderMeta.urls`).
 - Plan weights per provider are in [several-plans.md](several-plans.md).

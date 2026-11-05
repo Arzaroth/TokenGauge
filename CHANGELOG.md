@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Codex and OpenRouter show their current logos: Codex's cloud with a prompt
+  instead of OpenAI's knot, and OpenRouter's new mark.
+- The Claude logo keeps its orange in the GNOME and Plasma panels, and the
+  Codex, Cursor and OpenRouter logos are drawn in the foreground instead of
+  their accent colour. In the Omarchy panel a black-and-white logo follows the
+  theme's foreground.
+
 - `scripts/install-omarchy.sh --placement` takes every Omarchy bar section
   (`left`, `centerBegin`, `center`, `centerEnd`, `tray`, `right`), not only
   `left`, `center` and `right`, and a rerun says how to move a widget that is

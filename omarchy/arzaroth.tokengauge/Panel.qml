@@ -185,12 +185,14 @@ Panel {
 
   // -------------------------------------------------------- brand marks
 
-  // The installer drops the provider logos next to the binaries; the bar glyph
-  // stands in whenever one is missing.
-  // Brand colour for the active provider's mark, from the snapshot; the bar
-  // foreground stands in when a provider ships no colour.
-  readonly property color markColor: provider && present(provider.color) !== ""
+  readonly property color accentColor: provider && present(provider.color) !== ""
     ? provider.color : foreground
+  // A black-and-white mark has no colour of its own and takes the theme's
+  // foreground, which the file baked for a dark panel cannot. An older binary
+  // sends no `mark_color` and tints with the accent, as it always did.
+  readonly property color markColor: !provider ? foreground
+    : provider.mark_color === undefined ? accentColor
+    : present(provider.mark_color) !== "" ? provider.mark_color : foreground
 
   function markSource(row) {
     if (!row) return ""
@@ -608,10 +610,6 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
 
-            // The bundled marks are monochrome on purpose - the popover
-            // recolours them to its neutral foreground - so painting the brand
-            // colour through the mark's own alpha is what makes them read as
-            // logos here. Colourising instead would leave the white ones white.
             iconComponent: Component {
               Item {
                 id: heroMark
@@ -649,7 +647,7 @@ Panel {
                   anchors.centerIn: parent
                   visible: heroMarkImage.status !== Image.Ready
                   text: root.provider ? String(root.provider.glyph || "") : ""
-                  color: root.markColor
+                  color: root.accentColor
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.display
                 }

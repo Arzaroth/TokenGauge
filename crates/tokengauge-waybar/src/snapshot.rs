@@ -128,6 +128,7 @@ pub(crate) fn json_snapshot(
                         .unwrap_or_default(),
                 );
                 map.insert("color".into(), icon.color_hex.into());
+                map.insert("mark_color".into(), icon.mark_hex.into());
                 let pace_badge = |pace: Option<UsagePace>| {
                     pace.map(|p| serde_json::Value::from(p.badge()))
                         .unwrap_or(serde_json::Value::Null)
@@ -658,6 +659,7 @@ mod tests {
             "label",
             "glyph",
             "color",
+            "mark_color",
             "refresh_hint",
             "bar_tooltip",
             "icon_svg",

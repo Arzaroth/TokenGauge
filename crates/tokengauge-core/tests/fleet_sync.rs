@@ -1187,8 +1187,10 @@ fn new_usage_does_not_cover_for_a_missing_hour() {
 }
 
 #[test]
-fn a_peers_limit_windows_reach_this_machines_history_and_ours_reach_the_folder() {
-    use tokengauge_core::window_history::{SharedWindows, Trail, WindowHistory, history_path};
+fn a_peers_limit_windows_reach_the_fleet_view_and_only_ours_reach_the_folder() {
+    use tokengauge_core::window_history::{
+        SharedWindows, Trail, WindowHistory, fleet_view_path, history_path,
+    };
 
     let root = scratch("windows");
     let config = config(&root);
@@ -1235,7 +1237,13 @@ fn a_peers_limit_windows_reach_this_machines_history_and_ours_reach_the_folder()
     let status = sync::refresh(&config, &[], since, &[]).status;
     assert_eq!(status.error, None);
 
-    let folded = WindowHistory::read(&path).unwrap();
+    assert_eq!(
+        WindowHistory::read(&path).unwrap(),
+        ours,
+        "this machine's history keeps what it saw itself"
+    );
+    let view = fleet_view_path(&config.cache_file);
+    let folded = WindowHistory::read(&view).unwrap();
     assert_eq!(
         folded.trails[0].samples,
         [
@@ -1257,6 +1265,19 @@ fn a_peers_limit_windows_reach_this_machines_history_and_ours_reach_the_folder()
     assert_eq!(
         mine.windows.trails[0].account_digest.as_deref(),
         Some("acct")
+    );
+    assert_eq!(
+        mine.windows.trails[0].samples, ours.trails[0].samples,
+        "a peer's samples are never passed on"
+    );
+
+    let rekeyed = FleetKey::generate();
+    sync::store_key(&config.cache_file, &rekeyed, true).expect("re-key");
+    let status = sync::refresh(&config, &[], since, &[]).status;
+    assert_eq!(status.error, None);
+    assert!(
+        !view.exists(),
+        "a key change forgets the old fleet's windows"
     );
 }
 

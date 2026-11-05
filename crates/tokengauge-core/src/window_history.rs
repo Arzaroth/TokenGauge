@@ -31,6 +31,14 @@ pub fn history_path(cache_file: &Path) -> PathBuf {
     parent.join("tokengauge-window-history.json")
 }
 
+/// This machine's history with its fleet's folded in, for readers only:
+/// nothing in it is published, so a key change forgets the old fleet here as
+/// it does in the fleet store.
+pub fn fleet_view_path(cache_file: &Path) -> PathBuf {
+    let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
+    parent.join("tokengauge-window-fleet.json")
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct WindowHistory {
     #[serde(default)]
@@ -88,6 +96,7 @@ pub struct Trail {
 }
 
 /// One window's figures as a fetch reported them.
+#[derive(Clone, Copy)]
 pub(crate) struct Reading {
     pub used: u8,
     pub minutes: u32,
@@ -201,14 +210,15 @@ impl WindowHistory {
         }
     }
 
-    /// The trail `reading` belongs to, started afresh when its window reset.
+    /// The index of the trail `reading` belongs to, started afresh when its
+    /// window reset.
     pub(crate) fn observe(
         &mut self,
         provider: &str,
         credential: (Option<&str>, Option<&str>),
         window: &str,
         reading: &Reading,
-    ) -> &Trail {
+    ) -> usize {
         let (name, account) = credential;
         let found = self.trails.iter().position(|t| {
             t.provider == provider && t.credential.as_deref() == name && t.window == window
@@ -234,7 +244,7 @@ impl WindowHistory {
             }
         };
         self.trails[index].observe(reading);
-        &self.trails[index]
+        index
     }
 
     /// Drops the trails whose window has reset: nothing reports on them any
@@ -362,16 +372,61 @@ pub(crate) fn windows_mut(usage: &mut UsageSnapshot) -> Vec<(String, &mut UsageW
 }
 
 /// Adds what this fetch saw to the history beside `cache_file`, and sets each
-/// window's burn from its trail. A payload
-/// served stale saw nothing new, so it adds nothing. The time of a reading is
-/// the payload's own, not the write's: a stored credential's figures are
-/// carried between its fetches, and a carried figure is not a new sample.
-pub fn record(cache_file: &Path, payloads: &mut [ProviderPayload], now: DateTime<Utc>) {
+/// window's burn and opening from its trail with the fleet's samples of it
+/// folded in. A payload served stale saw nothing new, so it adds nothing. The
+/// time of a reading is the payload's own, not the write's: a stored
+/// credential's figures are carried between its fetches, and a carried figure
+/// is not a new sample. Only what this machine saw is kept in its history;
+/// the fleet's lands in the view beside it.
+pub fn record(
+    cache_file: &Path,
+    payloads: &mut [ProviderPayload],
+    peers: &[&SharedWindows],
+    now: DateTime<Utc>,
+) {
     let path = history_path(cache_file);
     let read = WindowHistory::read(&path);
     let readable = read.is_some();
     let mut history = read.unwrap_or_default();
     let before = history.clone();
+    let mut seen = Vec::new();
+    for_each_reading(payloads, now, |provider, credential, name, _, reading| {
+        seen.push(history.observe(provider, credential, name, &reading));
+    });
+    let view = history.with_fleet(peers, now);
+    let mut seen = seen.into_iter();
+    for_each_reading(payloads, now, |_, (_, account), _, window, reading| {
+        let Some(index) = seen.next() else {
+            return;
+        };
+        let own = &history.trails[index];
+        let trail = view
+            .trails
+            .get(index)
+            .filter(|t| near(t.resets_at, own.resets_at, own.window_minutes))
+            .unwrap_or(own);
+        let ours = own.same_account(account);
+        window.burn = ours.then(|| burn(trail, &reading)).flatten();
+        let opened = trail.opened_at.filter(|at| ours && *at <= reading.at);
+        window.opened_at = opened.map(|at| at.to_rfc3339()).or(window.opened_at.take());
+    });
+    history.prune(now);
+    if !readable {
+        return;
+    }
+    if history != before
+        && let Ok(text) = serde_json::to_string(&history)
+    {
+        let _ = write_atomic(&path, text.as_bytes());
+    }
+    write_view(cache_file, &history, peers, now);
+}
+
+fn for_each_reading(
+    payloads: &mut [ProviderPayload],
+    now: DateTime<Utc>,
+    mut each: impl FnMut(&str, (Option<&str>, Option<&str>), &str, &mut UsageWindow, Reading),
+) {
     for payload in payloads.iter_mut().filter(|p| !p.stale) {
         let provider = payload.provider.clone();
         let credential = payload.credential.name.clone();
@@ -386,25 +441,15 @@ pub fn record(cache_file: &Path, payloads: &mut [ProviderPayload], now: DateTime
             .map_or(now, |at| at.with_timezone(&Utc).min(now));
         for (name, window) in windows_mut(usage) {
             if let Some(reading) = Reading::of(window, at) {
-                let trail = history.observe(
+                each(
                     &provider,
                     (credential.as_deref(), account.as_deref()),
                     &name,
-                    &reading,
+                    window,
+                    reading,
                 );
-                let ours = trail.same_account(account.as_deref());
-                window.burn = ours.then(|| burn(trail, &reading)).flatten();
-                let opened = trail.opened_at.filter(|at| ours && *at <= reading.at);
-                window.opened_at = opened.map(|at| at.to_rfc3339()).or(window.opened_at.take());
             }
         }
-    }
-    history.prune(now);
-    if readable
-        && history != before
-        && let Ok(text) = serde_json::to_string(&history)
-    {
-        let _ = write_atomic(&path, text.as_bytes());
     }
 }
 
@@ -519,7 +564,15 @@ impl Trail {
 }
 
 impl WindowHistory {
-    /// Folds the fleet's trails and closed windows into this machine's own.
+    /// A copy of this history with the fleet's trails and closed windows
+    /// folded in, every trail at the index it has here.
+    fn with_fleet(&self, peers: &[&SharedWindows], now: DateTime<Utc>) -> WindowHistory {
+        let mut view = self.clone();
+        view.fold(peers, now);
+        view
+    }
+
+    /// Folds the fleet's trails and closed windows into this history.
     /// A trail only ever joins one this machine keeps for the same account:
     /// the samples of the same instance merge, a later instance takes the
     /// trail's place, and an earlier one is history already.
@@ -591,19 +644,31 @@ impl WindowHistory {
     }
 }
 
-/// Folds the fleet's windows into the history beside `cache_file`, written
-/// only when that changed anything. Run on every sync cycle from what the
-/// store holds, so a fold another writer raced away comes back on the next.
-pub fn fold_fleet(cache_file: &Path, peers: &[&SharedWindows], now: DateTime<Utc>) {
-    let path = history_path(cache_file);
-    let Some(mut history) = WindowHistory::read(&path) else {
+/// Rewrites the fleet view beside `cache_file` from this machine's history
+/// and what the fleet store holds now. Run on every sync cycle, so peers the
+/// store dropped, a key change's among them, leave the view with it.
+pub fn refresh_fleet_view(cache_file: &Path, peers: &[&SharedWindows], now: DateTime<Utc>) {
+    if let Some(history) = WindowHistory::read(&history_path(cache_file)) {
+        write_view(cache_file, &history, peers, now);
+    }
+}
+
+/// With no fleet the view is gone, and readers fall back to the history.
+fn write_view(
+    cache_file: &Path,
+    history: &WindowHistory,
+    peers: &[&SharedWindows],
+    now: DateTime<Utc>,
+) {
+    let path = fleet_view_path(cache_file);
+    if peers.is_empty() {
+        let _ = fs::remove_file(&path);
         return;
-    };
-    let before = history.clone();
-    history.fold(peers, now);
-    history.prune(now);
-    if history != before
-        && let Ok(text) = serde_json::to_string(&history)
+    }
+    let mut view = history.with_fleet(peers, now);
+    view.prune(now);
+    if WindowHistory::read(&path).as_ref() != Some(&view)
+        && let Ok(text) = serde_json::to_string(&view)
     {
         let _ = write_atomic(&path, text.as_bytes());
     }
@@ -673,7 +738,7 @@ mod tests {
             mut payloads: Vec<ProviderPayload>,
             now: DateTime<Utc>,
         ) -> Vec<ProviderPayload> {
-            record(&self.cache, &mut payloads, now);
+            record(&self.cache, &mut payloads, &[], now);
             payloads
         }
 

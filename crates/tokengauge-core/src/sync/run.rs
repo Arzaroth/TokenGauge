@@ -335,7 +335,11 @@ fn cycle(
         store.drop_vanished(&device.id, &listed, |id| key.object_name(id));
     }
 
-    crate::window_history::fold_fleet(&config.cache_file, &store.peer_windows(&device.id), now);
+    crate::window_history::refresh_fleet_view(
+        &config.cache_file,
+        &store.peer_windows(&device.id),
+        now,
+    );
 
     store.last_pull_ms = Some(now.timestamp_millis());
     Ok(())

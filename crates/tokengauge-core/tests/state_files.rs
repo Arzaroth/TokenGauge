@@ -48,6 +48,10 @@ fn derived(cache_file: &Path) -> Vec<(&'static str, PathBuf)> {
         ("fleet store lock", sync::store::lock_path(cache_file)),
         ("fleet key", sync::crypto::key_path(cache_file)),
         ("window history", window_history::history_path(cache_file)),
+        (
+            "window fleet view",
+            window_history::fleet_view_path(cache_file),
+        ),
     ]
 }
 
@@ -161,6 +165,7 @@ fn the_names_on_disk_are_the_names_users_already_have() {
             "tokengauge-fleet.lock",
             "tokengauge-sync-key",
             "tokengauge-window-history.json",
+            "tokengauge-window-fleet.json",
         ]
     );
 }

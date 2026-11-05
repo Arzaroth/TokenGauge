@@ -189,7 +189,14 @@ pub fn write_cache_full(
     store: Option<&StoreSeen>,
 ) -> Result<()> {
     let store = store.cloned().unwrap_or_else(|| StoreSeen::now(config));
-    crate::window_history::record(path, payloads, Utc::now());
+    let fleet = config.sync.enabled.then(|| sync::store::load(path).0);
+    let local = fleet.as_ref().map(|_| sync::local_device_id(config));
+    let peers = fleet
+        .as_ref()
+        .zip(local.as_deref())
+        .map(|(store, local)| store.peer_windows(local))
+        .unwrap_or_default();
+    crate::window_history::record(path, payloads, &peers, Utc::now());
     let data = CachedData::Full {
         payloads: payloads.to_vec(),
         errors: errors.to_vec(),

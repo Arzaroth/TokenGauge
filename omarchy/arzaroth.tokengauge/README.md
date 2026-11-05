@@ -2,12 +2,14 @@
 
 A bar widget for the Omarchy 4 Quickshell shell. One bar icon and one panel
 covering every AI coding subscription TokenGauge knows about: Claude, Codex,
-Kimi, Grok, and GLM.
+Kimi, Grok, GLM, OpenRouter, opencode Go and Cursor.
 
 The QML is strictly a display. Everything it draws comes from a single
 `tokengauge --json` snapshot, the same one the KDE Plasma applet and the
-GNOME extension read, so credentials, endpoints, ccusage, and the cache never
-enter the shell process.
+GNOME extension read, so credentials, endpoints, transcripts and the snapshot
+never enter the shell process. What each section says is resolved in
+`tokengauge-core` (`panel.rs`), so this panel reads the same as every other
+TokenGauge surface.
 
 ## Install
 
@@ -19,37 +21,49 @@ scripts/install-omarchy.sh
 
 That builds the binaries, copies this folder to
 `~/.config/omarchy/plugins/arzaroth.tokengauge/`, enables the widget, and
-restarts the shell. Pass `--placement=left|center|right` to choose a bar
-section (default `right`).
+restarts the shell. Pass `--placement=<section>` to choose a bar section
+(default `right`).
 
-Omarchy also ships its own `omarchy.agents` widget, which covers Claude, Codex,
-and Fireworks. Both can sit in the bar at once; drop theirs with
-`omarchy plugin disable omarchy.agents`.
+The section is Omarchy's shell config, not the widget's, and the installer
+only sets it the first time: once the widget is enabled, a rerun leaves it
+where it is. To move it later, enable it again with a section:
+
+```bash
+omarchy plugin enable arzaroth.tokengauge --section centerEnd
+```
+
+Omarchy takes `left`, `centerBegin`, `center`, `centerEnd`, `tray` and
+`right`; `centerEnd` is the group to the right of the clock.
+
+Omarchy ships its own `omarchy.agents` widget. Drop it with
+`omarchy plugin disable omarchy.agents` once this one is in the bar.
 
 ## Panel
 
-- **Hero** - the provider and the plan it runs on ("Claude Ultra").
+- **Hero** - the provider and the plan it runs on, with refresh, history,
+  remuda (while its page is serving) and settings buttons. Hovering refresh
+  says when the snapshot was last written.
 - **Provider switch** - one chip per enabled provider, shown only when more
   than one is enabled.
-- **Limits** - the percentage of each window used, a matching meter, the time
-  until it resets, and the pace projection next to it (`ends ~9%`, or
-  `empty in 2h 15m` when the window runs out first). Session, weekly, and any
-  provider-specific extra windows all render the same way.
-- **Cost** - today and this month in dollars and tokens, plus the current burn
-  rate per hour, from ccusage.
-- **Tokens by day** - one row per day for the last week: day, bar, then tokens
-  and dollars, with today bolded at the bottom. Hover a row for its full date
-  and exact figures. ccusage omits days with no spend, so each row is labelled
-  from its own date rather than by counting back from today.
-- **Tokens by model** - tokens and cost per model, the bar behind each row
-  scaled to the heaviest model. Hover for the input / output / cache-write /
-  cache-read split.
+- **Sections** - the panel spec's, in its order, each dropped when it has no
+  data:
+  - **Status** - why a stale row is stale (a failed fetch, an expired token).
+  - **Plans** and one **Limits** group per credential, for a provider holding
+    several logins in remuda's store; a single login draws one Limits group.
+    Each window shows its use, a meter with the pace marker, and the time
+    until it resets.
+  - **Cost** - today, this month and the burn rate, rated from the CLIs' own
+    transcripts against LiteLLM's price table.
+  - **Tokens by day**, **by model** and **by device** - one row each, the bar
+    behind it scaled to the largest; hover for the exact figures.
+- **History** - a second screen (`.`) with 30 days, 90 days and 12 months of
+  spend.
 - **Update banner** - when a newer TokenGauge release is out, an Update button
-  installs it in place.
-- **Settings** - the gear on the hero (or `s`) opens provider toggles and the
-  pin-to-bar picker, both writing straight to `config.toml`. A provider enabled
-  for the first time has nothing cached yet, so its tab appears a few seconds
-  later, once the daemon has fetched it.
+  installs it in place, or names the package manager that owns the install.
+- **Settings** - the gear (or `,`) opens provider toggles, the pin-to-bar
+  picker, the panel options and sync setup, all writing to `config.toml`. A
+  provider enabled for the first time has nothing cached yet, so its tab
+  appears a few seconds later, once it has been fetched.
 
 ## Interactions
 
@@ -59,13 +73,17 @@ and Fireworks. Both can sit in the bar at once; drop theirs with
   minus its rotate-and-persist: scrolling here moves the panel's own selection
   and leaves `config.toml` alone. The hover is this widget's own - Waybar's
   tooltip is the whole panel rather than a summary of it.
-- Panel header: refresh, history, settings.
+- Panel header: refresh, history, remuda, settings.
 - Panel: `h`/`l` switch provider, `j`/`k` scroll, `r` or Enter refresh, `u` and
-  `s` open the active provider's usage dashboard and status page, `,` toggles
-  the settings pane, Tab moves to the neighboring bar panel, Esc closes.
-  `u` and `s` mean what they mean in the TUI.
+  `s` open the active provider's usage dashboard and status page, `.` toggles
+  history, `,` toggles settings, `m` opens remuda while it serves, Tab moves to
+  the neighboring bar panel, Esc closes. `u` and `s` mean what they mean in the
+  TUI.
+- History: the number keys pick a range.
 - Settings pane: a number key toggles the provider on that row, `p` walks the
-  pin through Highest and each enabled provider.
+  pin through Highest and each enabled provider, `a`, `t` and `b` flip the
+  panel options (active credential only, plans total, split bars), `y` opens
+  sync setup.
 - IPC: `omarchy-shell arzaroth.tokengauge <open|close|toggle|refresh|next>`.
 
 ## Settings
@@ -83,8 +101,8 @@ Numbers need `--json`, or they land in `shell.json` as strings:
 omarchy bar set arzaroth.tokengauge refreshIntervalSec 300 --json
 ```
 
-Provider enablement and the pinned primary are editable from the panel's
-settings pane; everything else - notification thresholds, the refresh cadence
+Provider enablement, the pinned primary and the `[panel]` options are
+editable from the panel's settings pane; everything else - notification thresholds, the refresh cadence
 of the daemon, the click action, the cache location - stays in
 `~/.config/tokengauge/config.toml`, shared with the Waybar module and the
 daemon.

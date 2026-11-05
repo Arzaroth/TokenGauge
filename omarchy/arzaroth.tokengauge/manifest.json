@@ -13,7 +13,7 @@
   },
   "barWidget": {
     "displayName": "TokenGauge",
-    "description": "One bar icon and one panel: usage limits with pace, ccusage cost breakdown, and a rolling history for every AI coding subscription.",
+    "description": "One bar icon and one panel: usage limits with pace, spend read from the CLIs' own transcripts, and a rolling history for every AI coding subscription.",
     "category": "AI",
     "defaultSection": "right",
     "aliases": ["tokengauge", "token-gauge"],

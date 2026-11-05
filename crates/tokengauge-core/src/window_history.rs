@@ -819,6 +819,7 @@ mod tests {
         assert_eq!(closed(&history), [("primary".to_owned(), 70)]);
         assert_eq!(history.closed[0].resets_at, week);
         assert_eq!(samples(&history), [vec![0]]);
+        assert!(history.trails[0].opened_at.is_none(), "its reset moved");
     }
 
     #[test]
@@ -908,5 +909,69 @@ mod tests {
                 "windowMinutes"
             ]
         );
+    }
+
+    #[test]
+    fn a_week_idle_until_its_last_hours_is_measured_over_its_last_day() {
+        let m = Machine::new("burn-idle");
+        let reset = Utc::now() + Duration::days(2);
+        let day = 24 * 60;
+        let burn = burn_after(
+            &m,
+            &[
+                (60, 0),
+                (4 * day + 20 * 60, 0),
+                (4 * day + 21 * 60, 12),
+                (5 * day, 18),
+            ],
+            reset,
+            10080,
+        );
+        assert_eq!(burn.over_minutes, u32::try_from(day).unwrap());
+        assert_eq!(burn.per_hour, 0.75, "the 0% held until the climb began");
+    }
+
+    #[test]
+    fn a_rise_across_a_gap_is_spread_over_the_gap() {
+        let m = Machine::new("burn-gap");
+        let reset = Utc::now() + Duration::days(2);
+        let day = 24 * 60;
+        let burn = burn_after(
+            &m,
+            &[(60, 0), (3 * day + 60, 0), (4 * day + 60, 20)],
+            reset,
+            10080,
+        );
+        assert!((burn.per_hour - 20.0 / 24.0).abs() < 1e-9, "{burn:?}");
+    }
+
+    #[test]
+    fn a_week_refilled_in_place_opens_where_it_was_refilled() {
+        let m = Machine::new("refilled");
+        let reset = DateTime::from_timestamp(Utc::now().timestamp() + 3 * 86_400, 0).unwrap();
+        let start = reset - Duration::days(7);
+        let fetch = |hours: i64, used: u8| {
+            let at = start + Duration::hours(hours);
+            m.fetch(vec![payload(None, at, window(used, reset, 10080))], at)
+                .remove(0)
+        };
+        fetch(1, 10);
+        fetch(72, 70);
+        fetch(74, 0);
+        let window = fetch(77, 12).usage.unwrap().primary.unwrap();
+        let refilled = start + Duration::hours(72);
+        assert_eq!(window.opened_at, Some(refilled.to_rfc3339()));
+        let burn = window.burn.unwrap();
+        assert_eq!(burn.over_minutes, 300);
+        assert!((burn.per_hour - 2.4).abs() < 1e-9, "{burn:?}");
+
+        m.fetch(Vec::new(), reset + Duration::minutes(1));
+        let records: Vec<_> = m
+            .history()
+            .closed
+            .iter()
+            .map(|c| (c.opened_at, c.used))
+            .collect();
+        assert_eq!(records, [(start, 70), (refilled, 12)]);
     }
 }

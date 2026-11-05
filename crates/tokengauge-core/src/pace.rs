@@ -305,4 +305,29 @@ mod tests {
         assert!(!quiet.will_last_to_reset);
         assert_eq!(quiet.badge(), average.badge());
     }
+
+    #[test]
+    fn a_week_refilled_in_place_is_paced_from_its_refill() {
+        let now = Utc::now();
+        let week = 10080;
+        let reset = at(now, 3 * 1440);
+        let refilled = at(now, -1440);
+        let whole = UsagePace::for_window(30, Some(week), Some(&reset), None, now, None).unwrap();
+        assert_eq!(whole.stage, PaceStage::FarBehind);
+        let pace = UsagePace::for_window(30, Some(week), Some(&reset), Some(&refilled), now, None)
+            .unwrap();
+        assert!((pace.delta_percent - 5.0).abs() < 0.01, "{pace:?}");
+        assert_eq!(pace.stage, PaceStage::SlightlyAhead);
+        assert!(!pace.will_last_to_reset, "30% a day empties a 3-day rest");
+    }
+
+    #[test]
+    fn an_opening_before_the_window_could_have_is_the_window_itself() {
+        let now = Utc::now();
+        let reset = at(now, 150);
+        let long_ago = at(now, -1440);
+        let pace =
+            UsagePace::for_window(50, Some(300), Some(&reset), Some(&long_ago), now, None).unwrap();
+        assert!(pace.delta_percent.abs() < 0.01, "{pace:?}");
+    }
 }

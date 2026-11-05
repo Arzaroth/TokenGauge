@@ -81,6 +81,10 @@ pub struct Trail {
     /// was first and last seen. A trail only rises, so the figure held between
     /// two equal samples; between two others it moved at some point nobody saw.
     pub samples: Vec<(i64, u8)>,
+    /// When a reset that left `resetsAt` where it was opened this instance:
+    /// the last moment the instance before it was seen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_at: Option<DateTime<Utc>>,
 }
 
 /// One window's figures as a fetch reported them.
@@ -126,6 +130,26 @@ impl Trail {
                 && self.resets_at > reading.at
                 && reading.used >= used
                 && last >= reading.start())
+    }
+
+    /// When the instance `reading` belongs to opened, if a reset refilled
+    /// this one and left its reset instant in place.
+    fn refilled(&self, reading: &Reading, account: Option<&str>) -> Option<DateTime<Utc>> {
+        let &(last, used) = self.samples.last()?;
+        let refilled = self.same_account(account)
+            && self.resets_at > reading.at
+            && reading.used < used
+            && last >= reading.start()
+            && reading.at.timestamp_millis() > last;
+        refilled
+            .then(|| DateTime::from_timestamp_millis(last))
+            .flatten()
+    }
+
+    fn opened_ms(&self, reading: &Reading) -> i64 {
+        let start = reading.start();
+        self.opened_at
+            .map_or(start, |at| at.timestamp_millis().max(start))
     }
 
     fn same_account(&self, account: Option<&str>) -> bool {
@@ -180,10 +204,12 @@ impl WindowHistory {
         let index = match found {
             Some(i) if self.trails[i].continues(reading, account) => i,
             Some(i) => {
+                let opened_at = self.trails[i].refilled(reading, account);
                 let ended = std::mem::replace(
                     &mut self.trails[i],
                     Trail::new(provider, credential, window, reading),
                 );
+                self.trails[i].opened_at = opened_at;
                 if ended.same_account(account) {
                     self.closed.extend(ended.closed());
                 }
@@ -221,7 +247,9 @@ impl Trail {
             account_digest: self.account_digest.clone(),
             window: self.window.clone(),
             window_minutes: self.window_minutes,
-            opened_at: self.resets_at - chrono::Duration::minutes(i64::from(self.window_minutes)),
+            opened_at: self.opened_at.unwrap_or(
+                self.resets_at - chrono::Duration::minutes(i64::from(self.window_minutes)),
+            ),
             resets_at: self.resets_at,
             used,
             seen_at: DateTime::from_timestamp_millis(ms).unwrap_or(self.resets_at),
@@ -242,6 +270,7 @@ impl Trail {
             window_minutes: reading.minutes,
             resets_at: reading.resets_at,
             samples: Vec::new(),
+            opened_at: None,
         }
     }
 }
@@ -254,7 +283,7 @@ const HOUR_MS: f64 = 3_600_000.0;
 /// start is a sample every trail has.
 fn burn(trail: &Trail, reading: &Reading) -> Option<Burn> {
     let minutes = i64::from(reading.minutes);
-    let start = reading.start();
+    let start = trail.opened_ms(reading);
     let at = reading.at.timestamp_millis();
     let span = (minutes / 7).max(60) * 60_000;
     let from = (at - span).max(start);
@@ -344,10 +373,9 @@ pub fn record(cache_file: &Path, payloads: &mut [ProviderPayload], now: DateTime
                     &name,
                     &reading,
                 );
-                window.burn = trail
-                    .same_account(account.as_deref())
-                    .then(|| burn(trail, &reading))
-                    .flatten();
+                let ours = trail.same_account(account.as_deref());
+                window.burn = ours.then(|| burn(trail, &reading)).flatten();
+                window.opened_at = trail.opened_at.filter(|_| ours).map(|at| at.to_rfc3339());
             }
         }
     }

@@ -101,6 +101,7 @@ fn publish_peer(root: &Path, key: &FleetKey, tokens: u64) {
         buckets: bucketize(&[event(0, tokens, 0xfeed)]),
         days: Vec::new(),
         adopted: Vec::new(),
+        windows: Default::default(),
     };
 
     let name = key.object_name(PEER_ID);
@@ -534,6 +535,7 @@ fn a_provider_this_build_cannot_rate_is_reported_not_swallowed() {
         buckets: bucket,
         days: Vec::new(),
         adopted: Vec::new(),
+        windows: Default::default(),
     };
     let name = key.object_name(PEER_ID);
     let dir = root.join("shared").join("v1");
@@ -595,6 +597,8 @@ fn publish_device(
                 at_ms: Utc::now().timestamp_millis(),
             })
             .collect(),
+
+        windows: Default::default(),
     };
     let body = serde_json::to_vec(&contribution).expect("serialise");
     let dir = root.join("shared").join("v1");

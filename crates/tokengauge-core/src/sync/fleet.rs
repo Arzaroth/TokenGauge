@@ -18,6 +18,7 @@ use super::contribution::{
 use super::hour::Hour;
 use crate::cost::pricing::{PriceArchive, PriceTable, month_key};
 use crate::cost::{Source, TokenCounts, UsageEvent};
+use crate::window_history::SharedWindows;
 use selvedge::usage::export::{self as usage_export, Row as UsageRow, TypeCosts, UsageExport};
 
 /// The calendar step a history series advances by.
@@ -91,6 +92,10 @@ pub struct DeviceSlice {
     /// nothing either way.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub counted_from: BTreeMap<String, Hour>,
+    /// A peer's limit windows as it last published them. Never this
+    /// device's own: those live in the window history.
+    #[serde(default, skip_serializing_if = "SharedWindows::is_empty")]
+    pub windows: SharedWindows,
 }
 
 /// A [`DeviceSlice`] as the store file holds it. `counted` is an index the
@@ -114,6 +119,8 @@ struct StoredSlice {
     counted: StoredCounted,
     #[serde(default)]
     counted_from: BTreeMap<String, Hour>,
+    #[serde(default)]
+    windows: SharedWindows,
 }
 
 #[derive(Deserialize)]
@@ -144,6 +151,7 @@ impl From<StoredSlice> for DeviceSlice {
             adopted: stored.adopted,
             counted,
             counted_from,
+            windows: stored.windows,
         }
     }
 }
@@ -551,6 +559,16 @@ impl FleetStore {
         slice.days.sort_by_key(|day| day.date);
 
         merge_adopted(&mut slice.adopted, contribution.adopted.iter().cloned());
+        slice.windows = contribution.windows.clone();
+    }
+
+    /// Every peer's limit windows, for folding into this machine's history.
+    pub fn peer_windows(&self, local_id: &str) -> Vec<&SharedWindows> {
+        self.devices
+            .iter()
+            .filter(|(id, slice)| id.as_str() != local_id && !slice.windows.is_empty())
+            .map(|(_, slice)| &slice.windows)
+            .collect()
     }
 
     /// Carry out every adoption a device has announced, on our own copy of the
@@ -636,6 +654,7 @@ impl FleetStore {
         for slice in self.devices.values_mut() {
             slice.buckets.retain(|bucket| bucket.hour >= floor);
             slice.days.retain(|day| day.date >= floor_date);
+            slice.windows.trails.retain(|trail| trail.resets_at > now);
             slice.covers_from = Some(match slice.covers_from {
                 Some(existing) => existing.max(floor),
                 None => floor,
@@ -734,6 +753,7 @@ impl FleetStore {
                 .cloned()
                 .collect(),
             adopted: slice.adopted.clone(),
+            windows: SharedWindows::default(),
         })
     }
 
@@ -1876,6 +1896,7 @@ mod tests {
             buckets: bucketize(&[event("claude", "opus", hour("2026-08-09T09"), 10, Some(4))]),
             days: Vec::new(),
             adopted: Vec::new(),
+            windows: Default::default(),
         });
 
         assert_eq!(

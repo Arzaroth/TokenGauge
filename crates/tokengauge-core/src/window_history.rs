@@ -77,8 +77,9 @@ pub struct Trail {
     pub window_minutes: u32,
     /// The latest reset instant the provider gave for this instance.
     pub resets_at: DateTime<Utc>,
-    /// `[ms since the epoch, percent used]`, oldest first, one per change: a
-    /// value holds until the next sample.
+    /// `[ms since the epoch, percent used]`, oldest first: when each figure
+    /// was first and last seen. A trail only rises, so the figure held between
+    /// two equal samples; between two others it moved at some point nobody saw.
     pub samples: Vec<(i64, u8)>,
 }
 
@@ -141,8 +142,10 @@ impl Trail {
         }
         self.resets_at = reading.resets_at;
         self.window_minutes = reading.minutes;
-        match self.samples.last() {
-            Some((_, used)) if *used == reading.used => {}
+        match self.samples.as_mut_slice() {
+            [.., (_, before), last] if *before == reading.used && last.1 == reading.used => {
+                last.0 = ms;
+            }
             _ => self.samples.push((ms, reading.used)),
         }
         if self.samples.len() > MAX_SAMPLES {
@@ -246,32 +249,41 @@ impl Trail {
 const HOUR_MS: f64 = 3_600_000.0;
 
 /// How fast `trail` has been filling over the last seventh of its window (an
-/// hour at least): the last day of a week, the last hour of five. A window is
-/// empty when it opens, so its start is a sample every trail has, and a trail
-/// younger than the span measures from there: with no history at all, the
-/// burn is the window's average since it opened.
+/// hour at least): the last day of a week, the last hour of five, or since the
+/// window opened when that is sooner. A window is empty when it opens, so its
+/// start is a sample every trail has.
 fn burn(trail: &Trail, reading: &Reading) -> Option<Burn> {
     let minutes = i64::from(reading.minutes);
     let start = reading.start();
     let at = reading.at.timestamp_millis();
     let span = (minutes / 7).max(60) * 60_000;
     let from = (at - span).max(start);
-    let (since, used) = trail
-        .samples
-        .iter()
-        .rev()
-        .find(|(t, _)| *t <= from)
-        .copied()
-        .unwrap_or((start, 0));
-    let hours = (at - since) as f64 / HOUR_MS;
+    let hours = (at - from) as f64 / HOUR_MS;
     if hours <= 0.0 {
         return None;
     }
-    let per_hour = (f64::from(reading.used) - f64::from(used)).max(0.0) / hours;
+    let used = used_at(&trail.samples, (start, 0), from);
+    let per_hour = (f64::from(reading.used) - used).max(0.0) / hours;
     Some(Burn {
         per_hour,
-        over_minutes: u32::try_from((at - since) / 60_000).unwrap_or(u32::MAX),
+        over_minutes: u32::try_from((at - from) / 60_000).unwrap_or(u32::MAX),
     })
+}
+
+/// The figure at `at`: held between two equal samples, and on a straight line
+/// between two that differ, the move falling somewhere nobody saw.
+fn used_at(samples: &[(i64, u8)], origin: (i64, u8), at: i64) -> f64 {
+    let points = std::iter::once(&origin).chain(samples.iter().filter(|(t, _)| *t > origin.0));
+    let mut before = origin;
+    for &(t, used) in points {
+        if t > at {
+            let (t0, u0) = before;
+            let share = (at - t0) as f64 / (t - t0) as f64;
+            return f64::from(u0) + (f64::from(used) - f64::from(u0)) * share;
+        }
+        before = (t, used);
+    }
+    f64::from(before.1)
 }
 
 /// Every window a usage snapshot reports, by the name its trail goes by.
@@ -430,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn a_trail_takes_a_sample_when_the_figure_moves_and_not_when_it_is_carried() {
+    fn a_trail_keeps_when_each_figure_was_first_and_last_seen_and_not_a_carried_one() {
         let m = Machine::new("a_trail_takes");
         let start = Utc::now();
         let reset = start + Duration::hours(4);
@@ -448,7 +460,7 @@ mod tests {
             start + Duration::minutes(50),
         );
         let history = m.history();
-        assert_eq!(samples(&history), [vec![10, 14, 20]]);
+        assert_eq!(samples(&history), [vec![10, 10, 14, 14, 20]]);
         let trail = &history.trails[0];
         assert_eq!(trail.credential.as_deref(), Some("work"));
         assert_eq!(trail.window, "primary");
@@ -682,7 +694,7 @@ mod tests {
         let reset = Utc::now() + Duration::hours(3);
         let burn = burn_after(&m, &[(120, 30)], reset, 300);
         assert_eq!(burn.per_hour, 15.0);
-        assert_eq!(burn.over_minutes, 120);
+        assert_eq!(burn.over_minutes, 60);
     }
 
     #[test]
@@ -692,8 +704,8 @@ mod tests {
         let burn = burn_after(&m, &[(10, 10), (50, 40), (110, 40), (180, 40)], reset, 300);
         assert_eq!(burn.per_hour, 0.0);
         assert_eq!(
-            burn.over_minutes, 130,
-            "the figure has held since minute 50"
+            burn.over_minutes, 60,
+            "the figure held at 40 through the last hour"
         );
 
         let m = Machine::new("burn-steady");
@@ -712,7 +724,7 @@ mod tests {
         let m = Machine::new("burn-slower");
         let reset = Utc::now() + Duration::hours(1);
         let burn = burn_after(&m, &[(167 * 60, 1)], reset, 10080);
-        assert_eq!(burn.per_hour, 1.0 / 167.0);
+        assert!((burn.per_hour - 1.0 / 167.0).abs() < 1e-12, "{burn:?}");
     }
 
     #[test]
@@ -721,7 +733,7 @@ mod tests {
         let reset = Utc::now() + Duration::days(2);
         let day = 24 * 60;
         let burn = burn_after(&m, &[(day, 10), (3 * day, 20), (5 * day, 44)], reset, 10080);
-        assert_eq!(burn.over_minutes, u32::try_from(2 * day).unwrap());
+        assert_eq!(burn.over_minutes, u32::try_from(day).unwrap());
         assert_eq!(burn.per_hour, 0.5);
     }
 

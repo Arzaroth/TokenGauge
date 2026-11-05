@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `scripts/install-omarchy.sh --placement` takes every Omarchy bar section
+  (`left`, `centerBegin`, `center`, `centerEnd`, `tray`, `right`), not only
+  `left`, `center` and `right`, and a rerun says how to move a widget that is
+  already enabled.
+
 ## [0.56.1] - 2026-11-05
 
 ### Fixed

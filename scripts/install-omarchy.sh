@@ -14,6 +14,7 @@ PLUGIN_ID="arzaroth.tokengauge"
 PLUGIN_SRC="$REPO_DIR/omarchy/$PLUGIN_ID"
 PLUGIN_DIR="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
 PLACEMENT="${TOKENGAUGE_PLACEMENT:-right}"
+SECTIONS="left, centerBegin, center, centerEnd, tray, right"
 
 if [[ -t 1 ]]; then B="\033[0;34m"; G="\033[0;32m"; Y="\033[0;33m"; R="\033[0;31m"; Z="\033[0m"; else B=""; G=""; Y=""; R=""; Z=""; fi
 info()    { printf '%b\n' "${B}$*${Z}"; }
@@ -26,12 +27,12 @@ while [[ $# -gt 0 ]]; do
   --placement=*) PLACEMENT="${1#*=}" ;;
   --placement)
     # set -u would abort on an unset $2 before the check below ever ran.
-    [[ $# -ge 2 ]] || { fail "--placement needs a value (left, center, or right)"; exit 1; }
+    [[ $# -ge 2 ]] || { fail "--placement needs a value ($SECTIONS)"; exit 1; }
     PLACEMENT="$2"
     shift
     ;;
   -h | --help)
-    echo "Usage: install-omarchy.sh [--placement=left|center|right]"
+    echo "Usage: install-omarchy.sh [--placement=left|centerBegin|center|centerEnd|tray|right]"
     exit 0
     ;;
   *) fail "unknown option: $1"; exit 1 ;;
@@ -40,8 +41,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PLACEMENT" in
-left | center | right) ;;
-*) fail "placement must be left, center, or right (got '$PLACEMENT')"; exit 1 ;;
+left | centerBegin | center | centerEnd | tray | right) ;;
+*) fail "placement must be one of $SECTIONS (got '$PLACEMENT')"; exit 1 ;;
 esac
 
 command -v omarchy-shell >/dev/null 2>&1 || {
@@ -91,6 +92,7 @@ omarchy-shell -q shell rescanPlugins >/dev/null 2>&1 || true
 
 if omarchy-plugin-list 2>/dev/null | grep -q "^$PLUGIN_ID .*enabled"; then
   info "Plugin already enabled; leaving its bar placement alone."
+  info "Move it with: omarchy plugin enable $PLUGIN_ID --section <section>"
 else
   info "Enabling the widget in the $PLACEMENT section..."
   omarchy-plugin-enable "$PLUGIN_ID" "$PLACEMENT"

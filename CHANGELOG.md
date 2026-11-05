@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.56.1] - 2026-11-05
+
 ### Fixed
 
 - A Codex credit balance reads as credits (`62,500`), not dollars

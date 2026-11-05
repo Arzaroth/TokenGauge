@@ -19,7 +19,10 @@ it up.
 
 A 5h window at 62% is 62% on every machine, because the provider counts the
 credential, not the host. Merging limits would double-count them, so merging
-applies to the cost side only and the `limits` section is untouched.
+applies to the cost side only and the `limits` section is untouched. What is
+per-machine about a window is when it was watched: the contribution carries
+each device's window trails so a machine that was off sees what the others
+saw meanwhile ([below](#window-trails)), one figure seen twice, never added.
 
 That is why this is not a snapshot sync. `tokengauge-usage.json` holds provider
 payloads, error strings and account detail, none of which should leave the
@@ -155,7 +158,15 @@ Plaintext payload, before compression and encryption:
       "i": 812, "o": 3122, "cw5": 15300, "cw1h": 0, "cr": 981233 }
   ],
   "days": [ { "d": "2026-08-25", "n": 812, "x": "5a1e9f3c00b47d21" } ],
-  "adopted": [ { "id": "dd8008fc...", "atMs": 1792512000000 } ]
+  "adopted": [ { "id": "dd8008fc...", "atMs": 1792512000000 } ],
+  "windows": {
+    "trails": [ { "provider": "claude", "accountDigest": "3b1f...", "window": "secondary",
+                  "windowMinutes": 10080, "resetsAt": "2026-11-07T08:00:00Z",
+                  "samples": [[1792512000000, 12], [1792515600000, 14]] } ],
+    "closed": [ { "provider": "claude", "accountDigest": "3b1f...", "window": "secondary",
+                  "windowMinutes": 10080, "openedAt": "...", "resetsAt": "...",
+                  "used": 81, "seenAt": "..." } ]
+  }
 }
 ```
 
@@ -171,6 +182,11 @@ Plaintext payload, before compression and encryption:
   the instant it did, omitted
   when empty (so the content hash of a device that adopted nothing is
   unchanged). Carried on every contribution, not only the first.
+- `windows` holds the device's open trails and the windows it closed within
+  the wire retention, for the providers taking part, omitted when empty (so
+  the content hash of a device with none is unchanged). Only logins with an
+  `accountDigest` are shared, and never under their store name. See
+  [Window trails](#window-trails).
 - Size: a heavy week is about 900 buckets, ~90 KB of JSON; 35 days stays under
   half a megabyte before gzip.
 
@@ -233,7 +249,10 @@ Each cycle that rebuilds costs, before `write_cache_full`:
 2. Pull peers conditionally and merge them into the store, then fold every
    device a peer's `adopted` names (`settle_adoptions`) and drop the peers
    whose object vanished (`drop_vanished`, below).
-3. Feed the store into `build_report` as synthetic events beside local ones.
+3. Fold every peer's `windows` the store holds into the window history
+   (`window_history::fold_fleet`), from the store rather than from what was
+   just pulled, so a fold another writer raced away comes back next cycle.
+4. Feed the store into `build_report` as synthetic events beside local ones.
 
 The merged `CostInfo` lands in the snapshot where the local one did, so every
 frontend shows the fleet number with no frontend code, and the revision file
@@ -331,9 +350,33 @@ retention:
 10. **A lost machine cannot be revoked**, only out-run by re-keying (decision 0002).
 11. **A future schema** is skipped with a named reason, never a parse crash.
 
+## Window trails
+
+A trail ([../features/window-history.md](../features/window-history.md)) is
+filed by store name on its machine and by account digest on the wire. The
+store keeps each peer's `windows` as last published (`DeviceSlice.windows`,
+dropped once a trail's reset has passed), and a cycle folds them in
+(`WindowHistory::fold`):
+
+- A peer trail joins a local trail of the same provider, account and window.
+  A login no local trail holds is not taken in: remuda reads trails by name.
+- **Same instance** (reset instants within a twentieth of the window, an hour
+  at most): the samples merge. The later `openedAt` of the two wins, and what
+  this machine held before it closes. A drop between the two sides' samples
+  is a refill neither saw: the instance opens at the last sample before it.
+- **A later instance** replaces the local trail under the local name, closing
+  it; an earlier one is history already.
+- **A closed window** is filed once per instance (account, window, reset and
+  opening alike); whichever machine saw it last keeps its figure. One for an
+  account this machine holds takes the local name.
+
+The merged trail is what the burn, the pace and remuda's drain chart read, and
+what this machine publishes next, so a machine relays what it took in.
+
 ## Non-goals
 
-Merging limits or credits (wrong by construction). Team or multi-user fleets.
+Adding or averaging limits or credits across machines (wrong by construction;
+a trail is one figure seen twice). Team or multi-user fleets.
 Real-time push. P2P and LAN discovery. Several transports at once. A settings
 pane per desktop. A hosted service.
 
@@ -348,6 +391,7 @@ against a fake transport (`crates/tokengauge-core/tests/fleet_sync.rs`).
 ## Sources
 
 - `crates/tokengauge-core/src/sync/{mod,contribution,fleet,hour,crypto,transport,s3,run,report,store,config}.rs` (`adopt`, `settle_adoptions`, `drop_vanished`, `store::lock`, `merge_local`, `KeySet`)
+- `crates/tokengauge-core/src/window_history.rs` (`SharedWindows`, `WindowHistory::fold`, `fold_fleet`)
 - `crates/tokengauge-core/src/fetch.rs` (`native_costs`), `crates/tokengauge-core/src/cost/mod.rs` (`window_start`, `dedup_key`, `read_checked`, `TranscriptRead`)
 - `crates/tokengauge-core/src/device.rs`, `crates/tokengauge-core/src/doctor.rs`
 - `crates/tokengauge-waybar/src/sync_cli.rs`, `crates/tokengauge-tui/src/sync_view.rs`

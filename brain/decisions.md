@@ -238,6 +238,33 @@ projection through the panel spec, with no frontend change.
 - *The trail inside the snapshot*: every frontend reads the snapshot on a short
   cycle, and a week of samples per window is weight none of them draws.
 - *A history kept across resets*: the burn needs the current instance only.
+
+### 0008 Window trails ride on the fleet contribution
+
+**Decision.** Each contribution carries its device's open trails and the
+windows it closed within the wire retention (`windows`), filed by account
+digest with the store name left out. The fleet store keeps each peer's as it
+last published them, and every cycle folds them into the local window
+history: samples of one instance merge, the later refill wins, a drop between
+two machines' samples is a refill neither saw, a later instance replaces an
+older trail, and a closed window is filed once per instance.
+
+**Why.** A window's figure is the same on every machine, but when it was
+watched is not: a machine that was off for days has a trail with a hole in
+it, and its burn and remuda's drain chart were measured across the hole.
+Another machine watched it fill. Folding into the history file rather than
+into a separate fleet trail means the burn, the pace and remuda read one
+thing, and need no change.
+
+**Rejected.**
+- *A trail object per device beside the contribution*: a second object per
+  machine to list, seal and drop, for data that is a few kilobytes.
+- *Folding at receipt only*: an unchanged object is not read again, so a fold
+  another writer raced away would stay lost until the peer next published.
+- *Trails by store name*: each machine names its logins its own way, and a
+  name says nothing about which account it holds today.
+- *Summing or averaging figures across machines*: they are one figure seen
+  twice, not two to add.
   Past windows can be added when something draws them.
 
 **Consequences.** `burn` and the history file are part of decision 0003's

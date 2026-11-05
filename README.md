@@ -316,6 +316,10 @@ money is tokens times each machine's own price table, so shipping a figure would
 let a stale price table on one machine skew the fleet total. Never prompts, file
 paths, project names or credentials.
 
+Each limit's percent over time, filed by a digest of the account rather than
+the login's name, so a machine that was off for a week still sees how the week
+filled and paces from it.
+
 Each object is sealed with XChaCha20-Poly1305 under the fleet key and named with
 a keyed digest, so whoever holds the folder or bucket cannot read your usage or
 tell which object belongs to which machine. Two things it does **not** hide:

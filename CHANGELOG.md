@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Fleet sync shares each limit's history: a machine that was off or signed out
+  for days takes in what the others saw meanwhile, so its pace, its projection
+  and remuda's drain chart are measured from the whole week rather than across
+  the gap. Finished weeks are shared too.
+
 ### Fixed
 
 - A limit's projection after a quiet start follows how fast it is filling

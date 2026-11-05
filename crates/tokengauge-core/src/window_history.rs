@@ -496,7 +496,7 @@ impl Trail {
             .find(|&i| points[i].1 < points[i - 1].1)
         {
             let before = points[drop - 1];
-            ended.extend(self.closed_at(self.opened_at.min(peer.opened_at), before));
+            ended.extend(self.closed_at(opened, before));
             opened = DateTime::from_timestamp_millis(before.0);
             points.drain(..drop);
         }
@@ -1450,6 +1450,24 @@ mod tests {
         assert_eq!(history.closed.len(), 1);
         assert_eq!(history.closed[0].used, 60);
         assert_eq!(history.closed[0].opened_at, reset - Duration::days(7));
+    }
+
+    #[test]
+    fn a_drop_after_a_refill_closes_the_instance_from_that_refill() {
+        let (reset, h) = week();
+        let refilled = DateTime::from_timestamp_millis(h(75));
+        let mut ours = trail_of(Some("work"), "a", reset, &[(h(80), 20), (h(85), 30)]);
+        ours.opened_at = refilled;
+        let mut history = WindowHistory {
+            trails: vec![ours],
+            closed: Vec::new(),
+        };
+        let mut theirs = trail_of(None, "a", reset, &[(h(60), 10), (h(90), 5)]);
+        theirs.opened_at = DateTime::from_timestamp_millis(h(50));
+        history.fold(&[&peer(vec![theirs], Vec::new())], Utc::now());
+        assert_eq!(history.closed.len(), 1);
+        assert_eq!(Some(history.closed[0].opened_at), refilled);
+        assert_eq!(history.closed[0].used, 30);
     }
 
     #[test]

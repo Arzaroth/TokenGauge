@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::hour::Hour;
 use crate::DeviceIdentity;
 use crate::cost::{Source, TokenCounts, UsageEvent, digest_u64};
+use crate::window_history::SharedWindows;
 use crate::{PROVIDERS, natively_read};
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -182,6 +183,10 @@ pub struct Contribution {
     /// still folds its own copy of them in.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adopted: Vec<Adopted>,
+    /// How full each limit window has been, so a machine that was off sees
+    /// what the others saw meanwhile.
+    #[serde(default, skip_serializing_if = "SharedWindows::is_empty")]
+    pub windows: SharedWindows,
 }
 
 /// One device another took over, and when.
@@ -309,6 +314,13 @@ pub fn content_hash(contribution: &Contribution) -> u64 {
     for adopted in &contribution.adopted {
         feed(&mut buf, adopted.id.as_bytes());
         feed(&mut buf, &adopted.at_ms.to_le_bytes());
+    }
+    if !contribution.windows.is_empty() {
+        feed(&mut buf, b"w");
+        feed(
+            &mut buf,
+            &serde_json::to_vec(&contribution.windows).unwrap_or_default(),
+        );
     }
     digest_u64(&[&buf])
 }

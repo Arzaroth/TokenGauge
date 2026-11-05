@@ -18,6 +18,7 @@ use super::contribution::{
 use super::hour::Hour;
 use crate::cost::pricing::{PriceArchive, PriceTable, month_key};
 use crate::cost::{Source, TokenCounts, UsageEvent};
+use crate::window_history::SharedWindows;
 use selvedge::usage::export::{self as usage_export, Row as UsageRow, TypeCosts, UsageExport};
 
 /// The calendar step a history series advances by.
@@ -91,6 +92,10 @@ pub struct DeviceSlice {
     /// nothing either way.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub counted_from: BTreeMap<String, Hour>,
+    /// A peer's limit windows as it last published them. Never this
+    /// device's own: those live in the window history.
+    #[serde(default, skip_serializing_if = "SharedWindows::is_empty")]
+    pub windows: SharedWindows,
 }
 
 /// A [`DeviceSlice`] as the store file holds it. `counted` is an index the
@@ -114,6 +119,8 @@ struct StoredSlice {
     counted: StoredCounted,
     #[serde(default)]
     counted_from: BTreeMap<String, Hour>,
+    #[serde(default)]
+    windows: SharedWindows,
 }
 
 #[derive(Deserialize)]
@@ -144,6 +151,7 @@ impl From<StoredSlice> for DeviceSlice {
             adopted: stored.adopted,
             counted,
             counted_from,
+            windows: stored.windows,
         }
     }
 }
@@ -551,6 +559,16 @@ impl FleetStore {
         slice.days.sort_by_key(|day| day.date);
 
         merge_adopted(&mut slice.adopted, contribution.adopted.iter().cloned());
+        slice.windows = contribution.windows.clone();
+    }
+
+    /// Every peer's limit windows, for folding into this machine's history.
+    pub fn peer_windows(&self, local_id: &str) -> Vec<&SharedWindows> {
+        self.devices
+            .iter()
+            .filter(|(id, slice)| id.as_str() != local_id && !slice.windows.is_empty())
+            .map(|(_, slice)| &slice.windows)
+            .collect()
     }
 
     /// Carry out every adoption a device has announced, on our own copy of the
@@ -636,6 +654,7 @@ impl FleetStore {
         for slice in self.devices.values_mut() {
             slice.buckets.retain(|bucket| bucket.hour >= floor);
             slice.days.retain(|day| day.date >= floor_date);
+            slice.windows.trails.retain(|trail| trail.resets_at > now);
             slice.covers_from = Some(match slice.covers_from {
                 Some(existing) => existing.max(floor),
                 None => floor,
@@ -734,6 +753,7 @@ impl FleetStore {
                 .cloned()
                 .collect(),
             adopted: slice.adopted.clone(),
+            windows: SharedWindows::default(),
         })
     }
 
@@ -1876,6 +1896,7 @@ mod tests {
             buckets: bucketize(&[event("claude", "opus", hour("2026-08-09T09"), 10, Some(4))]),
             days: Vec::new(),
             adopted: Vec::new(),
+            windows: Default::default(),
         });
 
         assert_eq!(
@@ -2539,5 +2560,61 @@ mod tests {
         let montreal = FixedOffset::west_opt(5 * 3600).expect("offset");
         assert_eq!(bucket.hour.date_at(paris).to_string(), "2026-01-14");
         assert_eq!(bucket.hour.date_at(montreal).to_string(), "2026-01-14");
+    }
+
+    #[test]
+    fn a_peers_windows_are_held_until_their_reset_and_move_the_hash() {
+        use crate::window_history::Trail;
+        let now = hour("2026-08-25T12").start();
+        let trail = |resets_at: DateTime<Utc>| Trail {
+            provider: "claude".into(),
+            credential: None,
+            account_digest: Some("acct".into()),
+            window: "secondary".into(),
+            window_minutes: 10080,
+            resets_at,
+            samples: vec![(now.timestamp_millis(), 10)],
+            opened_at: None,
+        };
+        let mut store = FleetStore::new();
+        store.upsert_local(&device("a"), hour("2026-08-01T00"), &[], 1);
+        let mut contribution = Contribution {
+            schema_version: SCHEMA_VERSION,
+            device: device("b"),
+            written_at_ms: 5,
+            tz_offset_minutes: 0,
+            covers_from: hour("2026-08-01T00"),
+            providers: vec!["claude".into()],
+            buckets: Vec::new(),
+            days: Vec::new(),
+            adopted: Vec::new(),
+            windows: Default::default(),
+        };
+        let bare = content_hash(&contribution);
+        contribution.windows.trails = vec![
+            trail(now + chrono::Duration::days(2)),
+            trail(now + chrono::Duration::hours(1)),
+        ];
+        assert_ne!(content_hash(&contribution), bare);
+
+        store.absorb(&contribution);
+        let held = store.peer_windows("a");
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].trails.len(), 2);
+        assert!(
+            store.peer_windows("b").is_empty(),
+            "a device's own are never folded back"
+        );
+
+        store.prune(now + chrono::Duration::hours(2));
+        assert_eq!(store.peer_windows("a")[0].trails.len(), 1);
+
+        let text = serde_json::to_string(&store).unwrap();
+        let reread: FleetStore = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            reread.peer_windows("a")[0].trails.len(),
+            1,
+            "the store keeps them across runs"
+        );
     }
 }

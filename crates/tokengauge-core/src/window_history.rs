@@ -31,6 +31,14 @@ pub fn history_path(cache_file: &Path) -> PathBuf {
     parent.join("tokengauge-window-history.json")
 }
 
+/// This machine's history with its fleet's folded in, for readers only:
+/// nothing in it is published, so a key change forgets the old fleet here as
+/// it does in the fleet store.
+pub fn fleet_view_path(cache_file: &Path) -> PathBuf {
+    let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
+    parent.join("tokengauge-window-fleet.json")
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct WindowHistory {
     #[serde(default)]
@@ -88,6 +96,7 @@ pub struct Trail {
 }
 
 /// One window's figures as a fetch reported them.
+#[derive(Clone, Copy)]
 pub(crate) struct Reading {
     pub used: u8,
     pub minutes: u32,
@@ -201,14 +210,15 @@ impl WindowHistory {
         }
     }
 
-    /// The trail `reading` belongs to, started afresh when its window reset.
+    /// The index of the trail `reading` belongs to, started afresh when its
+    /// window reset.
     pub(crate) fn observe(
         &mut self,
         provider: &str,
         credential: (Option<&str>, Option<&str>),
         window: &str,
         reading: &Reading,
-    ) -> &Trail {
+    ) -> usize {
         let (name, account) = credential;
         let found = self.trails.iter().position(|t| {
             t.provider == provider && t.credential.as_deref() == name && t.window == window
@@ -234,7 +244,7 @@ impl WindowHistory {
             }
         };
         self.trails[index].observe(reading);
-        &self.trails[index]
+        index
     }
 
     /// Drops the trails whose window has reset: nothing reports on them any
@@ -252,14 +262,21 @@ impl WindowHistory {
 
 impl Trail {
     fn closed(&self) -> Option<ClosedWindow> {
-        let &(ms, used) = self.samples.last()?;
+        self.closed_at(self.opened_at, *self.samples.last()?)
+    }
+
+    fn closed_at(
+        &self,
+        opened_at: Option<DateTime<Utc>>,
+        (ms, used): (i64, u8),
+    ) -> Option<ClosedWindow> {
         (self.window_minutes >= CLOSED_MIN_MINUTES).then(|| ClosedWindow {
             provider: self.provider.clone(),
             credential: self.credential.clone(),
             account_digest: self.account_digest.clone(),
             window: self.window.clone(),
             window_minutes: self.window_minutes,
-            opened_at: self.opened_at.unwrap_or(
+            opened_at: opened_at.unwrap_or(
                 self.resets_at - chrono::Duration::minutes(i64::from(self.window_minutes)),
             ),
             resets_at: self.resets_at,
@@ -355,16 +372,62 @@ pub(crate) fn windows_mut(usage: &mut UsageSnapshot) -> Vec<(String, &mut UsageW
 }
 
 /// Adds what this fetch saw to the history beside `cache_file`, and sets each
-/// window's burn from its trail. A payload
-/// served stale saw nothing new, so it adds nothing. The time of a reading is
-/// the payload's own, not the write's: a stored credential's figures are
-/// carried between its fetches, and a carried figure is not a new sample.
-pub fn record(cache_file: &Path, payloads: &mut [ProviderPayload], now: DateTime<Utc>) {
+/// window's burn and opening from its trail with the fleet's samples of it
+/// folded in. A payload served stale saw nothing new, so it adds nothing. The
+/// time of a reading is the payload's own, not the write's: a stored
+/// credential's figures are carried between its fetches, and a carried figure
+/// is not a new sample. Only what this machine saw is kept in its history;
+/// the fleet's lands in the view beside it.
+pub fn record(
+    cache_file: &Path,
+    payloads: &mut [ProviderPayload],
+    peers: &[&SharedWindows],
+    now: DateTime<Utc>,
+) {
     let path = history_path(cache_file);
     let read = WindowHistory::read(&path);
     let readable = read.is_some();
     let mut history = read.unwrap_or_default();
     let before = history.clone();
+    let mut seen = Vec::new();
+    for_each_reading(payloads, now, |provider, credential, name, _, reading| {
+        seen.push(history.observe(provider, credential, name, &reading));
+    });
+    let view = history.with_fleet(peers, now);
+    let mut seen = seen.into_iter();
+    for_each_reading(payloads, now, |_, (_, account), _, window, reading| {
+        let Some(index) = seen.next() else {
+            return;
+        };
+        let own = &history.trails[index];
+        let trail = view
+            .trails
+            .get(index)
+            .filter(|t| near(t.resets_at, own.resets_at, own.window_minutes))
+            .unwrap_or(own);
+        let ours = own.same_account(account);
+        window.burn = ours.then(|| burn(trail, &reading)).flatten();
+        let opened = trail.opened_at.filter(|at| ours && *at <= reading.at);
+        window.opened_at = opened.map(|at| at.to_rfc3339()).or(window.opened_at.take());
+    });
+    history.prune(now);
+    if !readable {
+        drop_view(cache_file);
+        return;
+    }
+    if history != before
+        && let Ok(text) = serde_json::to_string(&history)
+    {
+        let _ = write_atomic(&path, text.as_bytes());
+    }
+    write_view(cache_file, &history, peers, now);
+}
+
+fn for_each_reading(
+    payloads: &mut [ProviderPayload],
+    now: DateTime<Utc>,
+    mut each: impl FnMut(&str, (Option<&str>, Option<&str>), &str, &mut UsageWindow, Reading),
+) {
     for payload in payloads.iter_mut().filter(|p| !p.stale) {
         let provider = payload.provider.clone();
         let credential = payload.credential.name.clone();
@@ -379,23 +442,241 @@ pub fn record(cache_file: &Path, payloads: &mut [ProviderPayload], now: DateTime
             .map_or(now, |at| at.with_timezone(&Utc).min(now));
         for (name, window) in windows_mut(usage) {
             if let Some(reading) = Reading::of(window, at) {
-                let trail = history.observe(
+                each(
                     &provider,
                     (credential.as_deref(), account.as_deref()),
                     &name,
-                    &reading,
+                    window,
+                    reading,
                 );
-                let ours = trail.same_account(account.as_deref());
-                window.burn = ours.then(|| burn(trail, &reading)).flatten();
-                let opened = trail.opened_at.filter(|at| ours && *at <= reading.at);
-                window.opened_at = opened.map(|at| at.to_rfc3339()).or(window.opened_at.take());
             }
         }
     }
-    history.prune(now);
-    if readable
-        && history != before
-        && let Ok(text) = serde_json::to_string(&history)
+}
+
+/// What a device shares with its fleet: the trails and closed windows of the
+/// logins whose account it knows, filed by account rather than by store name,
+/// since each machine names its logins its own way.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SharedWindows {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trails: Vec<Trail>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub closed: Vec<ClosedWindow>,
+}
+
+impl SharedWindows {
+    pub fn is_empty(&self) -> bool {
+        self.trails.is_empty() && self.closed.is_empty()
+    }
+
+    /// The trails, and the windows closed since `closed_since`, of the
+    /// providers in `providers`.
+    pub fn of(
+        history: &WindowHistory,
+        providers: &[String],
+        closed_since: DateTime<Utc>,
+    ) -> SharedWindows {
+        let shared = |provider: &str, account: &Option<String>| {
+            account.is_some() && providers.iter().any(|p| p.eq_ignore_ascii_case(provider))
+        };
+        SharedWindows {
+            trails: history
+                .trails
+                .iter()
+                .filter(|t| shared(&t.provider, &t.account_digest))
+                .map(|t| Trail {
+                    credential: None,
+                    ..t.clone()
+                })
+                .collect(),
+            closed: history
+                .closed
+                .iter()
+                .filter(|c| shared(&c.provider, &c.account_digest) && c.resets_at >= closed_since)
+                .map(|c| ClosedWindow {
+                    credential: None,
+                    ..c.clone()
+                })
+                .collect(),
+        }
+    }
+}
+
+impl Trail {
+    fn same_window(&self, other: &Trail) -> bool {
+        self.account_digest.is_some()
+            && self.account_digest == other.account_digest
+            && self.provider == other.provider
+            && self.window == other.window
+    }
+
+    /// Takes in another machine's samples of the same instance. Whichever
+    /// side saw the later refill opened it; a drop between the two sides'
+    /// samples is a refill neither saw. What came before the opening ended,
+    /// and is handed back as closed.
+    fn merge(&mut self, peer: &Trail) -> Vec<ClosedWindow> {
+        let mut ended = Vec::new();
+        let mut opened = self.opened_at.max(peer.opened_at);
+        if let Some(at) = opened.filter(|at| Some(*at) != self.opened_at)
+            && let Some(&last) = self
+                .samples
+                .iter()
+                .rev()
+                .find(|(t, _)| *t <= at.timestamp_millis())
+        {
+            ended.extend(self.closed_at(self.opened_at, last));
+        }
+        let floor = opened.map_or(i64::MIN, |at| at.timestamp_millis());
+        let mut points: Vec<(i64, u8)> = self
+            .samples
+            .iter()
+            .chain(&peer.samples)
+            .copied()
+            .filter(|(t, _)| *t > floor)
+            .collect();
+        points.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+        points.dedup_by_key(|p| p.0);
+        if let Some(drop) = (1..points.len())
+            .rev()
+            .find(|&i| points[i].1 < points[i - 1].1)
+        {
+            let before = points[drop - 1];
+            ended.extend(self.closed_at(opened, before));
+            opened = DateTime::from_timestamp_millis(before.0);
+            points.drain(..drop);
+        }
+        let mut samples: Vec<(i64, u8)> = Vec::with_capacity(points.len());
+        for point in points {
+            match samples.as_mut_slice() {
+                [.., (_, before), last] if *before == point.1 && last.1 == point.1 => {
+                    last.0 = point.0;
+                }
+                _ => samples.push(point),
+            }
+        }
+        if samples.len() > MAX_SAMPLES {
+            samples.drain(..samples.len() - MAX_SAMPLES);
+        }
+        self.samples = samples;
+        self.opened_at = opened;
+        ended
+    }
+}
+
+impl WindowHistory {
+    /// A copy of this history with the fleet's trails and closed windows
+    /// folded in, every trail at the index it has here.
+    fn with_fleet(&self, peers: &[&SharedWindows], now: DateTime<Utc>) -> WindowHistory {
+        let mut view = self.clone();
+        view.fold(peers, now);
+        view
+    }
+
+    /// Folds the fleet's trails and closed windows into this history.
+    /// A trail only ever joins one this machine keeps for the same account:
+    /// the samples of the same instance merge, a later instance takes the
+    /// trail's place, and an earlier one is history already.
+    pub fn fold(&mut self, peers: &[&SharedWindows], now: DateTime<Utc>) {
+        let mut ended = Vec::new();
+        for peer in peers.iter().flat_map(|p| &p.trails) {
+            if peer.account_digest.is_none() || peer.resets_at <= now {
+                continue;
+            }
+            for local in self.trails.iter_mut().filter(|t| t.same_window(peer)) {
+                if near(local.resets_at, peer.resets_at, local.window_minutes) {
+                    ended.extend(local.merge(peer));
+                } else if peer.resets_at > local.resets_at {
+                    ended.extend(local.closed());
+                    *local = Trail {
+                        credential: local.credential.take(),
+                        ..peer.clone()
+                    };
+                }
+            }
+        }
+        let closed = peers.iter().flat_map(|p| &p.closed).cloned();
+        for record in ended.into_iter().chain(closed) {
+            self.close(record);
+        }
+    }
+
+    /// Files a closed window once: the same instance seen from another
+    /// machine keeps whichever saw it last.
+    fn close(&mut self, record: ClosedWindow) {
+        if record.account_digest.is_none() {
+            return;
+        }
+        let same = |c: &ClosedWindow| {
+            c.account_digest == record.account_digest
+                && c.provider == record.provider
+                && c.window == record.window
+                && near(c.resets_at, record.resets_at, record.window_minutes)
+                && near(c.opened_at, record.opened_at, record.window_minutes)
+        };
+        if let Some(kept) = self.closed.iter_mut().find(|c| same(c)) {
+            if record.seen_at > kept.seen_at {
+                kept.used = record.used;
+                kept.seen_at = record.seen_at;
+            }
+            return;
+        }
+        let credential = record.credential.clone().or_else(|| {
+            let ours = |provider: &str, account: &Option<String>| {
+                provider == record.provider && *account == record.account_digest
+            };
+            self.trails
+                .iter()
+                .filter(|t| ours(&t.provider, &t.account_digest))
+                .map(|t| t.credential.clone())
+                .chain(
+                    self.closed
+                        .iter()
+                        .filter(|c| ours(&c.provider, &c.account_digest))
+                        .map(|c| c.credential.clone()),
+                )
+                .flatten()
+                .next()
+        });
+        self.closed.push(ClosedWindow {
+            credential,
+            ..record
+        });
+    }
+}
+
+/// Rewrites the fleet view beside `cache_file` from this machine's history
+/// and what the fleet store holds now. Run on every sync cycle, so peers the
+/// store dropped, a key change's among them, leave the view with it.
+pub fn refresh_fleet_view(cache_file: &Path, peers: &[&SharedWindows], now: DateTime<Utc>) {
+    match WindowHistory::read(&history_path(cache_file)) {
+        Some(history) => write_view(cache_file, &history, peers, now),
+        None => drop_view(cache_file),
+    }
+}
+
+/// A view that cannot be rebuilt is gone rather than left to stand for a
+/// fleet the store may no longer hold.
+fn drop_view(cache_file: &Path) {
+    let _ = fs::remove_file(fleet_view_path(cache_file));
+}
+
+/// With no fleet the view is gone, and readers fall back to the history.
+fn write_view(
+    cache_file: &Path,
+    history: &WindowHistory,
+    peers: &[&SharedWindows],
+    now: DateTime<Utc>,
+) {
+    if peers.is_empty() {
+        drop_view(cache_file);
+        return;
+    }
+    let path = fleet_view_path(cache_file);
+    let mut view = history.with_fleet(peers, now);
+    view.prune(now);
+    if WindowHistory::read(&path).as_ref() != Some(&view)
+        && let Ok(text) = serde_json::to_string(&view)
     {
         let _ = write_atomic(&path, text.as_bytes());
     }
@@ -465,7 +746,7 @@ mod tests {
             mut payloads: Vec<ProviderPayload>,
             now: DateTime<Utc>,
         ) -> Vec<ProviderPayload> {
-            record(&self.cache, &mut payloads, now);
+            record(&self.cache, &mut payloads, &[], now);
             payloads
         }
 
@@ -1043,5 +1324,332 @@ mod tests {
             .primary
             .unwrap();
         assert_eq!(window.opened_at, Some(opened));
+    }
+
+    fn trail_of(
+        name: Option<&str>,
+        account: &str,
+        reset: DateTime<Utc>,
+        samples: &[(i64, u8)],
+    ) -> Trail {
+        Trail {
+            provider: "claude".into(),
+            credential: name.map(str::to_owned),
+            account_digest: Some(account.to_owned()),
+            window: "secondary".into(),
+            window_minutes: 10080,
+            resets_at: reset,
+            samples: samples.to_vec(),
+            opened_at: None,
+        }
+    }
+
+    fn week() -> (DateTime<Utc>, impl Fn(i64) -> i64) {
+        let reset = DateTime::from_timestamp(Utc::now().timestamp() + 2 * 86_400, 0).unwrap();
+        let start = (reset - Duration::days(7)).timestamp_millis();
+        (reset, move |hours: i64| start + hours * 3_600_000)
+    }
+
+    fn peer(trails: Vec<Trail>, closed: Vec<ClosedWindow>) -> SharedWindows {
+        SharedWindows { trails, closed }
+    }
+
+    #[test]
+    fn the_fleets_samples_shape_the_burn_and_stay_out_of_this_machines_history() {
+        let (reset, h) = week();
+        let at = |hours: i64| DateTime::from_timestamp_millis(h(hours)).unwrap();
+        let fetch = |m: &Machine, peers: &[&SharedWindows], hours: i64, used: u8| {
+            let mut payloads = vec![payload(Some("work"), at(hours), window(used, reset, 10080))];
+            payloads[0].credential.account_digest = Some("a".into());
+            record(&m.cache, &mut payloads, peers, at(hours));
+            payloads[0].usage.as_ref().unwrap().primary.clone().unwrap()
+        };
+        let theirs = peer(
+            vec![Trail {
+                window: "primary".into(),
+                ..trail_of(None, "a", reset, &[(h(100), 10), (h(110), 40)])
+            }],
+            Vec::new(),
+        );
+
+        let alone = Machine::new("fleet_alone");
+        fetch(&alone, &[], 1, 0);
+        let alone = fetch(&alone, &[], 119, 50).burn.unwrap().per_hour;
+
+        let m = Machine::new("fleet_view");
+        fetch(&m, &[], 1, 0);
+        let burn = fetch(&m, &[&theirs], 119, 50).burn.unwrap().per_hour;
+        assert!(burn > 1.5 && alone < 0.5, "{burn} against {alone}");
+        assert_eq!(samples(&m.history()), [vec![0, 50]]);
+        let view = WindowHistory::read(&fleet_view_path(&m.cache)).unwrap();
+        assert_eq!(samples(&view), [vec![0, 10, 40, 50]]);
+
+        fetch(&m, &[], 119 + 1, 50);
+        assert!(!fleet_view_path(&m.cache).exists(), "no fleet, no view");
+    }
+
+    #[test]
+    fn a_view_that_cannot_be_rebuilt_is_gone() {
+        let m = Machine::new("view_unreadable");
+        let view = fleet_view_path(&m.cache);
+        fs::write(&view, "{}").unwrap();
+        fs::create_dir_all(history_path(&m.cache)).unwrap();
+        let theirs = peer(Vec::new(), Vec::new());
+        refresh_fleet_view(&m.cache, &[&theirs], Utc::now());
+        assert!(!view.exists(), "a sync cycle drops it");
+
+        fs::write(&view, "{}").unwrap();
+        m.fetch(Vec::new(), Utc::now());
+        assert!(!view.exists(), "a write drops it");
+    }
+
+    #[test]
+    fn what_is_shared_is_filed_by_account_and_never_by_name() {
+        let (reset, h) = week();
+        let now = Utc::now();
+        let mut unknown = trail_of(Some("old"), "x", reset, &[(h(1), 5)]);
+        unknown.account_digest = None;
+        let mut codex = trail_of(Some("work"), "c", reset, &[(h(1), 5)]);
+        codex.provider = "codex".into();
+        let recent = ClosedWindow {
+            provider: "claude".into(),
+            credential: Some("work".into()),
+            account_digest: Some("a".into()),
+            window: "secondary".into(),
+            window_minutes: 10080,
+            opened_at: now - Duration::days(9),
+            resets_at: now - Duration::days(2),
+            used: 80,
+            seen_at: now - Duration::days(2),
+        };
+        let old = ClosedWindow {
+            resets_at: now - Duration::days(60),
+            ..recent.clone()
+        };
+        let history = WindowHistory {
+            trails: vec![
+                trail_of(Some("work"), "a", reset, &[(h(1), 5)]),
+                unknown,
+                codex,
+            ],
+            closed: vec![recent, old],
+        };
+        let shared = SharedWindows::of(&history, &["Claude".into()], now - Duration::days(35));
+        assert_eq!(shared.trails.len(), 1);
+        assert_eq!(shared.trails[0].credential, None);
+        assert_eq!(shared.trails[0].account_digest.as_deref(), Some("a"));
+        assert_eq!(shared.closed.len(), 1);
+        assert_eq!(shared.closed[0].credential, None);
+        assert_eq!(shared.closed[0].used, 80);
+    }
+
+    #[test]
+    fn a_peers_samples_fill_the_gap_this_machine_was_off_for() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(
+                Some("work"),
+                "a",
+                reset,
+                &[(h(1), 0), (h(2), 0), (h(100), 40)],
+            )],
+            closed: Vec::new(),
+        };
+        let theirs = peer(
+            vec![trail_of(
+                None,
+                "a",
+                reset + Duration::seconds(30),
+                &[(h(50), 10), (h(60), 10), (h(70), 10), (h(90), 30)],
+            )],
+            Vec::new(),
+        );
+        history.fold(&[&theirs], Utc::now());
+        let ours = &history.trails[0];
+        assert_eq!(
+            ours.samples,
+            [
+                (h(1), 0),
+                (h(2), 0),
+                (h(50), 10),
+                (h(70), 10),
+                (h(90), 30),
+                (h(100), 40)
+            ]
+        );
+        assert_eq!(ours.credential.as_deref(), Some("work"));
+        assert_eq!(
+            ours.resets_at, reset,
+            "this machine's own reset instant stands"
+        );
+
+        let again = history.clone();
+        history.fold(&[&theirs], Utc::now());
+        assert_eq!(history, again, "a fold is idempotent");
+    }
+
+    #[test]
+    fn another_account_or_window_is_left_alone() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(Some("work"), "a", reset, &[(h(1), 5)])],
+            closed: Vec::new(),
+        };
+        let mut session = trail_of(None, "a", reset, &[(h(2), 50)]);
+        session.window = "primary".into();
+        let theirs = peer(
+            vec![trail_of(None, "b", reset, &[(h(2), 50)]), session],
+            Vec::new(),
+        );
+        let before = history.clone();
+        history.fold(&[&theirs], Utc::now());
+        assert_eq!(history, before);
+    }
+
+    #[test]
+    fn a_refill_the_peer_saw_opens_this_machines_trail_and_closes_what_came_before() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(
+                Some("work"),
+                "a",
+                reset,
+                &[(h(10), 20), (h(20), 50)],
+            )],
+            closed: Vec::new(),
+        };
+        let mut refilled = trail_of(None, "a", reset, &[(h(80), 2), (h(90), 9)]);
+        refilled.opened_at = DateTime::from_timestamp_millis(h(75));
+        let start = reset - Duration::days(7);
+        let seen = |hours: i64| DateTime::from_timestamp_millis(h(hours)).unwrap();
+        let before_refill = ClosedWindow {
+            provider: "claude".into(),
+            credential: None,
+            account_digest: Some("a".into()),
+            window: "secondary".into(),
+            window_minutes: 10080,
+            opened_at: start,
+            resets_at: reset,
+            used: 70,
+            seen_at: seen(75),
+        };
+        history.fold(&[&peer(vec![refilled], vec![before_refill])], Utc::now());
+        let ours = &history.trails[0];
+        assert_eq!(ours.samples, [(h(80), 2), (h(90), 9)]);
+        assert_eq!(ours.opened_at, Some(seen(75)));
+        let records: Vec<_> = history
+            .closed
+            .iter()
+            .map(|c| (c.opened_at, c.used, c.seen_at, c.credential.as_deref()))
+            .collect();
+        assert_eq!(
+            records,
+            [(start, 70, seen(75), Some("work"))],
+            "the same week seen by both is filed once, as whoever saw it last"
+        );
+    }
+
+    #[test]
+    fn a_drop_between_the_two_sides_is_a_refill_neither_saw() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(
+                Some("work"),
+                "a",
+                reset,
+                &[(h(10), 40), (h(30), 60)],
+            )],
+            closed: Vec::new(),
+        };
+        let theirs = peer(
+            vec![trail_of(None, "a", reset, &[(h(90), 5), (h(95), 8)])],
+            Vec::new(),
+        );
+        history.fold(&[&theirs], Utc::now());
+        let ours = &history.trails[0];
+        assert_eq!(ours.samples, [(h(90), 5), (h(95), 8)]);
+        assert_eq!(ours.opened_at, DateTime::from_timestamp_millis(h(30)));
+        assert_eq!(history.closed.len(), 1);
+        assert_eq!(history.closed[0].used, 60);
+        assert_eq!(history.closed[0].opened_at, reset - Duration::days(7));
+    }
+
+    #[test]
+    fn a_drop_after_a_refill_closes_the_instance_from_that_refill() {
+        let (reset, h) = week();
+        let refilled = DateTime::from_timestamp_millis(h(75));
+        let mut ours = trail_of(Some("work"), "a", reset, &[(h(80), 20), (h(85), 30)]);
+        ours.opened_at = refilled;
+        let mut history = WindowHistory {
+            trails: vec![ours],
+            closed: Vec::new(),
+        };
+        let mut theirs = trail_of(None, "a", reset, &[(h(60), 10), (h(90), 5)]);
+        theirs.opened_at = DateTime::from_timestamp_millis(h(50));
+        history.fold(&[&peer(vec![theirs], Vec::new())], Utc::now());
+        assert_eq!(history.closed.len(), 1);
+        assert_eq!(Some(history.closed[0].opened_at), refilled);
+        assert_eq!(history.closed[0].used, 30);
+    }
+
+    #[test]
+    fn a_later_instance_takes_the_trails_place_under_this_machines_name() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(
+                Some("work"),
+                "a",
+                reset,
+                &[(h(10), 40), (h(30), 60)],
+            )],
+            closed: Vec::new(),
+        };
+        let next = reset + Duration::days(7);
+        let theirs = peer(vec![trail_of(None, "a", next, &[(h(200), 5)])], Vec::new());
+        history.fold(&[&theirs], Utc::now());
+        assert_eq!(history.trails[0].resets_at, next);
+        assert_eq!(history.trails[0].samples, [(h(200), 5)]);
+        assert_eq!(history.trails[0].credential.as_deref(), Some("work"));
+        assert_eq!(history.closed[0].used, 60);
+        assert_eq!(history.closed[0].resets_at, reset);
+
+        let earlier = peer(vec![trail_of(None, "a", reset, &[(h(40), 70)])], Vec::new());
+        let before = history.clone();
+        history.fold(&[&earlier], Utc::now());
+        assert_eq!(history, before, "an earlier instance is history already");
+    }
+
+    #[test]
+    fn a_closed_week_this_machine_never_saw_is_filed_under_its_name_for_the_account() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(Some("work"), "a", reset, &[(h(1), 5)])],
+            closed: Vec::new(),
+        };
+        let last_week = ClosedWindow {
+            provider: "claude".into(),
+            credential: None,
+            account_digest: Some("a".into()),
+            window: "secondary".into(),
+            window_minutes: 10080,
+            opened_at: reset - Duration::days(14),
+            resets_at: reset - Duration::days(7),
+            used: 91,
+            seen_at: reset - Duration::days(7) - Duration::hours(1),
+        };
+        let stranger = ClosedWindow {
+            account_digest: Some("z".into()),
+            ..last_week.clone()
+        };
+        history.fold(&[&peer(Vec::new(), vec![last_week, stranger])], Utc::now());
+        let names: Vec<_> = history
+            .closed
+            .iter()
+            .map(|c| (c.account_digest.as_deref(), c.credential.as_deref(), c.used))
+            .collect();
+        assert_eq!(
+            names,
+            [(Some("a"), Some("work"), 91), (Some("z"), None, 91)]
+        );
     }
 }

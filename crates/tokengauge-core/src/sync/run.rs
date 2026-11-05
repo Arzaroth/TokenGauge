@@ -9,6 +9,7 @@ use super::report::{DeviceStatus, OverlapNote, SkippedObject, SyncStatus};
 use super::{SCHEMA_VERSION, crypto, store, transport};
 use crate::TokenGaugeConfig;
 use crate::cost::UsageEvent;
+use crate::window_history::{SharedWindows, WindowHistory};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
 use std::path::PathBuf;
@@ -238,12 +239,17 @@ fn cycle(
     let providers = syncing_providers(config);
     let own_name = key.object_name(&device.id);
 
-    if let Some(contribution) = store.contribution(
+    let history_path = crate::window_history::history_path(&config.cache_file);
+    if let Some(mut contribution) = store.contribution(
         &device.id,
         now,
         &providers,
         i64::from(config.sync.retention_days),
     ) {
+        if let Some(history) = WindowHistory::read(&history_path) {
+            let since = now - chrono::Duration::days(i64::from(config.sync.retention_days).max(1));
+            contribution.windows = SharedWindows::of(&history, &providers, since);
+        }
         let hash = publish_stamp(&contribution, &transport.describe(), &own_name);
         if store.published_hash != Some(hash) {
             let body =
@@ -328,6 +334,12 @@ fn cycle(
     if same_target && own_listed {
         store.drop_vanished(&device.id, &listed, |id| key.object_name(id));
     }
+
+    crate::window_history::refresh_fleet_view(
+        &config.cache_file,
+        &store.peer_windows(&device.id),
+        now,
+    );
 
     store.last_pull_ms = Some(now.timestamp_millis());
     Ok(())
@@ -675,6 +687,7 @@ mod tests {
             }],
             days: Vec::new(),
             adopted: Vec::new(),
+            windows: Default::default(),
         }
     }
 

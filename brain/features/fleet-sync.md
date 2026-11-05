@@ -2,7 +2,8 @@
 
 One set of figures across every machine you code on: the cost, token and burn
 rows cover the whole fleet, with a TOKENS BY DEVICE section showing where the
-spend came from. No service, no account: each machine writes one encrypted
+spend came from, and each limit's history is filled in by whichever machine
+was watching ([window-history.md](window-history.md)). No service, no account: each machine writes one encrypted
 object only it ever writes, into a folder your sync tool handles or an
 S3-compatible bucket. Mechanism: [../architecture/sync.md](../architecture/sync.md);
 decisions [0001 and 0002](../decisions.md#fleet-sync).

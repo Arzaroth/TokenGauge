@@ -53,6 +53,14 @@ account starts its own trail.
   over; one that does not parse starts afresh.
 - Writing it does not bump `tokengauge-revision`: it changes nothing a frontend
   draws until the snapshot does.
+- **With fleet sync on, other machines fill in a view of it.** This file holds
+  only what this machine saw, and is all it publishes. The trails and closed
+  windows the fleet published for the same accounts are folded with it into
+  `tokengauge-window-fleet.json`, rewritten at every write and every sync
+  cycle and removed when there is no fleet or the history cannot be read, so a machine that was off reads
+  the samples the others took meanwhile. The burn and the opening are taken
+  from the view ([../architecture/sync.md](../architecture/sync.md#window-trails),
+  [decision 0008](../decisions.md#0008-window-trails-ride-on-the-fleet-contribution)).
 
 ## The burn
 
@@ -76,6 +84,6 @@ assumed. `perHour` is not rounded.
 
 ## Sources
 
-- `crates/tokengauge-core/src/window_history.rs` (`record`, `Trail`, `burn`)
+- `crates/tokengauge-core/src/window_history.rs` (`record`, `Trail`, `burn`, `fold`, `SharedWindows`)
 - `crates/tokengauge-core/src/snapshot.rs` (`write_cache_full`)
 - `crates/tokengauge-core/src/payload.rs` (`UsageWindow.burn`, `Burn`)

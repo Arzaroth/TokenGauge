@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Fleet sync shares each limit's history: a machine that was off or signed out
+  for days takes in what the others saw meanwhile, so its pace, its projection
+  and remuda's drain chart are measured from the whole week rather than across
+  the gap. Finished weeks are shared too. Each machine shares only what it saw
+  itself, and the fleet's view lands in `tokengauge-window-fleet.json` beside
+  its own history, so a new fleet key forgets the old fleet's.
+
 ### Fixed
 
 - A limit's projection after a quiet start follows how fast it is filling

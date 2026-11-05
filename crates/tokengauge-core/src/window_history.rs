@@ -1252,4 +1252,264 @@ mod tests {
             .unwrap();
         assert_eq!(window.opened_at, Some(opened));
     }
+
+    fn trail_of(
+        name: Option<&str>,
+        account: &str,
+        reset: DateTime<Utc>,
+        samples: &[(i64, u8)],
+    ) -> Trail {
+        Trail {
+            provider: "claude".into(),
+            credential: name.map(str::to_owned),
+            account_digest: Some(account.to_owned()),
+            window: "secondary".into(),
+            window_minutes: 10080,
+            resets_at: reset,
+            samples: samples.to_vec(),
+            opened_at: None,
+        }
+    }
+
+    fn week() -> (DateTime<Utc>, impl Fn(i64) -> i64) {
+        let reset = DateTime::from_timestamp(Utc::now().timestamp() + 2 * 86_400, 0).unwrap();
+        let start = (reset - Duration::days(7)).timestamp_millis();
+        (reset, move |hours: i64| start + hours * 3_600_000)
+    }
+
+    fn peer(trails: Vec<Trail>, closed: Vec<ClosedWindow>) -> SharedWindows {
+        SharedWindows { trails, closed }
+    }
+
+    #[test]
+    fn what_is_shared_is_filed_by_account_and_never_by_name() {
+        let (reset, h) = week();
+        let now = Utc::now();
+        let mut unknown = trail_of(Some("old"), "x", reset, &[(h(1), 5)]);
+        unknown.account_digest = None;
+        let mut codex = trail_of(Some("work"), "c", reset, &[(h(1), 5)]);
+        codex.provider = "codex".into();
+        let recent = ClosedWindow {
+            provider: "claude".into(),
+            credential: Some("work".into()),
+            account_digest: Some("a".into()),
+            window: "secondary".into(),
+            window_minutes: 10080,
+            opened_at: now - Duration::days(9),
+            resets_at: now - Duration::days(2),
+            used: 80,
+            seen_at: now - Duration::days(2),
+        };
+        let old = ClosedWindow {
+            resets_at: now - Duration::days(60),
+            ..recent.clone()
+        };
+        let history = WindowHistory {
+            trails: vec![
+                trail_of(Some("work"), "a", reset, &[(h(1), 5)]),
+                unknown,
+                codex,
+            ],
+            closed: vec![recent, old],
+        };
+        let shared = SharedWindows::of(&history, &["Claude".into()], now - Duration::days(35));
+        assert_eq!(shared.trails.len(), 1);
+        assert_eq!(shared.trails[0].credential, None);
+        assert_eq!(shared.trails[0].account_digest.as_deref(), Some("a"));
+        assert_eq!(shared.closed.len(), 1);
+        assert_eq!(shared.closed[0].credential, None);
+        assert_eq!(shared.closed[0].used, 80);
+    }
+
+    #[test]
+    fn a_peers_samples_fill_the_gap_this_machine_was_off_for() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(
+                Some("work"),
+                "a",
+                reset,
+                &[(h(1), 0), (h(2), 0), (h(100), 40)],
+            )],
+            closed: Vec::new(),
+        };
+        let theirs = peer(
+            vec![trail_of(
+                None,
+                "a",
+                reset + Duration::seconds(30),
+                &[(h(50), 10), (h(60), 10), (h(70), 10), (h(90), 30)],
+            )],
+            Vec::new(),
+        );
+        history.fold(&[&theirs], Utc::now());
+        let ours = &history.trails[0];
+        assert_eq!(
+            ours.samples,
+            [
+                (h(1), 0),
+                (h(2), 0),
+                (h(50), 10),
+                (h(70), 10),
+                (h(90), 30),
+                (h(100), 40)
+            ]
+        );
+        assert_eq!(ours.credential.as_deref(), Some("work"));
+        assert_eq!(
+            ours.resets_at, reset,
+            "this machine's own reset instant stands"
+        );
+
+        let again = history.clone();
+        history.fold(&[&theirs], Utc::now());
+        assert_eq!(history, again, "a fold is idempotent");
+    }
+
+    #[test]
+    fn another_account_or_window_is_left_alone() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(Some("work"), "a", reset, &[(h(1), 5)])],
+            closed: Vec::new(),
+        };
+        let mut session = trail_of(None, "a", reset, &[(h(2), 50)]);
+        session.window = "primary".into();
+        let theirs = peer(
+            vec![trail_of(None, "b", reset, &[(h(2), 50)]), session],
+            Vec::new(),
+        );
+        let before = history.clone();
+        history.fold(&[&theirs], Utc::now());
+        assert_eq!(history, before);
+    }
+
+    #[test]
+    fn a_refill_the_peer_saw_opens_this_machines_trail_and_closes_what_came_before() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(
+                Some("work"),
+                "a",
+                reset,
+                &[(h(10), 20), (h(20), 50)],
+            )],
+            closed: Vec::new(),
+        };
+        let mut refilled = trail_of(None, "a", reset, &[(h(80), 2), (h(90), 9)]);
+        refilled.opened_at = DateTime::from_timestamp_millis(h(75));
+        let start = reset - Duration::days(7);
+        let seen = |hours: i64| DateTime::from_timestamp_millis(h(hours)).unwrap();
+        let before_refill = ClosedWindow {
+            provider: "claude".into(),
+            credential: None,
+            account_digest: Some("a".into()),
+            window: "secondary".into(),
+            window_minutes: 10080,
+            opened_at: start,
+            resets_at: reset,
+            used: 70,
+            seen_at: seen(75),
+        };
+        history.fold(&[&peer(vec![refilled], vec![before_refill])], Utc::now());
+        let ours = &history.trails[0];
+        assert_eq!(ours.samples, [(h(80), 2), (h(90), 9)]);
+        assert_eq!(ours.opened_at, Some(seen(75)));
+        let records: Vec<_> = history
+            .closed
+            .iter()
+            .map(|c| (c.opened_at, c.used, c.seen_at, c.credential.as_deref()))
+            .collect();
+        assert_eq!(
+            records,
+            [(start, 70, seen(75), Some("work"))],
+            "the same week seen by both is filed once, as whoever saw it last"
+        );
+    }
+
+    #[test]
+    fn a_drop_between_the_two_sides_is_a_refill_neither_saw() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(
+                Some("work"),
+                "a",
+                reset,
+                &[(h(10), 40), (h(30), 60)],
+            )],
+            closed: Vec::new(),
+        };
+        let theirs = peer(
+            vec![trail_of(None, "a", reset, &[(h(90), 5), (h(95), 8)])],
+            Vec::new(),
+        );
+        history.fold(&[&theirs], Utc::now());
+        let ours = &history.trails[0];
+        assert_eq!(ours.samples, [(h(90), 5), (h(95), 8)]);
+        assert_eq!(ours.opened_at, DateTime::from_timestamp_millis(h(30)));
+        assert_eq!(history.closed.len(), 1);
+        assert_eq!(history.closed[0].used, 60);
+        assert_eq!(history.closed[0].opened_at, reset - Duration::days(7));
+    }
+
+    #[test]
+    fn a_later_instance_takes_the_trails_place_under_this_machines_name() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(
+                Some("work"),
+                "a",
+                reset,
+                &[(h(10), 40), (h(30), 60)],
+            )],
+            closed: Vec::new(),
+        };
+        let next = reset + Duration::days(7);
+        let theirs = peer(vec![trail_of(None, "a", next, &[(h(200), 5)])], Vec::new());
+        history.fold(&[&theirs], Utc::now());
+        assert_eq!(history.trails[0].resets_at, next);
+        assert_eq!(history.trails[0].samples, [(h(200), 5)]);
+        assert_eq!(history.trails[0].credential.as_deref(), Some("work"));
+        assert_eq!(history.closed[0].used, 60);
+        assert_eq!(history.closed[0].resets_at, reset);
+
+        let earlier = peer(vec![trail_of(None, "a", reset, &[(h(40), 70)])], Vec::new());
+        let before = history.clone();
+        history.fold(&[&earlier], Utc::now());
+        assert_eq!(history, before, "an earlier instance is history already");
+    }
+
+    #[test]
+    fn a_closed_week_this_machine_never_saw_is_filed_under_its_name_for_the_account() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(Some("work"), "a", reset, &[(h(1), 5)])],
+            closed: Vec::new(),
+        };
+        let last_week = ClosedWindow {
+            provider: "claude".into(),
+            credential: None,
+            account_digest: Some("a".into()),
+            window: "secondary".into(),
+            window_minutes: 10080,
+            opened_at: reset - Duration::days(14),
+            resets_at: reset - Duration::days(7),
+            used: 91,
+            seen_at: reset - Duration::days(7) - Duration::hours(1),
+        };
+        let stranger = ClosedWindow {
+            account_digest: Some("z".into()),
+            ..last_week.clone()
+        };
+        history.fold(&[&peer(Vec::new(), vec![last_week, stranger])], Utc::now());
+        let names: Vec<_> = history
+            .closed
+            .iter()
+            .map(|c| (c.account_digest.as_deref(), c.credential.as_deref(), c.used))
+            .collect();
+        assert_eq!(
+            names,
+            [(Some("a"), Some("work"), 91), (Some("z"), None, 91)]
+        );
+    }
 }

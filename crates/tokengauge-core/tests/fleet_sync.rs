@@ -1185,3 +1185,92 @@ fn new_usage_does_not_cover_for_a_missing_hour() {
         300
     );
 }
+
+#[test]
+fn a_peers_limit_windows_reach_this_machines_history_and_ours_reach_the_folder() {
+    use tokengauge_core::window_history::{SharedWindows, Trail, WindowHistory, history_path};
+
+    let root = scratch("windows");
+    let config = config(&root);
+    let since = (Utc::now() - Duration::days(7))
+        .with_timezone(&chrono::Local)
+        .date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+
+    let now = Utc::now();
+    let reset = chrono::DateTime::from_timestamp(now.timestamp() + 2 * 86_400, 0).unwrap();
+    let ms = |hours_ago: i64| (now - Duration::hours(hours_ago)).timestamp_millis();
+    let trail = |credential: Option<&str>, samples: &[(i64, u8)]| Trail {
+        provider: "claude".into(),
+        credential: credential.map(str::to_owned),
+        account_digest: Some("acct".into()),
+        window: "secondary".into(),
+        window_minutes: 10080,
+        resets_at: reset,
+        samples: samples.to_vec(),
+        opened_at: None,
+    };
+    let path = history_path(&config.cache_file);
+    let ours = WindowHistory {
+        trails: vec![trail(
+            Some("work"),
+            &[(ms(100), 10), (ms(99), 10), (ms(1), 40)],
+        )],
+        closed: Vec::new(),
+    };
+    std::fs::write(&path, serde_json::to_vec(&ours).unwrap()).unwrap();
+
+    let mut contribution = peer_contribution();
+    contribution.windows = SharedWindows {
+        trails: vec![trail(None, &[(ms(60), 20), (ms(30), 30)])],
+        closed: Vec::new(),
+    };
+    let name = key.object_name(PEER_ID);
+    let body = serde_json::to_vec(&contribution).expect("serialise");
+    let dir = root.join("shared").join("v1");
+    std::fs::create_dir_all(&dir).expect("shared dir");
+    std::fs::write(dir.join(&name), key.seal(&name, &body).expect("seal")).expect("write");
+
+    let status = sync::refresh(&config, &[], since, &[]).status;
+    assert_eq!(status.error, None);
+
+    let folded = WindowHistory::read(&path).unwrap();
+    assert_eq!(
+        folded.trails[0].samples,
+        [
+            (ms(100), 10),
+            (ms(99), 10),
+            (ms(60), 20),
+            (ms(30), 30),
+            (ms(1), 40)
+        ]
+    );
+    assert_eq!(folded.trails[0].credential.as_deref(), Some("work"));
+
+    let mine = published(&root, &key, &sync::local_device_id(&config));
+    assert_eq!(mine.windows.trails.len(), 1);
+    assert_eq!(
+        mine.windows.trails[0].credential, None,
+        "a store name never leaves"
+    );
+    assert_eq!(
+        mine.windows.trails[0].account_digest.as_deref(),
+        Some("acct")
+    );
+}
+
+fn peer_contribution() -> Contribution {
+    Contribution {
+        schema_version: SCHEMA_VERSION,
+        device: record(PEER_ID, "laptop"),
+        written_at_ms: Utc::now().timestamp_millis(),
+        tz_offset_minutes: 0,
+        covers_from: Hour::containing(Utc::now()).minus_days(30),
+        providers: vec!["claude".into()],
+        buckets: Vec::new(),
+        days: Vec::new(),
+        adopted: Vec::new(),
+        windows: Default::default(),
+    }
+}

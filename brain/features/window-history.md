@@ -57,7 +57,7 @@ account starts its own trail.
   only what this machine saw, and is all it publishes. The trails and closed
   windows the fleet published for the same accounts are folded with it into
   `tokengauge-window-fleet.json`, rewritten at every write and every sync
-  cycle and removed when there is no fleet, so a machine that was off reads
+  cycle and removed when there is no fleet or the history cannot be read, so a machine that was off reads
   the samples the others took meanwhile. The burn and the opening are taken
   from the view ([../architecture/sync.md](../architecture/sync.md#window-trails),
   [decision 0008](../decisions.md#0008-window-trails-ride-on-the-fleet-contribution)).

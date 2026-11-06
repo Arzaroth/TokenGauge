@@ -4544,8 +4544,8 @@ dependencies = [
 
 [[package]]
 name = "selvedge"
-version = "0.14.0"
-source = "git+https://github.com/Arzaroth/selvedge?tag=v0.14.0#21bb3c3a4a1f30017f56fd4c39f55cb56ee83b61"
+version = "0.15.0"
+source = "git+https://github.com/Arzaroth/selvedge?tag=v0.15.0#57c71ce0be77c510b90820fd40f63d9035d46edb"
 dependencies = [
  "anyhow",
  "http",

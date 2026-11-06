@@ -2710,6 +2710,19 @@ mod tests {
     /// figures belongs. Waybar has no button to hover - its tooltip *is* the
     /// hover surface - so it carries the same sentence as a line, and a right
     /// click is still the refresh.
+    /// `MultiEffect`'s default mask has a hard edge, which qmllint and the
+    /// harnesses cannot see: they never run the shader.
+    #[test]
+    fn the_omarchy_logo_mask_keeps_its_soft_edge() {
+        let sources = frontend_sources("quickshell", "omarchy/arzaroth.tokengauge", "qml");
+        for setting in ["maskThresholdMin: 0.5", "maskSpreadAtMin: 1.0"] {
+            assert!(
+                sources.iter().any(|src| src.contains(setting)),
+                "the logo mask lost `{setting}`"
+            );
+        }
+    }
+
     #[test]
     fn every_frontend_says_when_it_last_refreshed() {
         let frontends = [

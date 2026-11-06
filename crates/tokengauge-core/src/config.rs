@@ -33,6 +33,10 @@ pub struct ProvidersConfig {
     pub openrouter: Option<bool>,
     pub opencode: Option<bool>,
     pub cursor: Option<bool>,
+    pub copilot: Option<bool>,
+    pub deepseek: Option<bool>,
+    pub minimax: Option<bool>,
+    pub antigravity: Option<bool>,
     /// Removed-provider keys (e.g. `[providers.zai]`) left over from older
     /// configs. Captured so `--doctor` can warn instead of silently ignoring.
     #[serde(flatten)]

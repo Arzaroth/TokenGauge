@@ -990,6 +990,7 @@ fn cost_rows(
     if let Some((remaining, unit)) = credits {
         let value = match unit {
             CreditUnit::Usd => balance(remaining),
+            CreditUnit::Cny => format!("¥{remaining:.2}"),
             CreditUnit::Credits | CreditUnit::Other => credit_count(remaining),
         };
         out.push(PanelRow::new("Credits", value));
@@ -2759,6 +2760,16 @@ mod tests {
                  snapshot it already had"
             );
         }
+    }
+
+    #[test]
+    fn a_yuan_balance_is_drawn_in_yuan() {
+        let mut r = row();
+        r.credits = Some(110.0);
+        r.credit_unit = CreditUnit::Cny;
+        let spec = panel_spec(&r);
+        let cost = spec.iter().find(|s| s.id == "cost").expect("cost");
+        assert_eq!(cost.rows[0].value, "¥110.00");
     }
 
     #[test]

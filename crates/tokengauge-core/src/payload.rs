@@ -120,6 +120,7 @@ pub enum CreditUnit {
     #[default]
     Usd,
     Credits,
+    Cny,
     #[serde(other)]
     Other,
 }
@@ -371,6 +372,10 @@ impl Default for TokenGaugeConfig {
                 openrouter: None,
                 opencode: None,
                 cursor: None,
+                copilot: None,
+                deepseek: None,
+                minimax: None,
+                antigravity: None,
                 unknown: HashMap::new(),
             },
             cost_source: CostSource::default(),

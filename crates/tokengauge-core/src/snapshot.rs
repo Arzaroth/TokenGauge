@@ -414,6 +414,7 @@ mod tests {
     #[test]
     fn opening_a_panel_fetches_only_past_the_floor() {
         let dir = std::env::temp_dir().join(format!("tg-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let cache_file = dir.join("snapshot.json");
         let config = TokenGaugeConfig {

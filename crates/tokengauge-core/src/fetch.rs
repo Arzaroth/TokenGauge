@@ -899,6 +899,21 @@ mod tests {
     }
 
     #[test]
+    fn a_429_holds_nothing_it_cannot_date() {
+        for updated_at in [None, Some("yesterday".to_string())] {
+            let mut cached = claude_fetched_minutes_ago(1);
+            cached.usage.as_mut().unwrap().updated_at = updated_at;
+            let mut payloads = Vec::new();
+            let mut errors = vec![ProviderFetchError::new(
+                "claude".into(),
+                "Claude rate-limited - try again shortly",
+            )];
+            apply_stale_fallback(&mut payloads, &mut errors, &[cached]);
+            assert!(payloads[0].stale);
+        }
+    }
+
+    #[test]
     fn any_other_error_goes_stale_at_once() {
         let mut payloads = Vec::new();
         let mut errors = vec![ProviderFetchError::new("claude".into(), "HTTP 502")];

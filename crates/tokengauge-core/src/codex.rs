@@ -18,8 +18,8 @@ use serde_json::{Value, json};
 use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::{check_status, epoch_to_rfc3339, json_int, json_num, jwt_claims, trimmed};
 use crate::{
-    CredentialState, CreditUnit, Credits, ExtraRateWindow, ProviderPayload, UsageSnapshot,
-    UsageWindow, http_client, pct_u8, slug,
+    BankedResets, CredentialState, CreditUnit, Credits, ExtraRateWindow, ProviderPayload,
+    UsageSnapshot, UsageWindow, http_client, pct_u8, slug,
 };
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -545,11 +545,27 @@ struct UsageResponse {
     #[serde(default)]
     additional_rate_limits: Value,
     credits: Option<CreditsWire>,
+    #[serde(default, deserialize_with = "reset_credits_or_none")]
+    rate_limit_reset_credits: Option<ResetCreditsWire>,
     individual_limit: Option<IndividualLimit>,
     /// Team, enterprise and EDU workspaces report the administrator-defined
     /// monthly credit pool here instead of at the root.
     #[serde(default, alias = "spendControl")]
     spend_control: Option<SpendControl>,
+}
+
+#[derive(Deserialize)]
+struct ResetCreditsWire {
+    available_count: u32,
+}
+
+/// An extra on the response: a shape this does not know costs the marker,
+/// never the limits beside it.
+fn reset_credits_or_none<'de, D>(deserializer: D) -> Result<Option<ResetCreditsWire>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
 }
 
 #[derive(Deserialize)]
@@ -903,6 +919,13 @@ fn to_payload(
         return Err(anyhow!("Codex returned no usage windows"));
     }
 
+    let banked_resets = resp
+        .rate_limit_reset_credits
+        .filter(|credits| credits.available_count > 0)
+        .map(|credits| BankedResets {
+            available: credits.available_count,
+            expires_at: None,
+        });
     let plan = trimmed(resp.plan_type).or(plan_hint);
     let weight = plan_weight(plan.as_deref());
     let mut payload = ProviderPayload::live(
@@ -913,6 +936,7 @@ fn to_payload(
             secondary,
             login_method: plan.as_deref().map(plan_label),
             extra_rate_windows,
+            banked_resets,
             ..UsageSnapshot::at(now)
         },
     );

@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Codex's free limit resets are marked on the limits title, the way Claude's
   banked resets are.
 
+- The panel and every frontend read in French, following the locale or `[panel]
+  language = "auto" | "en" | "fr"`, with a switch in each settings pane.
+
 ### Changed
 
 - A provider answering 429 keeps its last figures current for thirty minutes

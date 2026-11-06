@@ -405,3 +405,14 @@ sessions beside the live login, nor a login changed outside remuda.
   no account id reaches anything written; the 16-hex digest is enough to match
   remuda's sidecars.
 
+### 0007 One translation table, in core, keyed by the English
+
+Five frontends in three languages each had a route to translation: KDE catalogues,
+GNOME gettext, Rust crates. Taking them would mean one set of files per toolkit and
+the same sentence translated up to five times. So `i18n.rs` holds the only table,
+keyed by the English sentence, and `--json` hands it to the frontends that cannot call
+it. English needs no table, and a missing entry reads in English rather than breaking.
+What it costs: no plural rules beyond one key per form, and GNOME's preferences and
+Plasma's configuration dialog stay English because they are built before any snapshot
+is read. French is reviewed by hand, so more languages are added when someone can
+review them, not machine-translated in bulk.

@@ -59,6 +59,7 @@ use the indexes.
 | [fleet-sync.md](features/fleet-sync.md) | Fleet-wide figures, TOKENS BY DEVICE, setup, status. |
 | [banked-resets.md](features/banked-resets.md) | Claude's banked limit resets on the limits title. |
 | [pace.md](features/pace.md) | Projected usage at reset per window. |
+| [i18n.md](features/i18n.md) | English and French: one table in core, `[panel] language`, what stays English |
 | [window-history.md](features/window-history.md) | Each window's trail, and how fast it has been filling. |
 | [notifications.md](features/notifications.md) | Threshold alerts, active plan only. |
 | [remuda-page.md](features/remuda-page.md) | The button that opens `remuda serve`'s page. |

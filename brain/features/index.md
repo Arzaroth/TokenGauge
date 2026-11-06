@@ -6,7 +6,8 @@ all six surfaces unless the doc records the exception. Back to the root map:
 
 | Feature | What it is | Key files |
 |---|---|---|
-| [Providers](providers.md) | The eight vendors read, their credentials, windows, readers and store support | `providers.rs`, `{claude,codex,kimi,grok,glm,openrouter,opencode,cursor}.rs` |
+| [Languages](i18n.md) | English and French: one table in core, `[panel] language`, what stays English |
+| [Providers](providers.md) | The vendors read, their credentials, windows, readers and store support | `providers.rs`, `{claude,codex,kimi,grok,glm,openrouter,opencode,cursor}.rs` |
 | [Several plans](several-plans.md) | Every stored credential's limits, ALL PLANS header weighted by plan multiplier, split bars, `[panel]` options | `credentials.rs`, `rows.rs`, `panel.rs`, `plan_weight` |
 | [Cost tracking](cost-tracking.md) | COST and TOKENS sections from local transcripts: today, month, 7-day, session, burn rate | `cost/`, `panel.rs` |
 | [Spend history](spend-history.md) | 30 d / 90 d / 12 mo chart on a second screen, past months at past prices, backfill, export | `history.rs`, `sync/fleet.rs`, `price-archive.json` |

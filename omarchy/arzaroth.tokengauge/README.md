@@ -2,7 +2,7 @@
 
 A bar widget for the Omarchy 4 Quickshell shell. One bar icon and one panel
 covering every AI coding subscription TokenGauge knows about: Claude, Codex,
-Kimi, Grok, GLM, OpenRouter, opencode Go and Cursor.
+Kimi, Grok, GLM, OpenRouter, opencode Go, Cursor, Copilot, Antigravity, DeepSeek and MiniMax.
 
 The QML is strictly a display. Everything it draws comes from a single
 `tokengauge --json` snapshot, the same one the KDE Plasma applet and the

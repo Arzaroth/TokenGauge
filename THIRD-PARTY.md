@@ -69,6 +69,10 @@ made.
 
 <https://github.com/basecamp/omarchy>, Copyright (c) David Heinemeier Hansson.
 
+`crates/tokengauge-core/src/{antigravity,copilot,deepseek,minimax}.rs` implement
+the provider protocols worked out in its `omarchy-agent-usage-*` collectors. The
+code is ours.
+
 `omarchy/arzaroth.tokengauge` is a third-party plugin for omarchy-shell,
 adapted from their own `omarchy.agents` plugin (`shell/plugins/agents/`). It
 carries structure from it: the panel's Flickable and KeyboardPanel
@@ -98,6 +102,6 @@ go stale: `git shortlog -sn`, or the
 
 ## Provider brand marks
 
-Anthropic, OpenAI, xAI, Moonshot, Z.ai, Cursor, OpenRouter and the rest remain
+Anthropic, OpenAI, xAI, Moonshot, Z.ai, Cursor, GitHub, Google, DeepSeek, MiniMax, OpenRouter and the rest remain
 the property of their owners. Their names and marks identify which service a
 row describes and nothing more.

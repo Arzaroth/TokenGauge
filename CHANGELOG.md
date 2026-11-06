@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opening a panel fetches current figures when the snapshot is at least five
   minutes old, on Plasma, GNOME, Omarchy and the tray.
 
+- Providers: GitHub Copilot, Google Antigravity, DeepSeek and MiniMax.
 - Codex's free limit resets are marked on the limits title, the way Claude's
   banked resets are.
 

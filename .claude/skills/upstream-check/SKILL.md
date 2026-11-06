@@ -40,7 +40,7 @@ pace.
 
 **Noise** - SwiftUI, menu bar layouts and tokens, widgets, Settings, iCloud and
 Keychain plumbing, localization, the Spend dashboard's internals, and every
-provider we do not ship (Antigravity, Kiro, Fireworks, T3 Chat, Devin, ...).
+provider we do not ship (Kiro, Fireworks, T3 Chat, Devin, ...).
 opencode **Zen** belongs on this list and opencode **Go** does not: they are
 separate products on one account and only Go is shipped.
 macOS-only paths we deliberately skipped stay skipped: browser-cookie imports

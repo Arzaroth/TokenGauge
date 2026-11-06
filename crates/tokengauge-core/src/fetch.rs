@@ -62,6 +62,25 @@ impl ProviderFetchError {
             active: false,
         }
     }
+
+    fn is_rate_limit(&self) -> bool {
+        self.raw.contains("rate-limited")
+    }
+}
+
+/// How long a provider's last figures stay current while it answers 429.
+const RATE_LIMIT_GRACE_MINUTES: i64 = 30;
+
+fn within_rate_limit_grace(payload: &ProviderPayload) -> bool {
+    payload
+        .usage
+        .as_ref()
+        .and_then(|usage| usage.updated_at.as_deref())
+        .and_then(|iso| chrono::DateTime::parse_from_rfc3339(iso).ok())
+        .is_some_and(|at| {
+            chrono::Utc::now().signed_duration_since(at)
+                < chrono::Duration::minutes(RATE_LIMIT_GRACE_MINUTES)
+        })
 }
 
 /// Shorten a fetch error for display. The native fetchers already produce
@@ -367,11 +386,15 @@ fn apply_stale_fallback(
             true // no fallback, keep the error
         } else {
             payloads.extend(cached.into_iter().map(|mut payload| {
-                payload.stale = true;
+                // A 429 says only "not now". Figures a few minutes old are
+                // still the account's figures, and a window that reset in the
+                // meantime is expired at render whatever this says.
+                let held = err.is_rate_limit() && within_rate_limit_grace(&payload);
+                payload.stale = !held;
                 // The error is about to be dropped, and it is the only record
                 // of why these figures stopped moving. A cached payload can
                 // already carry an older reason; this round's is the true one.
-                payload.stale_reason = Some(err.message.clone());
+                payload.stale_reason = (!held).then(|| err.message.clone());
                 if payload.credential.active.is_some() {
                     payload.credential.active = Some(err.active);
                 }
@@ -792,7 +815,7 @@ mod tests {
             credential(Some("perso"), false),
         ];
         let mut payloads = vec![credential(Some("work"), true)];
-        let mut failed = ProviderFetchError::new("claude".into(), "rate-limited");
+        let mut failed = ProviderFetchError::new("claude".into(), "HTTP 502");
         failed.credential = Some("perso".into());
         let mut errors = vec![failed];
 
@@ -803,7 +826,7 @@ mod tests {
         let perso = &payloads[1];
         assert_eq!(perso.credential.name.as_deref(), Some("perso"));
         assert!(perso.stale && perso.credential.active == Some(false));
-        assert_eq!(perso.stale_reason.as_deref(), Some("rate-limited"));
+        assert_eq!(perso.stale_reason.as_deref(), Some("HTTP 502"));
     }
 
     /// After a switch, the previous snapshot's live payload belongs to a
@@ -825,6 +848,62 @@ mod tests {
             1,
             "the live login's failure has nowhere to go"
         );
+    }
+
+    fn claude_fetched_minutes_ago(minutes: i64) -> ProviderPayload {
+        let fetched = chrono::Utc::now() - chrono::Duration::minutes(minutes);
+        ProviderPayload {
+            stale_reason: None,
+            reported_cost: None,
+            provider: "claude".into(),
+            version: None,
+            source: None,
+            usage: Some(crate::UsageSnapshot {
+                primary: None,
+                secondary: None,
+                tertiary: None,
+                updated_at: Some(fetched.to_rfc3339()),
+                login_method: None,
+                extra_rate_windows: Vec::new(),
+                banked_resets: None,
+            }),
+            credits: None,
+            error: None,
+            stale: false,
+            credential: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_429_keeps_figures_current_until_the_grace_runs_out() {
+        let ladder = crate::provider::check_status(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            "Claude",
+            "log in",
+        )
+        .unwrap_err()
+        .to_string();
+
+        for (minutes, stale) in [(5, false), (RATE_LIMIT_GRACE_MINUTES + 1, true)] {
+            let mut payloads = Vec::new();
+            let mut errors = vec![ProviderFetchError::new("claude".into(), &ladder)];
+            apply_stale_fallback(
+                &mut payloads,
+                &mut errors,
+                &[claude_fetched_minutes_ago(minutes)],
+            );
+            assert!(errors.is_empty());
+            assert_eq!(payloads[0].stale, stale, "{minutes} minutes old");
+            assert_eq!(payloads[0].stale_reason.is_some(), stale);
+        }
+    }
+
+    #[test]
+    fn any_other_error_goes_stale_at_once() {
+        let mut payloads = Vec::new();
+        let mut errors = vec![ProviderFetchError::new("claude".into(), "HTTP 502")];
+        apply_stale_fallback(&mut payloads, &mut errors, &[claude_fetched_minutes_ago(1)]);
+        assert!(payloads[0].stale);
     }
 
     #[test]

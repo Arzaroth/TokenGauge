@@ -64,9 +64,9 @@ mod gui {
     use tokengauge_core::{
         HistoryPanel, PROVIDERS, PanelConfig, PlansTotal, ProviderRow, Section, SectionKind,
         TokenGaugeConfig, Tone, cache_is_stale, config_set_oauth_provider, config_set_panel,
-        config_set_primary, default_config_path, fetch_all_providers, load_config,
-        panel_open_wants_fetch, panel_spec, payload_to_rows_with_costs, read_cache_full,
-        retain_enabled, write_cache_full, write_default_config,
+        config_set_primary, default_config_path, fetch_all_providers, i18n::LanguageSetting,
+        load_config, panel_open_wants_fetch, panel_spec, payload_to_rows_with_costs,
+        read_cache_full, retain_enabled, write_cache_full, write_default_config,
     };
     use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem};
     use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -836,6 +836,29 @@ mod gui {
                         if ui.add(chip).clicked() && !active {
                             panel.plans_total = mode;
                             changed = Some(("plans_total", label));
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Language").color(SUB));
+                    for language in [
+                        LanguageSetting::Auto,
+                        LanguageSetting::En,
+                        LanguageSetting::Fr,
+                    ] {
+                        let label = language.as_str();
+                        let active = panel.language == language;
+                        let chip =
+                            egui::Button::new(RichText::new(label).strong().color(if active {
+                                DARK
+                            } else {
+                                SUB
+                            }))
+                            .fill(if active { BLUE } else { CARD })
+                            .corner_radius(6);
+                        if ui.add(chip).clicked() && !active {
+                            panel.language = language;
+                            changed = Some(("language", label));
                         }
                     }
                 });

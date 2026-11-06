@@ -16,6 +16,7 @@
 //! banner, the provider selector and the settings pane are interactive and
 //! toolkit-shaped. Everything a user reads lives in this file.
 
+use crate::i18n::{date_pattern, tf, tr};
 use serde::Serialize;
 
 use crate::sync::DeviceCost;
@@ -261,7 +262,7 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
         if !status.is_empty() {
             out.push(Section {
                 id: "status",
-                title: "STATUS".into(),
+                title: tr("STATUS").into(),
                 kind: SectionKind::Rows,
                 rows: status,
                 group: None,
@@ -270,7 +271,7 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
 
         let limits = limit_rows(row);
         if !limits.is_empty() {
-            let mut title = vec!["LIMITS".to_string()];
+            let mut title = vec![tr("LIMITS").to_string()];
             title.extend(banked_marker(row));
             out.push(Section {
                 id: "limits",
@@ -293,7 +294,7 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
     if !cost_rows.is_empty() {
         out.push(Section {
             id: "cost",
-            title: "COST".into(),
+            title: tr("COST").into(),
             kind: SectionKind::Rows,
             rows: cost_rows,
             group: None,
@@ -305,7 +306,7 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
         if !days.is_empty() {
             out.push(Section {
                 id: "tokens_by_day",
-                title: "TOKENS BY DAY".into(),
+                title: tr("TOKENS BY DAY").into(),
                 kind: SectionKind::Bars,
                 rows: days,
                 group: None,
@@ -319,7 +320,7 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
                 // The cost layer is scoped to the calendar month. A bare
                 // "Tokens by model" next to a panel counting all-time is worse
                 // than a longer heading.
-                title: "TOKENS BY MODEL · THIS MONTH".into(),
+                title: tr("TOKENS BY MODEL · THIS MONTH").into(),
                 kind: SectionKind::Bars,
                 rows: models,
                 group: None,
@@ -330,7 +331,7 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
         if !devices.is_empty() {
             out.push(Section {
                 id: "tokens_by_device",
-                title: "TOKENS BY DEVICE · THIS MONTH".into(),
+                title: tr("TOKENS BY DEVICE · THIS MONTH").into(),
                 kind: SectionKind::Bars,
                 rows: devices,
                 group: None,
@@ -358,7 +359,7 @@ fn device_rows(cost: &CostInfo) -> Vec<PanelRow> {
             // and on waybar and GNOME never a tooltip either. A marker put
             // anywhere else is invisible on every surface, so it rides here.
             r.suffix = match () {
-                _ if device.partial => format!("{} · partial", money(device.usd)),
+                _ if device.partial => tf!("{usd} · partial", usd = money(device.usd)),
                 _ if !device.is_local => {
                     format!(
                         "{} · {}",
@@ -383,16 +384,16 @@ fn device_rows(cost: &CostInfo) -> Vec<PanelRow> {
 fn device_tooltip(device: &DeviceCost, now_ms: i64) -> String {
     let mut lines = vec![device.label.clone()];
     if device.is_local {
-        lines.push("This machine".to_string());
+        lines.push(tr("This machine").to_string());
     }
-    lines.push(format!(
-        "Last published  {}",
-        ago(device.updated_at_ms, now_ms)
+    lines.push(tf!(
+        "Last published  {when}",
+        when = ago(device.updated_at_ms, now_ms)
     ));
-    lines.push(format!("Tokens  {}", exact_tokens(device.tokens)));
+    lines.push(tf!("Tokens  {count}", count = exact_tokens(device.tokens)));
     if device.partial {
         lines.push(
-            "Joined the fleet part-way through the month, so its share is only what it has covered"
+            tr("Joined the fleet part-way through the month, so its share is only what it has covered")
                 .to_string(),
         );
     }
@@ -452,7 +453,7 @@ pub fn bar_tooltip(row: &ProviderRow, options: &PanelConfig) -> BarTooltip {
     }
     if let Some(plans) = sections.iter().find(|s| s.id == "plans") {
         lines.extend(plans.rows.iter().map(|r| BarTooltipLine {
-            label: format!("{} · all plans", r.label),
+            label: tf!("{label} · all plans", label = r.label),
             ..line(r, r.tone)
         }));
     }
@@ -493,7 +494,7 @@ pub fn bar_tooltip(row: &ProviderRow, options: &PanelConfig) -> BarTooltip {
 pub fn refresh_hint(updated_iso: Option<&str>, now_ms: i64) -> String {
     let Some(at) = updated_iso.and_then(|iso| chrono::DateTime::parse_from_rfc3339(iso).ok())
     else {
-        return "Last refresh unknown".to_string();
+        return tr("Last refresh unknown").to_string();
     };
     let at = at.with_timezone(&chrono::Local);
     // The clock alone answers "when" for anything today; past midnight it needs
@@ -501,13 +502,14 @@ pub fn refresh_hint(updated_iso: Option<&str>, now_ms: i64) -> String {
     let same_day = chrono::DateTime::from_timestamp_millis(now_ms)
         .is_some_and(|now| now.with_timezone(&chrono::Local).date_naive() == at.date_naive());
     let stamp = if same_day {
-        at.format("%H:%M")
+        at.format("%H:%M").to_string()
     } else {
-        at.format("%-d %b %H:%M")
+        at.format(&date_pattern("%-d %b %H:%M", &at)).to_string()
     };
-    format!(
-        "Last refreshed {} · {stamp}",
-        ago(at.timestamp_millis(), now_ms)
+    tf!(
+        "Last refreshed {when} · {stamp}",
+        when = ago(at.timestamp_millis(), now_ms),
+        stamp = stamp
     )
 }
 
@@ -515,10 +517,10 @@ pub fn refresh_hint(updated_iso: Option<&str>, now_ms: i64) -> String {
 pub fn ago(then_ms: i64, now_ms: i64) -> String {
     let seconds = ((now_ms - then_ms) / 1000).max(0);
     match seconds {
-        0..=89 => "just now".to_string(),
-        90..=5399 => format!("{}m ago", seconds / 60),
-        5400..=172_799 => format!("{}h ago", seconds / 3600),
-        _ => format!("{}d ago", seconds / 86_400),
+        0..=89 => tr("just now").to_string(),
+        90..=5399 => tf!("{count}m ago", count = seconds / 60),
+        5400..=172_799 => tf!("{count}h ago", count = seconds / 3600),
+        _ => tf!("{count}d ago", count = seconds / 86_400),
     }
 }
 
@@ -548,16 +550,19 @@ fn status_rows(row: &ProviderRow, credential: Option<&str>) -> Vec<PanelRow> {
         .stale_reason
         .as_deref()
         .filter(|r| !r.is_empty())
-        .unwrap_or("the last live fetch failed");
+        .unwrap_or(tr("the last live fetch failed"));
 
     let label = match credential {
-        Some(name) => format!("Stale · {name}"),
-        None => "Stale".to_string(),
+        Some(name) => tf!("Stale · {name}", name = name),
+        None => tr("Stale").to_string(),
     };
     let mut r = PanelRow::new(label, age);
     r.badge = ellipsize(reason, 72);
     r.badge_tone = Tone::Warn;
-    r.tooltip = format!("Showing the last figures that arrived.\n{reason}");
+    r.tooltip = tf!(
+        "Showing the last figures that arrived.\n{reason}",
+        reason = reason
+    );
     vec![r]
 }
 
@@ -578,6 +583,7 @@ struct Window<'a> {
 /// does not report has no meter, rather than a permanently empty one.
 fn windows(row: &ProviderRow) -> Vec<Window<'_>> {
     let (session, weekly, tertiary) = crate::window_labels(&row.provider);
+    let (session, weekly, tertiary) = (tr(session), tr(weekly), tr(tertiary));
     let fixed = [
         (
             session,
@@ -642,12 +648,12 @@ fn windows(row: &ProviderRow) -> Vec<Window<'_>> {
 fn reset_footnote(used: u8, reset: &str) -> String {
     if reset == "—" || reset.is_empty() {
         if used == 0 {
-            "not started".to_string()
+            tr("not started").to_string()
         } else {
             String::new()
         }
     } else {
-        format!("Resets {reset}")
+        tf!("Resets {reset}", reset = reset)
     }
 }
 
@@ -665,20 +671,27 @@ fn banked_marker(row: &ProviderRow) -> Option<String> {
     if left.is_some_and(|d| d.num_minutes() < 1) {
         return None;
     }
-    let noun = if banked.available == 1 {
-        "reset"
-    } else {
-        "resets"
-    };
     let expiry = left
         .map(|d| {
-            format!(
-                ", expires in {}",
-                crate::fmt::format_duration(d.num_minutes(), 2)
+            tf!(
+                ", expires in {left}",
+                left = crate::fmt::format_duration(d.num_minutes(), 2)
             )
         })
         .unwrap_or_default();
-    Some(format!("{} {noun} banked{expiry}", banked.available))
+    Some(if banked.available == 1 {
+        tf!(
+            "{count} reset banked{expiry}",
+            count = banked.available,
+            expiry = expiry
+        )
+    } else {
+        tf!(
+            "{count} resets banked{expiry}",
+            count = banked.available,
+            expiry = expiry
+        )
+    })
 }
 
 fn limit_rows(row: &ProviderRow) -> Vec<PanelRow> {
@@ -708,7 +721,7 @@ fn credential_name(row: &ProviderRow) -> String {
     row.credential
         .as_ref()
         .and_then(|c| c.name.clone())
-        .unwrap_or_else(|| "live login".to_string())
+        .unwrap_or_else(|| tr("live login").to_string())
 }
 
 /// A credential's weight in the combined figure, or `None` when it is left
@@ -761,7 +774,7 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
     if !status.is_empty() {
         out.push(Section {
             id: "status",
-            title: "STATUS".into(),
+            title: tr("STATUS").into(),
             kind: SectionKind::Rows,
             rows: status,
             group: None,
@@ -772,9 +785,9 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
         out.push(Section {
             id: "plans",
             title: if hidden > 0 {
-                format!("ALL PLANS · {} credentials", groups.len())
+                tf!("ALL PLANS · {count} credentials", count = groups.len())
             } else {
-                "ALL PLANS".into()
+                tr("ALL PLANS").into()
             },
             kind: SectionKind::Meters,
             rows: plans,
@@ -789,13 +802,17 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
         title.extend(credential.label.clone());
         title.extend(g.plan_label.clone().filter(|p| !p.is_empty()));
         if credential.active == Some(true) {
-            title.push("active".to_string());
+            title.push(tr("active").to_string());
         }
         if has_total && credential.state.is_none() && counted(g, options.plans_total).is_none() {
-            title.push("not in total".to_string());
+            title.push(tr("not in total").to_string());
         }
         if hidden > 0 && !has_total && credential.active == Some(true) {
-            title.push(format!("{} of {} shown", shown.len(), groups.len()));
+            title.push(tf!(
+                "{shown} of {total} shown",
+                shown = shown.len(),
+                total = groups.len()
+            ));
         }
         title.extend(banked_marker(g));
         let (kind, rows) = match credential.state {
@@ -805,7 +822,7 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
                 if rows.is_empty() {
                     (
                         SectionKind::Rows,
-                        vec![PanelRow::new("Limits", "none reported")],
+                        vec![PanelRow::new(tr("Limits"), tr("none reported"))],
                     )
                 } else {
                     (SectionKind::Meters, rows)
@@ -828,22 +845,26 @@ fn state_row(state: crate::CredentialState) -> PanelRow {
     use crate::CredentialState;
     let (label, badge, tooltip) = match state {
         CredentialState::Expired => (
-            "Expired",
-            "remuda refreshes it",
-            "Its access token has expired, so it was not asked about. remuda's timer refreshes stored credentials every 30 minutes; `remuda refresh` does it now.",
+            tr("Expired"),
+            tr("remuda refreshes it"),
+            tr(
+                "Its access token has expired, so it was not asked about. remuda's timer refreshes stored credentials every 30 minutes; `remuda refresh` does it now.",
+            ),
         ),
         CredentialState::Unverified => (
-            "Unverified",
-            "remuda re-identifies it",
-            "Its sidecar was written for other tokens, so whose they are is unknown. remuda re-identifies it on its next run.",
+            tr("Unverified"),
+            tr("remuda re-identifies it"),
+            tr(
+                "Its sidecar was written for other tokens, so whose they are is unknown. remuda re-identifies it on its next run.",
+            ),
         ),
         CredentialState::Other => (
-            "Unknown state",
+            tr("Unknown state"),
             "",
-            "A newer build wrote a state this one cannot draw.",
+            tr("A newer build wrote a state this one cannot draw."),
         ),
     };
-    let mut r = PanelRow::new(label, "not asked");
+    let mut r = PanelRow::new(label, tr("not asked"));
     r.badge = badge.to_string();
     r.badge_tone = Tone::Warn;
     r.tooltip = tooltip.to_string();
@@ -950,19 +971,19 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
                 .collect();
             match total_mode {
                 PlansTotal::Weighted => {
-                    r.badge = "estimate".to_string();
+                    r.badge = tr("estimate").to_string();
                     r.badge_tone = Tone::Dim;
                     lines.push(
-                        "Weighted by each plan's nominal multiplier. The real limits are not published, so this is an estimate."
+                        tr("Weighted by each plan's nominal multiplier. The real limits are not published, so this is an estimate.")
                             .to_string(),
                     );
                 }
                 PlansTotal::Absolute => {
-                    lines.push("Every plan counts as 100%, whatever its size.".to_string());
+                    lines.push(tr("Every plan counts as 100%, whatever its size.").to_string());
                 }
             }
             if !left_out.is_empty() {
-                lines.push(format!("Not in the total: {}", left_out.join(", ")));
+                lines.push(tf!("Not in the total: {names}", names = left_out.join(", ")));
             }
             r.tooltip = lines.join("\n");
             Some(r)
@@ -993,7 +1014,7 @@ fn cost_rows(
             CreditUnit::Cny => format!("¥{remaining:.2}"),
             CreditUnit::Credits | CreditUnit::Other => credit_count(remaining),
         };
-        out.push(PanelRow::new("Credits", value));
+        out.push(PanelRow::new(tr("Credits"), value));
     }
 
     // A cap drawing on that balance goes under it, because it is the narrower
@@ -1004,13 +1025,13 @@ fn cost_rows(
     if let Some(cap) = credit_limit {
         let title = credit_limit_title(cap.kind);
         let mut r = PanelRow::new(title, balance(cap.remaining()));
-        r.suffix = format!("of {}", balance(cap.limit));
+        r.suffix = tf!("of {cap}", cap = balance(cap.limit));
         if let Some(percent) = cap.used_percent() {
-            r.badge = format!("{percent}% used");
+            r.badge = tf!("{percent}% used", percent = percent);
             r.badge_tone = Tone::for_percent(percent);
         }
         if let Some(resets) = cap.resets.as_deref() {
-            r.tooltip = format!("{title} resets {resets}");
+            r.tooltip = tf!("{title} resets {when}", title = title, when = resets);
         }
         out.push(r);
     }
@@ -1026,21 +1047,21 @@ fn cost_rows(
 /// What a cap is called. The kind is the provider's; the words are ours.
 fn credit_limit_title(kind: CreditLimitKind) -> &'static str {
     match kind {
-        CreditLimitKind::Key => "Key limit",
-        CreditLimitKind::Subscription => "Plan limit",
-        CreditLimitKind::OnDemand => "On-demand cap",
+        CreditLimitKind::Key => tr("Key limit"),
+        CreditLimitKind::Subscription => tr("Plan limit"),
+        CreditLimitKind::OnDemand => tr("On-demand cap"),
         // A kind this build does not know still draws, under a word that is
         // true of every cap there is.
-        CreditLimitKind::Other => "Spend limit",
+        CreditLimitKind::Other => tr("Spend limit"),
     }
 }
 
 fn sync_row(note: &SyncNote) -> PanelRow {
     let mut r = PanelRow::new(
-        "Sync",
+        tr("Sync"),
         match note.devices {
-            1 => "1 device".to_string(),
-            n => format!("{n} devices"),
+            1 => tr("1 device").to_string(),
+            n => tf!("{count} devices", count = n),
         },
     );
     r.badge = note.headline.clone();
@@ -1050,7 +1071,7 @@ fn sync_row(note: &SyncNote) -> PanelRow {
     // sentence kept for the tooltip.
     r.suffix = ellipsize(&note.detail, 72);
     r.tooltip = if note.detail.is_empty() {
-        "Cost and token figures cover every machine in the fleet".to_string()
+        tr("Cost and token figures cover every machine in the fleet").to_string()
     } else {
         note.detail.clone()
     };
@@ -1060,36 +1081,36 @@ fn sync_row(note: &SyncNote) -> PanelRow {
 fn spend_rows(cost: &CostInfo) -> Vec<PanelRow> {
     let mut out = Vec::new();
 
-    let mut today = PanelRow::new("Today", money(cost.today_usd));
-    today.suffix = format!("{} tokens", format_tokens(cost.today_tokens));
+    let mut today = PanelRow::new(tr("Today"), money(cost.today_usd));
+    today.suffix = tf!("{count} tokens", count = format_tokens(cost.today_tokens));
 
     if let Some(pct) = cost.today_vs_avg_percent() {
-        today.badge = format!(
-            "{}{:.0}% vs prior avg",
-            if pct >= 0.0 { "↑" } else { "↓" },
-            pct.abs()
+        today.badge = tf!(
+            "{arrow}{percent}% vs prior avg",
+            arrow = if pct >= 0.0 { "↑" } else { "↓" },
+            percent = format!("{:.0}", pct.abs())
         );
         today.badge_tone = Tone::for_trend(pct);
     }
     out.push(today);
 
     if cost.session_usd > 0.0 {
-        out.push(PanelRow::new("Session", money(cost.session_usd)));
+        out.push(PanelRow::new(tr("Session"), money(cost.session_usd)));
     }
     if cost.weekly_usd > 0.0 {
-        out.push(PanelRow::new("7-day", money(cost.weekly_usd)));
+        out.push(PanelRow::new(tr("7-day"), money(cost.weekly_usd)));
     }
 
-    let mut month = PanelRow::new("This month", money(cost.monthly_usd));
-    month.suffix = format!("{} tokens", format_tokens(cost.monthly_tokens));
+    let mut month = PanelRow::new(tr("This month"), money(cost.monthly_usd));
+    month.suffix = tf!("{count} tokens", count = format_tokens(cost.monthly_tokens));
     out.push(month);
 
     if let Some(burn) = cost.burn_rate.as_ref()
         && burn.cost_per_hour > 0.0
     {
         out.push(PanelRow::new(
-            "Burn rate",
-            format!("{}/hr", money(burn.cost_per_hour)),
+            tr("Burn rate"),
+            tf!("{usd}/hr", usd = money(burn.cost_per_hour)),
         ));
     }
 
@@ -1120,7 +1141,7 @@ fn day_rows(cost: &CostInfo) -> Vec<PanelRow> {
             let is_today = day.date == today;
             let mut r = PanelRow::new(
                 if is_today {
-                    "Today".to_string()
+                    tr("Today").to_string()
                 } else {
                     weekday_label(&day.date)
                 },
@@ -1134,9 +1155,9 @@ fn day_rows(cost: &CostInfo) -> Vec<PanelRow> {
             });
             r.emphasized = is_today;
             r.tooltip = format!(
-                "{}\n{} tokens\n${:.2}",
+                "{}\n{}\n${:.2}",
                 long_date_label(&day.date),
-                exact_tokens(day.tokens),
+                tf!("{count} tokens", count = exact_tokens(day.tokens)),
                 day.usd
             );
             if let Some(split) = model_breakdown(&day.by_model) {
@@ -1217,11 +1238,11 @@ fn device_breakdown(devices: &[DeviceCost]) -> Option<String> {
                 d.label.clone(),
                 format_tokens(d.tokens),
                 money(d.usd),
-                if d.partial { "  · partial" } else { "" },
+                if d.partial { tr("  · partial") } else { "" },
             )
         })
         .collect();
-    breakdown("By device", &rows)
+    breakdown(tr("By device"), &rows)
 }
 
 /// Which models spent a day, under the day it splits. Capped and ordered by
@@ -1238,7 +1259,7 @@ fn model_breakdown(models: &[DayModelCost]) -> Option<String> {
             )
         })
         .collect();
-    breakdown("By model", &rows)
+    breakdown(tr("By model"), &rows)
 }
 
 fn model_tooltip(m: &ModelCost) -> String {
@@ -1247,20 +1268,23 @@ fn model_tooltip(m: &ModelCost) -> String {
     // zeroes, and a breakdown adding up to nothing is worse than none.
     let split = m.input_tokens + m.output_tokens + m.cache_creation_tokens + m.cache_read_tokens;
     if split > 0 {
-        lines.push(format!("Input   {}", exact_tokens(m.input_tokens)));
-        lines.push(format!("Output  {}", exact_tokens(m.output_tokens)));
-        lines.push(format!(
-            "Cache write  {}",
-            exact_tokens(m.cache_creation_tokens)
+        lines.push(tf!("Input   {count}", count = exact_tokens(m.input_tokens)));
+        lines.push(tf!(
+            "Output  {count}",
+            count = exact_tokens(m.output_tokens)
         ));
-        lines.push(format!(
-            "Cache read   {}",
-            exact_tokens(m.cache_read_tokens)
+        lines.push(tf!(
+            "Cache write  {count}",
+            count = exact_tokens(m.cache_creation_tokens)
+        ));
+        lines.push(tf!(
+            "Cache read   {count}",
+            count = exact_tokens(m.cache_read_tokens)
         ));
     } else {
-        lines.push(format!("{} tokens", exact_tokens(m.tokens)));
+        lines.push(tf!("{count} tokens", count = exact_tokens(m.tokens)));
     }
-    lines.push(format!("${:.2} this month", m.usd));
+    lines.push(tf!("{usd} this month", usd = format!("${:.2}", m.usd)));
     let mut out = lines.join("\n");
     if let Some(split) = device_breakdown(&m.by_device) {
         out.push_str(&split);
@@ -1408,7 +1432,7 @@ pub fn model_label(id: &str) -> String {
 /// `2026-08-22` -> `Sat`. Falls back to the raw date when it will not parse.
 fn weekday_label(date: &str) -> String {
     match chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-        Ok(d) => d.format("%a").to_string(),
+        Ok(d) => d.format(&date_pattern("%a", &d)).to_string(),
         Err(_) => date.to_string(),
     }
 }
@@ -1416,7 +1440,7 @@ fn weekday_label(date: &str) -> String {
 /// `2026-08-22` -> `Saturday 22 August`.
 fn long_date_label(date: &str) -> String {
     match chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-        Ok(d) => d.format("%A %-d %B").to_string(),
+        Ok(d) => d.format(&date_pattern("%A %-d %B", &d)).to_string(),
         Err(_) => date.to_string(),
     }
 }
@@ -2566,7 +2590,7 @@ mod tests {
     /// config.toml.
     #[test]
     fn every_settings_pane_offers_the_panel_options() {
-        let frontends: [(&str, &str, &str, [&str; 3]); 4] = [
+        let frontends: [(&str, &str, &str, [&str; 4]); 4] = [
             (
                 "tray",
                 "crates/tokengauge-tray/src",
@@ -2575,6 +2599,7 @@ mod tests {
                     "\"active_credential_only\",",
                     "Some((\"split_bars\"",
                     "Some((\"plans_total\"",
+                    "Some((\"language\"",
                 ],
             ),
             (
@@ -2585,6 +2610,7 @@ mod tests {
                     "root.setPanel(\"active_credential_only\"",
                     "root.setPanel(\"split_bars\"",
                     "root.setPanel(\"plans_total\"",
+                    "root.setPanel(\"language\"",
                 ],
             ),
             (
@@ -2595,6 +2621,7 @@ mod tests {
                     "toggle(_('Active credential only'), 'active_credential_only')",
                     "toggle(_('Split ALL PLANS bars'), 'split_bars')",
                     "write(total, 'plans_total'",
+                    "write(language, 'language'",
                 ],
             ),
             (
@@ -2605,6 +2632,7 @@ mod tests {
                     "{ key: \"active_credential_only\"",
                     "{ key: \"split_bars\"",
                     "usage.setPanel(\"plans_total\"",
+                    "usage.setPanel(\"language\"",
                 ],
             ),
         ];
@@ -2770,6 +2798,27 @@ mod tests {
         let spec = panel_spec(&r);
         let cost = spec.iter().find(|s| s.id == "cost").expect("cost");
         assert_eq!(cost.rows[0].value, "¥110.00");
+    }
+
+    #[test]
+    fn the_panel_reads_in_french() {
+        let mut row = row();
+        row.cost = Some(cost());
+        let (titles, labels) = crate::i18n::with_language(crate::i18n::Language::Fr, || {
+            let spec = panel_spec(&row);
+            (
+                spec.iter().map(|s| s.title.clone()).collect::<Vec<_>>(),
+                spec.iter()
+                    .flat_map(|s| s.rows.iter().map(|r| r.label.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        });
+        assert!(
+            titles.iter().any(|t| t.starts_with("LIMITES")),
+            "{titles:?}"
+        );
+        assert!(titles.iter().any(|t| t == "COÛT"), "{titles:?}");
+        assert!(labels.iter().any(|l| l == "Aujourd’hui"), "{labels:?}");
     }
 
     #[test]

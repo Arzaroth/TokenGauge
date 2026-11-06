@@ -708,6 +708,29 @@ Item {
                         onToggled: if (checked) root.setPanel("plans_total", "absolute")
                     }
                 }
+                RowLayout {
+                    visible: full.settingsOpen
+                    spacing: Kirigami.Units.smallSpacing
+                    PlasmaComponents.Label {
+                        textFormat: Text.PlainText
+                        text: i18n("Language:")
+                    }
+                    PlasmaComponents.RadioButton {
+                        text: i18n("System")
+                        checked: root.panelOptions.language === "auto"
+                        onToggled: if (checked) root.setPanel("language", "auto")
+                    }
+                    PlasmaComponents.RadioButton {
+                        text: "English"
+                        checked: root.panelOptions.language === "en"
+                        onToggled: if (checked) root.setPanel("language", "en")
+                    }
+                    PlasmaComponents.RadioButton {
+                        text: "Français"
+                        checked: root.panelOptions.language === "fr"
+                        onToggled: if (checked) root.setPanel("language", "fr")
+                    }
+                }
                 Kirigami.Separator {
                     Layout.fillWidth: true
                     visible: full.settingsOpen

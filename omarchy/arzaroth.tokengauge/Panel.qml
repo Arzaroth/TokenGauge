@@ -1224,6 +1224,21 @@ Panel {
             onChanged: function(value) { usage.setPanel("plans_total", value) }
           }
 
+          ButtonGroup {
+            visible: root.settingsOpen
+            width: parent.width
+            foreground: root.foreground
+            accent: Commons.Color.accent
+            fontFamily: root.fontFamily
+            options: [
+              { value: "auto", label: "System" },
+              { value: "en", label: "English" },
+              { value: "fr", label: "Français" }
+            ]
+            value: usage.panelOptions.language
+            onChanged: function(value) { usage.setPanel("language", value) }
+          }
+
           Text {
             textFormat: Text.PlainText
             visible: root.settingsOpen

@@ -263,9 +263,12 @@ fn format_reset_time(resets_at: Option<&str>, description: Option<String>) -> St
         // Under a minute left rounds to "in 0m", which reads as broken on a
         // countdown that now ticks.
         return if duration.num_seconds() >= 60 {
-            format!("in {}", fmt::format_duration(duration.num_minutes(), 3))
+            crate::i18n::tf!(
+                "in {duration}",
+                duration = fmt::format_duration(duration.num_minutes(), 3)
+            )
         } else {
-            "now".to_string()
+            crate::i18n::tr("now").to_string()
         };
     }
     // Fall back to description if we can't compute relative time

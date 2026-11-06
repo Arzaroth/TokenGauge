@@ -29,9 +29,9 @@ pub fn month_start(day: NaiveDate) -> NaiveDate {
 pub fn format_duration(minutes: i64, units: usize) -> String {
     let minutes = minutes.max(0);
     let parts = [
-        (minutes / 1440, 'd'),
-        ((minutes / 60) % 24, 'h'),
-        (minutes % 60, 'm'),
+        (minutes / 1440, crate::i18n::day_unit()),
+        ((minutes / 60) % 24, "h"),
+        (minutes % 60, "m"),
     ];
     let first = parts
         .iter()
@@ -52,13 +52,13 @@ pub fn format_updated_relative(iso: &str) -> Option<String> {
     let delta = Utc::now().signed_duration_since(ts.with_timezone(&Utc));
     let secs = delta.num_seconds().max(0);
     Some(if secs < 60 {
-        "just now".to_string()
+        crate::i18n::tr("just now").to_string()
     } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
+        crate::i18n::tf!("{count}m ago", count = secs / 60)
     } else if secs < 86400 {
-        format!("{}h ago", secs / 3600)
+        crate::i18n::tf!("{count}h ago", count = secs / 3600)
     } else {
-        format!("{}d ago", secs / 86400)
+        crate::i18n::tf!("{count}d ago", count = secs / 86400)
     })
 }
 

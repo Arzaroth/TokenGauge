@@ -224,6 +224,7 @@ pub(crate) fn json_snapshot(
         "panel_options": {
             "active_credential_only": config.panel.active_credential_only,
             "plans_total": config.panel.plans_total,
+            "language": config.panel.language,
             "split_bars": config.panel.split_bars,
         },
         "window": window,
@@ -389,11 +390,19 @@ fn notify_key(payload: &ProviderPayload, source: &str, slot: &str) -> String {
 }
 
 pub(crate) fn fire_notification(provider: &str, window: &str, pct: u8, threshold: u8, reset: &str) {
-    let title = format!("TokenGauge: {provider} {window} at {pct}%");
+    use tokengauge_core::i18n::{fill, tr};
+    let title = fill(
+        tr("TokenGauge: {provider} {window} at {percent}%"),
+        &[
+            ("provider", &provider),
+            ("window", &tr(window)),
+            ("percent", &pct),
+        ],
+    );
     let body = if reset == "—" {
         String::new()
     } else {
-        format!("resets {reset}")
+        fill(tr("resets {reset}"), &[("reset", &reset)])
     };
     let urgency = if threshold >= 90 {
         Urgency::Critical

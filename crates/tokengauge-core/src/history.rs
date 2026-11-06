@@ -14,6 +14,7 @@
 //! renders none of this - its second screen is the TUI, which left-click has
 //! opened since long before there was any history to look at.
 
+use crate::i18n::{date_pattern, tf, tr};
 use chrono::{Datelike, Days, FixedOffset, NaiveDate};
 use serde::{Deserialize, Serialize};
 
@@ -53,9 +54,9 @@ impl HistoryRange {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Days30 => "30 days",
-            Self::Days90 => "90 days",
-            Self::Months12 => "12 months",
+            Self::Days30 => tr("30 days"),
+            Self::Days90 => tr("90 days"),
+            Self::Months12 => tr("12 months"),
         }
     }
 
@@ -227,9 +228,16 @@ fn unpriced_note(unpriced: &std::collections::BTreeSet<String>) -> String {
     let names: Vec<&str> = unpriced.iter().take(SHOWN).map(String::as_str).collect();
     let listed = match unpriced.len().saturating_sub(SHOWN) {
         0 => names.join(", "),
-        rest => format!("{} and {rest} more", names.join(", ")),
+        rest => tf!(
+            "{names} and {rest} more",
+            names = names.join(", "),
+            rest = rest
+        ),
     };
-    format!("no price for {listed}: their tokens are counted, their cost is not")
+    tf!(
+        "no price for {listed}: their tokens are counted, their cost is not",
+        listed = listed
+    )
 }
 
 /// The series, and the models it could not rate.
@@ -272,11 +280,11 @@ fn build_series(
                 // `full_label` carries the rest for edges and tooltips.
                 label: match step {
                     Step::Day => date.format("%-d").to_string(),
-                    Step::Month => date.format("%b").to_string(),
+                    Step::Month => date.format(&date_pattern("%b", date)).to_string(),
                 },
                 full_label: match step {
-                    Step::Day => date.format("%-d %b %Y").to_string(),
-                    Step::Month => date.format("%B %Y").to_string(),
+                    Step::Day => date.format(&date_pattern("%-d %b %Y", date)).to_string(),
+                    Step::Month => date.format(&date_pattern("%B %Y", date)).to_string(),
                 },
                 key,
                 usd: money(usd),
@@ -353,8 +361,14 @@ fn covers(store: &FleetStore, offset: FixedOffset) -> String {
         .filter_map(|slice| slice.covers_from)
         .min();
     match earliest {
-        Some(hour) => format!("since {}", hour.date_at(offset).format("%-d %b %Y")),
-        None => "no history yet".to_string(),
+        Some(hour) => {
+            let date = hour.date_at(offset);
+            tf!(
+                "since {date}",
+                date = date.format(&date_pattern("%-d %b %Y", &date))
+            )
+        }
+        None => tr("no history yet").to_string(),
     }
 }
 

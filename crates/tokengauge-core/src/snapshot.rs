@@ -227,6 +227,19 @@ pub fn write_cache_full(
 /// missing, it has aged past `refresh_secs`, or it predates a provider that is
 /// enabled now. Every reader routes its fetch-or-serve decision through here so
 /// none of them can disagree about what stale means.
+pub const PANEL_OPEN_FETCH_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Whether opening a panel should fetch: the snapshot is at least
+/// [`PANEL_OPEN_FETCH_AFTER`] old. The floor is what keeps opening a panel
+/// repeatedly from walking every provider into a 429.
+pub fn panel_open_wants_fetch(config: &TokenGaugeConfig) -> bool {
+    std::fs::metadata(&config.cache_file)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|written_at| written_at.elapsed().ok())
+        .is_none_or(|age| age >= PANEL_OPEN_FETCH_AFTER)
+}
+
 pub fn cache_is_stale(config: &TokenGaugeConfig) -> bool {
     let Some(written_at) = fs::metadata(&config.cache_file)
         .and_then(|meta| meta.modified())

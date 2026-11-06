@@ -21,9 +21,9 @@ use tokengauge_core::now_ms;
 use tokengauge_core::project::TOKENGAUGE;
 use tokengauge_core::{
     TokenGaugeConfig, WaybarState, cache_is_stale, config_set_oauth_provider, config_set_primary,
-    ensure_cache_dir, load_config, payload_to_rows_with_costs, read_waybar_state,
-    refresh_in_progress, refresh_sentinel_path, signal_daemon_reload, waybar_state_path,
-    write_default_config, write_waybar_state,
+    ensure_cache_dir, load_config, panel_open_wants_fetch, payload_to_rows_with_costs,
+    read_waybar_state, refresh_in_progress, refresh_sentinel_path, signal_daemon_reload,
+    waybar_state_path, write_default_config, write_waybar_state,
 };
 
 #[derive(Parser, Debug)]
@@ -45,6 +45,10 @@ pub struct Args {
     /// ccusage. Pair with a waybar signal so the bar repolls immediately.
     #[arg(long)]
     refresh: bool,
+    /// A panel was opened: refresh when the snapshot is more than five minutes
+    /// old, otherwise do nothing.
+    #[arg(long)]
+    panel_opened: bool,
     /// Internal: run the actual fetch in a detached worker spawned by --refresh.
     /// Not for direct use.
     #[arg(long, hide = true)]
@@ -226,6 +230,7 @@ enum Action {
     Backfill,
     Update,
     Refresh,
+    PanelOpened,
     Rotate(RotateDir),
     Open(OpenTarget),
     /// `--waybar`: emit one waybar payload and exit.
@@ -306,6 +311,9 @@ impl Action {
         if args.refresh {
             add!("--refresh", Action::Refresh);
         }
+        if args.panel_opened {
+            add!("--panel-opened", Action::PanelOpened);
+        }
         if let Some(dir) = args.rotate {
             add!("--rotate", Action::Rotate(dir));
         }
@@ -332,6 +340,14 @@ impl Action {
             Action::Table
         };
         Ok(asked.pop().map(|(_, action)| action).unwrap_or(default))
+    }
+}
+
+/// The daemon owns the sentinel while it is up, so ask it first and only fork
+/// a worker when nothing answers.
+fn request_refresh(config: &TokenGaugeConfig) {
+    if try_send_command(config, &SocketCommand::Refresh).is_err() {
+        handle_refresh_quick(config);
     }
 }
 
@@ -395,10 +411,14 @@ fn main() -> Result<()> {
         Action::Backfill => handle_backfill(&config),
         Action::Update => handle_update(&config),
         Action::Refresh => {
-            // The daemon owns the sentinel while it is up, so ask it first and
-            // only fork a worker when nothing answers.
-            if try_send_command(&config, &SocketCommand::Refresh).is_err() {
-                handle_refresh_quick(&config);
+            request_refresh(&config);
+            Ok(())
+        }
+        Action::PanelOpened => {
+            if !refresh_in_progress(&refresh_sentinel_path(&config.cache_file))
+                && panel_open_wants_fetch(&config)
+            {
+                request_refresh(&config);
             }
             Ok(())
         }

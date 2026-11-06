@@ -64,9 +64,9 @@ mod gui {
     use tokengauge_core::{
         HistoryPanel, PROVIDERS, PanelConfig, PlansTotal, ProviderRow, Section, SectionKind,
         TokenGaugeConfig, Tone, cache_is_stale, config_set_oauth_provider, config_set_panel,
-        config_set_primary, default_config_path, fetch_all_providers, load_config, panel_spec,
-        payload_to_rows_with_costs, read_cache_full, retain_enabled, write_cache_full,
-        write_default_config,
+        config_set_primary, default_config_path, fetch_all_providers, load_config,
+        panel_open_wants_fetch, panel_spec, payload_to_rows_with_costs, read_cache_full,
+        retain_enabled, write_cache_full, write_default_config,
     };
     use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem};
     use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -216,6 +216,7 @@ mod gui {
     /// the UI never blocks on a file write.
     enum Action {
         Refresh,
+        PanelOpened,
         SetProvider(String, bool),
         SetPrimary(String),
         SetPanel(&'static str, &'static str),
@@ -1342,6 +1343,7 @@ mod gui {
             while let Ok(ev) = menu_rx.try_recv() {
                 if ev.id == ids.show {
                     show_window(&ctx);
+                    let _ = action_tx.send(Action::PanelOpened);
                 } else if ev.id == ids.refresh {
                     let _ = action_tx.send(Action::Refresh);
                 } else if ev.id == ids.sync {
@@ -1402,6 +1404,7 @@ mod gui {
                     ));
                     drop(flyout);
                     show_window(&ctx);
+                    let _ = action_tx.send(Action::PanelOpened);
                 }
             }
             thread::sleep(Duration::from_millis(120));
@@ -1524,7 +1527,10 @@ mod gui {
                 .into_iter()
                 .chain(action_rx.try_iter())
                 .collect();
-            forced = queued.iter().any(|a| matches!(a, Action::Refresh));
+            forced = queued.iter().any(|a| matches!(a, Action::Refresh))
+                || (queued.iter().any(|a| matches!(a, Action::PanelOpened))
+                    && load_config(Some(cfg_path.clone()))
+                        .is_ok_and(|config| panel_open_wants_fetch(&config)));
             for action in queued {
                 let result = match action {
                     Action::SetProvider(name, enable) => {
@@ -1545,7 +1551,7 @@ mod gui {
                             #[cfg(unix)]
                             tokengauge_core::signal_daemon_reload();
                         }),
-                    Action::Refresh => Ok(()),
+                    Action::Refresh | Action::PanelOpened => Ok(()),
                 };
                 if let Err(e) = result {
                     let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());

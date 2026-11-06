@@ -13,7 +13,7 @@ Item {
 
   // Set by the panel while it is open; see the tick timer at the foot.
   property bool live: false
-  onLiveChanged: if (live) reload()
+  onLiveChanged: if (live) action("--panel-opened")
 
   property var snapshot: null
   property string lastError: ""

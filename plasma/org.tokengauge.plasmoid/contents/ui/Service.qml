@@ -90,6 +90,8 @@ Item {
         return "sh -c " + shellQuote('export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ' + c)
     }
 
+    onLiveChanged: if (live) action("--panel-opened")
+
     // Refresh the snapshot.
     function reload() {
         exec.connectSource(cmd(service.binary + " --json"))

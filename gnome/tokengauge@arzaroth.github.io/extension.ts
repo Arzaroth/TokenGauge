@@ -360,7 +360,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
         if (!live)
             return;
         if (!this._updating)
-            this._reload();
+            this._action('--panel-opened');
         this._liveTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, LIVE_INTERVAL_SECS, () => {
             // A poll would cancel an in-flight `--update` read and leave the
             // button stuck on "Updating…", exactly as it would on the long timer.

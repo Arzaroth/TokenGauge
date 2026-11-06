@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Omarchy: provider logos in the panel have smooth edges, and Codex's `>_` is no
+  longer half filled in.
+
 ## [0.58.0] - 2026-11-05
 
 ### Added

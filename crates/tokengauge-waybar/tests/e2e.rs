@@ -213,6 +213,28 @@ fn opening_a_panel_over_a_stale_snapshot_leaves_the_fetch_to_the_read() {
 }
 
 #[test]
+fn the_panel_and_its_table_follow_the_language_setting() {
+    let machine = Machine::with(&[("claude", true)], Some("claude"), "weekly");
+    machine.seed();
+    let english = machine.json();
+    assert_eq!(english["strings"], serde_json::json!({}));
+    assert_eq!(
+        section(row(&english, "claude"), "limits")["title"],
+        "LIMITS"
+    );
+
+    let (code, _, stderr) = machine.run(&["--set-panel", "language=fr"]);
+    assert_eq!(code, 0, "{stderr}");
+    let french = machine.json();
+    assert_eq!(french["panel_options"]["language"], "fr");
+    assert_eq!(french["strings"]["Settings"], "Réglages");
+    assert_eq!(
+        section(row(&french, "claude"), "limits")["title"],
+        "LIMITES"
+    );
+}
+
+#[test]
 fn opening_a_panel_over_a_young_snapshot_asks_nobody() {
     let machine = Machine::with(&[("claude", true)], Some("claude"), "weekly");
     machine.seed();

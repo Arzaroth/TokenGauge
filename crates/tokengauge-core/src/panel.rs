@@ -2732,13 +2732,6 @@ mod tests {
         }
     }
 
-    /// Every frontend says when it last refreshed.
-    ///
-    /// Five of the six put the sentence behind their refresh control: hovering
-    /// the button that would replace the figures is where the age of those
-    /// figures belongs. Waybar has no button to hover - its tooltip *is* the
-    /// hover surface - so it carries the same sentence as a line, and a right
-    /// click is still the refresh.
     /// `MultiEffect`'s default mask has a hard edge, which qmllint and the
     /// harnesses cannot see: they never run the shader.
     #[test]
@@ -2821,6 +2814,13 @@ mod tests {
         assert!(labels.iter().any(|l| l == "Aujourd’hui"), "{labels:?}");
     }
 
+    /// Every frontend says when it last refreshed.
+    ///
+    /// Five of the six put the sentence behind their refresh control: hovering
+    /// the button that would replace the figures is where the age of those
+    /// figures belongs. Waybar has no button to hover - its tooltip *is* the
+    /// hover surface - so it carries the same sentence as a line, and a right
+    /// click is still the refresh.
     #[test]
     fn every_frontend_says_when_it_last_refreshed() {
         let frontends = [

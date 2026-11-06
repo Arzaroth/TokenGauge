@@ -73,7 +73,7 @@ PlasmoidItem {
     // ended up saying something different or nothing at all.
     function tooltipSub(r) {
         if (!r)
-            return lastError !== "" ? lastError : i18n("No provider data yet.")
+            return lastError !== "" ? lastError : root.t("No provider data yet.")
         var tip = r.bar_tooltip || {}
         var lines = []
         var rows = Array.isArray(tip.lines) ? tip.lines : []
@@ -92,6 +92,7 @@ PlasmoidItem {
     // ---- data ----------------------------------------------------------------
     // All of it is the service's; these are the names FullRep and CompactRep
     // already call.
+    function t(english, first, second) { return root.service.t(english, first, second) }
     function reload() { root.service.reload() }
     function action(flag) { root.service.action(flag) }
     function applyUpdate() { root.service.applyUpdate() }

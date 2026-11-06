@@ -194,6 +194,15 @@ pub fn date_pattern(pattern: &str, date: &impl Datelike) -> String {
         .replace("%a", weekday_short_fr(date.weekday()))
 }
 
+/// The table a frontend that cannot call [`tr`] reads off `--json`. Empty in English,
+/// where the sentence is its own key.
+pub fn strings() -> std::collections::BTreeMap<&'static str, &'static str> {
+    match current() {
+        Language::En => std::collections::BTreeMap::new(),
+        Language::Fr => FRENCH.iter().copied().collect(),
+    }
+}
+
 /// The one-letter unit a duration is written in: `2d 8h` is `2j 8h` in French.
 pub fn day_unit() -> &'static str {
     match current() {
@@ -310,6 +319,12 @@ const FRENCH: &[(&str, &str)] = &[
     ("5-hour", "5 heures"),
     ("Credit", "Crédit"),
     ("Key limit", "Limite de clé"),
+    ("Daily Routines", "Routines quotidiennes"),
+    ("Monthly total", "Total mensuel"),
+    ("Rate limit", "Limite de débit"),
+    ("5-hour limit", "Limite sur 5 heures"),
+    ("1-day limit", "Limite sur 1 jour"),
+    ("7-day limit", "Limite sur 7 jours"),
     ("Balance", "Solde"),
     ("Included", "Inclus"),
     ("Cursor models", "Modèles Cursor"),
@@ -381,6 +396,156 @@ const FRENCH: &[(&str, &str)] = &[
     ),
     ("Run tokengauge --update.", "Lancez tokengauge --update."),
     ("Upgrade it with {by}.", "Mettez-la à jour avec {by}."),
+    // What each frontend draws itself
+    ("refreshing", "actualisation"),
+    ("1 provider", "1 fournisseur"),
+    ("{count} providers", "{count} fournisseurs"),
+    ("No providers returned", "Aucun fournisseur n’a répondu"),
+    ("Usage", "Utilisation"),
+    (
+        "Errors only - no usable provider data",
+        "Uniquement des erreurs : aucune donnée exploitable",
+    ),
+    ("Providers", "Fournisseurs"),
+    ("scroll", "défiler"),
+    (" · updated {when}", " · actualisé {when}"),
+    (" Full details: {path}", " Détails complets : {path}"),
+    ("Errors", "Erreurs"),
+    ("idle", "inactif"),
+    ("Keybindings", "Raccourcis"),
+    (
+        "press any key to close",
+        "appuyez sur une touche pour fermer",
+    ),
+    ("select", "choisir"),
+    ("refresh", "actualiser"),
+    ("dashboard", "tableau de bord"),
+    ("status", "état"),
+    ("sync", "synchro"),
+    ("help", "aide"),
+    ("quit", "quitter"),
+    ("select next provider", "fournisseur suivant"),
+    ("select previous provider", "fournisseur précédent"),
+    (
+        "select prev / next provider",
+        "fournisseur précédent / suivant",
+    ),
+    ("first / last provider", "premier / dernier fournisseur"),
+    (
+        "scroll the panel (PgDn / PgUp a page)",
+        "faire défiler le panneau (PgDn / PgUp par page)",
+    ),
+    ("refresh now", "actualiser maintenant"),
+    (
+        "open provider dashboard",
+        "ouvrir le tableau de bord du fournisseur",
+    ),
+    (
+        "open provider status page",
+        "ouvrir la page d’état du fournisseur",
+    ),
+    ("fleet sync setup", "configurer la synchro de flotte"),
+    ("spend history", "historique des dépenses"),
+    (
+        "open remuda (while it serves)",
+        "ouvrir remuda (quand il tourne)",
+    ),
+    ("toggle this help", "afficher / masquer cette aide"),
+    ("Refreshing…", "Actualisation…"),
+    ("remuda is no longer serving", "remuda ne tourne plus"),
+    (
+        "remuda is not installed (looked on PATH and in ~/.local/bin)",
+        "remuda n’est pas installé (cherché dans le PATH et ~/.local/bin)",
+    ),
+    ("Show TokenGauge", "Afficher TokenGauge"),
+    ("Refresh now", "Actualiser maintenant"),
+    ("Set up fleet sync", "Configurer la synchro de flotte"),
+    ("Update TokenGauge", "Mettre à jour TokenGauge"),
+    ("Quit", "Quitter"),
+    ("Hide (Esc)", "Masquer (Échap)"),
+    ("Settings", "Réglages"),
+    ("History", "Historique"),
+    ("Refresh", "Actualiser"),
+    ("No usage data yet", "Pas encore de données"),
+    (
+        "Sign in with `codex` or `claude`, then refresh.",
+        "Connectez-vous avec `codex` ou `claude`, puis actualisez.",
+    ),
+    ("Updated {when}", "Actualisé {when}"),
+    ("HISTORY", "HISTORIQUE"),
+    ("No history yet", "Pas encore d’historique"),
+    (
+        "Nothing spent in this range",
+        "Aucune dépense sur cette période",
+    ),
+    ("PROVIDERS", "FOURNISSEURS"),
+    ("PIN TO BAR", "ÉPINGLER À LA BARRE"),
+    ("SEVERAL CREDENTIALS", "PLUSIEURS IDENTIFIANTS"),
+    ("Active credential only", "Identifiant actif seulement"),
+    (
+        "Split ALL PLANS bars",
+        "Segmenter les barres de TOUS LES FORFAITS",
+    ),
+    ("Language", "Langue"),
+    ("Highest usage", "Utilisation la plus élevée"),
+    ("TokenGauge - no data", "TokenGauge - aucune donnée"),
+    ("TokenGauge: no providers", "TokenGauge : aucun fournisseur"),
+    ("Refreshing...", "Actualisation..."),
+    ("Updating…", "Mise à jour…"),
+    ("Update", "Mettre à jour"),
+    ("Open remuda", "Ouvrir remuda"),
+    ("Showing last known values", "Dernières valeurs connues"),
+    (
+        "No provider usage yet.\nEnable one in the settings below.",
+        "Pas encore de données.\nActivez un fournisseur dans les réglages ci-dessous.",
+    ),
+    ("No history yet.", "Pas encore d’historique."),
+    (
+        "Nothing spent in this range.",
+        "Aucune dépense sur cette période.",
+    ),
+    ("Weighted", "Pondéré"),
+    ("Absolute", "Absolu"),
+    ("System", "Système"),
+    (
+        "A number toggles a provider, p walks the pin, a, b and t switch how several credentials are drawn, y sets up fleet sync so tokens and cost add up across your machines, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml.",
+        "Un chiffre active ou désactive un fournisseur, p change l’épingle, a, b et t changent l’affichage de plusieurs identifiants, y configure la synchro de flotte pour additionner tokens et coûts entre vos machines, u et s ouvrent le tableau de bord et la page d’état du fournisseur. Les seuils, l’intervalle d’actualisation et l’action au clic se règlent dans ~/.config/tokengauge/config.toml.",
+    ),
+    ("No provider data yet.", "Pas encore de données."),
+    ("Updated", "Actualisé"),
+    ("tokens", "tokens"),
+    ("avg", "moy."),
+    ("Open dashboard", "Ouvrir le tableau de bord"),
+    ("Back to the panel", "Retour au panneau"),
+    ("Update available", "Mise à jour disponible"),
+    ("upgrade it with", "à mettre à jour avec"),
+    ("stale", "périmé"),
+    ("Pin to bar", "Épingler à la barre"),
+    (
+        "snapshot command failed",
+        "la commande d’instantané a échoué",
+    ),
+    (
+        "Update available: v%1 - upgrade it with %2",
+        "Mise à jour disponible : v%1 - à mettre à jour avec %2",
+    ),
+    ("Update available: v%1", "Mise à jour disponible : v%1"),
+    ("Updated %1", "Actualisé %1"),
+    ("OAuth providers", "Fournisseurs OAuth"),
+    ("Several credentials", "Plusieurs identifiants"),
+    ("ALL PLANS:", "TOUS LES FORFAITS :"),
+    ("Language:", "Langue :"),
+    ("Fleet sync", "Synchro de flotte"),
+    ("Set up sync…", "Configurer la synchro…"),
+    (
+        "Adds up tokens and cost across your machines. Opens in a terminal.",
+        "Additionne tokens et coûts entre vos machines. S’ouvre dans un terminal.",
+    ),
+    ("TokenGauge v%1", "TokenGauge v%1"),
+    (
+        "applet v%1, binary v%2 - reinstall: tokengauge-waybar --install-frontend plasma",
+        "applet v%1, binaire v%2 - à réinstaller : tokengauge-waybar --install-frontend plasma",
+    ),
     // Pace
     ("empty in {eta}", "vide dans {eta}"),
     ("ends ~{percent}%", "fin ~{percent} %"),
@@ -398,18 +563,33 @@ mod tests {
         "rows.rs",
         "../../tokengauge-waybar/src/snapshot.rs",
         "../../tokengauge-waybar/src/daemon.rs",
+        "../../tokengauge-waybar/src/render.rs",
+        "../../tokengauge-tray/src/main.rs",
+        "../../tokengauge-tui/src/ui.rs",
+        "../../tokengauge-tui/src/app.rs",
+        "../../../omarchy/arzaroth.tokengauge/Panel.qml",
+        "../../../plasma/org.tokengauge.plasmoid/contents/ui/FullRep.qml",
+        "../../../gnome/tokengauge@arzaroth.github.io/extension.ts",
     ];
 
     fn sentences_in(source: &str) -> Vec<String> {
         let body = source.split("#[cfg(test)]").next().unwrap_or(source);
         let mut out = Vec::new();
-        for opener in ["tr(\"", "tf!(\""] {
-            for piece in body.split(opener).skip(1) {
+        for opener in ["tr(\"", "tf!(\"", ".t(\"", "_('"] {
+            let starts = body.match_indices(opener).filter(|(at, _)| {
+                body[..*at]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|before| !before.is_alphanumeric() && before != '_')
+            });
+            for (at, _) in starts {
+                let piece = &body[at + opener.len()..];
                 let mut sentence = String::new();
                 let mut chars = piece.chars();
                 while let Some(c) = chars.next() {
                     match c {
-                        '"' => break,
+                        '"' if opener != "_('" => break,
+                        '\'' if opener == "_('" => break,
                         '\\' => match chars.next() {
                             Some('n') => sentence.push('\n'),
                             Some(other) => sentence.push(other),
@@ -455,6 +635,21 @@ mod tests {
                     meta.id
                 );
             }
+        }
+    }
+
+    /// An extra window's title is written by its provider's fetcher and read by
+    /// `panel.rs` as data, so the scan above cannot see it.
+    #[test]
+    fn the_titles_a_fetcher_writes_have_a_translation() {
+        for title in [
+            "Monthly",
+            "Spend limit",
+            "Daily Routines",
+            "Monthly total",
+            "Rate limit",
+        ] {
+            assert!(FRENCH.iter().any(|(en, _)| *en == title), "{title:?}");
         }
     }
 

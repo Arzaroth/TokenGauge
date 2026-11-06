@@ -46,6 +46,12 @@ Item {
       language: o.language === "en" || o.language === "fr" ? o.language : "auto"
     }
   }
+  readonly property var strings: snapshot && snapshot.strings ? snapshot.strings : ({})
+
+  function t(english) {
+    return strings[english] || english
+  }
+
   readonly property string version: snapshot ? String(snapshot.version || "") : ""
 
   readonly property var updateStatus: snapshot ? snapshot.update : null

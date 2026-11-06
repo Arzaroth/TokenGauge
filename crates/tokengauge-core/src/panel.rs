@@ -616,7 +616,7 @@ fn windows(row: &ProviderRow) -> Vec<Window<'_>> {
         .filter(|e| !e.placeholder)
         .map(|e| {
             (
-                e.title.as_str(),
+                tr(e.title.as_str()),
                 e.used,
                 e.reset.as_str(),
                 e.resets_at.as_deref(),

@@ -7,6 +7,7 @@
 //! hint it printed disagreed with every other surface.
 
 use serde::Serialize;
+use tokengauge_core::i18n::tr;
 use tokengauge_core::{
     PanelConfig, PanelRow, ProviderFetchError, ProviderRow, Section, SectionKind, Segment, Theme,
     TokenGaugeConfig, Tone, WaybarWindow, provider_icon, read_waybar_state, theme,
@@ -201,7 +202,7 @@ pub(crate) fn render_output(
     if rows.is_empty() && errors.is_empty() && !refreshing {
         return WaybarOutput {
             text: "—".into(),
-            tooltip: "<tt>TokenGauge: no providers</tt>".into(),
+            tooltip: format!("<tt>{}</tt>", tr("TokenGauge: no providers")),
             class: "tokengauge-empty".into(),
         };
     }
@@ -209,7 +210,10 @@ pub(crate) fn render_output(
     let text_inner = build_text_for_rows_with_errors(rows, errors, config);
     let text = if refreshing {
         if rows.is_empty() && errors.is_empty() {
-            format!("   <span foreground=\"{yellow}\">⟳ Refreshing...</span>")
+            format!(
+                "   <span foreground=\"{yellow}\">⟳ {}</span>",
+                tr("Refreshing...")
+            )
         } else {
             format!("   <span foreground=\"{yellow}\">⟳</span> {text_inner}")
         }
@@ -483,7 +487,10 @@ pub(crate) fn format_tooltip_from_cards(
     );
     let body = cards.join(&format!("\n{separator}\n"));
     let status_line = if refreshing {
-        format!("\n<tt><b><span foreground=\"{yellow}\">⟳ Refreshing...</span></b></tt>")
+        format!(
+            "\n<tt><b><span foreground=\"{yellow}\">⟳ {}</span></b></tt>",
+            tr("Refreshing...")
+        )
     } else {
         String::new()
     };

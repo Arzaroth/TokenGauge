@@ -221,6 +221,7 @@ pub(crate) fn json_snapshot(
         "primary": config.waybar.primary,
         // What the settings panes' panel toggles show. The panel above is
         // already drawn with them; this is only so a toggle reads its state.
+        "strings": tokengauge_core::i18n::strings(),
         "panel_options": {
             "active_credential_only": config.panel.active_credential_only,
             "plans_total": config.panel.plans_total,

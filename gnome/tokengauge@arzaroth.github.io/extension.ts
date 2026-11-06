@@ -7,13 +7,15 @@ import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
+import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import * as Panel from './panel.js';
 import {isCancelled, shellQuote} from './util.js';
 import {
     attachTooltip, barFill, box, historyChart, label, scrollLimit, scrollView, spacer, splitBar, verticalAdjustment,
 } from './widgets.js';
+
+const _ = Panel.translate;
 
 // How often the open menu re-reads the snapshot. See `_setLive`.
 const LIVE_INTERVAL_SECS = 30;
@@ -230,6 +232,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             }
             try {
                 this._snapshot = JSON.parse(stdout) as Panel.Snapshot;
+                Panel.setStrings(this._snapshot.strings);
                 this._lastError = '';
             } catch (e) {
                 this._lastError = `parse error: ${e}`;

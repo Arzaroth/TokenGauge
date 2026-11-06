@@ -2717,7 +2717,9 @@ mod tests {
         let sources = frontend_sources("quickshell", "omarchy/arzaroth.tokengauge", "qml");
         for setting in ["maskThresholdMin: 0.5", "maskSpreadAtMin: 1.0"] {
             assert!(
-                sources.iter().any(|src| src.contains(setting)),
+                sources
+                    .iter()
+                    .any(|src| src.lines().any(|line| line.trim() == setting)),
                 "the logo mask lost `{setting}`"
             );
         }

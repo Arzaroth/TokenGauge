@@ -97,6 +97,13 @@ Item {
         // An action runs the flag and the read in one subprocess, so the panel
         // never renders against pre-action state.
         Registry.clear()
+        usage.live = true
+        var opened = Registry.find("--panel-opened")
+        check.ok("opening the panel asks for current figures", opened !== null)
+        if (opened) opened.answer(panelJson, "", 0)
+        usage.live = false
+
+        Registry.clear()
         usage.setPrimary("codex")
         var pinned = Registry.find("--set-primary")
         check.ok("repinning ran a command", pinned !== null)

@@ -196,6 +196,25 @@ fn a_fresh_snapshot_is_served_without_asking_a_provider() {
     );
 }
 
+#[test]
+fn opening_a_panel_over_a_young_snapshot_asks_nobody() {
+    let machine = Machine::with(&[("claude", true)], Some("claude"), "weekly");
+    machine.seed();
+    let before = std::fs::read_to_string(machine.cache()).expect("the seed");
+
+    let (code, _, _) = machine.run(&["--panel-opened"]);
+
+    assert_eq!(code, 0);
+    assert!(
+        !machine.root.join("state/tokengauge-refreshing").exists(),
+        "a young snapshot must not raise the refresh sentinel"
+    );
+    assert_eq!(
+        std::fs::read_to_string(machine.cache()).expect("the cache"),
+        before
+    );
+}
+
 /// The panel a frontend draws, resolved by the binary rather than by the
 /// frontend. Section order, kinds and every string come from `panel.rs`; this
 /// is the only test that sees them the way a frontend does.

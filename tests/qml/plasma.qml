@@ -84,6 +84,13 @@ Item {
         // An action runs the flag and the read in one source, so the applet
         // never renders against pre-action state.
         Registry.clear()
+        service.live = true
+        var opened = Registry.find("--panel-opened")
+        check.ok("opening the panel asks for current figures", opened !== null)
+        if (opened) opened.answer(panelJson, "", 0)
+        service.live = false
+
+        Registry.clear()
         service.action("--set-primary 'codex'")
         var pinned = Registry.find("--set-primary")
         check.ok("repinning ran a command", pinned !== null)

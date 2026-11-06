@@ -412,6 +412,31 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_panel_fetches_only_past_the_floor() {
+        let dir = std::env::temp_dir().join(format!("tg-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cache_file = dir.join("snapshot.json");
+        let config = TokenGaugeConfig {
+            cache_file: cache_file.clone(),
+            ..Default::default()
+        };
+        assert!(panel_open_wants_fetch(&config), "no snapshot at all");
+
+        std::fs::write(&cache_file, "{}").unwrap();
+        assert!(!panel_open_wants_fetch(&config));
+
+        let aged = std::time::SystemTime::now() - PANEL_OPEN_FETCH_AFTER;
+        std::fs::File::options()
+            .write(true)
+            .open(&cache_file)
+            .unwrap()
+            .set_modified(aged)
+            .unwrap();
+        assert!(panel_open_wants_fetch(&config));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_window_that_reset_since_the_write_is_stale_however_young_the_snapshot() {
         let now = Utc::now();
         let written_at = now - chrono::Duration::minutes(5);

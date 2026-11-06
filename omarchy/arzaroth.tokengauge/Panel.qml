@@ -639,6 +639,10 @@ Panel {
                   visible: heroMarkImage.status === Image.Ready
                   maskEnabled: true
                   maskSource: heroMarkImage
+                  // The defaults make any non-zero alpha fully opaque, which
+                  // fattens a logo and fills in its fine strokes.
+                  maskThresholdMin: 0.5
+                  maskSpreadAtMin: 1.0
                 }
 
                 // The bar glyph stands in while the logo is missing or failed.

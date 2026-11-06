@@ -196,6 +196,21 @@ fn a_fresh_snapshot_is_served_without_asking_a_provider() {
     );
 }
 
+/// The `--json` chained behind the flag fetches a stale snapshot itself, and with
+/// a worker as well every provider is asked twice.
+#[test]
+fn opening_a_panel_over_a_stale_snapshot_leaves_the_fetch_to_the_read() {
+    let machine = Machine::with(&[("claude", true)], Some("claude"), "weekly");
+    machine.seed();
+    let day_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+    filetime_set(&machine.cache(), day_ago);
+
+    let (code, _, _) = machine.run(&["--panel-opened"]);
+
+    assert_eq!(code, 0);
+    assert!(!machine.root.join("state/tokengauge-refreshing").exists());
+}
+
 #[test]
 fn opening_a_panel_over_a_young_snapshot_asks_nobody() {
     let machine = Machine::with(&[("claude", true)], Some("claude"), "weekly");

@@ -20,6 +20,7 @@ its live `auth.json`.
 | Antigravity | `agy`'s sign-in: Secret Service keyring, then `antigravity-oauth-token` | Session, Weekly + other model groups | no | no | none |
 | DeepSeek | `DEEPSEEK_API_KEY`, opencode's or pi's saved key | balance only | no | no | none |
 | MiniMax | `MINIMAX_API_KEY`, opencode's or pi's saved key | Session, Weekly | no | no | none |
+| Muse | `MUSE_AUTH_PATH`, `~/.config/muse/auth.json` (`muse login`) | Session, Weekly | no | no | none |
 
 Notes:
 
@@ -51,6 +52,12 @@ Notes:
 - **MiniMax** reports what is left, per model. The `general` row stands for the
   plan, and a window's status outranks its percentage. A key answers only on its
   own region's host.
+- **Muse** has no read-only usage endpoint. Its windows ride on `POST
+  /muse-code/key`, which is the one call here that may create something: it mints
+  the account's Model API key, and returns the same key on every later call. The
+  wire struct names no key field, so it is dropped at parsing
+  (`the_minted_key_never_reaches_the_snapshot`). Pay-as-you-go and some active
+  plans steadily answer with no windows, which is not an error.
 - **Cursor** has no public API; TokenGauge calls the dashboard's
   `/api/usage-summary` with the token `cursor-agent` leaves, in its `auth.json`
   or, on macOS, the Keychain (`cursor-access-token` / `cursor-refresh-token`

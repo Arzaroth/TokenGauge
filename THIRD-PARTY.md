@@ -69,7 +69,7 @@ made.
 
 <https://github.com/basecamp/omarchy>, Copyright (c) David Heinemeier Hansson.
 
-`crates/tokengauge-core/src/{antigravity,copilot,deepseek,minimax}.rs` implement
+`crates/tokengauge-core/src/{antigravity,copilot,deepseek,minimax,muse}.rs` implement
 the provider protocols worked out in its `omarchy-agent-usage-*` collectors. The
 code is ours.
 
@@ -102,6 +102,6 @@ go stale: `git shortlog -sn`, or the
 
 ## Provider brand marks
 
-Anthropic, OpenAI, xAI, Moonshot, Z.ai, Cursor, GitHub, Google, DeepSeek, MiniMax, OpenRouter and the rest remain
+Anthropic, OpenAI, xAI, Moonshot, Z.ai, Cursor, GitHub, Google, DeepSeek, MiniMax, Meta, OpenRouter and the rest remain
 the property of their owners. Their names and marks identify which service a
 row describes and nothing more.

@@ -546,6 +546,14 @@ const FRENCH: &[(&str, &str)] = &[
         "applet v%1, binary v%2 - reinstall: tokengauge-waybar --install-frontend plasma",
         "applet v%1, binaire v%2 - à réinstaller : tokengauge-waybar --install-frontend plasma",
     ),
+    (
+        "h/l or Tab  range    q/Esc  back",
+        "h/l ou Tab  période    q/Échap  retour",
+    ),
+    (
+        "nothing spent in this range",
+        "aucune dépense sur cette période",
+    ),
     // Pace
     ("empty in {eta}", "vide dans {eta}"),
     ("ends ~{percent}%", "fin ~{percent} %"),
@@ -567,6 +575,7 @@ mod tests {
         "../../tokengauge-tray/src/main.rs",
         "../../tokengauge-tui/src/ui.rs",
         "../../tokengauge-tui/src/app.rs",
+        "../../tokengauge-tui/src/history_view.rs",
         "../../../omarchy/arzaroth.tokengauge/Panel.qml",
         "../../../plasma/org.tokengauge.plasmoid/contents/ui/FullRep.qml",
         "../../../gnome/tokengauge@arzaroth.github.io/extension.ts",

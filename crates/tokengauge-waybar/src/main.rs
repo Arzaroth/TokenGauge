@@ -415,8 +415,11 @@ fn main() -> Result<()> {
             Ok(())
         }
         Action::PanelOpened => {
+            // A snapshot already stale is fetched by the `--json` chained behind
+            // this, or by the daemon's next check. A worker as well asks twice.
             if !refresh_in_progress(&refresh_sentinel_path(&config.cache_file))
                 && panel_open_wants_fetch(&config)
+                && !cache_is_stale(&config)
             {
                 request_refresh(&config);
             }

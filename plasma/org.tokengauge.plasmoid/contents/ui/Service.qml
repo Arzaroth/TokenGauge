@@ -90,7 +90,9 @@ Item {
         return "sh -c " + shellQuote('export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; ' + c)
     }
 
-    onLiveChanged: if (live) action("--panel-opened")
+    // `;`, not `&&`: a binary older than this applet refuses the flag, and the panel
+    // still has to read the snapshot.
+    onLiveChanged: if (live) exec.connectSource(cmd(service.binary + " --panel-opened 2>/dev/null; " + service.binary + " --json"))
 
     // Refresh the snapshot.
     function reload() {

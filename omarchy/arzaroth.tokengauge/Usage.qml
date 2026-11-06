@@ -13,7 +13,9 @@ Item {
 
   // Set by the panel while it is open; see the tick timer at the foot.
   property bool live: false
-  onLiveChanged: if (live) action("--panel-opened")
+  // `;`, not `&&`: a binary older than this widget refuses the flag, and the panel
+  // still has to read the snapshot.
+  onLiveChanged: if (live) run(shellQuote(binary) + " --panel-opened 2>/dev/null; " + shellQuote(binary) + " --json")
 
   property var snapshot: null
   property string lastError: ""

@@ -1455,7 +1455,10 @@ mod gui {
         action_rx: mpsc::Receiver<Action>,
         cfg_path: std::path::PathBuf,
     ) {
-        let mut forced = false;
+        // A tray that starts on screen has just opened its panel.
+        let mut forced = !std::env::args().any(|arg| arg == "--hidden")
+            && load_config(Some(cfg_path.clone()))
+                .is_ok_and(|config| panel_open_wants_fetch(&config));
         loop {
             let mut refresh_secs = 600u64;
             match load_config(Some(cfg_path.clone())) {

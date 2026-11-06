@@ -1176,6 +1176,29 @@ mod tests {
     }
 
     #[test]
+    fn reset_credits_are_banked_while_any_are_left() {
+        let banked = |credits: &str| {
+            let body: UsageResponse = serde_json::from_str(&format!(
+                r#"{{"rate_limit":{{"primary_window":{{"used_percent":5,"reset_at":1,
+                    "limit_window_seconds":18000}}}},"rate_limit_reset_credits":{credits}}}"#
+            ))
+            .expect("the reset credits never fail the response");
+            to_payload(body, Utc::now(), "oauth", None)
+                .unwrap()
+                .usage
+                .unwrap()
+                .banked_resets
+        };
+
+        let two = banked(r#"{"available_count":2,"applicable_available_count":2}"#).unwrap();
+        assert_eq!(two.available, 2);
+        assert!(two.expires_at.is_none());
+        assert!(banked(r#"{"available_count":0,"applicable_available_count":0}"#).is_none());
+        assert!(banked(r#"{"available_count":"many"}"#).is_none());
+        assert!(banked("null").is_none());
+    }
+
+    #[test]
     fn maps_live_codex_sample() {
         // Live free-plan sample: the only window is 43200 minutes long. Held in
         // the primary slot it read as "Session 6%" resetting a month out; it now

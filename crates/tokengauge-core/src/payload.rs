@@ -376,6 +376,7 @@ impl Default for TokenGaugeConfig {
                 deepseek: None,
                 minimax: None,
                 antigravity: None,
+                muse: None,
                 unknown: HashMap::new(),
             },
             cost_source: CostSource::default(),

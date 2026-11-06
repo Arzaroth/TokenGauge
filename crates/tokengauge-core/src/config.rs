@@ -37,6 +37,7 @@ pub struct ProvidersConfig {
     pub deepseek: Option<bool>,
     pub minimax: Option<bool>,
     pub antigravity: Option<bool>,
+    pub muse: Option<bool>,
     /// Removed-provider keys (e.g. `[providers.zai]`) left over from older
     /// configs. Captured so `--doctor` can warn instead of silently ignoring.
     #[serde(flatten)]

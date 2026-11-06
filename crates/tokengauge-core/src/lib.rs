@@ -50,6 +50,7 @@ pub mod history;
 mod kimi;
 pub mod launch;
 mod minimax;
+mod muse;
 mod opencode;
 mod openrouter;
 pub mod pace;

@@ -23,7 +23,7 @@ use chrono::Utc;
 use crate::credentials::StoreReader;
 use crate::{
     ProviderPayload, ProvidersConfig, antigravity, claude, codex, copilot, cursor, deepseek, glm,
-    grok, kimi, minimax, opencode, openrouter,
+    grok, kimi, minimax, muse, opencode, openrouter,
 };
 
 /// Whether a provider's credentials are currently available, and where from.
@@ -255,6 +255,22 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         enabled_in: |c| c.minimax,
     },
     ProviderMeta {
+        id: "muse",
+        label: "Muse",
+        cli: Some("muse"),
+        glyph: "\u{f06a9}",
+        urls: ProviderUrls {
+            dashboard: Some("https://www.meta.ai"),
+            status: None,
+        },
+        windows: ("Session", "Weekly", "Tertiary"),
+        natively_read: false,
+        fetch: muse::fetch,
+        store: None,
+        auth: muse_auth,
+        enabled_in: |c| c.muse,
+    },
+    ProviderMeta {
         id: "openrouter",
         label: "OpenRouter",
         // An API key in the environment: the key is pasted into whichever
@@ -356,6 +372,7 @@ pub const PROVIDERS: &[&str] = &[
     "antigravity",
     "deepseek",
     "minimax",
+    "muse",
     "openrouter",
     "opencode",
     "cursor",
@@ -750,6 +767,22 @@ fn minimax_auth() -> AuthStatus {
     }
 }
 
+fn muse_auth() -> AuthStatus {
+    if crate::muse::access_token().is_some() {
+        AuthStatus {
+            ok: true,
+            detail: "muse login".to_string(),
+            hint: "",
+        }
+    } else {
+        AuthStatus {
+            ok: false,
+            detail: "no sign-in".to_string(),
+            hint: "run `muse login`",
+        }
+    }
+}
+
 fn openrouter_auth() -> AuthStatus {
     let Some(var) = ["OPENROUTER_API_KEY", "OPENROUTER_KEY"]
         .into_iter()
@@ -1000,6 +1033,7 @@ mod tests {
                 "antigravity" => config.antigravity = Some(true),
                 "deepseek" => config.deepseek = Some(true),
                 "minimax" => config.minimax = Some(true),
+                "muse" => config.muse = Some(true),
                 other => panic!("{other} has no field in this test - add it with the row"),
             }
             assert_eq!(

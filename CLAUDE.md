@@ -210,6 +210,14 @@ blind, because a window resetting mid-cycle makes the snapshot stale at an
 instant no timer wakes for, and the frontend polling every 30s used to be the
 only thing that noticed.
 
+Opening a panel asks for more than a render: `--panel-opened`, sent by Plasma,
+GNOME, Omarchy and the tray, refreshes once the snapshot is five minutes old
+(`panel::tests::every_panel_asks_for_current_figures_when_opened`). The floor is
+the rule to keep. Claude's usage endpoint rate-limits, and every open with no
+floor is another request per credential. For the same reason a 429 holds a
+provider's figures current for thirty minutes (`apply_stale_fallback`) instead
+of calling them stale for a wait the provider asked for.
+
 `--set-provider` fetches before it returns, because frontends run
 `--set-provider && --json` in one subprocess and the `--json` has to see the new
 provider. The daemon's SIGHUP reload then finds a snapshot that already covers

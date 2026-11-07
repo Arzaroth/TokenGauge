@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Opening a panel fetches current figures when the snapshot is at least five
+  minutes old, on Plasma, GNOME, Omarchy and the tray.
+
+### Changed
+
+- A provider answering 429 keeps its last figures current for thirty minutes
+  rather than turning stale at once. Any other error still marks them stale.
+- The Omarchy widget answers `omarchy-shell` over the shell's own socket on
+  Omarchy 4.5 and later.
+
 ### Fixed
 
 - Omarchy: provider logos in the panel have smooth edges, and Codex's `>_` is no

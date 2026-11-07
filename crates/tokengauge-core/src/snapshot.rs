@@ -227,6 +227,19 @@ pub fn write_cache_full(
 /// missing, it has aged past `refresh_secs`, or it predates a provider that is
 /// enabled now. Every reader routes its fetch-or-serve decision through here so
 /// none of them can disagree about what stale means.
+pub const PANEL_OPEN_FETCH_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Whether opening a panel should fetch: the snapshot is at least
+/// [`PANEL_OPEN_FETCH_AFTER`] old. The floor is what keeps opening a panel
+/// repeatedly from walking every provider into a 429.
+pub fn panel_open_wants_fetch(config: &TokenGaugeConfig) -> bool {
+    std::fs::metadata(&config.cache_file)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|written_at| written_at.elapsed().ok())
+        .is_none_or(|age| age >= PANEL_OPEN_FETCH_AFTER)
+}
+
 pub fn cache_is_stale(config: &TokenGaugeConfig) -> bool {
     let Some(written_at) = fs::metadata(&config.cache_file)
         .and_then(|meta| meta.modified())
@@ -396,6 +409,32 @@ mod tests {
             stale: false,
             credential: Default::default(),
         }
+    }
+
+    #[test]
+    fn opening_a_panel_fetches_only_past_the_floor() {
+        let dir = std::env::temp_dir().join(format!("tg-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cache_file = dir.join("snapshot.json");
+        let config = TokenGaugeConfig {
+            cache_file: cache_file.clone(),
+            ..Default::default()
+        };
+        assert!(panel_open_wants_fetch(&config), "no snapshot at all");
+
+        std::fs::write(&cache_file, "{}").unwrap();
+        assert!(!panel_open_wants_fetch(&config));
+
+        let aged = std::time::SystemTime::now() - PANEL_OPEN_FETCH_AFTER;
+        std::fs::File::options()
+            .write(true)
+            .open(&cache_file)
+            .unwrap()
+            .set_modified(aged)
+            .unwrap();
+        assert!(panel_open_wants_fetch(&config));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

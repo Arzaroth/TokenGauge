@@ -45,7 +45,14 @@ A snapshot is stale when it is:
 
 `retain_enabled()` handles the other direction, filtering a disabled provider out
 of an otherwise fresh snapshot. `apply_stale_fallback` serves the last good
-payload when a fetch fails, marked `stale` with `stale_reason`.
+payload when a fetch fails, marked `stale` with `stale_reason`. A 429 is the
+exception: figures under thirty minutes old stay current through it
+(`RATE_LIMIT_GRACE_MINUTES`).
+
+Opening a panel is the one other reason to fetch: `--panel-opened` (the tray's
+`Action::PanelOpened`) refreshes when `panel_open_wants_fetch` finds the snapshot
+at least `PANEL_OPEN_FETCH_AFTER` (five minutes) old. It sits beside
+`cache_is_stale`, not inside it, so a render never fetches for this reason.
 
 ## How a change reaches a frontend
 

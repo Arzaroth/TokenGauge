@@ -422,8 +422,12 @@ Panel {
     live: root.opened
   }
 
+  // Shells before 4.5 have no IpcRegistry and reach this over `qs ipc` instead.
   IpcHandler {
+    id: ipc
     target: root.ipcTarget
+    Component.onCompleted: if (typeof IpcRegistry !== "undefined") IpcRegistry.register(ipc)
+    Component.onDestruction: if (typeof IpcRegistry !== "undefined") IpcRegistry.unregister(ipc)
     function open(): void { root.open() }
     function close(): void { root.close() }
     function show(): void { root.open() }

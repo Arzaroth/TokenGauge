@@ -2725,6 +2725,42 @@ mod tests {
         }
     }
 
+    /// Waybar is absent because its tooltip has no open event, and the TUI
+    /// because it forces a fetch on launch.
+    #[test]
+    fn every_panel_asks_for_current_figures_when_opened() {
+        let frontends = [
+            ("tray", "crates/tokengauge-tray/src", "rs", "PanelOpened"),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+                "--panel-opened",
+            ),
+            (
+                "gnome",
+                "gnome/tokengauge@arzaroth.github.io",
+                "ts",
+                "--panel-opened",
+            ),
+            (
+                "quickshell",
+                "omarchy/arzaroth.tokengauge",
+                "qml",
+                "--panel-opened",
+            ),
+        ];
+
+        for (id, dir, extension, signal) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            assert!(
+                sources.iter().any(|src| src.contains(signal)),
+                "{id} ({dir}) never sends `{signal}`, so opening it shows the \
+                 snapshot it already had"
+            );
+        }
+    }
+
     #[test]
     fn every_frontend_says_when_it_last_refreshed() {
         let frontends = [

@@ -66,6 +66,15 @@ test('the indicator registers itself as a GObject class', () => {
     );
 });
 
+test('opening the panel asks for current figures', () => {
+    const {indicator} = enabled();
+    answer();
+    open(indicator);
+    const asked = Harness.running.at(-1);
+    assert.ok(asked.argv[2].includes('--panel-opened'));
+    assert.ok(asked.argv[2].indexOf('--json') > asked.argv[2].indexOf('--panel-opened'));
+});
+
 test('it asks the binary for a snapshot and nothing else', () => {
     enabled();
 

@@ -21,6 +21,12 @@ or remuda's page's.
 - Usable grants land on the payload as `usage.bankedResets: {available,
   expiresAt}`, omitted when there are none. remuda reads it
   ([../architecture/credentials.md](../architecture/credentials.md)).
+- Codex's reset credits are the same thing under another name:
+  `wham/usage` carries `rate_limit_reset_credits: {available_count,
+  applicable_available_count}`, and `available_count` becomes the same
+  `bankedResets`. That block has no expiry, so the Codex marker names none.
+  `/wham/rate-limit-reset-credits` lists each credit with one, for one more
+  request per credential, and nothing here asks it yet.
 - The marker is resolved in `panel.rs` when the row renders, so the countdown
   moves between fetches. Once the soonest expiry passes the marker goes, since
   the count no longer says how many are left, and `rolled_over` makes the

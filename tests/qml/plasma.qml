@@ -87,7 +87,11 @@ Item {
         service.live = true
         var opened = Registry.find("--panel-opened")
         check.ok("opening the panel asks for current figures", opened !== null)
-        if (opened) opened.answer(panelJson, "", 0)
+        if (opened) {
+            check.ok("and nothing it prints reaches the parser",
+                     opened.commandLine.indexOf("--panel-opened >/dev/null 2>&1;") !== -1)
+            opened.answer(panelJson, "", 0)
+        }
         service.live = false
 
         Registry.clear()

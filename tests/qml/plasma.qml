@@ -68,6 +68,11 @@ Item {
 
         // remuda's button follows the snapshot, and opening it is the binary's.
         check.equal("the recording serves no remuda", service.remudaServing, false)
+        Registry.clear()
+        service.addRemudaAccount()
+        check.ok("adding an account ran the binary", Registry.find("--open=remuda-add") !== null)
+        if (Registry.find("--open=remuda-add"))
+            Registry.find("--open=remuda-add").answer(panelJson, "", 0)
         var serving = JSON.parse(panelJson)
         serving.remuda = { serving: true, version: "0.5.0" }
         Registry.clear()

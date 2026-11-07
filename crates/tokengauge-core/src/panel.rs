@@ -2704,6 +2704,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn every_frontend_with_a_header_offers_adding_an_account_through_remuda() {
+        for (id, dir, extension, opened) in [
+            (
+                "tui",
+                "crates/tokengauge-tui/src",
+                "rs",
+                "launch::open_remuda_add",
+            ),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+                "--open=remuda-add",
+            ),
+            (
+                "gnome",
+                "gnome/tokengauge@arzaroth.github.io",
+                "ts",
+                "--open=remuda-add",
+            ),
+            (
+                "quickshell",
+                "omarchy/arzaroth.tokengauge",
+                "qml",
+                "--open=remuda-add",
+            ),
+        ] {
+            let sources = frontend_sources(id, dir, extension);
+            assert!(
+                sources.iter().any(|src| src.contains(opened)),
+                "{id} ({dir}) never mentions `{opened}` - its add-account button is missing"
+            );
+        }
+    }
+
     /// `--update` refuses a binary a package manager installed, so an Update
     /// button offered to one fails on click. `upgraded_by` in `--json` says
     /// who upgrades it instead, and every frontend that draws the button reads

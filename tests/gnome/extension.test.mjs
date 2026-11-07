@@ -489,4 +489,25 @@ test('the remuda button shows only while remuda serves, and opens it through the
     const asked = Harness.find('--open=remuda');
     assert.ok(asked, 'the button ran no command');
     assert.ok(!asked.argv[2].includes('serve.url'), asked.argv[2]);
+    assert.equal(asked.argv[2].includes('--open=remuda-add'), false, asked.argv[2]);
+});
+
+test('the add-account button shows only while remuda serves, and leaves the rest to remuda', () => {
+    const addButton = indicator => Harness.byStyle(content(indicator), 'tokengauge-icon-button')
+        .find(b => b.accessible_name === 'Add an account in remuda');
+
+    const {indicator} = enabled();
+    answer();
+    open(indicator);
+    assert.equal(addButton(indicator), undefined);
+
+    const serving = JSON.parse(panelJson);
+    serving.remuda = {serving: true, version: '0.5.0'};
+    indicator._reload();
+    answer(JSON.stringify(serving));
+    const button = addButton(indicator);
+    assert.ok(button, 'no add-account button while remuda serves');
+
+    button.click();
+    assert.ok(Harness.find('--open=remuda-add'), 'the button ran no command');
 });

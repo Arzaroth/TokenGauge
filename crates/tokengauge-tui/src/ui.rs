@@ -943,6 +943,11 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
+    /// Another test loading a config can switch the shared language to the
+    /// developer's locale, so a test that reads English pins it on its thread.
+    fn in_english(body: fn()) {
+        tokengauge_core::i18n::with_language(tokengauge_core::i18n::Language::En, body);
+    }
 
     #[test]
     fn the_footer_offers_remuda_only_while_it_serves() {
@@ -971,6 +976,10 @@ mod tests {
     /// window on the whole panel, clamped to its ends.
     #[test]
     fn a_panel_taller_than_the_pane_scrolls_by_line_and_says_what_is_hidden() {
+        in_english(a_panel_taller_than_the_pane_scrolls_by_line_and_says_what_is_hidden_body);
+    }
+
+    fn a_panel_taller_than_the_pane_scrolls_by_line_and_says_what_is_hidden_body() {
         let window = scroll_window(40, 10, 0);
         assert_eq!((window.above, window.below), (0, 30));
         let window = scroll_window(40, 10, 99);
@@ -1084,6 +1093,10 @@ mod tests {
     /// so the provider view has to say so - not only the sync screen.
     #[test]
     fn the_cost_section_carries_the_sync_health_note() {
+        in_english(the_cost_section_carries_the_sync_health_note_body);
+    }
+
+    fn the_cost_section_carries_the_sync_health_note_body() {
         let row = provider_with_sync_note();
         let cost = section(&row, "cost");
         let out = screen(|frame| render_rows(frame, frame.area(), &cost));
@@ -1136,6 +1149,10 @@ mod tests {
     /// the spec's strings is what keeps it from happening again.
     #[test]
     fn the_panel_content_is_the_specs_and_not_this_files() {
+        in_english(the_panel_content_is_the_specs_and_not_this_files_body);
+    }
+
+    fn the_panel_content_is_the_specs_and_not_this_files_body() {
         let row = provider_with_sync_note();
         let cost = section(&row, "cost");
         let out = screen(|frame| render_rows(frame, frame.area(), &cost));

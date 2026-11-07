@@ -295,6 +295,12 @@ fn empty_panel() -> HistoryPanel {
 
 #[cfg(test)]
 mod tests {
+    /// Another test loading a config can switch the shared language to the
+    /// developer's locale, so a test that reads English pins it on its thread.
+    fn in_english(body: fn()) {
+        tokengauge_core::i18n::with_language(tokengauge_core::i18n::Language::En, body);
+    }
+
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -391,6 +397,10 @@ mod tests {
 
     #[test]
     fn an_empty_range_says_so_rather_than_drawing_an_empty_chart() {
+        in_english(an_empty_range_says_so_rather_than_drawing_an_empty_chart_body);
+    }
+
+    fn an_empty_range_says_so_rather_than_drawing_an_empty_chart_body() {
         let mut view = view();
         view.panel.series[0].empty = true;
         let out = screen(&view);

@@ -78,10 +78,12 @@ test('opening the panel asks for current figures', () => {
 test('the words it draws itself come from the snapshot', () => {
     const {indicator} = enabled();
     answer(JSON.stringify({...JSON.parse(panelJson), strings: {Settings: 'Réglages'}}));
-    const box = open(indicator);
-    const names = Harness.byStyle(box, 'tokengauge-icon-button').map(b => b.accessible_name);
-    assert.ok(names.includes('Réglages'), `the header reads ${names}`);
+    const settings = () => Harness.byStyle(content(indicator), 'tokengauge-icon-button')
+        .find(b => b.child?.icon_name === 'emblem-system-symbolic');
+    open(indicator);
+    assert.equal(settings()?.accessible_name, 'Réglages');
     answer(panelJson);
+    assert.equal(settings()?.accessible_name, 'Settings', 'a snapshot without the word falls back to English');
 });
 
 test('it asks the binary for a snapshot and nothing else', () => {

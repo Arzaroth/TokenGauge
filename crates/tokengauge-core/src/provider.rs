@@ -47,8 +47,12 @@ fn saved_key_in(raw: &str, ids: &[&str]) -> Option<(String, String)> {
     let parsed: serde_json::Value = serde_json::from_str(raw).ok()?;
     ids.iter().find_map(|id| {
         let entry = parsed.get(id)?;
-        // A sign-in's token is not the key this id's API takes.
-        if entry.get("type").and_then(serde_json::Value::as_str) == Some("oauth") {
+        // A sign-in's token is not the key this id's API takes, and a `wellknown`
+        // entry's `key` names a variable.
+        if matches!(
+            entry.get("type").and_then(serde_json::Value::as_str),
+            Some("oauth" | "wellknown")
+        ) {
             return None;
         }
         let key = ["key", "apiKey", "token"]
@@ -340,6 +344,8 @@ mod tests {
         assert_eq!(saved_key_in(raw, &["minimax"]), None);
         let resolved_by_pi = r#"{"deepseek":{"key":"$DEEPSEEK"}}"#;
         assert_eq!(saved_key_in(resolved_by_pi, &["deepseek"]), None);
+        let wellknown = r#"{"deepseek":{"type":"wellknown","key":"SOME_VAR","token":"no"}}"#;
+        assert_eq!(saved_key_in(wellknown, &["deepseek"]), None);
         let oauth_first = r#"{"minimax":{"type":"oauth","token":"no"},"minimax-cn":{"key":"k"}}"#;
         assert_eq!(
             saved_key_in(oauth_first, &["minimax", "minimax-cn"]),

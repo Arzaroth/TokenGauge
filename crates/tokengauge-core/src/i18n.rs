@@ -352,7 +352,7 @@ const FRENCH: &[(&str, &str)] = &[
     ("{count} tokens", "{count} tokens"),
     (
         "{arrow}{percent}% vs prior avg",
-        "{arrow}{percent} % par rapport à la moyenne",
+        "{arrow}{percent} % vs moyenne",
     ),
     ("7-day", "7 jours"),
     ("This month", "Ce mois-ci"),

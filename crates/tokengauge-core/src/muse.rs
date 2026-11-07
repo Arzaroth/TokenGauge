@@ -85,6 +85,10 @@ fn reset_iso(value: &Value) -> Option<String> {
 }
 
 impl WireWindow {
+    fn unreadable(&self) -> bool {
+        !self.used_percent.is_null() && json_num(&self.used_percent).is_none()
+    }
+
     fn to_window(&self, fallback_minutes: u32) -> Option<UsageWindow> {
         let used = json_num(&self.used_percent).filter(|used| used.is_finite())?;
         Some(UsageWindow {
@@ -103,6 +107,16 @@ impl WireWindow {
 }
 
 fn to_payload(resp: KeyResponse) -> Result<ProviderPayload> {
+    // An error keeps the last figures, marked stale. A window dropped here would
+    // read as a plan that has none.
+    if let Some(usage) = resp.subs_usage.as_ref()
+        && [&usage.window, &usage.weekly]
+            .into_iter()
+            .flatten()
+            .any(WireWindow::unreadable)
+    {
+        return Err(anyhow!("Muse returned an unreadable usage"));
+    }
     let (primary, secondary) = resp.subs_usage.as_ref().map_or((None, None), |usage| {
         (
             usage
@@ -178,6 +192,14 @@ mod tests {
         assert_eq!(weekly.used_percent, Some(60));
         assert_eq!(weekly.window_minutes, Some(WEEK_MINUTES));
         assert_eq!(usage.login_method.as_deref(), Some("Muse Code Max"));
+    }
+
+    #[test]
+    fn an_unreadable_window_is_a_failed_check_not_a_plan_without_one() {
+        assert!(
+            payload(r#"{"is_subs_active":true,"subs_usage":{"window":{"used_percent":"lots"}}}"#)
+                .is_err()
+        );
     }
 
     #[test]

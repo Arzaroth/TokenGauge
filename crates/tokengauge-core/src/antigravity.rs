@@ -257,13 +257,13 @@ fn to_payload(
             group
                 .buckets
                 .iter()
-                .find(|b| b.is_session())
-                .and_then(|b| b.to_window(SESSION_MINUTES)),
+                .filter(|b| b.is_session())
+                .find_map(|b| b.to_window(SESSION_MINUTES)),
             group
                 .buckets
                 .iter()
-                .find(|b| b.is_week())
-                .and_then(|b| b.to_window(WEEK_MINUTES)),
+                .filter(|b| b.is_week())
+                .find_map(|b| b.to_window(WEEK_MINUTES)),
         )
     });
 
@@ -398,6 +398,16 @@ mod tests {
         );
         assert_eq!(usage.primary.unwrap().used_percent, Some(100));
         assert!(usage.secondary.is_none());
+    }
+
+    #[test]
+    fn a_disabled_bucket_does_not_hide_the_one_behind_it() {
+        let usage = usage(
+            r#"{"buckets":[
+                {"window":"5h","disabled":true,"remainingFraction":0.9},
+                {"window":"5h","remainingFraction":0.5}]}"#,
+        );
+        assert_eq!(usage.primary.unwrap().used_percent, Some(50));
     }
 
     #[test]

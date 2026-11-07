@@ -222,9 +222,27 @@ mod tests {
         let session = usage.primary.unwrap();
         assert_eq!(session.used_percent, Some(25));
         assert!(session.resets_at.unwrap().starts_with("2027-01-15"));
-        let weekly = usage.secondary.unwrap();
-        assert_eq!(weekly.used_percent, Some(60));
-        assert!(weekly.resets_at.is_some(), "placed from the time remaining");
+        assert_eq!(usage.secondary.unwrap().used_percent, Some(60));
+    }
+
+    #[test]
+    fn a_reset_with_no_end_time_is_placed_from_the_time_remaining() {
+        let now = Utc::now();
+        let body = serde_json::from_str(
+            r#"{"model_remains":[{"model_name":"general",
+                "current_weekly_remaining_percent":40,"weekly_remains_time":3600000}]}"#,
+        )
+        .unwrap();
+        let weekly = to_payload(body, now)
+            .unwrap()
+            .usage
+            .unwrap()
+            .secondary
+            .unwrap();
+        assert_eq!(
+            weekly.resets_at.unwrap(),
+            (now + TimeDelta::hours(1)).to_rfc3339()
+        );
     }
 
     #[test]

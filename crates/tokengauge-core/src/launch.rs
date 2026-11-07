@@ -7,7 +7,7 @@
 //! run. No frontend needs to know what a terminal is.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 
 use crate::TokenGaugeConfig;
 
@@ -181,6 +181,30 @@ pub fn open_remuda() -> bool {
         .stderr(Stdio::null())
         .spawn()
         .is_ok()
+}
+
+/// `remuda open --add`, which lands on the add-account sheet. A remuda without
+/// the flag exits 2 before it looks for a page, and its plain page is one click
+/// from the same sheet. `None` when remuda is not installed.
+pub fn run_remuda_open_add() -> Option<std::io::Result<Output>> {
+    let run = |args: &[&str]| {
+        let mut cmd = remuda_open_command()?;
+        Some(cmd.args(args).stdin(Stdio::null()).output())
+    };
+    match run(&["--add"])? {
+        Ok(output) if output.status.code() == Some(2) => run(&[]),
+        other => Some(other),
+    }
+}
+
+/// Waits on a thread, since falling back to the plain page has to outlive the
+/// keypress. False when remuda is not installed.
+pub fn open_remuda_add() -> bool {
+    if remuda_binary().is_none() {
+        return false;
+    }
+    std::thread::spawn(run_remuda_open_add);
+    true
 }
 
 /// How loudly a notification asks for attention, in libnotify's terms.

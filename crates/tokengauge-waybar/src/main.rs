@@ -54,7 +54,8 @@ pub struct Args {
     #[arg(long, hide = true)]
     internal_refresh_worker: bool,
     /// Open the selected provider's dashboard or status page in the browser,
-    /// or the page `remuda serve` is serving.
+    /// or the page `remuda serve` is serving, optionally on its add-account
+    /// sheet.
     #[arg(long, value_enum)]
     open: Option<OpenTarget>,
     /// Print a diagnostic checklist (deps, config, cache, providers, waybar wiring).
@@ -193,6 +194,7 @@ enum OpenTarget {
     Dashboard,
     Status,
     Remuda,
+    RemudaAdd,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -444,6 +446,7 @@ fn main() -> Result<()> {
         // opens nothing. handle_open reads the cache directly - no daemon
         // needed to resolve the selected provider's URL.
         Action::Open(OpenTarget::Remuda) => open_remuda(),
+        Action::Open(OpenTarget::RemudaAdd) => open_remuda_add(),
         Action::Open(target) => {
             handle_open(&config, target);
             Ok(())
@@ -744,7 +747,7 @@ fn open_url_for_provider(provider: &str, target: OpenTarget) {
     let url = match target {
         OpenTarget::Dashboard => urls.dashboard,
         OpenTarget::Status => urls.status,
-        OpenTarget::Remuda => None,
+        OpenTarget::Remuda | OpenTarget::RemudaAdd => None,
     };
     if let Some(url) = url {
         tokengauge_core::launch::open_url(url);
@@ -763,6 +766,20 @@ fn open_remuda() -> Result<()> {
         .status()?;
     if !status.success() {
         anyhow::bail!("`remuda open` failed ({status})");
+    }
+    Ok(())
+}
+
+/// Waited on like `open_remuda`, with remuda's stderr passed on, except that of
+/// a flag it rejected and recovered from.
+fn open_remuda_add() -> Result<()> {
+    let Some(output) = tokengauge_core::launch::run_remuda_open_add() else {
+        anyhow::bail!("remuda is not installed (looked on PATH and in ~/.local/bin)");
+    };
+    let output = output?;
+    if !output.status.success() {
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!("`remuda open` failed ({})", output.status);
     }
     Ok(())
 }

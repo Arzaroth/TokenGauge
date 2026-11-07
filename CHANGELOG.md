@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than turning stale at once. Any other error still marks them stale.
 - The Omarchy widget answers `omarchy-shell` over the shell's own socket on
   Omarchy 4.5 and later.
+- New app icon: a coin whose edge is a gauge, with an AI sparkle filling up in the middle.
 
 ### Fixed
 

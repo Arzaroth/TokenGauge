@@ -105,7 +105,7 @@ pub struct Args {
     #[arg(long, value_name = "NAME")]
     set_primary: Option<String>,
     /// Set one `[panel]` option, then reload the daemon:
-    /// `active_credential_only=true|false`, `plans_total=weighted|absolute`,
+    /// `active_credential_only=true|false`, `plans_total=weighted|absolute`, `language=auto|en|fr`,
     /// `split_bars=true|false`.
     #[arg(long, value_name = "KEY=VALUE")]
     set_panel: Option<String>,

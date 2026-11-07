@@ -143,19 +143,34 @@ export type PlansTotal = 'weighted' | 'absolute';
 
 /// The `[panel]` options the binary drew the panel with, for the settings that
 /// flip them to read back.
+let strings: Record<string, string> = {};
+
+export function setStrings(next: Record<string, string> | undefined): void {
+    strings = next ?? {};
+}
+
+export function translate(english: string): string {
+    return strings[english] ?? english;
+}
+
+export type Language = 'auto' | 'en' | 'fr';
+
 export interface PanelOptions {
     active_credential_only: boolean;
     plans_total: PlansTotal;
     split_bars: boolean;
+    language: Language;
 }
 
 export const DEFAULT_PANEL_OPTIONS: PanelOptions = {
     active_credential_only: false,
     plans_total: 'weighted',
     split_bars: true,
+    language: 'auto',
 };
 
 export interface Snapshot {
+    strings?: Record<string, string>;
     version: string;
     rows: Row[];
     errors: FetchError[];

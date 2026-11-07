@@ -108,12 +108,22 @@ Item {
 
     // An older binary carries no `panel_options`; its panel is drawn with the
     // defaults, so that is what the settings show.
+    readonly property var strings: snapshot.strings || ({})
+
+    function t(english, first, second) {
+        var out = strings[english] || english
+        if (first !== undefined) out = out.replace("%1", first)
+        if (second !== undefined) out = out.replace("%2", second)
+        return out
+    }
+
     readonly property var panelOptions: {
         var o = snapshot.panel_options || {}
         return {
             active_credential_only: o.active_credential_only === true,
             plans_total: o.plans_total === "absolute" ? "absolute" : "weighted",
-            split_bars: o.split_bars !== false
+            split_bars: o.split_bars !== false,
+            language: o.language === "en" || o.language === "fr" ? o.language : "auto"
         }
     }
 

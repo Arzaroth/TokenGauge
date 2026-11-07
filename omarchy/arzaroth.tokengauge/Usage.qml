@@ -42,9 +42,16 @@ Item {
     return {
       active_credential_only: o.active_credential_only === true,
       plans_total: o.plans_total === "absolute" ? "absolute" : "weighted",
-      split_bars: o.split_bars !== false
+      split_bars: o.split_bars !== false,
+      language: o.language === "en" || o.language === "fr" ? o.language : "auto"
     }
   }
+  readonly property var strings: snapshot && snapshot.strings ? snapshot.strings : ({})
+
+  function t(english) {
+    return strings[english] || english
+  }
+
   readonly property string version: snapshot ? String(snapshot.version || "") : ""
 
   readonly property var updateStatus: snapshot ? snapshot.update : null

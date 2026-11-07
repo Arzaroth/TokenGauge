@@ -319,20 +319,20 @@ Item {
             PlasmaComponents.ToolButton {
                 icon.name: "view-refresh"
                 display: QQC2.AbstractButton.IconOnly
-                text: i18n("Refresh")
+                text: root.t("Refresh")
                 onClicked: root.action("--refresh")
                 // An IconOnly ToolButton shows no tooltip of its own, so each
                 // header button sets one; this one adds the refresh age.
                 QQC2.ToolTip.text: full.row && full.row.refresh_hint
-                    ? i18n("Refresh") + "\n" + full.row.refresh_hint
-                    : i18n("Refresh")
+                    ? root.t("Refresh") + "\n" + full.row.refresh_hint
+                    : root.t("Refresh")
                 QQC2.ToolTip.visible: hovered
                 QQC2.ToolTip.delay: 300
             }
             PlasmaComponents.ToolButton {
                 icon.name: "view-statistics"
                 display: QQC2.AbstractButton.IconOnly
-                text: i18n("History")
+                text: root.t("History")
                 checkable: true
                 checked: full.historyOpen
                 onClicked: full.openScreen(full.historyOpen ? "panel" : "history")
@@ -343,7 +343,7 @@ Item {
             PlasmaComponents.ToolButton {
                 icon.name: "system-users"
                 display: QQC2.AbstractButton.IconOnly
-                text: i18n("Open remuda")
+                text: root.t("Open remuda")
                 visible: root.remudaServing
                 onClicked: root.openRemuda()
                 QQC2.ToolTip.text: text
@@ -353,7 +353,7 @@ Item {
             PlasmaComponents.ToolButton {
                 icon.name: "configure"
                 display: QQC2.AbstractButton.IconOnly
-                text: i18n("Settings")
+                text: root.t("Settings")
                 checkable: true
                 checked: full.settingsOpen
                 onClicked: full.openScreen(full.settingsOpen ? "panel" : "settings")
@@ -385,16 +385,16 @@ Item {
                 wrapMode: Text.WordWrap
                 color: root.snapshot.theme && root.snapshot.theme.green ? root.snapshot.theme.green : "#a6e3a1"
                 text: root.updateInfo && root.updateInfo.upgraded_by
-                    ? i18n("Update available: v%1 - upgrade it with %2", root.updateInfo.latest, root.updateInfo.upgraded_by)
+                    ? root.t("Update available: v%1 - upgrade it with %2", root.updateInfo.latest, root.updateInfo.upgraded_by)
                     : root.updateInfo && root.updateInfo.latest
-                    ? i18n("Update available: v%1", root.updateInfo.latest)
-                    : i18n("Update available")
+                    ? root.t("Update available: v%1", root.updateInfo.latest)
+                    : root.t("Update available")
             }
             PlasmaComponents.Button {
                 // `--update` refuses a binary a package manager owns.
                 visible: !(root.updateInfo && root.updateInfo.upgraded_by)
                 icon.name: "system-software-update"
-                text: root.updating ? i18n("Updating…") : i18n("Update")
+                text: root.updating ? root.t("Updating…") : root.t("Update")
                 // Disabled while an update is in flight so a double-trigger can't
                 // race a second --update; root.updating resets when exec finishes
                 // (success or failure), re-enabling on a failed update.
@@ -438,7 +438,7 @@ Item {
                 PlasmaComponents.Label {
                     textFormat: Text.PlainText
                     visible: full.showPanel && full.row === null
-                    text: i18n("No provider data yet.")
+                    text: root.t("No provider data yet.")
                     opacity: 0.7
                 }
 
@@ -471,7 +471,7 @@ Item {
                     PlasmaComponents.Label {
                         textFormat: Text.PlainText
                         visible: full.row && full.row.stale
-                        text: i18n("stale")
+                        text: root.t("stale")
                         color: root.snapshot.theme && root.snapshot.theme.yellow ? root.snapshot.theme.yellow : "#f9e2af"
                         font: Kirigami.Theme.smallFont
                     }
@@ -544,7 +544,7 @@ Item {
                         Layout.fillWidth: true
                         textFormat: Text.PlainText
                         visible: full.historySeries === null
-                        text: i18n("No history yet.")
+                        text: root.t("No history yet.")
                         opacity: 0.7
                     }
 
@@ -564,7 +564,7 @@ Item {
                         Layout.fillWidth: true
                         textFormat: Text.PlainText
                         visible: full.historySeries !== null && full.historySeries.empty
-                        text: i18n("Nothing spent in this range.")
+                        text: root.t("Nothing spent in this range.")
                         opacity: 0.7
                     }
 
@@ -649,14 +649,14 @@ Item {
                     visible: full.showPanel && full.row && full.row.updated
                     opacity: 0.5
                     font: Kirigami.Theme.smallFont
-                    text: full.row && full.row.updated ? i18n("Updated %1", full.row.updated) : ""
+                    text: full.row && full.row.updated ? root.t("Updated %1", full.row.updated) : ""
                 }
 
                 // ---- settings pane ----
                 PlasmaComponents.Label {
                     textFormat: Text.PlainText
                     visible: full.settingsOpen
-                    text: i18n("OAuth providers")
+                    text: root.t("OAuth providers")
                     font.bold: true
                 }
                 Repeater {
@@ -675,18 +675,18 @@ Item {
                 PlasmaComponents.Label {
                     textFormat: Text.PlainText
                     visible: full.settingsOpen
-                    text: i18n("Several credentials")
+                    text: root.t("Several credentials")
                     font.bold: true
                 }
                 PlasmaComponents.CheckBox {
                     visible: full.settingsOpen
-                    text: i18n("Active credential only")
+                    text: root.t("Active credential only")
                     checked: root.panelOptions.active_credential_only
                     onToggled: root.setPanel("active_credential_only", checked ? "true" : "false")
                 }
                 PlasmaComponents.CheckBox {
                     visible: full.settingsOpen
-                    text: i18n("Split ALL PLANS bars")
+                    text: root.t("Split ALL PLANS bars")
                     checked: root.panelOptions.split_bars
                     onToggled: root.setPanel("split_bars", checked ? "true" : "false")
                 }
@@ -695,17 +695,40 @@ Item {
                     spacing: Kirigami.Units.smallSpacing
                     PlasmaComponents.Label {
                         textFormat: Text.PlainText
-                        text: i18n("ALL PLANS:")
+                        text: root.t("ALL PLANS:")
                     }
                     PlasmaComponents.RadioButton {
-                        text: i18n("Weighted")
+                        text: root.t("Weighted")
                         checked: root.panelOptions.plans_total === "weighted"
                         onToggled: if (checked) root.setPanel("plans_total", "weighted")
                     }
                     PlasmaComponents.RadioButton {
-                        text: i18n("Absolute")
+                        text: root.t("Absolute")
                         checked: root.panelOptions.plans_total === "absolute"
                         onToggled: if (checked) root.setPanel("plans_total", "absolute")
+                    }
+                }
+                RowLayout {
+                    visible: full.settingsOpen
+                    spacing: Kirigami.Units.smallSpacing
+                    PlasmaComponents.Label {
+                        textFormat: Text.PlainText
+                        text: root.t("Language:")
+                    }
+                    PlasmaComponents.RadioButton {
+                        text: root.t("System")
+                        checked: root.panelOptions.language === "auto"
+                        onToggled: if (checked) root.setPanel("language", "auto")
+                    }
+                    PlasmaComponents.RadioButton {
+                        text: "English"
+                        checked: root.panelOptions.language === "en"
+                        onToggled: if (checked) root.setPanel("language", "en")
+                    }
+                    PlasmaComponents.RadioButton {
+                        text: "Français"
+                        checked: root.panelOptions.language === "fr"
+                        onToggled: if (checked) root.setPanel("language", "fr")
                     }
                 }
                 Kirigami.Separator {
@@ -715,13 +738,13 @@ Item {
                 PlasmaComponents.Label {
                     textFormat: Text.PlainText
                     visible: full.settingsOpen
-                    text: i18n("Fleet sync")
+                    text: root.t("Fleet sync")
                     font.bold: true
                 }
                 PlasmaComponents.Button {
                     visible: full.settingsOpen
                     icon.name: "folder-sync"
-                    text: i18n("Set up sync…")
+                    text: root.t("Set up sync…")
                     onClicked: root.openSyncSetup()
                 }
                 PlasmaComponents.Label {
@@ -730,7 +753,7 @@ Item {
                     visible: full.settingsOpen
                     wrapMode: Text.WordWrap
                     opacity: 0.7
-                    text: i18n("Adds up tokens and cost across your machines. Opens in a terminal.")
+                    text: root.t("Adds up tokens and cost across your machines. Opens in a terminal.")
                 }
                 Kirigami.Separator {
                     Layout.fillWidth: true
@@ -739,12 +762,12 @@ Item {
                 PlasmaComponents.Label {
                     textFormat: Text.PlainText
                     visible: full.settingsOpen
-                    text: i18n("Pin to bar")
+                    text: root.t("Pin to bar")
                     font.bold: true
                 }
                 PlasmaComponents.RadioButton {
                     visible: full.settingsOpen
-                    text: i18n("Highest usage")
+                    text: root.t("Highest usage")
                     checked: !root.snapshot.primary
                     onToggled: if (checked) root.action("--set-primary highest")
                 }
@@ -782,8 +805,8 @@ Item {
                             applet = ""
                         }
                         if (binary === "") return "TokenGauge"
-                        if (applet === "" || applet === binary) return i18n("TokenGauge v%1", binary)
-                        return i18n("applet v%1, binary v%2 - reinstall: tokengauge-waybar --install-frontend plasma",
+                        if (applet === "" || applet === binary) return root.t("TokenGauge v%1", binary)
+                        return root.t("applet v%1, binary v%2 - reinstall: tokengauge-waybar --install-frontend plasma",
                                     applet, binary)
                     }
                 }

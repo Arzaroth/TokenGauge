@@ -95,6 +95,7 @@ impl Machine {
             // An isolated home, or the machine running these tests answers with
             // its own credentials, its own snapshot and its own daemon socket.
             .env("HOME", &self.root)
+            .env("LC_ALL", "C")
             .env("XDG_STATE_HOME", self.root.join("state"))
             .env("XDG_CONFIG_HOME", &self.root)
             .env("XDG_DATA_HOME", self.root.join("data"))
@@ -209,6 +210,28 @@ fn opening_a_panel_over_a_stale_snapshot_leaves_the_fetch_to_the_read() {
 
     assert_eq!(code, 0);
     assert!(!machine.root.join("state/tokengauge-refreshing").exists());
+}
+
+#[test]
+fn the_panel_and_its_table_follow_the_language_setting() {
+    let machine = Machine::with(&[("claude", true)], Some("claude"), "weekly");
+    machine.seed();
+    let english = machine.json();
+    assert_eq!(english["strings"], serde_json::json!({}));
+    assert_eq!(
+        section(row(&english, "claude"), "limits")["title"],
+        "LIMITS"
+    );
+
+    let (code, _, stderr) = machine.run(&["--set-panel", "language=fr"]);
+    assert_eq!(code, 0, "{stderr}");
+    let french = machine.json();
+    assert_eq!(french["panel_options"]["language"], "fr");
+    assert_eq!(french["strings"]["Settings"], "Réglages");
+    assert_eq!(
+        section(row(&french, "claude"), "limits")["title"],
+        "LIMITES"
+    );
 }
 
 #[test]
@@ -460,6 +483,7 @@ fn a_panel_option_is_written_and_read_back_without_asking_a_provider() {
         serde_json::json!({
             "active_credential_only": false,
             "plans_total": "weighted",
+            "language": "auto",
             "split_bars": true,
         })
     );

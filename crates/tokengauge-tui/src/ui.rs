@@ -7,6 +7,7 @@ use ratatui::widgets::{
     Paragraph, Wrap,
 };
 use ratatui::{Frame, Terminal};
+use tokengauge_core::i18n::{fill, tr};
 use tokengauge_core::panel::{PanelRow, Section, SectionKind, Segment, Tone, panel_spec};
 use tokengauge_core::{ProviderRow, format_updated_relative, theme};
 
@@ -68,7 +69,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing:
     let separator = Span::styled("  ·  ", Style::default().fg(dim()));
     let status = if is_refreshing {
         Span::styled(
-            format!("{spinner} refreshing"),
+            format!("{spinner} {}", tr("refreshing")),
             Style::default()
                 .fg(hex_to_color(&theme().yellow))
                 .add_modifier(Modifier::BOLD),
@@ -89,10 +90,11 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing:
 
     let provider_count = state.rows.len();
     let count_span = Span::styled(
-        format!(
-            "{provider_count} provider{}",
-            if provider_count == 1 { "" } else { "s" }
-        ),
+        if provider_count == 1 {
+            tr("1 provider").to_string()
+        } else {
+            fill(tr("{count} providers"), &[("count", &provider_count)])
+        },
         Style::default().fg(dim()),
     );
 
@@ -122,11 +124,11 @@ fn render_body(frame: &mut Frame, area: Rect, state: &mut AppState) {
             .status_message
             .as_deref()
             .or(state.last_error.as_deref())
-            .unwrap_or("No providers returned");
+            .unwrap_or(tr("No providers returned"));
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(" Usage ")
+            .title(format!(" {} ", tr("Usage")))
             .border_style(Style::default().fg(dim()));
         let paragraph = Paragraph::new(message)
             .style(Style::default().fg(Color::Red))
@@ -149,9 +151,9 @@ fn render_body(frame: &mut Frame, area: Rect, state: &mut AppState) {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(" Usage ")
+            .title(format!(" {} ", tr("Usage")))
             .border_style(Style::default().fg(dim()));
-        let paragraph = Paragraph::new("Errors only - no usable provider data")
+        let paragraph = Paragraph::new(tr("Errors only - no usable provider data"))
             .style(Style::default().fg(Color::Red))
             .block(block);
         frame.render_widget(paragraph, usage_area);
@@ -203,7 +205,7 @@ fn render_sidebar(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(" Providers ")
+        .title(format!(" {} ", tr("Providers")))
         .border_style(Style::default().fg(dim()));
 
     let list = List::new(items)
@@ -298,7 +300,7 @@ impl ScrollWindow {
         if self.below > 0 {
             parts.push(format!("↓ {}", self.below));
         }
-        Some(format!(" {} · J/K scroll ", parts.join(" · ")))
+        Some(format!(" {} · J/K {} ", parts.join(" · "), tr("scroll")))
     }
 }
 
@@ -323,7 +325,7 @@ fn detail_title_line(row: &ProviderRow) -> Line<'static> {
         .updated_iso
         .as_deref()
         .and_then(format_updated_relative)
-        .map(|r| format!(" · updated {r}"))
+        .map(|r| fill(tr(" · updated {when}"), &[("when", &r)]))
         .unwrap_or_default();
     Line::from(vec![
         Span::raw(" "),
@@ -771,7 +773,10 @@ fn render_errors(frame: &mut Frame, area: Rect, state: &AppState) {
             ])
         })
         .chain(std::iter::once(Line::from(Span::styled(
-            format!(" Full details: {}", state.cache_file.display()),
+            fill(
+                tr(" Full details: {path}"),
+                &[("path", &state.cache_file.display())],
+            ),
             Style::default().fg(Color::DarkGray),
         ))))
         .collect();
@@ -779,7 +784,7 @@ fn render_errors(frame: &mut Frame, area: Rect, state: &AppState) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(" Errors ")
+        .title(format!(" {} ", tr("Errors")))
         .border_style(Style::default().fg(Color::Red));
     let widget = Paragraph::new(error_lines)
         .block(block)
@@ -793,9 +798,9 @@ fn render_errors(frame: &mut Frame, area: Rect, state: &AppState) {
 
 fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing: bool) {
     let status_text = if is_refreshing {
-        "refreshing"
+        tr("refreshing")
     } else {
-        state.status_message.as_deref().unwrap_or("idle")
+        state.status_message.as_deref().unwrap_or(tr("idle"))
     };
     let status_color = if is_refreshing {
         hex_to_color(&theme().yellow)
@@ -813,22 +818,22 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing:
     let mut spans = vec![
         Span::raw(" "),
         Span::styled("j/k", key),
-        Span::styled(" select", dim_s),
+        Span::styled(format!(" {}", tr("select")), dim_s),
         Span::styled("  ", sep),
         Span::styled("J/K", key),
-        Span::styled(" scroll", dim_s),
+        Span::styled(format!(" {}", tr("scroll")), dim_s),
         Span::styled("  ", sep),
         Span::styled("r", key),
-        Span::styled(" refresh", dim_s),
+        Span::styled(format!(" {}", tr("refresh")), dim_s),
         Span::styled("  ", sep),
         Span::styled("u", key),
-        Span::styled(" dashboard", dim_s),
+        Span::styled(format!(" {}", tr("dashboard")), dim_s),
         Span::styled("  ", sep),
         Span::styled("s", key),
-        Span::styled(" status", dim_s),
+        Span::styled(format!(" {}", tr("status")), dim_s),
         Span::styled("  ", sep),
         Span::styled("S", key),
-        Span::styled(" sync", dim_s),
+        Span::styled(format!(" {}", tr("sync")), dim_s),
         Span::styled("  ", sep),
     ];
     if state.remuda_serving {
@@ -840,10 +845,10 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing:
     }
     spans.extend([
         Span::styled("?", key),
-        Span::styled(" help", dim_s),
+        Span::styled(format!(" {}", tr("help")), dim_s),
         Span::styled("  ", sep),
         Span::styled("q", key),
-        Span::styled(" quit", dim_s),
+        Span::styled(format!(" {}", tr("quit")), dim_s),
         Span::styled("  ·  ", sep),
         Span::styled(
             status_text,
@@ -864,7 +869,7 @@ fn render_help_popup(frame: &mut Frame, area: Rect) {
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(hex_to_color(&theme().yellow)))
         .title(Span::styled(
-            " Keybindings ",
+            format!(" {} ", tr("Keybindings")),
             Style::default()
                 .fg(hex_to_color(&theme().yellow))
                 .add_modifier(Modifier::BOLD),
@@ -876,26 +881,31 @@ fn render_help_popup(frame: &mut Frame, area: Rect) {
     let desc = Style::default().fg(Color::Gray);
     let lines = vec![
         Line::from(""),
-        binding_line("j / ↓", "select next provider", key, desc),
-        binding_line("k / ↑", "select previous provider", key, desc),
-        binding_line("h / l", "select prev / next provider", key, desc),
-        binding_line("g / G", "first / last provider", key, desc),
-        binding_line("J / K", "scroll the panel (PgDn / PgUp a page)", key, desc),
-        binding_line("r", "refresh now", key, desc),
-        binding_line("u", "open provider dashboard", key, desc),
-        binding_line("s", "open provider status page", key, desc),
-        binding_line("S", "fleet sync setup", key, desc),
-        binding_line("H", "spend history", key, desc),
-        binding_line("m", "open remuda (while it serves)", key, desc),
-        binding_line("?", "toggle this help", key, desc),
-        binding_line("q / esc", "quit", key, desc),
+        binding_line("j / ↓", tr("select next provider"), key, desc),
+        binding_line("k / ↑", tr("select previous provider"), key, desc),
+        binding_line("h / l", tr("select prev / next provider"), key, desc),
+        binding_line("g / G", tr("first / last provider"), key, desc),
+        binding_line(
+            "J / K",
+            tr("scroll the panel (PgDn / PgUp a page)"),
+            key,
+            desc,
+        ),
+        binding_line("r", tr("refresh now"), key, desc),
+        binding_line("u", tr("open provider dashboard"), key, desc),
+        binding_line("s", tr("open provider status page"), key, desc),
+        binding_line("S", tr("fleet sync setup"), key, desc),
+        binding_line("H", tr("spend history"), key, desc),
+        binding_line("m", tr("open remuda (while it serves)"), key, desc),
+        binding_line("?", tr("toggle this help"), key, desc),
+        binding_line("q / esc", tr("quit"), key, desc),
         Line::from(""),
         Line::from(Span::styled(
             format!("  TokenGauge v{}", env!("CARGO_PKG_VERSION")),
             Style::default().fg(dim()),
         )),
         Line::from(Span::styled(
-            "  press any key to close",
+            format!("  {}", tr("press any key to close")),
             Style::default().fg(dim()),
         )),
     ];
@@ -933,6 +943,11 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
+    /// Another test loading a config can switch the shared language to the
+    /// developer's locale, so a test that reads English pins it on its thread.
+    fn in_english(body: fn()) {
+        tokengauge_core::i18n::with_language(tokengauge_core::i18n::Language::En, body);
+    }
 
     #[test]
     fn the_footer_offers_remuda_only_while_it_serves() {
@@ -961,6 +976,10 @@ mod tests {
     /// window on the whole panel, clamped to its ends.
     #[test]
     fn a_panel_taller_than_the_pane_scrolls_by_line_and_says_what_is_hidden() {
+        in_english(a_panel_taller_than_the_pane_scrolls_by_line_and_says_what_is_hidden_body);
+    }
+
+    fn a_panel_taller_than_the_pane_scrolls_by_line_and_says_what_is_hidden_body() {
         let window = scroll_window(40, 10, 0);
         assert_eq!((window.above, window.below), (0, 30));
         let window = scroll_window(40, 10, 99);
@@ -1074,6 +1093,10 @@ mod tests {
     /// so the provider view has to say so - not only the sync screen.
     #[test]
     fn the_cost_section_carries_the_sync_health_note() {
+        in_english(the_cost_section_carries_the_sync_health_note_body);
+    }
+
+    fn the_cost_section_carries_the_sync_health_note_body() {
         let row = provider_with_sync_note();
         let cost = section(&row, "cost");
         let out = screen(|frame| render_rows(frame, frame.area(), &cost));
@@ -1126,6 +1149,10 @@ mod tests {
     /// the spec's strings is what keeps it from happening again.
     #[test]
     fn the_panel_content_is_the_specs_and_not_this_files() {
+        in_english(the_panel_content_is_the_specs_and_not_this_files_body);
+    }
+
+    fn the_panel_content_is_the_specs_and_not_this_files_body() {
         let row = provider_with_sync_note();
         let cost = section(&row, "cost");
         let out = screen(|frame| render_rows(frame, frame.area(), &cost));

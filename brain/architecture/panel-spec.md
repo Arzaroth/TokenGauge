@@ -89,6 +89,10 @@ enforce what no type system can:
 | `every_frontend_with_a_second_screen_draws_the_history_series` | history drawn (not waybar) |
 | `every_frontend_with_a_header_offers_remuda_while_it_serves` | remuda button (TUI, GNOME, Plasma, Omarchy) |
 
+The strings the spec resolves are in the user's language: see
+[../features/i18n.md](../features/i18n.md). A frontend keys off a section's `id`, never
+its title, which is what makes that safe.
+
 ## Sources
 
 - `crates/tokengauge-core/src/panel.rs` (`panel_spec`, `SECTION_IDS`, `SectionKind`, `Tone`, `refresh_hint`, `bar_tooltip`, `segment_cells`, `tests`)

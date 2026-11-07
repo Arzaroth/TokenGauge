@@ -263,5 +263,27 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
         group.add(total);
 
         toggle(_('Split ALL PLANS bars'), 'split_bars');
+
+        const languages: Panel.Language[] = ['auto', 'en', 'fr'];
+        const language = new Adw.ComboRow({
+            title: _('Language'),
+            model: Gtk.StringList.new([_('Follow the system'), 'English', 'Français']),
+            selected: Math.max(0, languages.indexOf(options.language)),
+        });
+        let confirmedLanguage = language.selected;
+        let revertingLanguage = false;
+        language.connect('notify::selected', () => {
+            if (revertingLanguage)
+                return;
+            const previous = confirmedLanguage;
+            confirmedLanguage = language.selected;
+            write(language, 'language', languages[language.selected] ?? 'auto', () => {
+                revertingLanguage = true;
+                language.selected = previous;
+                confirmedLanguage = previous;
+                revertingLanguage = false;
+            });
+        });
+        group.add(language);
     }
 }

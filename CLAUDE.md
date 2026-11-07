@@ -135,6 +135,17 @@ is why the fields are named exactly as the JSON names them and only the fields
 this frontend reads are declared. The four `panel::tests` that grep frontend
 sources read the `.ts`, not the build output.
 
+### A sentence a user reads goes through the table
+
+`i18n.rs` holds English and French, keyed by the English
+(`brain/features/i18n.md`, decision 0007). In Rust that is `tr` and `tf!`, in QML
+`usage.t` or `root.t`, in GNOME's extension `_`. `i18n::tests::every_sentence_has_a_translation`
+reads those sources, so a new sentence with no French fails. It cannot see a plain
+literal that skips the table, or a title a fetcher writes into a payload, which is
+why Codex's `Monthly` shipped English until it was read in a real snapshot. Compare
+against a section's `id` and never its title, which changes with the language. A test
+that runs the binary sets `LC_ALL=C`, or it reads in the developer's language.
+
 ### Rows the spec drops
 
 A window the provider does not report (`used: None`) and a `placeholder: true`

@@ -259,6 +259,9 @@ pub struct PanelConfig {
     /// a single pooled bar.
     #[serde(deserialize_with = "or_true")]
     pub split_bars: bool,
+    /// The language the panel reads in. `auto` follows the locale.
+    #[serde(deserialize_with = "or_default")]
+    pub language: crate::i18n::LanguageSetting,
     #[serde(flatten)]
     pub unknown: HashMap<String, toml::Value>,
 }
@@ -291,6 +294,7 @@ impl Default for PanelConfig {
             active_credential_only: false,
             plans_total: PlansTotal::default(),
             split_bars: true,
+            language: crate::i18n::LanguageSetting::default(),
             unknown: HashMap::new(),
         }
     }
@@ -353,6 +357,8 @@ pub fn load_config(path: Option<PathBuf>) -> Result<TokenGaugeConfig> {
         .with_context(|| format!("failed to read config at {}", path.display()))?;
     let mut config: TokenGaugeConfig = toml::from_str(&contents)
         .with_context(|| format!("failed to parse config at {}", path.display()))?;
+
+    crate::i18n::apply(config.panel.language);
 
     // Apply defaults for empty values
     if config.cache_file.as_os_str().is_empty() {
@@ -442,6 +448,8 @@ click_action = "tui"
 # plans_total = "weighted"
 # One bar segment per credential under ALL PLANS, instead of one pooled bar.
 # split_bars = true
+# The language the panel reads in: "auto" follows the locale, or "en" or "fr".
+# language = "auto"
 
 [providers]
 # OAuth providers - set to true/false to enable/disable
@@ -548,6 +556,7 @@ pub const PANEL_KEYS: &[(&str, &[&str])] = &[
     ("active_credential_only", &["true", "false"]),
     ("plans_total", &["weighted", "absolute"]),
     ("split_bars", &["true", "false"]),
+    ("language", &["auto", "en", "fr"]),
 ];
 
 /// Set one `[panel]` key. Validated against [`PANEL_KEYS`] before anything is

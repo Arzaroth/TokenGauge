@@ -64,9 +64,10 @@ mod gui {
     use tokengauge_core::{
         HistoryPanel, PROVIDERS, PanelConfig, PlansTotal, ProviderRow, Section, SectionKind,
         TokenGaugeConfig, Tone, cache_is_stale, config_set_oauth_provider, config_set_panel,
-        config_set_primary, default_config_path, fetch_all_providers, load_config,
-        panel_open_wants_fetch, panel_spec, payload_to_rows_with_costs, read_cache_full,
-        retain_enabled, write_cache_full, write_default_config,
+        config_set_primary, default_config_path, fetch_all_providers,
+        i18n::{LanguageSetting, fill, tr},
+        load_config, panel_open_wants_fetch, panel_spec, payload_to_rows_with_costs,
+        read_cache_full, retain_enabled, write_cache_full, write_default_config,
     };
     use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem};
     use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -299,11 +300,11 @@ mod gui {
 
             // Tray icon + menu. Left-click shows the window (not the menu).
             let menu = Menu::new();
-            let show_i = MenuItem::new("Show TokenGauge", true, None);
-            let refresh_i = MenuItem::new("Refresh now", true, None);
-            let sync_i = MenuItem::new("Set up fleet sync", true, None);
-            let update_i = MenuItem::new("Update TokenGauge", true, None);
-            let quit_i = MenuItem::new("Quit", true, None);
+            let show_i = MenuItem::new(tr("Show TokenGauge"), true, None);
+            let refresh_i = MenuItem::new(tr("Refresh now"), true, None);
+            let sync_i = MenuItem::new(tr("Set up fleet sync"), true, None);
+            let update_i = MenuItem::new(tr("Update TokenGauge"), true, None);
+            let quit_i = MenuItem::new(tr("Quit"), true, None);
             menu.append(&show_i)?;
             menu.append(&refresh_i)?;
             menu.append(&sync_i)?;
@@ -470,11 +471,11 @@ mod gui {
                             .fill(CARD)
                             .corner_radius(6)
                             .min_size(egui::vec2(26.0, 26.0));
-                            if ui.add(close).on_hover_text("Hide (Esc)").clicked() {
+                            if ui.add(close).on_hover_text(tr("Hide (Esc)")).clicked() {
                                 ui.ctx().send_viewport_cmd(ViewportCommand::Visible(false));
                             }
                             let gear = egui::Button::new(
-                                RichText::new("\u{2699} Settings")
+                                RichText::new(format!("\u{2699} {}", tr("Settings")))
                                     .strong()
                                     .color(if self.settings_open { DARK } else { SUB }),
                             )
@@ -492,7 +493,7 @@ mod gui {
                             // chart emoji, and a tofu box in the header is the
                             // bug the cost trend badge already shipped once.
                             let history = egui::Button::new(
-                                RichText::new("History")
+                                RichText::new(tr("History"))
                                     .strong()
                                     .color(if self.history_open { DARK } else { SUB }),
                             )
@@ -506,7 +507,9 @@ mod gui {
                                 }
                             }
                             let btn = egui::Button::new(
-                                RichText::new("\u{27f3} Refresh").strong().color(DARK),
+                                RichText::new(format!("\u{27f3} {}", tr("Refresh")))
+                                    .strong()
+                                    .color(DARK),
                             )
                             .fill(BLUE)
                             .corner_radius(6)
@@ -534,12 +537,14 @@ mod gui {
                                 ui.add_space(24.0);
                                 ui.vertical_centered(|ui| {
                                     ui.label(
-                                        RichText::new("No usage data yet").size(15.0).color(SUB),
+                                        RichText::new(tr("No usage data yet"))
+                                            .size(15.0)
+                                            .color(SUB),
                                     );
                                     ui.label(
-                                        RichText::new(
+                                        RichText::new(tr(
                                             "Sign in with `codex` or `claude`, then refresh.",
-                                        )
+                                        ))
                                         .small()
                                         .color(SUB),
                                     );
@@ -567,7 +572,7 @@ mod gui {
                                     .corner_radius(10)
                                     .inner_margin(egui::Margin::same(12))
                                     .show(ui, |ui| {
-                                        ui.label(RichText::new("Errors").strong().color(RED));
+                                        ui.label(RichText::new(tr("Errors")).strong().color(RED));
                                         ui.add_space(4.0);
                                         for e in &snap.errors {
                                             ui.label(RichText::new(e).small().color(SUB));
@@ -643,7 +648,7 @@ mod gui {
                     ui.add_space(6.0);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new(format!("Updated {}", row.updated))
+                            RichText::new(fill(tr("Updated {when}"), &[("when", &row.updated)]))
                                 .small()
                                 .color(SUB),
                         );
@@ -662,7 +667,7 @@ mod gui {
                 self.history_range = 0;
             }
             card(ui, |ui| {
-                ui.label(RichText::new("HISTORY").small().strong().color(SUB));
+                ui.label(RichText::new(tr("HISTORY")).small().strong().color(SUB));
                 ui.add_space(6.0);
 
                 ui.horizontal_wrapped(|ui| {
@@ -685,7 +690,7 @@ mod gui {
 
                 let Some(series) = history.series.get(self.history_range) else {
                     ui.add_space(6.0);
-                    ui.label(RichText::new("No history yet").color(SUB));
+                    ui.label(RichText::new(tr("No history yet")).color(SUB));
                     return;
                 };
 
@@ -701,7 +706,7 @@ mod gui {
                 if series.empty {
                     ui.add_space(6.0);
                     ui.label(
-                        RichText::new("Nothing spent in this range")
+                        RichText::new(tr("Nothing spent in this range"))
                             .small()
                             .color(SUB),
                     );
@@ -735,7 +740,7 @@ mod gui {
         /// frontends put behind their gear button.
         fn settings_pane(&mut self, ui: &mut egui::Ui, snap: &Snapshot) {
             card(ui, |ui| {
-                ui.label(RichText::new("PROVIDERS").small().strong().color(SUB));
+                ui.label(RichText::new(tr("PROVIDERS")).small().strong().color(SUB));
                 ui.add_space(4.0);
                 for provider in PROVIDERS {
                     let mut on = snap.enabled.iter().any(|p| p == provider);
@@ -758,7 +763,7 @@ mod gui {
                 }
 
                 ui.add_space(12.0);
-                ui.label(RichText::new("PIN TO BAR").small().strong().color(SUB));
+                ui.label(RichText::new(tr("PIN TO BAR")).small().strong().color(SUB));
                 ui.add_space(4.0);
                 let current = if snap.primary.is_empty() {
                     "highest"
@@ -795,7 +800,7 @@ mod gui {
 
                 ui.add_space(12.0);
                 ui.label(
-                    RichText::new("SEVERAL CREDENTIALS")
+                    RichText::new(tr("SEVERAL CREDENTIALS"))
                         .small()
                         .strong()
                         .color(SUB),
@@ -804,7 +809,10 @@ mod gui {
                 let mut panel = snap.panel.clone();
                 let mut changed: Option<(&'static str, &'static str)> = None;
                 if ui
-                    .checkbox(&mut panel.active_credential_only, "Active credential only")
+                    .checkbox(
+                        &mut panel.active_credential_only,
+                        tr("Active credential only"),
+                    )
                     .changed()
                 {
                     changed = Some((
@@ -813,13 +821,13 @@ mod gui {
                     ));
                 }
                 if ui
-                    .checkbox(&mut panel.split_bars, "Split ALL PLANS bars")
+                    .checkbox(&mut panel.split_bars, tr("Split ALL PLANS bars"))
                     .changed()
                 {
                     changed = Some(("split_bars", bool_str(panel.split_bars)));
                 }
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("ALL PLANS").color(SUB));
+                    ui.label(RichText::new(tr("ALL PLANS")).color(SUB));
                     for (mode, label) in [
                         (PlansTotal::Weighted, "weighted"),
                         (PlansTotal::Absolute, "absolute"),
@@ -836,6 +844,29 @@ mod gui {
                         if ui.add(chip).clicked() && !active {
                             panel.plans_total = mode;
                             changed = Some(("plans_total", label));
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(tr("Language")).color(SUB));
+                    for language in [
+                        LanguageSetting::Auto,
+                        LanguageSetting::En,
+                        LanguageSetting::Fr,
+                    ] {
+                        let label = language.as_str();
+                        let active = panel.language == language;
+                        let chip =
+                            egui::Button::new(RichText::new(label).strong().color(if active {
+                                DARK
+                            } else {
+                                SUB
+                            }))
+                            .fill(if active { BLUE } else { CARD })
+                            .corner_radius(6);
+                        if ui.add(chip).clicked() && !active {
+                            panel.language = language;
+                            changed = Some(("language", label));
                         }
                     }
                 });
@@ -1106,7 +1137,7 @@ mod gui {
     /// "Highest usage" and the raw id - for one setting.
     fn pin_label(choice: &str) -> String {
         if choice == "highest" {
-            return "Highest usage".to_string();
+            return tr("Highest usage").to_string();
         }
         PROVIDERS
             .iter()
@@ -1138,7 +1169,7 @@ mod gui {
             }
         }
         let Some(row) = snap.rows.get(selected).or_else(|| snap.rows.first()) else {
-            return ("TokenGauge — no data".to_string(), None);
+            return (tr("TokenGauge - no data").to_string(), None);
         };
         let tip = &row.bar_tooltip;
         let mut lines = vec![tip.title.clone()];

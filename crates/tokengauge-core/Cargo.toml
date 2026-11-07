@@ -53,3 +53,6 @@ keyring = { version = "3", default-features = false, features = ["windows-native
 
 [features]
 self-update = ["selvedge/self-update"]
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+sys-locale = "0.3"

@@ -402,7 +402,7 @@ seat, whatever the seat tier is called. Codex plans weigh against Plus: Pro 100,
 known multiplier (Claude or ChatGPT Enterprise, ChatGPT Free) is left out of it
 and marked `not in total`.
 
-Three `[panel]` options change how this is drawn, from `config.toml`, from
+Four `[panel]` options change how this is drawn, from `config.toml`, from
 `tokengauge --set-panel KEY=VALUE`, or from the settings pane of the Plasma,
 GNOME, Omarchy and tray panels:
 
@@ -420,6 +420,8 @@ plans_total = "weighted"
 # usage and as wide as its share of the total (a tenth of the bar at least, so
 # a small plan beside a big one stays readable), instead of one pooled bar.
 split_bars = true
+# The language the panel reads in: "auto" follows the locale, or "en" or "fr".
+language = "auto"
 ```
 
 The CLI's own login is asked on every refresh. A credential it is not signed

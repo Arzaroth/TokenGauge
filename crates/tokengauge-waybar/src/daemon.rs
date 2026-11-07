@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use selvedge::update;
+use tokengauge_core::i18n::{fill, tr};
 use tokengauge_core::launch::{Urgency, notify};
 use tokengauge_core::project::TOKENGAUGE;
 use tokengauge_core::{
@@ -89,12 +90,15 @@ pub(crate) fn notify_update_available(config: &TokenGaugeConfig) {
         &tokengauge_core::update_status_path(&config.cache_file),
         |latest, current| {
             let how = match crate::snapshot::upgraded_by() {
-                by if by.is_empty() => "Run tokengauge --update.".to_string(),
-                by => format!("Upgrade it with {by}."),
+                by if by.is_empty() => tr("Run tokengauge --update.").to_string(),
+                by => fill(tr("Upgrade it with {by}."), &[("by", &by)]),
             };
             notify(
-                "TokenGauge: update available",
-                &format!("v{latest} is available (you have v{current}). {how}"),
+                tr("TokenGauge: update available"),
+                &fill(
+                    tr("v{latest} is available (you have v{current}). {how}"),
+                    &[("latest", &latest), ("current", &current), ("how", &how)],
+                ),
                 Urgency::Normal,
                 true,
             )

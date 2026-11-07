@@ -594,7 +594,7 @@ Panel {
                 // `--update` refuses a binary a package manager owns.
                 visible: !(usage.updateStatus && usage.updateStatus.upgraded_by)
                 anchors.verticalCenter: parent.verticalCenter
-                text: usage.updating ? "Updating…" : "Update"
+                text: usage.t(usage.updating ? "Updating…" : "Update")
                 bordered: true
                 foreground: root.foreground
                 accent: Commons.Color.accent
@@ -678,7 +678,7 @@ Panel {
                 }
                 PanelActionButton {
                   iconText: "󰄨"
-                  tooltipText: "History  ."
+                  tooltipText: usage.t("History") + "  ."
                   foreground: root.historyOpen ? Commons.Color.accent : root.dim
                   hoverColor: root.foreground
                   fontFamily: root.fontFamily
@@ -686,7 +686,7 @@ Panel {
                 }
                 PanelActionButton {
                   iconText: "󰀉"
-                  tooltipText: "Open remuda  m"
+                  tooltipText: usage.t("Open remuda") + "  m"
                   visible: usage.remudaServing
                   enabled: !usage.loading
                   foreground: root.dim
@@ -696,7 +696,7 @@ Panel {
                 }
                 PanelActionButton {
                   iconText: "󰒓"
-                  tooltipText: "Settings  ,"
+                  tooltipText: usage.t("Settings") + "  ,"
                   foreground: root.settingsOpen ? Commons.Color.accent : root.dim
                   hoverColor: root.foreground
                   fontFamily: root.fontFamily
@@ -725,7 +725,7 @@ Panel {
             textFormat: Text.PlainText
             visible: !!root.provider && root.provider.stale === true
             width: parent.width
-            text: "Showing last known values"
+            text: usage.t("Showing last known values")
             color: root.urgent
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -736,7 +736,7 @@ Panel {
             visible: !root.provider && root.errorText === ""
             width: parent.width
             topPadding: Style.space(24)
-            text: "No provider usage yet.\nEnable one in the settings below."
+            text: usage.t("No provider usage yet.\nEnable one in the settings below.")
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -929,7 +929,7 @@ Panel {
           PanelSectionHeader {
             visible: root.historyOpen
             width: parent.width
-            text: "HISTORY"
+            text: usage.t("HISTORY")
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
@@ -970,7 +970,7 @@ Panel {
               textFormat: Text.PlainText
               width: parent.width
               visible: root.historySeries === null
-              text: "No history yet."
+              text: usage.t("No history yet.")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -995,7 +995,7 @@ Panel {
               textFormat: Text.PlainText
               width: parent.width
               visible: root.historySeries !== null && root.historySeries.empty
-              text: "Nothing spent in this range."
+              text: usage.t("Nothing spent in this range.")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -1081,7 +1081,7 @@ Panel {
           PanelSectionHeader {
             visible: root.settingsOpen
             width: parent.width
-            text: "PROVIDERS"
+            text: usage.t("PROVIDERS")
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
@@ -1128,7 +1128,7 @@ Panel {
           PanelSectionHeader {
             visible: root.settingsOpen
             width: parent.width
-            text: "PIN TO BAR"
+            text: usage.t("PIN TO BAR")
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
@@ -1140,7 +1140,7 @@ Panel {
             accent: Commons.Color.accent
             fontFamily: root.fontFamily
             options: {
-              var out = [{ value: "highest", label: "Highest usage" }]
+              var out = [{ value: "highest", label: usage.t("Highest usage") }]
               for (var i = 0; i < usage.enabledProviders.length; i++) {
                 var id = String(usage.enabledProviders[i])
                 out.push({ value: id, label: root.providerLabel(id) })
@@ -1156,7 +1156,7 @@ Panel {
           PanelSectionHeader {
             visible: root.settingsOpen
             width: parent.width
-            text: "SEVERAL CREDENTIALS"
+            text: usage.t("SEVERAL CREDENTIALS")
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
@@ -1168,8 +1168,8 @@ Panel {
 
             Repeater {
               model: [
-                { key: "active_credential_only", label: "a  Active credential only" },
-                { key: "split_bars", label: "b  Split ALL PLANS bars" }
+                { key: "active_credential_only", label: "a  " + usage.t("Active credential only") },
+                { key: "split_bars", label: "b  " + usage.t("Split ALL PLANS bars") }
               ]
 
               Item {
@@ -1204,7 +1204,7 @@ Panel {
           Text {
             textFormat: Text.PlainText
             visible: root.settingsOpen
-            text: "t  ALL PLANS"
+            text: "t  " + usage.t("ALL PLANS")
             color: root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -1217,11 +1217,26 @@ Panel {
             accent: Commons.Color.accent
             fontFamily: root.fontFamily
             options: [
-              { value: "weighted", label: "Weighted" },
-              { value: "absolute", label: "Absolute" }
+              { value: "weighted", label: usage.t("Weighted") },
+              { value: "absolute", label: usage.t("Absolute") }
             ]
             value: usage.panelOptions.plans_total
             onChanged: function(value) { usage.setPanel("plans_total", value) }
+          }
+
+          ButtonGroup {
+            visible: root.settingsOpen
+            width: parent.width
+            foreground: root.foreground
+            accent: Commons.Color.accent
+            fontFamily: root.fontFamily
+            options: [
+              { value: "auto", label: usage.t("System") },
+              { value: "en", label: "English" },
+              { value: "fr", label: "Français" }
+            ]
+            value: usage.panelOptions.language
+            onChanged: function(value) { usage.setPanel("language", value) }
           }
 
           Text {
@@ -1229,7 +1244,7 @@ Panel {
             visible: root.settingsOpen
             width: parent.width
             topPadding: Style.space(4)
-            text: "A number toggles a provider, p walks the pin, a, b and t switch how several credentials are drawn, y sets up fleet sync so tokens and cost add up across your machines, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml."
+            text: usage.t("A number toggles a provider, p walks the pin, a, b and t switch how several credentials are drawn, y sets up fleet sync so tokens and cost add up across your machines, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml.")
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

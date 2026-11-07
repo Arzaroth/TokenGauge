@@ -47,6 +47,7 @@ pub mod fmt;
 mod glm;
 mod grok;
 pub mod history;
+pub mod i18n;
 mod kimi;
 pub mod launch;
 mod minimax;

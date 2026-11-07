@@ -14,6 +14,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::{Bar, BarChart, BarGroup, Block, BorderType, Borders, Clear, Paragraph};
 use tokengauge_core::history::{HistoryPanel, HistorySeries};
+use tokengauge_core::i18n::tr;
 use tokengauge_core::{load_config, provider_label};
 
 use crate::theme::{self, dim, tone_color};
@@ -152,7 +153,7 @@ impl HistoryView {
         frame.render_widget(self.notes_line(), layout[3]);
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "h/l or Tab  range    q/Esc  back",
+                tr("h/l or Tab  range    q/Esc  back"),
                 Style::default().fg(dim()),
             ))),
             layout[4],
@@ -220,7 +221,7 @@ impl HistoryView {
         if series.empty {
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
-                    "nothing spent in this range",
+                    tr("nothing spent in this range"),
                     Style::default().fg(dim()),
                 ))),
                 area,
@@ -294,6 +295,12 @@ fn empty_panel() -> HistoryPanel {
 
 #[cfg(test)]
 mod tests {
+    /// Another test loading a config can switch the shared language to the
+    /// developer's locale, so a test that reads English pins it on its thread.
+    fn in_english(body: fn()) {
+        tokengauge_core::i18n::with_language(tokengauge_core::i18n::Language::En, body);
+    }
+
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -390,6 +397,10 @@ mod tests {
 
     #[test]
     fn an_empty_range_says_so_rather_than_drawing_an_empty_chart() {
+        in_english(an_empty_range_says_so_rather_than_drawing_an_empty_chart_body);
+    }
+
+    fn an_empty_range_says_so_rather_than_drawing_an_empty_chart_body() {
         let mut view = view();
         view.panel.series[0].empty = true;
         let out = screen(&view);

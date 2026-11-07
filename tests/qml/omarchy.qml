@@ -96,6 +96,8 @@ Item {
 
         // An action runs the flag and the read in one subprocess, so the panel
         // never renders against pre-action state.
+        check.ok("a word with no table reads in English", usage.t("Settings") === "Settings")
+
         Registry.clear()
         usage.live = true
         var opened = Registry.find("--panel-opened")

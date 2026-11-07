@@ -7,6 +7,7 @@
 //! ([`crate::window_history`]), and at its average since it opened when not.
 //! Ported from CodexBar's `UsagePace`.
 
+use crate::i18n::tf;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
@@ -151,8 +152,11 @@ impl UsagePace {
     /// reset (`ends ~16%`), or when it runs out first (`empty in 2h 15m`).
     pub fn badge(&self) -> String {
         match self.eta_seconds {
-            Some(seconds) => format!("empty in {}", format_eta(seconds)),
-            None => format!("ends ~{}%", self.projected_percent.round() as i64),
+            Some(seconds) => tf!("empty in {eta}", eta = format_eta(seconds)),
+            None => tf!(
+                "ends ~{percent}%",
+                percent = self.projected_percent.round() as i64
+            ),
         }
     }
 }

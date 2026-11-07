@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use ratatui::DefaultTerminal;
+use tokengauge_core::i18n::tr;
 use tokengauge_core::{
     ProviderFetchError, ProviderRow, load_config, payload_to_rows_with_costs, provider_urls,
     read_cache_full, read_waybar_state, retain_enabled, waybar_state_path,
@@ -288,7 +289,7 @@ impl App {
             return Ok(());
         }
         if matches!(key.code, KeyCode::Char('r')) && self.pending_refresh.is_none() {
-            self.state.status_message = Some("Refreshing…".into());
+            self.state.status_message = Some(tr("Refreshing…").into());
             self.pending_refresh = Some(spawn_refresh(self.config_override.clone(), true));
         }
         let tab = self.state.active_tab;
@@ -379,9 +380,9 @@ impl App {
             .unwrap_or(false);
         self.state.remuda_serving = serving;
         self.state.status_message = if !serving {
-            Some("remuda is no longer serving".into())
+            Some(tr("remuda is no longer serving").into())
         } else if !tokengauge_core::launch::open_remuda() {
-            Some("remuda is not installed (looked on PATH and in ~/.local/bin)".into())
+            Some(tr("remuda is not installed (looked on PATH and in ~/.local/bin)").into())
         } else {
             None
         };

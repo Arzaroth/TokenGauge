@@ -363,7 +363,7 @@ class TokenGaugeIndicator extends PanelMenu.Button {
             // `;`, not `&&`: a binary older than this extension refuses the flag,
             // and the panel still has to read the snapshot.
             const bin = shellQuote(this._binary());
-            this._refreshSnapshot(`${bin} --panel-opened 2>/dev/null; ${bin} --json`);
+            this._refreshSnapshot(`${bin} --panel-opened >/dev/null 2>&1; ${bin} --json`);
         }
         this._liveTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, LIVE_INTERVAL_SECS, () => {
             // A poll would cancel an in-flight `--update` read and leave the

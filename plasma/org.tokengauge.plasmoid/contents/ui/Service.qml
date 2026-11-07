@@ -92,7 +92,7 @@ Item {
 
     // `;`, not `&&`: a binary older than this applet refuses the flag, and the panel
     // still has to read the snapshot.
-    onLiveChanged: if (live) exec.connectSource(cmd(service.binary + " --panel-opened 2>/dev/null; " + service.binary + " --json"))
+    onLiveChanged: if (live) exec.connectSource(cmd(service.binary + " --panel-opened >/dev/null 2>&1; " + service.binary + " --json"))
 
     // Refresh the snapshot.
     function reload() {

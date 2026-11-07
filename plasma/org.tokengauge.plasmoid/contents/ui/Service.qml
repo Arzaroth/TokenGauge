@@ -135,6 +135,10 @@ Item {
         action("--open=remuda")
     }
 
+    function addRemudaAccount() {
+        action("--open=remuda-add")
+    }
+
     // Long-poll for the next change instead of only re-reading on a timer, so a
     // fetch by the daemon or another frontend shows up here at once. QML in a
     // plasmoid has no file watcher, so the wait happens in the binary: it parks

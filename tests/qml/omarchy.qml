@@ -136,6 +136,12 @@ Item {
             check.equal("the switch reads the new state", usage.panelOptions.plans_total, "absolute")
         }
 
+        Registry.clear()
+        usage.addRemudaAccount()
+        check.ok("adding an account ran the binary", Registry.find("--open=remuda-add") !== null)
+        if (Registry.find("--open=remuda-add"))
+            Registry.find("--open=remuda-add").answer(panelJson, "", 0)
+
         // remuda's button follows the snapshot, and opening it is the binary's.
         check.equal("the recording serves no remuda", usage.remudaServing, false)
         Registry.clear()

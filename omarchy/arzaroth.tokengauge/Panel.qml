@@ -538,6 +538,7 @@ Panel {
         else if (t === "u" || t === "U") root.openProviderUrl("dashboard_url")
         else if (t === "s" || t === "S") root.openProviderUrl("status_url")
         else if ((t === "m" || t === "M") && usage.remudaServing && !usage.loading) usage.openRemuda()
+        else if (t === "+" && usage.remudaServing && !usage.loading) usage.addRemudaAccount()
       }
 
       Flickable {
@@ -693,6 +694,16 @@ Panel {
                   hoverColor: root.foreground
                   fontFamily: root.fontFamily
                   onClicked: usage.openRemuda()
+                }
+                PanelActionButton {
+                  iconText: "󰐕"
+                  tooltipText: usage.t("Add an account in remuda") + "  +"
+                  visible: usage.remudaServing
+                  enabled: !usage.loading
+                  foreground: root.dim
+                  hoverColor: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: usage.addRemudaAccount()
                 }
                 PanelActionButton {
                   iconText: "󰒓"

@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opening a panel fetches current figures when the snapshot is at least five
   minutes old, on Plasma, GNOME, Omarchy and the tray.
 - Providers: GitHub Copilot, Google Antigravity, DeepSeek, MiniMax and Meta Muse.
+- A `+` beside the remuda button opens remuda on its add-account sheet, on
+  Plasma, GNOME, Omarchy and the TUI, and through `--open=remuda-add` for a waybar
+  click. Signing in stays remuda's.
 - Codex's free limit resets are marked on the limits title, the way Claude's
   banked resets are.
 - The panel and every frontend read in French, following the locale or `[panel]

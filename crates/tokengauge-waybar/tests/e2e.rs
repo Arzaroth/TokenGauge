@@ -694,6 +694,68 @@ fn a_remuda_page_is_offered_only_while_it_is_served() {
     drop(listener);
 }
 
+/// The `+` button asks remuda for its add-account sheet. An older remuda rejects
+/// the flag with clap's exit status 2, and the plain page takes over without that
+/// usage error reaching the frontend. Any other failure is remuda's and is passed on.
+#[cfg(unix)]
+#[test]
+fn adding_an_account_asks_remuda_and_falls_back_on_an_older_one() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let machine = Machine::with(&[("claude", true)], Some("claude"), "weekly");
+    let open = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_tokengauge"));
+        command.env("PATH", machine.root.join("empty"));
+        machine.run_in(command, &["--open=remuda-add"])
+    };
+
+    let (code, _, stderr) = open();
+    assert_ne!(code, 0);
+    assert!(stderr.contains("remuda is not installed"), "{stderr}");
+
+    let bin = machine.root.join(".local/bin");
+    std::fs::create_dir_all(&bin).expect("~/.local/bin");
+    let remuda = bin.join("remuda");
+    let log = machine.root.join("remuda-args");
+    let install = |script: &str| {
+        std::fs::remove_file(&log).ok();
+        std::fs::write(
+            &remuda,
+            format!("#!/bin/sh\necho \"$@\" >> \"$HOME/remuda-args\"\n{script}\n"),
+        )
+        .expect("the stand-in");
+        std::fs::set_permissions(&remuda, std::fs::Permissions::from_mode(0o755))
+            .expect("executable");
+    };
+
+    install("exit 0");
+    let (code, stdout, stderr) = open();
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(stdout, "");
+    assert_eq!(
+        std::fs::read_to_string(&log).expect("it ran"),
+        "open --add\n"
+    );
+
+    install(r#"[ "$2" = --add ] && { echo 'unexpected argument' >&2; exit 2; }; exit 0"#);
+    let (code, _, stderr) = open();
+    assert_eq!(code, 0, "{stderr}");
+    assert!(!stderr.contains("unexpected argument"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&log).expect("it ran"),
+        "open --add\nopen\n"
+    );
+
+    install("echo 'remuda is not serving' >&2; exit 1");
+    let (code, _, stderr) = open();
+    assert_ne!(code, 0);
+    assert!(stderr.contains("remuda is not serving"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&log).expect("it ran"),
+        "open --add\n"
+    );
+}
+
 /// `--open=remuda` is what every desktop button runs, chained `&& --json`, so
 /// it has to wait for `remuda open` and fail with it. A script stands in for
 /// remuda where its installer puts it, and PATH holds nothing, so no real

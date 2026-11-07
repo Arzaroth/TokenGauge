@@ -322,7 +322,8 @@ Rules that are easy to regress:
   surfaces, not six: waybar has no button (`--open=remuda` is for a click
   binding) and the tray builds only where remuda does not run.
   `panel::tests::every_frontend_with_a_header_offers_remuda_while_it_serves`
-  is the list.
+  is the list. Its `+` beside it runs `remuda open --add` the same way: picking
+  a provider and signing in are remuda's, and TokenGauge never grows a picker.
 - **The combined header weighs by nominal plan multiplier** (`plan_weight` in
   `claude.rs` against Pro, `codex.rs` against Plus, keyed on the wire's
   `plan_type`: `prolite`, `pro` and `promax` are Pro 100, 200 and 500, and

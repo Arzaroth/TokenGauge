@@ -514,6 +514,12 @@ const FRENCH: &[(&str, &str)] = &[
     ("Updating…", "Mise à jour…"),
     ("Update", "Mettre à jour"),
     ("Open remuda", "Ouvrir remuda"),
+    ("Add an account in remuda", "Ajouter un compte dans remuda"),
+    ("add account", "ajouter un compte"),
+    (
+        "add an account in remuda (while it serves)",
+        "ajouter un compte dans remuda (quand il tourne)",
+    ),
     ("Showing last known values", "Dernières valeurs connues"),
     (
         "No provider usage yet.\nEnable one in the settings below.",

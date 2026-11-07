@@ -351,6 +351,16 @@ Item {
                 QQC2.ToolTip.delay: 300
             }
             PlasmaComponents.ToolButton {
+                icon.name: "list-add"
+                display: QQC2.AbstractButton.IconOnly
+                text: root.t("Add an account in remuda")
+                visible: root.remudaServing
+                onClicked: root.addRemudaAccount()
+                QQC2.ToolTip.text: text
+                QQC2.ToolTip.visible: hovered
+                QQC2.ToolTip.delay: 300
+            }
+            PlasmaComponents.ToolButton {
                 icon.name: "configure"
                 display: QQC2.AbstractButton.IconOnly
                 text: root.t("Settings")

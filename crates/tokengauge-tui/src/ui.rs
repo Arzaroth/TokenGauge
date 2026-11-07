@@ -841,6 +841,9 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, is_refreshing:
             Span::styled("m", key),
             Span::styled(" remuda", dim_s),
             Span::styled("  ", sep),
+            Span::styled("+", key),
+            Span::styled(format!(" {}", tr("add account")), dim_s),
+            Span::styled("  ", sep),
         ]);
     }
     spans.extend([
@@ -897,6 +900,12 @@ fn render_help_popup(frame: &mut Frame, area: Rect) {
         binding_line("S", tr("fleet sync setup"), key, desc),
         binding_line("H", tr("spend history"), key, desc),
         binding_line("m", tr("open remuda (while it serves)"), key, desc),
+        binding_line(
+            "+",
+            tr("add an account in remuda (while it serves)"),
+            key,
+            desc,
+        ),
         binding_line("?", tr("toggle this help"), key, desc),
         binding_line("q / esc", tr("quit"), key, desc),
         Line::from(""),

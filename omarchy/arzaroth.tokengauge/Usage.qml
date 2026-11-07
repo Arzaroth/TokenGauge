@@ -169,6 +169,10 @@ Item {
     action("--open=remuda")
   }
 
+  function addRemudaAccount() {
+    action("--open=remuda-add")
+  }
+
   // Both of these rewrite ~/.config/tokengauge/config.toml and reload the
   // daemon. `--set-provider` fetches a newly enabled provider before it
   // returns, so the --json chained behind it already carries the new row and

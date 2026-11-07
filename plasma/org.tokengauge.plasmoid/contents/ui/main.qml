@@ -98,6 +98,7 @@ PlasmoidItem {
     function applyUpdate() { root.service.applyUpdate() }
     function openSyncSetup() { root.service.openSyncSetup() }
     function openRemuda() { root.service.openRemuda() }
+    function addRemudaAccount() { root.service.addRemudaAccount() }
     readonly property alias remudaServing: root.service.remudaServing
     readonly property alias panelOptions: root.service.panelOptions
     function setPanel(key, value) { root.service.setPanel(key, value) }

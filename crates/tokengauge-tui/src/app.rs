@@ -327,7 +327,12 @@ impl App {
             KeyCode::Char('s') => self.open_active_url(OpenWhich::Status),
             KeyCode::Char('S') => self.open_sync(),
             KeyCode::Char('H') => self.open_history(),
-            KeyCode::Char('m') if self.state.remuda_serving => self.open_remuda(),
+            KeyCode::Char('m') if self.state.remuda_serving => {
+                self.open_remuda(tokengauge_core::launch::open_remuda);
+            }
+            KeyCode::Char('+') if self.state.remuda_serving => {
+                self.open_remuda(tokengauge_core::launch::open_remuda_add);
+            }
             _ => {}
         }
         if self.state.active_tab != tab {
@@ -374,14 +379,14 @@ impl App {
 
     /// Asks again before opening: the flag is up to 15s old, and `remuda open`
     /// on a page that stopped fails into /dev/null.
-    fn open_remuda(&mut self) {
+    fn open_remuda(&mut self, open: fn() -> bool) {
         let serving = load_config(self.config_override.clone())
             .map(|config| tokengauge_core::remuda::status(&config).serving)
             .unwrap_or(false);
         self.state.remuda_serving = serving;
         self.state.status_message = if !serving {
             Some(tr("remuda is no longer serving").into())
-        } else if !tokengauge_core::launch::open_remuda() {
+        } else if !open() {
             Some(tr("remuda is not installed (looked on PATH and in ~/.local/bin)").into())
         } else {
             None

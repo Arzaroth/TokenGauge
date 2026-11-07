@@ -120,10 +120,30 @@ pub fn tr(english: &str) -> &str {
 }
 
 pub fn fill(template: &str, values: &[(&str, &dyn Display)]) -> String {
-    let mut out = template.to_string();
-    for (name, value) in values {
-        out = out.replace(&format!("{{{name}}}"), &value.to_string());
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let value = after.find('}').and_then(|close| {
+            let name = &after[..close];
+            values
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| (v.to_string(), close))
+        });
+        match value {
+            Some((value, close)) => {
+                out.push_str(&value);
+                rest = &after[close + 1..];
+            }
+            None => {
+                out.push('{');
+                rest = after;
+            }
+        }
     }
+    out.push_str(rest);
     out
 }
 
@@ -584,21 +604,23 @@ mod tests {
     fn sentences_in(source: &str) -> Vec<String> {
         let body = source.split("#[cfg(test)]").next().unwrap_or(source);
         let mut out = Vec::new();
-        for opener in ["tr(\"", "tf!(\"", ".t(\"", "_('"] {
-            let starts = body.match_indices(opener).filter(|(at, _)| {
-                body[..*at]
-                    .chars()
-                    .next_back()
-                    .is_none_or(|before| !before.is_alphanumeric() && before != '_')
+        for (call, quote) in [("tr(", '"'), ("tf!(", '"'), (".t(", '"'), ("_(", '\'')] {
+            let starts = body.match_indices(call).filter(|(at, _)| {
+                call.starts_with('.')
+                    || body[..*at]
+                        .chars()
+                        .next_back()
+                        .is_none_or(|before| !before.is_alphanumeric() && before != '_')
             });
             for (at, _) in starts {
-                let piece = &body[at + opener.len()..];
+                let Some(piece) = body[at + call.len()..].trim_start().strip_prefix(quote) else {
+                    continue;
+                };
                 let mut sentence = String::new();
                 let mut chars = piece.chars();
                 while let Some(c) = chars.next() {
                     match c {
-                        '"' if opener != "_('" => break,
-                        '\'' if opener == "_('" => break,
+                        c if c == quote => break,
                         '\\' => match chars.next() {
                             Some('n') => sentence.push('\n'),
                             Some(other) => sentence.push(other),
@@ -631,6 +653,24 @@ mod tests {
                 "no French for {sentence:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_scan_reads_member_calls_and_calls_split_over_lines() {
+        let source = "a(usage.t(\"One\")); b(root.t(\"Two\")); attr(\"No\");\n\
+                      tr(\n    \"Three\",\n); tf!(\n \"Four {x}\", x = 1); _('Five'); my_tr(\"No\")";
+        assert_eq!(
+            sentences_in(source),
+            ["Three", "Four {x}", "One", "Two", "Five"]
+        );
+    }
+
+    #[test]
+    fn a_value_is_never_read_as_a_placeholder() {
+        assert_eq!(
+            fill("{a} and {b} {unknown}", &[("a", &"{b}"), ("b", &2)]),
+            "{b} and 2 {unknown}"
+        );
     }
 
     #[test]

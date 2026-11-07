@@ -71,7 +71,7 @@ test('opening the panel asks for current figures', () => {
     answer();
     open(indicator);
     const asked = Harness.running.at(-1);
-    assert.ok(asked.argv[2].includes('--panel-opened'));
+    assert.ok(asked.argv[2].includes('--panel-opened >/dev/null 2>&1;'));
     assert.ok(asked.argv[2].indexOf('--json') > asked.argv[2].indexOf('--panel-opened'));
 });
 

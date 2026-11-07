@@ -22,7 +22,8 @@ remuda's side is its `src/served.rs` and "Finding a running page" in its
   `serve.json` parses, `/proc/<pid>/stat` gives the recorded start time (rejects a
   dead or reused pid), and a TCP connect to `127.0.0.1:<port>` succeeds within
   300 ms.
-- **`remuda open`** (no arguments) is the only way to the page: it reads the token
+- **`remuda open`** (`--add` lands on the add-account sheet) is the only way to the
+  page: it reads the token
   itself, opens the browser through a private redirect file, starts
   `remuda-serve.service` if installed and nothing serves (waiting up to 10s), and
   otherwise exits non-zero with a message.
@@ -31,6 +32,18 @@ Pinned by `remuda::tests::the_serve_keys_are_spelled_as_decision_0004_says` and
 `remuda::tests::a_start_time_is_the_twenty_second_stat_field`; renaming a key is a
 change to decision 0004 and to remuda. Needs a remuda newer than 0.4.2; against an
 older one the button never appears.
+
+## Adding an account
+
+Signing in is remuda's: its sheet has every provider, the OAuth flows and the
+name for the login. The panel only offers the way there, a `+` beside the remuda
+button under the same `serving` gate. `tokengauge --open=remuda-add` runs `remuda
+open --add` and, when remuda exits 2 because it has no such flag, plain `remuda
+open`, which is one click from the same sheet. Any other failure is reported as
+for `--open=remuda`. Surfaces and keys: `+` in the TUI and the Omarchy widget,
+header buttons on GNOME, Plasma and Omarchy, `--open=remuda-add` for a waybar click
+binding. `panel::tests::every_frontend_with_a_header_offers_adding_an_account_through_remuda`
+is the list.
 
 ## How it reaches the frontends
 

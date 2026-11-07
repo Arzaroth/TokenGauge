@@ -153,6 +153,7 @@ terminal TUI. The waybar panel itself is the tooltip - hover the module.
 | `S` | Fleet sync setup |
 | `H` | Spend history (`h` / `l` / Tab cycle the range, `q` / `Esc` back) |
 | `m` | Open remuda's page, while `remuda serve` runs |
+| `+` | Add an account in remuda, while `remuda serve` runs |
 | `q` / `Esc` | Quit |
 
 ## Configuration
@@ -439,6 +440,11 @@ that opens its page, and the TUI and the Omarchy panel open it with `m`. Waybar
 has no button; bind `tokengauge --open=remuda` to a click in its config
 instead. TokenGauge opens the page by running `remuda open`, so the page's
 access token never passes through it. This needs a remuda newer than 0.4.2 and Linux, where remuda runs.
+
+Beside it, a `+` button (`+` in the TUI and the Omarchy panel,
+`tokengauge --open=remuda-add` for a waybar click) adds an account: it opens
+remuda on its add-account sheet, where you pick the provider and sign in. A
+remuda older than `--add` opens on its main page instead.
 
 Every provider remuda keeps is read this way: Claude, Codex, Grok, Kimi,
 Cursor (cursor-agent's login), and the API keys of GLM and opencode Go. A

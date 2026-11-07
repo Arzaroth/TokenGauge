@@ -23,6 +23,47 @@ use crate::{ProviderPayload, UsageSnapshot};
 /// Three of the five reported a 429 as a bare `HTTP 429`, which reads like a
 /// bug rather than "wait a moment" - the friendly wording Claude and Kimi
 /// already had is now everyone's.
+/// A literal key opencode or pi filed under one of `ids`, with the id it was
+/// under. A pi `$VAR` or `!command` entry is pi's to resolve, and a key filed
+/// under any other id belongs to a gateway and is never sent.
+pub(crate) fn saved_api_key(ids: &[&str]) -> Option<(String, String)> {
+    let pi_dir = std::env::var_os("PI_CODING_AGENT_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| Some(dirs::home_dir()?.join(".pi").join("agent")));
+    [
+        Some(crate::opencode::data_dir().join("auth.json")),
+        pi_dir.map(|dir| dir.join("auth.json")),
+    ]
+    .iter()
+    .flatten()
+    .find_map(|path| {
+        let raw = std::fs::read_to_string(path).ok()?;
+        saved_key_in(&raw, ids)
+    })
+}
+
+fn saved_key_in(raw: &str, ids: &[&str]) -> Option<(String, String)> {
+    let parsed: serde_json::Value = serde_json::from_str(raw).ok()?;
+    ids.iter().find_map(|id| {
+        let entry = parsed.get(id)?;
+        // A sign-in's token is not the key this id's API takes, and a `wellknown`
+        // entry's `key` names a variable.
+        if matches!(
+            entry.get("type").and_then(serde_json::Value::as_str),
+            Some("oauth" | "wellknown")
+        ) {
+            return None;
+        }
+        let key = ["key", "apiKey", "token"]
+            .iter()
+            .find_map(|field| entry.get(field)?.as_str())?
+            .trim();
+        (!key.is_empty() && !key.starts_with(['!', '$']))
+            .then(|| (key.to_string(), (*id).to_string()))
+    })
+}
+
 /// Base64url, unpadded, which is how a JWT segment is encoded. Written out
 /// because this is the only base64 in the crate and the alternative is a
 /// dependency for twenty lines. `+` and `/` are accepted too, so a token
@@ -291,6 +332,25 @@ mod tests {
         assert_eq!(trimmed(Some("  x  ".into())), Some("x".into()));
         assert_eq!(trimmed(Some("   ".into())), None);
         assert_eq!(trimmed(None), None);
+    }
+
+    #[test]
+    fn a_saved_key_is_a_literal_one_under_a_named_id() {
+        let raw = r#"{"gateway":{"key":"no"},"deepseek":{"type":"api","key":" k "}}"#;
+        assert_eq!(
+            saved_key_in(raw, &["deepseek"]),
+            Some(("k".into(), "deepseek".into()))
+        );
+        assert_eq!(saved_key_in(raw, &["minimax"]), None);
+        let resolved_by_pi = r#"{"deepseek":{"key":"$DEEPSEEK"}}"#;
+        assert_eq!(saved_key_in(resolved_by_pi, &["deepseek"]), None);
+        let wellknown = r#"{"deepseek":{"type":"wellknown","key":"SOME_VAR","token":"no"}}"#;
+        assert_eq!(saved_key_in(wellknown, &["deepseek"]), None);
+        let oauth_first = r#"{"minimax":{"type":"oauth","token":"no"},"minimax-cn":{"key":"k"}}"#;
+        assert_eq!(
+            saved_key_in(oauth_first, &["minimax", "minimax-cn"]),
+            Some(("k".into(), "minimax-cn".into()))
+        );
     }
 
     /// Every fetcher used to spell these four out. A 429 reported as a bare

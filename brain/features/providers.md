@@ -16,6 +16,11 @@ its live `auth.json`.
 | OpenRouter | `OPENROUTER_API_KEY`; optional management key for the balance | Credit, Key limit | no (vendor-reported cost) | no | none |
 | opencode Go | `OPENCODE_API_KEY` / `OPENCODE_GO_API_KEY`, then opencode 2's `opencode.db`, then opencode 1's `auth.json` | 5-hour, Weekly, Monthly | no | yes (key) | none |
 | Cursor | `CURSOR_ACCESS_TOKEN`, `~/.config/cursor/auth.json` (`~/.cursor/auth.json` on macOS, `CURSOR_CONFIG_DIR`) from `cursor-agent`, then the macOS Keychain | Included, Cursor models, Other models | no | yes | vs Pro |
+| Copilot | `COPILOT_QUOTA_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token` | Monthly | no | no | none |
+| Antigravity | `agy`'s sign-in: Secret Service keyring, then `antigravity-oauth-token` | Session, Weekly + other model groups | no | no | none |
+| DeepSeek | `DEEPSEEK_API_KEY`, opencode's or pi's saved key | balance only | no | no | none |
+| MiniMax | `MINIMAX_API_KEY`, opencode's or pi's saved key | Session, Weekly | no | no | none |
+| Muse | `MUSE_AUTH_PATH`, `~/.config/muse/auth.json` (`muse login`) | Session, Weekly | no | no | none |
 
 Notes:
 
@@ -35,6 +40,24 @@ Notes:
   database that cannot be read is an error. A row fetched with an OAuth token
   has source `oauth`. An OAuth access token names no account, since it rotates
   (`Login::Access`). remuda switches the key in that same row.
+- **Copilot** reads `copilot_internal/user`, which needs a `User-Agent` or answers
+  403. A plan with no metered allowance reports zero of every figure, and draws
+  no gauge rather than a spent one.
+- **Antigravity** only reads `agy`'s sign-in, like every other read-only login. The
+  access token lapses within the hour and `agy` alone renews it, so a lapsed token
+  is the error "sign-in expired" and the last figures go stale. On Linux the keyring
+  goes through `secret-tool`, so no dbus is linked.
+- **DeepSeek** sells a balance, one entry per currency, and the funded one is
+  shown. CNY is `CreditUnit::Cny` and is never drawn as dollars.
+- **MiniMax** reports what is left, per model. The `general` row stands for the
+  plan, and a window's status outranks its percentage. A key answers only on its
+  own region's host.
+- **Muse** has no read-only usage endpoint. Its windows ride on `POST
+  /muse-code/key`, which is the one call here that may create something: it mints
+  the account's Model API key, and returns the same key on every later call. The
+  wire struct names no key field, so it is dropped at parsing
+  (`the_minted_key_never_reaches_the_snapshot`). Pay-as-you-go and some active
+  plans steadily answer with no windows, which is not an error.
 - **Cursor** has no public API; TokenGauge calls the dashboard's
   `/api/usage-summary` with the token `cursor-agent` leaves, in its `auth.json`
   or, on macOS, the Keychain (`cursor-access-token` / `cursor-refresh-token`

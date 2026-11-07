@@ -17,7 +17,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 - **One panel, five surfaces**: the waybar tooltip, the KDE Plasma applet, the GNOME extension, the Quickshell widget and the tray window (Windows and the macOS menu bar) all render the same sections in the same order - LIMITS, COST, TOKENS BY DAY, TOKENS BY MODEL, TOKENS BY DEVICE - from a single layout resolved in `tokengauge-core`. Hovering the icon gets the same summary on the four that have one - Plasma, GNOME, Quickshell and the tray - each limit window with its tier, then one money line; the waybar module has no icon to hover, because its tooltip already is the panel. See [CLAUDE.md](CLAUDE.md) for the parity rule.
 - **KDE Plasma 6 applet**: native panel widget (QML plasmoid) - brand-icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and an inline settings pane (toggle OAuth providers, pin the bar). Shares the same config, cache, and daemon as the Waybar module; the Waybar module keeps working untouched.
 - **Native cost tracking**: today, month, 7-day rolling, per-model split, burn rate $/hr anchored to the provider's real session window, 7-day chart, today's spend vs the average of the prior days
-- **Multi-provider**: Claude, Codex, Kimi, Grok, GLM (z.ai), OpenRouter, opencode Go, and Cursor
+- **Multi-provider**: Claude, Codex, Kimi, Grok, GLM (z.ai), OpenRouter, opencode Go, Cursor, Copilot, Antigravity, DeepSeek, MiniMax and Muse
 - **Several plans at one vendor**: with [remuda](https://github.com/Arzaroth/remuda) keeping your logins, every one of them gets its own limits in the panel, the active one first, and the plans are added up by their multiplier. See [Several plans per provider](#several-plans-per-provider).
 - **GNOME Shell extension**: panel indicator for GNOME 45+ mirroring the Plasma applet - brand icon + percent in the panel, click-to-open popup with provider tabs, tier-tinted usage bars, cost rows, per-day and per-model token bars, and pin-to-bar, plus an Adwaita preferences window for the provider toggles. Shares the same config, cache, and daemon as the Waybar module.
 - **Pace tracking**: every usage window - including Claude's model-scoped weeklies like `Fable only` - projects where it lands at reset from how fast it has been filling lately (`ends ~16%`, or `empty in 2h 15m` when it runs out first), read off a history of each window TokenGauge keeps beside its snapshot, shown next to each reset on every frontend (hidden until 3% of the window has elapsed)
@@ -40,6 +40,11 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 | OpenRouter | API key | `openrouter = true` | `OPENROUTER_API_KEY` env, plus `OPENROUTER_MANAGEMENT_KEY` for the account balance |
 | opencode Go | API key | `opencode = true` | `OPENCODE_API_KEY` env, or the key `/connect` files in `$XDG_DATA_HOME/opencode/opencode.db` (opencode 2) or `auth.json` (opencode 1) |
 | Cursor | CLI | `cursor = true` | `~/.config/cursor/auth.json` (`cursor-agent` CLI; `~/.cursor/auth.json` or the Keychain on macOS) or `CURSOR_ACCESS_TOKEN` |
+| Copilot | Token | `copilot = true` | `COPILOT_QUOTA_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token` |
+| Antigravity | CLI | `antigravity = true` | `agy`'s sign-in (Secret Service keyring, or `~/.gemini/antigravity-cli/antigravity-oauth-token`) |
+| DeepSeek | API key | `deepseek = true` | `DEEPSEEK_API_KEY`, or the key opencode or pi saved |
+| Muse | CLI | `muse = true` | `muse login` (`MUSE_AUTH_PATH`, or `~/.config/muse/auth.json`) |
+| MiniMax | API key | `minimax = true` | `MINIMAX_API_KEY` (`MINIMAX_REGION=cn` for China), or the key opencode or pi saved |
 
 All providers are read-only: TokenGauge never refreshes a token. Codex refreshes its own. For CLI-backed credentials, re-run the respective CLI (`claude`, `kimi`, `grok login`, `cursor-agent`) when a token expires. For env-key providers, update the variable instead: `KIMI_CODE_API_KEY` for Kimi (when set, it takes precedence over the CLI token), `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`) for GLM, `OPENROUTER_API_KEY` for OpenRouter and `OPENCODE_API_KEY` for opencode Go (when set, it takes precedence over the key opencode stored).
 
@@ -50,6 +55,11 @@ All providers are read-only: TokenGauge never refreshes a token. Codex refreshes
 - **OpenRouter** (openrouter.ai): sells credit rather than a plan. `OPENROUTER_API_KEY` (or `OPENROUTER_KEY`) reads the key's own cap and spend; the account balance needs a management key from openrouter.ai/settings/keys in `OPENROUTER_MANAGEMENT_KEY`.
 - **opencode Go** (opencode.ai): the key minted at opencode.ai/auth, from `OPENCODE_API_KEY` or from where opencode files it once pasted into the TUI with `/connect` (`opencode.db` in opencode 2, `auth.json` in opencode 1). Go only; Zen has no limits to draw.
 - **Cursor** (cursor.com): reads the `cursor-agent` CLI login, or set `CURSOR_ACCESS_TOKEN` (which takes precedence). `CURSOR_CONFIG_DIR` overrides the CLI's directory. On macOS the CLI keeps its login in `~/.cursor/auth.json` or, more often, the Keychain, and both are read. The IDE's own login is not read, so an IDE-only user signs in with `cursor-agent` once.
+- **Copilot**: the monthly allowance, from the endpoint the Copilot CLI reads. GitHub documents no personal-account usage API, so it may change without notice.
+- **Antigravity**: session and weekly limits. TokenGauge only reads `agy`'s sign-in, and its access token lapses within the hour, so figures go stale until `agy` next runs.
+- **DeepSeek**: the prepaid balance.
+- **MiniMax**: Token Plan session and weekly limits.
+- **Muse**: session and weekly limits on a subscription. Pay-as-you-go accounts have no windows to show.
 
 ## Installation
 

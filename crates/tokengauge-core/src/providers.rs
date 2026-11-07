@@ -22,7 +22,8 @@ use chrono::Utc;
 
 use crate::credentials::StoreReader;
 use crate::{
-    ProviderPayload, ProvidersConfig, claude, codex, cursor, glm, grok, kimi, opencode, openrouter,
+    ProviderPayload, ProvidersConfig, antigravity, claude, codex, copilot, cursor, deepseek, glm,
+    grok, kimi, minimax, muse, opencode, openrouter,
 };
 
 /// Whether a provider's credentials are currently available, and where from.
@@ -190,6 +191,86 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         enabled_in: |c| c.glm,
     },
     ProviderMeta {
+        id: "copilot",
+        label: "Copilot",
+        cli: None,
+        glyph: "\u{f4b8}",
+        urls: ProviderUrls {
+            dashboard: Some("https://github.com/settings/copilot"),
+            status: Some("https://www.githubstatus.com"),
+        },
+        windows: ("Monthly", "Weekly", "Tertiary"),
+        natively_read: false,
+        fetch: copilot::fetch,
+        store: None,
+        auth: copilot_auth,
+        enabled_in: |c| c.copilot,
+    },
+    ProviderMeta {
+        id: "antigravity",
+        label: "Antigravity",
+        cli: Some("agy"),
+        glyph: "\u{f02ad}",
+        urls: ProviderUrls {
+            dashboard: Some("https://antigravity.google"),
+            status: None,
+        },
+        windows: ("Session", "Weekly", "Tertiary"),
+        natively_read: false,
+        fetch: antigravity::fetch,
+        store: None,
+        auth: antigravity_auth,
+        enabled_in: |c| c.antigravity,
+    },
+    ProviderMeta {
+        id: "deepseek",
+        label: "DeepSeek",
+        cli: None,
+        glyph: "\u{f06a9}",
+        urls: ProviderUrls {
+            dashboard: Some("https://platform.deepseek.com/usage"),
+            status: Some("https://status.deepseek.com"),
+        },
+        windows: ("Balance", "Weekly", "Tertiary"),
+        natively_read: false,
+        fetch: deepseek::fetch,
+        store: None,
+        auth: deepseek_auth,
+        enabled_in: |c| c.deepseek,
+    },
+    ProviderMeta {
+        id: "minimax",
+        label: "MiniMax",
+        cli: None,
+        glyph: "\u{f06a9}",
+        urls: ProviderUrls {
+            dashboard: Some("https://platform.minimax.io/user-center/payment/token-plan"),
+            status: None,
+        },
+        windows: ("Session", "Weekly", "Tertiary"),
+        natively_read: false,
+        fetch: minimax::fetch,
+        store: None,
+        auth: minimax_auth,
+        enabled_in: |c| c.minimax,
+    },
+    ProviderMeta {
+        id: "muse",
+        label: "Muse",
+        cli: Some("muse"),
+        glyph: "\u{f06a9}",
+        urls: ProviderUrls {
+            dashboard: Some("https://www.meta.ai"),
+            status: None,
+        },
+        windows: ("Session", "Weekly", "Tertiary"),
+        natively_read: false,
+        fetch: muse::fetch,
+        store: None,
+        auth: muse_auth,
+        enabled_in: |c| c.muse,
+    },
+    ProviderMeta {
         id: "openrouter",
         label: "OpenRouter",
         // An API key in the environment: the key is pasted into whichever
@@ -287,6 +368,11 @@ pub const PROVIDERS: &[&str] = &[
     "kimi",
     "grok",
     "glm",
+    "copilot",
+    "antigravity",
+    "deepseek",
+    "minimax",
+    "muse",
     "openrouter",
     "opencode",
     "cursor",
@@ -613,6 +699,90 @@ fn opencode_auth() -> AuthStatus {
 /// balance comes from `/credits`, which only a management key may ask. Say so
 /// when the second is absent rather than reporting a clean pass over a panel
 /// that will be missing its headline figure.
+fn copilot_auth() -> AuthStatus {
+    if crate::copilot::token().is_some() {
+        AuthStatus {
+            ok: true,
+            detail: "token found".to_string(),
+            hint: "",
+        }
+    } else {
+        AuthStatus {
+            ok: false,
+            detail: "no token".to_string(),
+            hint: "run `gh auth login`, or set COPILOT_QUOTA_TOKEN",
+        }
+    }
+}
+
+fn antigravity_auth() -> AuthStatus {
+    match crate::antigravity::login() {
+        crate::antigravity::Login::Fresh(_) => AuthStatus {
+            ok: true,
+            detail: "agy sign-in".to_string(),
+            hint: "",
+        },
+        crate::antigravity::Login::Lapsed => AuthStatus {
+            ok: false,
+            detail: "agy sign-in expired".to_string(),
+            hint: "run `agy`, which renews it",
+        },
+        crate::antigravity::Login::Absent => AuthStatus {
+            ok: false,
+            detail: "no agy sign-in".to_string(),
+            hint: "run `agy` and sign in",
+        },
+    }
+}
+
+fn deepseek_auth() -> AuthStatus {
+    if crate::deepseek::api_key().is_some() {
+        AuthStatus {
+            ok: true,
+            detail: "key found".to_string(),
+            hint: "",
+        }
+    } else {
+        AuthStatus {
+            ok: false,
+            detail: "no key".to_string(),
+            hint: "set DEEPSEEK_API_KEY, or sign in to DeepSeek in opencode or pi",
+        }
+    }
+}
+
+fn minimax_auth() -> AuthStatus {
+    if crate::minimax::credential().is_some() {
+        AuthStatus {
+            ok: true,
+            detail: "key found".to_string(),
+            hint: "",
+        }
+    } else {
+        AuthStatus {
+            ok: false,
+            detail: "no key".to_string(),
+            hint: "set MINIMAX_API_KEY, or sign in to MiniMax in opencode or pi",
+        }
+    }
+}
+
+fn muse_auth() -> AuthStatus {
+    if crate::muse::access_token().is_some() {
+        AuthStatus {
+            ok: true,
+            detail: "muse login".to_string(),
+            hint: "",
+        }
+    } else {
+        AuthStatus {
+            ok: false,
+            detail: "no sign-in".to_string(),
+            hint: "run `muse login`",
+        }
+    }
+}
+
 fn openrouter_auth() -> AuthStatus {
     let Some(var) = ["OPENROUTER_API_KEY", "OPENROUTER_KEY"]
         .into_iter()
@@ -859,6 +1029,11 @@ mod tests {
                 "openrouter" => config.openrouter = Some(true),
                 "opencode" => config.opencode = Some(true),
                 "cursor" => config.cursor = Some(true),
+                "copilot" => config.copilot = Some(true),
+                "antigravity" => config.antigravity = Some(true),
+                "deepseek" => config.deepseek = Some(true),
+                "minimax" => config.minimax = Some(true),
+                "muse" => config.muse = Some(true),
                 other => panic!("{other} has no field in this test - add it with the row"),
             }
             assert_eq!(

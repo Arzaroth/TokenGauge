@@ -63,7 +63,7 @@ const ACCOUNT_IDS: &[&str] = &["opencode-go", "opencode"];
 
 /// opencode keeps XDG paths on every platform, macOS included, so this is
 /// not `dirs::data_dir()`, which would be `~/Library/Application Support`.
-fn data_dir() -> PathBuf {
+pub(crate) fn data_dir() -> PathBuf {
     std::env::var_os("XDG_DATA_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)

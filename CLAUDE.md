@@ -266,7 +266,7 @@ Decision 0003 in `brain/decisions.md` is the design, and
 [remuda](https://github.com/Arzaroth/remuda), which keeps every captured login
 under `[credentials] store` and reads TokenGauge's snapshot back.
 `credentials.rs` reads the store; `providers.rs` gives every provider remuda
-stores a `StoreReader` (all of them but OpenRouter); `fetch_all_providers`
+stores a `StoreReader` (Copilot, Antigravity, DeepSeek, MiniMax, Muse and OpenRouter have none, because remuda stores none of them); `fetch_all_providers`
 asks the live login as before and every
 other stored credential beside it, tagging each payload with `credential`,
 `active`, `credentialState`, `credentialLabel` and `planWeight`.

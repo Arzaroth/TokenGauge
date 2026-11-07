@@ -30,13 +30,16 @@
 
 pub mod project;
 
+mod antigravity;
 mod ccusage;
 mod claude;
 mod codex;
 pub mod config;
+mod copilot;
 pub mod cost;
 pub mod credentials;
 mod cursor;
+mod deepseek;
 mod device;
 pub mod doctor;
 pub mod fetch;
@@ -46,6 +49,8 @@ mod grok;
 pub mod history;
 mod kimi;
 pub mod launch;
+mod minimax;
+mod muse;
 mod opencode;
 mod openrouter;
 pub mod pace;

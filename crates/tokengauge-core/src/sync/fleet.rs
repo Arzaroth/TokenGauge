@@ -116,31 +116,33 @@ struct StoredSlice {
     #[serde(default)]
     adopted: Vec<Adopted>,
     #[serde(default)]
-    counted: StoredCounted,
+    counted: Lenient<BTreeMap<String, BTreeMap<Hour, KeySet>>>,
     #[serde(default)]
     counted_from: BTreeMap<String, Hour>,
     #[serde(default)]
     windows: SharedWindows,
 }
 
+/// An index the next whole read rebuilds, read leniently: one in a shape this
+/// build cannot read is dropped rather than failing the store.
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum StoredCounted {
-    Keys(BTreeMap<String, BTreeMap<Hour, KeySet>>),
+enum Lenient<T> {
+    Read(T),
     Unreadable(serde::de::IgnoredAny),
 }
 
-impl Default for StoredCounted {
+impl<T: Default> Default for Lenient<T> {
     fn default() -> Self {
-        Self::Keys(BTreeMap::new())
+        Self::Read(T::default())
     }
 }
 
 impl From<StoredSlice> for DeviceSlice {
     fn from(stored: StoredSlice) -> Self {
         let (counted, counted_from) = match stored.counted {
-            StoredCounted::Keys(counted) => (counted, stored.counted_from),
-            StoredCounted::Unreadable(_) => (BTreeMap::new(), BTreeMap::new()),
+            Lenient::Read(counted) => (counted, stored.counted_from),
+            Lenient::Unreadable(_) => (BTreeMap::new(), BTreeMap::new()),
         };
         Self {
             device: stored.device,

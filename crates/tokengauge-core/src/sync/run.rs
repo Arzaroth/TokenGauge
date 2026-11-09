@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use super::contribution::{Contribution, DeviceRecord, content_hash};
-use super::fleet::{Adoption, FleetStore, ObjectState, STORE_RETENTION_DAYS};
+use super::fleet::{Adoption, FleetStore, LeftOut, ObjectState, STORE_RETENTION_DAYS};
 use super::hour::Hour;
 use super::report::{DeviceStatus, OverlapNote, SkippedObject, SyncStatus};
 use super::{SCHEMA_VERSION, crypto, store, transport};
@@ -26,6 +26,9 @@ pub struct SyncOutcome {
     /// could not be read. `events` carries this device's stored record for
     /// them, and the caller drops its own read of them.
     pub held: Vec<&'static str>,
+    /// The calls of the caller's read that another device counted first,
+    /// which the caller drops before it rates the rest.
+    pub left_out: LeftOut,
 }
 
 /// Keep the durable store current, and - when sync is on - run a cycle and
@@ -65,14 +68,48 @@ pub fn refresh(
     let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, store_error) = store::load(&config.cache_file);
     status.error = store_error;
+
+    // Peers first: whether a call of this read is another device's is
+    // decided against what they published, and a source that has since
+    // dropped a moved session must not keep it out of this read for a cycle.
+    let mut fleet = None;
+    if config.sync.enabled {
+        // A store that would not parse is the more serious of the two, so it
+        // keeps the slot if it already claimed it.
+        match open_fleet(config, &device, &mut store, &mut status) {
+            Ok(opened) => {
+                if let Err(e) = pull(config, &device, &mut store, now, &mut status, &opened) {
+                    status.error.get_or_insert(format!("{e:#}"));
+                }
+                fleet = Some(opened);
+            }
+            Err(e) => {
+                status.error.get_or_insert(format!("{e:#}"));
+            }
+        }
+    }
+    let left_out = leave_out(config, &mut store, &device.id, local_events, now);
+
     let held = match gaps_error(gaps) {
         None => {
-            store.upsert_local(&device, from, local_events, now.timestamp_millis());
+            store.upsert_local_leaving(
+                &device,
+                from,
+                local_events,
+                &left_out,
+                now.timestamp_millis(),
+            );
             Vec::new()
         }
         Some(e) => {
             status.error.get_or_insert(e);
-            store.merge_local(&device, from, local_events, now.timestamp_millis());
+            store.merge_local_leaving(
+                &device,
+                from,
+                local_events,
+                &left_out,
+                now.timestamp_millis(),
+            );
             store.local_providers(&device.id)
         }
     };
@@ -80,11 +117,9 @@ pub fn refresh(
     // the record stands in for this device.
     let read: &[UsageEvent] = if held.is_empty() { local_events } else { &[] };
 
-    if config.sync.enabled
-        && let Err(e) = cycle(config, &device, &mut store, now, &mut status)
+    if let Some(fleet) = &fleet
+        && let Err(e) = publish(config, &device, &mut store, now, &mut status, fleet)
     {
-        // A store that would not parse is the more serious of the two, so it
-        // keeps the slot if it already claimed it.
         status.error.get_or_insert(format!("{e:#}"));
     }
 
@@ -100,6 +135,7 @@ pub fn refresh(
             status,
             store,
             held,
+            left_out,
         };
     }
 
@@ -127,7 +163,32 @@ pub fn refresh(
         status,
         store,
         held,
+        left_out,
     }
+}
+
+/// What a read leaves out for the peers that counted it first. Nothing with
+/// sync off: the report then counts this machine alone, and a call held out
+/// for a peer it does not show would be counted nowhere.
+///
+/// A peer this device left calls out for that the store no longer holds -
+/// forgotten, adopted, or of an old fleet key - takes them back, and the ones
+/// older than the read window only a deep read reaches, so the backfill runs
+/// again.
+fn leave_out(
+    config: &TokenGaugeConfig,
+    store: &mut FleetStore,
+    local_id: &str,
+    events: &[UsageEvent],
+    now: DateTime<Utc>,
+) -> LeftOut {
+    if !config.sync.enabled {
+        return LeftOut::default();
+    }
+    if store.release_left_out(local_id) {
+        crate::statefiles::redo_backfill(&config.cache_file);
+    }
+    store.left_out(local_id, events, now)
 }
 
 /// This machine's device id, for attributing the local row.
@@ -170,9 +231,16 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
     // marker stays off so the backfill runs again whole - an hour on, not on
     // the next fetch, so a gap that lasts costs one deep read an hour.
     let gap = gaps_error(&gaps);
+    let left_out = leave_out(config, &mut store, &device.id, &events, now);
     match &gap {
-        None => store.backfill_local(&device, window_hour(since), &events, now),
-        Some(_) => store.merge_local(&device, window_hour(since), &events, now.timestamp_millis()),
+        None => store.backfill_local_leaving(&device, window_hour(since), &events, &left_out, now),
+        Some(_) => store.merge_local_leaving(
+            &device,
+            window_hour(since),
+            &events,
+            &left_out,
+            now.timestamp_millis(),
+        ),
     }
     store.compact(now, i64::from(config.sync.retention_days));
     store.prune(now);
@@ -208,18 +276,6 @@ fn gaps_error(gaps: &[PathBuf]) -> Option<String> {
         "transcripts under {} could not be read; this machine's history is merged, not replaced, until they can",
         first.display()
     ))
-}
-
-fn cycle(
-    config: &TokenGaugeConfig,
-    device: &DeviceRecord,
-    store: &mut FleetStore,
-    now: DateTime<Utc>,
-    status: &mut SyncStatus,
-) -> Result<()> {
-    let fleet = open_fleet(config, device, store, status)?;
-    publish(config, device, store, now, status, &fleet)?;
-    pull(config, device, store, now, status, &fleet)
 }
 
 /// The key, the transport and our object's name, for one cycle.

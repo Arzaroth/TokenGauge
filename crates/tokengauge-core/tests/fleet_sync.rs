@@ -841,14 +841,14 @@ fn a_listing_without_our_own_object_drops_nobody() {
     remove_object(&root, &key, PEER_ID);
     remove_object(&root, &key, &sync::local_device_id(&config));
     let status = sync::refresh(&config, &local, since, &[]).status;
-    assert!(!status.published, "nothing changed, so nothing republished");
-    assert_eq!(status.devices.len(), 2);
-
-    let status = sync::refresh(&config, &local, since, &[]).status;
     assert!(
         status.published,
         "our missing object is put back, or peers would drop this machine"
     );
+    assert_eq!(status.devices.len(), 2);
+
+    let status = sync::refresh(&config, &local, since, &[]).status;
+    assert!(!status.published, "nothing changed, so nothing republished");
     assert_eq!(status.devices.len(), 2);
 }
 

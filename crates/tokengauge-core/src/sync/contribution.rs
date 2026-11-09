@@ -349,7 +349,7 @@ pub(super) fn merge_adopted(into: &mut Vec<Adopted>, more: impl IntoIterator<Ite
 /// Fold events into `(hour, provider, model, login, source)` buckets, sorted so
 /// the serialised form is stable and [`content_hash`] can tell a real change
 /// from a rewrite.
-pub fn bucketize(events: &[UsageEvent]) -> Vec<Bucket> {
+pub fn bucketize<'a>(events: impl IntoIterator<Item = &'a UsageEvent>) -> Vec<Bucket> {
     let mut folded: BTreeMap<BucketKey, (TokenCounts, u64)> = BTreeMap::new();
     for event in events {
         let entry = folded.entry(BucketKey::for_event(event)).or_default();
@@ -372,7 +372,7 @@ pub fn bucketize(events: &[UsageEvent]) -> Vec<Bucket> {
 }
 
 /// Fingerprint every UTC day a read touched.
-pub fn day_digests(events: &[UsageEvent]) -> Vec<DayDigest> {
+pub fn day_digests<'a>(events: impl IntoIterator<Item = &'a UsageEvent>) -> Vec<DayDigest> {
     let mut folded: BTreeMap<NaiveDate, (u64, u64)> = BTreeMap::new();
     for event in events {
         let entry = folded.entry(event.at.date_naive()).or_default();

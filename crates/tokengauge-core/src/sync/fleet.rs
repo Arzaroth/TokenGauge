@@ -11,9 +11,9 @@ use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::contribution::{
-    Adopted, Bucket, Contribution, DayDigest, DeviceRecord, Granularity, Print, PrintSet, Prints,
-    SCHEMA_VERSION, WIRE_RETENTION_DAYS, bucketize, day_digests, intern_provider, merge_adopted,
-    print_key, session_prints, sort_key, syncable,
+    Adopted, Bucket, Contribution, DayDigest, DeviceRecord, Granularity, Print, PrintKey, PrintSet,
+    Prints, SCHEMA_VERSION, WIRE_RETENTION_DAYS, bucketize, day_digests, intern_provider,
+    merge_adopted, print_key, session_prints, sort_key, syncable,
 };
 use super::hour::Hour;
 use crate::cost::pricing::{PriceArchive, PriceTable, month_key};
@@ -97,6 +97,12 @@ pub struct DeviceSlice {
     /// these sessions again leaves out.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub session_prints: Prints,
+    /// The session-hours this device's reads held and left out, by the peer
+    /// that counted them first. Kept as long as the buckets, past the hours
+    /// any peer still publishes prints for, so a deep read does not count
+    /// them again. Local only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub left_out: BTreeMap<String, Prints>,
     /// A peer's limit windows as it last published them. Never this
     /// device's own: those live in the window history.
     #[serde(default, skip_serializing_if = "SharedWindows::is_empty")]
@@ -106,6 +112,54 @@ pub struct DeviceSlice {
 impl DeviceSlice {
     pub fn print(&self, provider: &str, hour: Hour, session: u32) -> Option<Print> {
         self.session_prints.get(provider)?.get(&hour)?.get(session)
+    }
+
+    fn left_out_for(&self, holder: &str, (provider, hour, session): PrintKey) -> Option<Print> {
+        self.left_out
+            .get(holder)?
+            .get(provider)?
+            .get(&hour)?
+            .get(session)
+    }
+}
+
+/// The calls of a read that another device counted first, and who that is.
+///
+/// A session moved or copied between machines keeps every call's dedup key,
+/// and only the device reading the transcript knows each call's tokens, so
+/// that device is the one that leaves them out: its buckets never hold a call
+/// another device's buckets already count, and every fleet view adds the
+/// buckets up as they are.
+#[derive(Debug, Clone, Default)]
+pub struct LeftOut {
+    calls: Vec<bool>,
+    groups: BTreeMap<String, BTreeMap<PrintKey, Print>>,
+}
+
+impl LeftOut {
+    pub fn contains(&self, index: usize) -> bool {
+        self.calls.get(index).copied().unwrap_or(false)
+    }
+
+    pub fn count(&self) -> usize {
+        self.calls.iter().filter(|left| **left).count()
+    }
+
+    /// Drop the calls left out from the read they were found in.
+    pub fn drop_from(&self, events: &mut Vec<UsageEvent>) {
+        let mut index = 0;
+        events.retain(|_| {
+            index += 1;
+            !self.contains(index - 1)
+        });
+    }
+
+    fn kept<'a>(&'a self, events: &'a [UsageEvent]) -> impl Iterator<Item = &'a UsageEvent> {
+        events
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !self.contains(*index))
+            .map(|(_, event)| event)
     }
 }
 
@@ -132,6 +186,8 @@ struct StoredSlice {
     counted_from: BTreeMap<String, Hour>,
     #[serde(default)]
     session_prints: Lenient<Prints>,
+    #[serde(default)]
+    left_out: Lenient<BTreeMap<String, Prints>>,
     #[serde(default)]
     windows: SharedWindows,
 }
@@ -168,6 +224,10 @@ impl From<StoredSlice> for DeviceSlice {
             counted_from,
             session_prints: match stored.session_prints {
                 Lenient::Read(prints) => prints,
+                Lenient::Unreadable(_) => BTreeMap::new(),
+            },
+            left_out: match stored.left_out {
+                Lenient::Read(left_out) => left_out,
                 Lenient::Unreadable(_) => BTreeMap::new(),
             },
             windows: stored.windows,
@@ -455,6 +515,18 @@ impl FleetStore {
         events: &[UsageEvent],
         now_ms: i64,
     ) {
+        self.upsert_local_leaving(device, from, events, &LeftOut::default(), now_ms);
+    }
+
+    /// [`Self::upsert_local`], without the calls in `left_out`.
+    pub fn upsert_local_leaving(
+        &mut self,
+        device: &DeviceRecord,
+        from: Hour,
+        events: &[UsageEvent],
+        left_out: &LeftOut,
+        now_ms: i64,
+    ) {
         let slice = self.devices.entry(device.id.clone()).or_default();
         slice.device = device.clone();
         slice.updated_at_ms = now_ms;
@@ -462,7 +534,7 @@ impl FleetStore {
             Some(existing) => existing.min(from),
             None => from,
         });
-        replace_read(slice, from, events);
+        replace_read(slice, from, events, left_out);
     }
 
     /// The deep re-read: each provider's buckets are replaced from the oldest
@@ -480,12 +552,24 @@ impl FleetStore {
         events: &[UsageEvent],
         now: DateTime<Utc>,
     ) {
+        self.backfill_local_leaving(device, reach, events, &LeftOut::default(), now);
+    }
+
+    /// [`Self::backfill_local`], without the calls in `left_out`.
+    pub fn backfill_local_leaving(
+        &mut self,
+        device: &DeviceRecord,
+        reach: Hour,
+        events: &[UsageEvent],
+        left_out: &LeftOut,
+        now: DateTime<Utc>,
+    ) {
         let slice = self.devices.entry(device.id.clone()).or_default();
         slice.device = device.clone();
         slice.updated_at_ms = now.timestamp_millis();
         slice.covers_from = Some(slice.covers_from.map_or(reach, |covers| covers.min(reach)));
 
-        replace_read(slice, reach, events);
+        replace_read(slice, reach, events, left_out);
     }
 
     /// Fold a retired device's history into `into_id` and drop the retired
@@ -540,6 +624,35 @@ impl FleetStore {
             }
         }
         into.session_prints.retain(|_, hours| !hours.is_empty());
+
+        for slice in self.devices.values_mut() {
+            let Some(mut prints) = slice.left_out.remove(retired_id) else {
+                continue;
+            };
+            let moved = slice.left_out.entry(into_id.to_string()).or_default();
+            for (provider, hours) in prints.iter_mut() {
+                let older: Vec<Hour> = hours
+                    .keys()
+                    .copied()
+                    .filter(|hour| edge.is_none_or(|edge| *hour < edge))
+                    .collect();
+                let held = moved.entry(provider.clone()).or_default();
+                for hour in older {
+                    if let Some(set) = hours.remove(&hour) {
+                        held.entry(hour).or_default().0.extend(set.0);
+                    }
+                }
+            }
+            prints.retain(|_, hours| !hours.is_empty());
+            if !prints.is_empty() {
+                slice.left_out.insert(retired_id.to_string(), prints);
+            }
+            slice.left_out.retain(|_, prints| {
+                prints.retain(|_, hours| !hours.is_empty());
+                !prints.is_empty()
+            });
+        }
+        let into = self.devices.get_mut(into_id)?;
 
         into.covers_from = match (into.covers_from, retired.covers_from) {
             (Some(a), Some(b)) => Some(a.min(b)),
@@ -696,6 +809,13 @@ impl FleetStore {
             slice.buckets.retain(|bucket| bucket.hour >= floor);
             slice.days.retain(|day| day.date >= floor_date);
             slice.windows.trails.retain(|trail| trail.resets_at > now);
+            slice.left_out.retain(|_, prints| {
+                for hours in prints.values_mut() {
+                    hours.retain(|hour, _| *hour >= floor);
+                }
+                prints.retain(|_, hours| !hours.is_empty());
+                !prints.is_empty()
+            });
             slice.covers_from = Some(match slice.covers_from {
                 Some(existing) => existing.max(floor),
                 None => floor,
@@ -851,6 +971,79 @@ impl FleetStore {
             .collect()
     }
 
+    /// The calls of this device's read that another device counted first.
+    ///
+    /// A session-hour is left out when a peer publishes the same print for
+    /// it: the same session, the same number of calls, the same keys. The
+    /// device that published first keeps it, which is the one that does not
+    /// leave it out here: a device holding the print in its own record
+    /// counted it before it saw the peer's, and then the smaller id keeps it.
+    /// Past the hours any peer still publishes prints for, this device's own
+    /// record of what it left out answers instead, while the peer it left
+    /// them out for is still in the store.
+    pub fn left_out(&self, local_id: &str, events: &[UsageEvent], now: DateTime<Utc>) -> LeftOut {
+        let own = self.devices.get(local_id);
+        let aged = Hour::containing(now).minus_days(HOURLY_RETENTION_DAYS);
+        let mut groups: BTreeMap<String, BTreeMap<PrintKey, Print>> = BTreeMap::new();
+        for (group, print) in session_prints(events) {
+            if let Some(holder) = self.holder(local_id, own, group, print, aged) {
+                groups.entry(holder).or_default().insert(group, print);
+            }
+        }
+        let leave: BTreeSet<PrintKey> = groups.values().flat_map(|g| g.keys().copied()).collect();
+        let calls = events
+            .iter()
+            .map(|event| print_key(event).is_some_and(|group| leave.contains(&group)))
+            .collect();
+        LeftOut { calls, groups }
+    }
+
+    fn holder(
+        &self,
+        local_id: &str,
+        own: Option<&DeviceSlice>,
+        group: PrintKey,
+        print: Print,
+        aged: Hour,
+    ) -> Option<String> {
+        let (provider, hour, session) = group;
+        let first = self
+            .devices
+            .iter()
+            .find(|(id, slice)| {
+                id.as_str() != local_id && slice.print(provider, hour, session) == Some(print)
+            })
+            .map(|(id, _)| id.as_str());
+        if let Some(first) = first {
+            let ours = own.is_some_and(|slice| slice.print(provider, hour, session) == Some(print));
+            return (!ours || first < local_id).then(|| first.to_string());
+        }
+        if hour >= aged {
+            return None;
+        }
+        let own = own?;
+        own.left_out
+            .keys()
+            .find(|holder| {
+                self.devices.contains_key(holder.as_str())
+                    && own.left_out_for(holder, group) == Some(print)
+            })
+            .cloned()
+    }
+
+    /// Forget what this device left out for peers the store no longer holds,
+    /// returning whether there was any: those calls are counted nowhere now,
+    /// and only a deep read reaches the ones older than the read window.
+    pub fn release_left_out(&mut self, local_id: &str) -> bool {
+        let known: BTreeSet<String> = self.devices.keys().cloned().collect();
+        let Some(slice) = self.devices.get_mut(local_id) else {
+            return false;
+        };
+        let before = slice.left_out.len();
+        slice.left_out.retain(|holder, _| known.contains(holder));
+        slice.left_out.len() != before
+    }
+
     /// Events for `build_report`, minus what the caller already holds.
     ///
     /// The local device's buckets are skipped where the caller's real events
@@ -905,6 +1098,19 @@ impl FleetStore {
         events: &[UsageEvent],
         now_ms: i64,
     ) {
+        self.merge_local_leaving(device, from, events, &LeftOut::default(), now_ms);
+    }
+
+    /// [`Self::merge_local`], without the calls in `left_out`. Their keys are
+    /// still recorded as counted, so a later merge does not add them either.
+    pub fn merge_local_leaving(
+        &mut self,
+        device: &DeviceRecord,
+        from: Hour,
+        events: &[UsageEvent],
+        left_out: &LeftOut,
+        now_ms: i64,
+    ) {
         let slice = self.devices.entry(device.id.clone()).or_default();
         slice.device = device.clone();
         slice.updated_at_ms = now_ms;
@@ -914,11 +1120,12 @@ impl FleetStore {
             .iter()
             .map(|b| (b.hour.utc_date(), b.provider.clone(), b.model.clone()))
             .collect();
-        for event in events {
+        for (index, event) in events.iter().enumerate() {
             let hour = Hour::containing(event.at);
             if hour < from {
                 continue;
             }
+            let left = left_out.contains(index);
             let authoritative = slice
                 .counted_from
                 .get(event.provider)
@@ -937,6 +1144,9 @@ impl FleetStore {
                     continue;
                 }
                 keys.insert(key);
+                if left {
+                    continue;
+                }
                 if let Some((provider, hour, session)) = print_key(event) {
                     slice
                         .session_prints
@@ -946,11 +1156,13 @@ impl FleetStore {
                         .or_default()
                         .add(session, key);
                 }
-            } else if held_days.contains(&(
-                hour.utc_date(),
-                event.provider.to_string(),
-                event.model.clone(),
-            )) {
+            } else if left
+                || held_days.contains(&(
+                    hour.utc_date(),
+                    event.provider.to_string(),
+                    event.model.clone(),
+                ))
+            {
                 continue;
             }
             match slice.buckets.iter_mut().find(|b| {
@@ -1361,7 +1573,7 @@ fn read_floors(floor: Hour, events: &[UsageEvent]) -> BTreeMap<&'static str, Hou
 /// [`read_floors`]. A floor inside a rolled-up day moves to the next one: that
 /// day was built while its transcripts were all there, and re-read hours
 /// landed beside it would count the rest of it twice.
-fn replace_read(slice: &mut DeviceSlice, floor: Hour, events: &[UsageEvent]) {
+fn replace_read(slice: &mut DeviceSlice, floor: Hour, events: &[UsageEvent], left_out: &LeftOut) {
     let mut floors = read_floors(floor, events);
     for (provider, first) in floors.iter_mut() {
         let date = first.utc_date();
@@ -1382,7 +1594,7 @@ fn replace_read(slice: &mut DeviceSlice, floor: Hour, events: &[UsageEvent]) {
 
     slice.buckets.retain(|bucket| !replaced(bucket));
     slice.buckets.extend(
-        bucketize(events)
+        bucketize(left_out.kept(events))
             .into_iter()
             .filter(|bucket| replaced(bucket)),
     );
@@ -1415,7 +1627,7 @@ fn replace_read(slice: &mut DeviceSlice, floor: Hour, events: &[UsageEvent]) {
             hours.retain(|hour, _| *hour < *first);
         }
     }
-    for ((provider, hour, session), print) in session_prints(events) {
+    for ((provider, hour, session), print) in session_prints(left_out.kept(events)) {
         if floors.get(provider).is_some_and(|first| hour >= *first) {
             slice
                 .session_prints
@@ -1427,6 +1639,32 @@ fn replace_read(slice: &mut DeviceSlice, floor: Hour, events: &[UsageEvent]) {
         }
     }
     slice.session_prints.retain(|_, hours| !hours.is_empty());
+
+    for prints in slice.left_out.values_mut() {
+        for (provider, hours) in prints.iter_mut() {
+            if let Some(first) = floors.get(provider.as_str()) {
+                hours.retain(|hour, _| *hour < *first);
+            }
+        }
+    }
+    for (holder, groups) in &left_out.groups {
+        let prints = slice.left_out.entry(holder.clone()).or_default();
+        for ((provider, hour, session), print) in groups {
+            if floors.get(provider).is_some_and(|first| *hour >= *first) {
+                prints
+                    .entry(provider.to_string())
+                    .or_default()
+                    .entry(*hour)
+                    .or_default()
+                    .insert(*session, *print);
+            }
+        }
+    }
+    slice.left_out.retain(|_, prints| {
+        prints.retain(|_, hours| !hours.is_empty());
+        !prints.is_empty()
+    });
+
     for (provider, first) in &floors {
         slice
             .counted_from
@@ -1436,13 +1674,16 @@ fn replace_read(slice: &mut DeviceSlice, floor: Hour, events: &[UsageEvent]) {
     }
 
     let floor_date = floor.utc_date();
-    let fresh: Vec<DayDigest> = day_digests(events)
+    let read_days: BTreeSet<NaiveDate> = events
+        .iter()
+        .map(|event| event.at.date_naive())
+        .filter(|date| *date >= floor_date)
+        .collect();
+    let fresh: Vec<DayDigest> = day_digests(left_out.kept(events))
         .into_iter()
         .filter(|day| day.date >= floor_date)
         .collect();
-    slice
-        .days
-        .retain(|day| !fresh.iter().any(|new| new.date == day.date));
+    slice.days.retain(|day| !read_days.contains(&day.date));
     slice.days.extend(fresh);
     slice.days.sort_by_key(|day| day.date);
 }

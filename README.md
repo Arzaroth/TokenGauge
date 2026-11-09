@@ -327,6 +327,11 @@ money is tokens times each machine's own price table, so shipping a figure would
 let a stale price table on one machine skew the fleet total. Never prompts, file
 paths, project names or credentials.
 
+For each hour, a print of every session's calls: how many, and a digest of
+their ids, with the session id itself reduced to a 32-bit digest. That is how
+a session moved or copied to another machine is counted once, and it says
+nothing a bucket does not already say beyond how many calls made it up.
+
 Each limit's percent over time as this machine saw it, filed by a digest of the
 account rather than the login's name, so a machine that was off for a week
 still sees how the week filled and paces from it. A machine passes on only
@@ -349,9 +354,12 @@ older than `retention_days`.
 
 ### If you sync `~/.claude/projects` yourself
 
-Then both machines read the same transcripts and the fleet total doubles.
-TokenGauge fingerprints each day and tells you when it sees this, counting the
-day once, but the fix is to leave that provider out:
+Then both machines read the same transcripts. Each machine publishes a print of
+every session's calls per hour, so a session another machine already counted is
+counted once, which also covers a session moved or copied between machines.
+Against a machine on an older TokenGauge it falls back to fingerprinting each
+day and telling you when it sees this, counting the day once. Either way, the
+cleaner setup is to leave that provider out:
 
 ```toml
 [sync.providers]

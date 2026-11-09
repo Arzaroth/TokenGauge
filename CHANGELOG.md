@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fleet sync counts a Claude Code or Codex session once when it is moved or
+  copied to another machine (t3cc `send`, `--copy`), and when two machines read
+  a shared `~/.claude/projects` with other usage on the same day. Both machines
+  need this release; with an older one it counts as before.
+
 ## [0.59.0] - 2026-11-07
 
 ### Added

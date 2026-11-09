@@ -278,6 +278,45 @@ decision 0003's snapshot contract; remuda reads the view when it is there, pinne
 `window_history::tests::the_keys_remuda_reads_are_spelled_as_decision_0003_says`.
 The file is written with the snapshot and does not bump the revision.
 
+### 0009 A call read on two devices is left out where it is read
+
+**Decision.** Each contribution carries a print per provider, hour and session:
+the call count and an XOR of the calls' dedup keys folded to 32 bits. A device
+whose read holds a session-hour a peer publishes the same print for leaves it
+out of its buckets and of what it rates, unless it published that print first,
+in which case the smaller id keeps it. The device remembers what it left out
+and for whom, and a peer that leaves the store hands those calls back through
+a fresh backfill.
+
+**Why.** t3cc's `send` moves a Claude Code session between machines with every
+call's dedup key intact, and `--copy` leaves both machines holding it. The
+whole-day fold (hazard 1) only catches two devices whose days are identical,
+and the source keeps buckets for days its read no longer covers. Only the
+device reading the transcript knows each call's tokens, so a rule applied by
+every reader ("smallest id keeps") cannot subtract a call from a source that
+no longer has the file; leaving it out where it is read makes every device's
+buckets disjoint, and the report, the split, both exports and the day rows
+then agree with no rule of their own.
+
+**Rejected.**
+- *Publishing the counted keys*: exact per call, but 110,851 keys on a heavy
+  month are about 450 KB gzipped per publish against 15 KB of buckets, keys do
+  not compress, and a 32-bit match across two devices' hours drops a real call
+  about once a year per pair.
+- *A provenance marker written by t3cc*: nothing published, but only t3cc's
+  moves are covered, and t3cc would have to know the source's device id.
+- *A whole-session digest*: smaller still, but a `--copy` both sides carry on
+  in changes it on both, and the whole copied history would count twice.
+- *Deciding before the pull*: the target would hold out a session the source
+  had just dropped for one cycle, counted nowhere.
+
+**Consequences.** Additive and optional, no schema bump: an older peer reads
+the object and ignores the prints, and with it the fleet behaves as before.
+Not caught: the hour of a `--copy` both sides carry on in, Kimi and Grok
+(their events carry no session), and session-hours older than the hourly
+window a device never left out. See
+[architecture/sync.md](architecture/sync.md#the-fleet-store-is-the-durable-record).
+
 ## Panel and frontends
 
 - **One panel spec, resolved in core; frontends own chrome only.** Five toolkits

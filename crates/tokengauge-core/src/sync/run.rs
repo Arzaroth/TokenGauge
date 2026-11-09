@@ -742,6 +742,7 @@ mod tests {
             days: Vec::new(),
             adopted: Vec::new(),
             windows: Default::default(),
+            session_prints: Default::default(),
         }
     }
 

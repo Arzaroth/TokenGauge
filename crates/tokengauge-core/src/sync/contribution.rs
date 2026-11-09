@@ -187,6 +187,143 @@ pub struct Contribution {
     /// what the others saw meanwhile.
     #[serde(default, skip_serializing_if = "SharedWindows::is_empty")]
     pub windows: SharedWindows,
+    /// The calls each session made in each hour, by provider, so a device
+    /// that reads a session another one already counted leaves it out.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub session_prints: Prints,
+}
+
+/// Session prints per provider and hour.
+pub type Prints = BTreeMap<String, BTreeMap<Hour, PrintSet>>;
+
+/// The calls one session made within one provider-hour: how many, and the XOR
+/// of their dedup keys folded to 32 bits. Two devices holding the same print
+/// for the same session and hour read the same calls.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Print {
+    pub calls: u32,
+    pub digest: u32,
+}
+
+impl Print {
+    fn add(&mut self, key: u64) {
+        self.calls = self.calls.saturating_add(1);
+        self.digest ^= fold_key(key);
+    }
+}
+
+/// A dedup key folded to 32 bits, as the store and the wire keep it.
+pub fn fold_key(key: u64) -> u32 {
+    (key ^ (key >> 32)) as u32
+}
+
+/// A session id folded to 32 bits. A clash needs two sessions in one hour
+/// with the same count and digest as well, so the width is not what keeps
+/// two sessions apart.
+pub fn session_id(session: &str) -> u32 {
+    fold_key(digest_u64(&[session.as_bytes()]))
+}
+
+/// One provider-hour's prints, by session, written as one base64 blob of
+/// 12-byte records like [`super::fleet::KeySet`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PrintSet(pub BTreeMap<u32, Print>);
+
+impl PrintSet {
+    pub fn get(&self, session: u32) -> Option<Print> {
+        self.0.get(&session).copied()
+    }
+
+    pub fn insert(&mut self, session: u32, print: Print) {
+        self.0.insert(session, print);
+    }
+
+    /// One more call of `session`, with `key`.
+    pub fn add(&mut self, session: u32, key: u64) {
+        self.0.entry(session).or_default().add(key);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Serialize for PrintSet {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let bytes: Vec<u8> = self
+            .0
+            .iter()
+            .flat_map(|(session, print)| {
+                [session, &print.calls, &print.digest]
+                    .into_iter()
+                    .flat_map(|field| field.to_le_bytes())
+            })
+            .collect();
+        serializer.serialize_str(&crate::provider::base64_encode(&bytes))
+    }
+}
+
+impl<'de> Deserialize<'de> for PrintSet {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        let bytes = crate::provider::base64_decode(&raw)
+            .ok_or_else(|| serde::de::Error::custom("session prints are not base64"))?;
+        Ok(Self(
+            bytes
+                .as_chunks::<12>()
+                .0
+                .iter()
+                .map(|record| {
+                    let field = |at: usize| {
+                        u32::from_le_bytes([
+                            record[at],
+                            record[at + 1],
+                            record[at + 2],
+                            record[at + 3],
+                        ])
+                    };
+                    (
+                        field(0),
+                        Print {
+                            calls: field(4),
+                            digest: field(8),
+                        },
+                    )
+                })
+                .collect(),
+        ))
+    }
+}
+
+/// Where a call's print is filed: provider, hour, session.
+pub type PrintKey = (&'static str, Hour, u32);
+
+/// The print of every session-hour a read holds, over the calls that carry
+/// both a dedup key and a session. A call missing either has no print and is
+/// never left out.
+pub fn session_prints<'a>(
+    events: impl IntoIterator<Item = &'a UsageEvent>,
+) -> BTreeMap<PrintKey, Print> {
+    let mut prints: BTreeMap<PrintKey, Print> = BTreeMap::new();
+    for event in events {
+        if let Some(group) = print_key(event) {
+            prints
+                .entry(group)
+                .or_default()
+                .add(event.key.unwrap_or_default());
+        }
+    }
+    prints
+}
+
+pub fn print_key(event: &UsageEvent) -> Option<PrintKey> {
+    event.key?;
+    let session = event.session.as_deref()?;
+    Some((
+        event.provider,
+        Hour::containing(event.at),
+        session_id(session),
+    ))
 }
 
 /// One device another took over, and when.
@@ -320,6 +457,13 @@ pub fn content_hash(contribution: &Contribution) -> u64 {
         feed(
             &mut buf,
             &serde_json::to_vec(&contribution.windows).unwrap_or_default(),
+        );
+    }
+    if !contribution.session_prints.is_empty() {
+        feed(&mut buf, b"sp");
+        feed(
+            &mut buf,
+            &serde_json::to_vec(&contribution.session_prints).unwrap_or_default(),
         );
     }
     digest_u64(&[&buf])

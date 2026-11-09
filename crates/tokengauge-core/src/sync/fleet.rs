@@ -11,9 +11,9 @@ use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::contribution::{
-    Adopted, Bucket, Contribution, DayDigest, DeviceRecord, Granularity, SCHEMA_VERSION,
-    WIRE_RETENTION_DAYS, bucketize, day_digests, intern_provider, merge_adopted, sort_key,
-    syncable,
+    Adopted, Bucket, Contribution, DayDigest, DeviceRecord, Granularity, Print, PrintSet, Prints,
+    SCHEMA_VERSION, WIRE_RETENTION_DAYS, bucketize, day_digests, intern_provider, merge_adopted,
+    print_key, session_prints, sort_key, syncable,
 };
 use super::hour::Hour;
 use crate::cost::pricing::{PriceArchive, PriceTable, month_key};
@@ -92,10 +92,21 @@ pub struct DeviceSlice {
     /// nothing either way.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub counted_from: BTreeMap<String, Hour>,
+    /// The session prints of this device's hourly buckets, from the hours
+    /// `counted_from` covers: published, and what a peer that reads one of
+    /// these sessions again leaves out.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub session_prints: Prints,
     /// A peer's limit windows as it last published them. Never this
     /// device's own: those live in the window history.
     #[serde(default, skip_serializing_if = "SharedWindows::is_empty")]
     pub windows: SharedWindows,
+}
+
+impl DeviceSlice {
+    pub fn print(&self, provider: &str, hour: Hour, session: u32) -> Option<Print> {
+        self.session_prints.get(provider)?.get(&hour)?.get(session)
+    }
 }
 
 /// A [`DeviceSlice`] as the store file holds it. `counted` is an index the
@@ -119,6 +130,8 @@ struct StoredSlice {
     counted: Lenient<BTreeMap<String, BTreeMap<Hour, KeySet>>>,
     #[serde(default)]
     counted_from: BTreeMap<String, Hour>,
+    #[serde(default)]
+    session_prints: Lenient<Prints>,
     #[serde(default)]
     windows: SharedWindows,
 }
@@ -153,6 +166,10 @@ impl From<StoredSlice> for DeviceSlice {
             adopted: stored.adopted,
             counted,
             counted_from,
+            session_prints: match stored.session_prints {
+                Lenient::Read(prints) => prints,
+                Lenient::Unreadable(_) => BTreeMap::new(),
+            },
             windows: stored.windows,
         }
     }
@@ -514,6 +531,16 @@ impl FleetStore {
         );
         into.days.sort_by_key(|day| day.date);
 
+        for (provider, hours) in retired.session_prints {
+            let held = into.session_prints.entry(provider).or_default();
+            for (hour, prints) in hours {
+                if edge.is_none_or(|edge| hour < edge) {
+                    held.entry(hour).or_insert(prints);
+                }
+            }
+        }
+        into.session_prints.retain(|_, hours| !hours.is_empty());
+
         into.covers_from = match (into.covers_from, retired.covers_from) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
@@ -559,6 +586,18 @@ impl FleetStore {
         slice.days.retain(|day| day.date < from_date);
         slice.days.extend(contribution.days.iter().cloned());
         slice.days.sort_by_key(|day| day.date);
+
+        for hours in slice.session_prints.values_mut() {
+            hours.retain(|hour, _| *hour < from);
+        }
+        for (provider, hours) in &contribution.session_prints {
+            slice
+                .session_prints
+                .entry(provider.clone())
+                .or_default()
+                .extend(hours.iter().map(|(hour, prints)| (*hour, prints.clone())));
+        }
+        slice.session_prints.retain(|_, hours| !hours.is_empty());
 
         merge_adopted(&mut slice.adopted, contribution.adopted.iter().cloned());
         slice.windows = contribution.windows.clone();
@@ -677,6 +716,10 @@ impl FleetStore {
                 hours.retain(|hour, _| *hour >= floor);
             }
             slice.counted.retain(|_, hours| !hours.is_empty());
+            for hours in slice.session_prints.values_mut() {
+                hours.retain(|hour, _| *hour >= floor);
+            }
+            slice.session_prints.retain(|_, hours| !hours.is_empty());
             for from in slice.counted_from.values_mut() {
                 *from = (*from).max(floor);
             }
@@ -756,6 +799,19 @@ impl FleetStore {
                 .collect(),
             adopted: slice.adopted.clone(),
             windows: SharedWindows::default(),
+            session_prints: slice
+                .session_prints
+                .iter()
+                .filter(|(provider, _)| taking_part(provider))
+                .map(|(provider, hours)| {
+                    let hours: BTreeMap<Hour, PrintSet> = hours
+                        .range(floor..)
+                        .map(|(hour, prints)| (*hour, prints.clone()))
+                        .collect();
+                    (provider.clone(), hours)
+                })
+                .filter(|(_, hours)| !hours.is_empty())
+                .collect(),
         })
     }
 
@@ -881,6 +937,15 @@ impl FleetStore {
                     continue;
                 }
                 keys.insert(key);
+                if let Some((provider, hour, session)) = print_key(event) {
+                    slice
+                        .session_prints
+                        .entry(provider.to_string())
+                        .or_default()
+                        .entry(hour)
+                        .or_default()
+                        .add(session, key);
+                }
             } else if held_days.contains(&(
                 hour.utc_date(),
                 event.provider.to_string(),
@@ -1345,6 +1410,23 @@ fn replace_read(slice: &mut DeviceSlice, floor: Hour, events: &[UsageEvent]) {
                 .insert(key);
         }
     }
+    for (provider, first) in &floors {
+        if let Some(hours) = slice.session_prints.get_mut(*provider) {
+            hours.retain(|hour, _| *hour < *first);
+        }
+    }
+    for ((provider, hour, session), print) in session_prints(events) {
+        if floors.get(provider).is_some_and(|first| hour >= *first) {
+            slice
+                .session_prints
+                .entry(provider.to_string())
+                .or_default()
+                .entry(hour)
+                .or_default()
+                .insert(session, print);
+        }
+    }
+    slice.session_prints.retain(|_, hours| !hours.is_empty());
     for (provider, first) in &floors {
         slice
             .counted_from
@@ -1899,6 +1981,7 @@ mod tests {
             days: Vec::new(),
             adopted: Vec::new(),
             windows: Default::default(),
+            session_prints: Default::default(),
         });
 
         assert_eq!(
@@ -2591,6 +2674,7 @@ mod tests {
             days: Vec::new(),
             adopted: Vec::new(),
             windows: Default::default(),
+            session_prints: Default::default(),
         };
         let bare = content_hash(&contribution);
         contribution.windows.trails = vec![

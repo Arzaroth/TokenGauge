@@ -217,6 +217,24 @@ fn cycle(
     now: DateTime<Utc>,
     status: &mut SyncStatus,
 ) -> Result<()> {
+    let fleet = open_fleet(config, device, store, status)?;
+    publish(config, device, store, now, status, &fleet)?;
+    pull(config, device, store, now, status, &fleet)
+}
+
+/// The key, the transport and our object's name, for one cycle.
+struct Fleet {
+    key: crypto::FleetKey,
+    transport: Box<dyn transport::Transport>,
+    own_name: String,
+}
+
+fn open_fleet(
+    config: &TokenGaugeConfig,
+    device: &DeviceRecord,
+    store: &mut FleetStore,
+    status: &mut SyncStatus,
+) -> Result<Fleet> {
     let key = crypto::load_key(&config.cache_file)?.context(
         "no fleet key on this machine; run `--sync-init` here, or `--sync-join <key>` to join an existing fleet",
     )?;
@@ -236,9 +254,29 @@ fn cycle(
         let _ = transport.delete(&previous);
     }
 
-    let providers = syncing_providers(config);
     let own_name = key.object_name(&device.id);
+    Ok(Fleet {
+        key,
+        transport,
+        own_name,
+    })
+}
 
+fn publish(
+    config: &TokenGaugeConfig,
+    device: &DeviceRecord,
+    store: &mut FleetStore,
+    now: DateTime<Utc>,
+    status: &mut SyncStatus,
+    fleet: &Fleet,
+) -> Result<()> {
+    let Fleet {
+        key,
+        transport,
+        own_name,
+    } = fleet;
+    let own_name = own_name.as_str();
+    let providers = syncing_providers(config);
     let history_path = crate::window_history::history_path(&config.cache_file);
     if let Some(mut contribution) = store.contribution(
         &device.id,
@@ -250,18 +288,34 @@ fn cycle(
             let since = now - chrono::Duration::days(i64::from(config.sync.retention_days).max(1));
             contribution.windows = SharedWindows::of(&history, &providers, since);
         }
-        let hash = publish_stamp(&contribution, &transport.describe(), &own_name);
+        let hash = publish_stamp(&contribution, &transport.describe(), own_name);
         if store.published_hash != Some(hash) {
             let body =
                 serde_json::to_vec(&contribution).context("could not serialise a contribution")?;
-            transport.put(&own_name, &key.seal(&own_name, &body)?)?;
+            transport.put(own_name, &key.seal(own_name, &body)?)?;
             store.published_hash = Some(hash);
-            store.published_name = Some(own_name.clone());
+            store.published_name = Some(own_name.to_string());
             store.last_publish_ms = Some(now.timestamp_millis());
             status.published = true;
         }
     }
+    Ok(())
+}
 
+fn pull(
+    config: &TokenGaugeConfig,
+    device: &DeviceRecord,
+    store: &mut FleetStore,
+    now: DateTime<Utc>,
+    status: &mut SyncStatus,
+    fleet: &Fleet,
+) -> Result<()> {
+    let Fleet {
+        key,
+        transport,
+        own_name,
+    } = fleet;
+    let own_name = own_name.as_str();
     let same_target = store.list_target(&transport.describe());
     let entries = transport.list()?;
     let listed: BTreeSet<String> = entries.iter().map(|entry| entry.name.clone()).collect();
@@ -298,7 +352,7 @@ fn cycle(
             continue;
         };
 
-        let reason = match read_peer(&key, &store.retired_key_ids, &entry.name, &sealed) {
+        let reason = match read_peer(key, &store.retired_key_ids, &entry.name, &sealed) {
             PeerOutcome::Absorbed(contribution) => {
                 store.absorb(&contribution);
                 None
@@ -322,12 +376,12 @@ fn cycle(
     }
 
     store.settle_adoptions(&device.id);
-    delete_adopted_leftovers(store, &device.id, &listed, &key, transport.as_ref());
+    delete_adopted_leftovers(store, &device.id, &listed, key, transport.as_ref());
     // A listing without this machine's own object is not one to delete peers
     // on the strength of: whatever hid ours may have hidden theirs. Ours is
     // put back on the next cycle, or peers would drop this machine while it
     // idles with nothing new to publish.
-    let own_listed = listed.contains(&own_name);
+    let own_listed = listed.contains(own_name);
     if !own_listed {
         store.published_hash = None;
     }

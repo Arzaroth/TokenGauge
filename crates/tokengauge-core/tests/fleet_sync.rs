@@ -1300,3 +1300,58 @@ fn peer_contribution() -> Contribution {
         session_prints: Default::default(),
     }
 }
+
+/// A session the peer counted before it moved here: the cycle pulls the
+/// peer's prints before this read is folded in, so the very first refresh
+/// leaves the moved call out and the fleet counts it once.
+#[test]
+fn a_session_moved_from_a_peer_counts_once_on_the_first_refresh() {
+    let root = scratch("moved-session");
+    let config = config(&root);
+    let since = (Utc::now() - Duration::days(7))
+        .with_timezone(&chrono::Local)
+        .date_naive();
+    let key = FleetKey::generate();
+    sync::store_key(&config.cache_file, &key, true).expect("key");
+
+    let in_session = |mut event: UsageEvent, session: &str| {
+        event.session = Some(session.into());
+        event
+    };
+    let moved = in_session(event(3, 100, 1), "moved");
+    let peer_device = DeviceRecord {
+        id: PEER_ID.into(),
+        hostname: "laptop".into(),
+        label: "laptop".into(),
+        os: "linux".into(),
+    };
+    let mut peer = sync::FleetStore::new();
+    peer.upsert_local(
+        &peer_device,
+        Hour::containing(Utc::now()).minus_days(7),
+        std::slice::from_ref(&moved),
+        Utc::now().timestamp_millis(),
+    );
+    let contribution = peer
+        .contribution(PEER_ID, Utc::now(), &["claude".into()], 35)
+        .expect("peer contribution");
+    assert!(!contribution.session_prints.is_empty());
+    let name = key.object_name(PEER_ID);
+    let body = serde_json::to_vec(&contribution).expect("serialise");
+    let dir = root.join("shared").join("v1");
+    std::fs::create_dir_all(&dir).expect("shared dir");
+    std::fs::write(dir.join(&name), key.seal(&name, &body).expect("seal")).expect("write peer");
+
+    let read = vec![moved, in_session(event(2, 5, 2), "here")];
+    let outcome = sync::refresh(&config, &read, since, &[]);
+    assert_eq!(outcome.left_out.count(), 1);
+
+    let mut kept = read.clone();
+    outcome.left_out.drop_from(&mut kept);
+    let total: u64 = kept
+        .iter()
+        .chain(&outcome.events)
+        .map(|e| e.tokens.total())
+        .sum();
+    assert_eq!(total, 105, "the moved call once, from the peer");
+}

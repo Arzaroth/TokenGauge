@@ -2483,6 +2483,351 @@ mod tests {
         assert_eq!(split, row_total);
     }
 
+    fn in_session(mut event: UsageEvent, session: &str) -> UsageEvent {
+        event.session = Some(session.into());
+        event
+    }
+
+    /// What `sync::refresh` does with one device's read: leave out what a
+    /// peer counted first, fold the rest in, and hand the report what is
+    /// kept.
+    fn read_on(
+        store: &mut FleetStore,
+        id: &str,
+        from: Hour,
+        read: &[UsageEvent],
+    ) -> Vec<UsageEvent> {
+        let now = from.start() + chrono::Duration::days(10);
+        let left_out = store.left_out(id, read, now);
+        store.upsert_local_leaving(&device(id), from, read, &left_out, 2);
+        let mut kept = read.to_vec();
+        left_out.drop_from(&mut kept);
+        kept
+    }
+
+    fn report_total(
+        store: &FleetStore,
+        id: &str,
+        from: Hour,
+        read: &[UsageEvent],
+        kept: &[UsageEvent],
+    ) -> u64 {
+        kept.iter()
+            .chain(&store.synthetic_events(id, from, read))
+            .map(|e| e.tokens.total())
+            .sum()
+    }
+
+    /// A session moved from `z` to `b` (t3cc `send`) keeps every call's
+    /// dedup key. `z` counted the moved call before the move, `b` reads it
+    /// again, and the two days differ by each side's other usage, so the
+    /// whole-day fold does not catch it. Every fleet view has to count it once.
+    #[test]
+    fn a_call_counted_on_one_device_and_read_on_another_counts_once() {
+        let utc = FixedOffset::east_opt(0).expect("offset");
+        let from = hour("2026-08-01T00");
+        let moved = in_session(
+            event("claude", "opus", hour("2026-08-04T09"), 100, Some(1)),
+            "moved",
+        );
+        let mut store = FleetStore::new();
+        read_on(
+            &mut store,
+            "z",
+            from,
+            &[
+                moved.clone(),
+                in_session(
+                    event("claude", "opus", hour("2026-08-04T10"), 7, Some(2)),
+                    "z-own",
+                ),
+            ],
+        );
+        let read = [
+            moved,
+            in_session(
+                event("claude", "opus", hour("2026-08-04T11"), 5, Some(3)),
+                "b-own",
+            ),
+        ];
+        let kept = read_on(&mut store, "b", from, &read);
+        assert!(store.overlaps().is_empty(), "the days differ");
+
+        let expected = 100 + 7 + 5;
+        assert_eq!(
+            report_total(&store, "b", from, &read, &kept),
+            expected,
+            "the report total"
+        );
+
+        let range = (from.utc_date(), hour("2026-08-25T00").utc_date());
+        let prices = PriceTable::default();
+        let split: u64 = store
+            .device_totals("claude", range, utc, &prices, "b", None)
+            .iter()
+            .map(|row| row.tokens)
+            .sum();
+        assert_eq!(split, expected, "the per-device split");
+
+        let archive = PriceArchive::default();
+        let exported: u64 = store
+            .export_rows(None, utc, &prices, &archive)
+            .iter()
+            .map(|row| row.total_tokens)
+            .sum();
+        assert_eq!(exported, expected, "--export");
+
+        let usage: u64 = store
+            .usage_export(None, utc, &prices, &archive, 3)
+            .rows
+            .iter()
+            .map(|row| row.tokens.total())
+            .sum();
+        assert_eq!(usage, expected, "--usage-json");
+
+        let history: u64 = store
+            .totals_by_step("claude", range, utc, Step::Day, &prices, &archive)
+            .steps
+            .values()
+            .map(|(tokens, _)| tokens)
+            .sum();
+        assert_eq!(history, expected, "the day rows");
+    }
+
+    fn fleet_total(store: &FleetStore) -> u64 {
+        store
+            .synthetic_events("nobody", hour("2099-01-01T00"), &[])
+            .iter()
+            .map(|e| e.tokens.total())
+            .sum()
+    }
+
+    /// Two devices that counted the same session-hour before either saw the
+    /// other's print: the smaller id keeps it, and further reads on either
+    /// side leave it where it is instead of handing it back and forth.
+    #[test]
+    fn a_tie_is_kept_by_the_smaller_id_and_stays_there() {
+        let from = hour("2026-08-01T00");
+        let copied = [in_session(
+            event("claude", "opus", hour("2026-08-04T09"), 100, Some(1)),
+            "s",
+        )];
+        let mut store = FleetStore::new();
+        store.upsert_local(&device("a"), from, &copied, 1);
+        store.upsert_local(&device("b"), from, &copied, 1);
+        assert_eq!(fleet_total(&store), 100, "the whole-day fold, meanwhile");
+
+        for _ in 0..3 {
+            read_on(&mut store, "b", from, &copied);
+            read_on(&mut store, "a", from, &copied);
+            assert_eq!(tokens_for(&store, "a"), 100);
+            assert_eq!(tokens_for(&store, "b"), 0);
+            assert_eq!(fleet_total(&store), 100);
+        }
+        assert!(store.overlaps().is_empty(), "nothing left to fold by day");
+    }
+
+    /// The source re-reads after the move deleted its copy: its buckets lose
+    /// the session, and the target takes it back on its next read.
+    #[test]
+    fn a_session_the_source_dropped_comes_back_to_the_target() {
+        let from = hour("2026-08-01T00");
+        let own = in_session(
+            event("claude", "opus", hour("2026-08-02T08"), 3, Some(9)),
+            "a",
+        );
+        let moved = in_session(
+            event("claude", "opus", hour("2026-08-04T09"), 100, Some(1)),
+            "s",
+        );
+        let mut store = FleetStore::new();
+        read_on(&mut store, "z", from, &[own.clone(), moved.clone()]);
+        read_on(&mut store, "b", from, std::slice::from_ref(&moved));
+        assert_eq!(fleet_total(&store), 103);
+
+        read_on(&mut store, "z", from, std::slice::from_ref(&own));
+        assert_eq!(fleet_total(&store), 3, "for the one read in between");
+        read_on(&mut store, "b", from, std::slice::from_ref(&moved));
+        assert_eq!(tokens_for(&store, "b"), 100);
+        assert_eq!(fleet_total(&store), 103);
+    }
+
+    /// `--copy`, and both machines carry on in the session afterwards: the
+    /// copied hours count once, each side's later calls count on that side.
+    #[test]
+    fn a_copied_session_both_sides_continue_counts_each_call_once() {
+        let from = hour("2026-08-01T00");
+        let call =
+            |at: &str, out, key| in_session(event("claude", "opus", hour(at), out, Some(key)), "s");
+        let copied = [call("2026-08-04T09", 100, 1), call("2026-08-04T10", 50, 2)];
+        let mut store = FleetStore::new();
+        read_on(&mut store, "z", from, &copied);
+
+        let on_z = [copied.as_slice(), &[call("2026-08-05T09", 7, 3)]].concat();
+        let on_b = [copied.as_slice(), &[call("2026-08-05T11", 5, 4)]].concat();
+        read_on(&mut store, "b", from, &on_b);
+        read_on(&mut store, "z", from, &on_z);
+        read_on(&mut store, "b", from, &on_b);
+
+        assert_eq!(tokens_for(&store, "z"), 157);
+        assert_eq!(tokens_for(&store, "b"), 5);
+        assert_eq!(fleet_total(&store), 162);
+    }
+
+    /// A peer on an older build publishes no prints, so nothing is left out
+    /// for it: the fleet behaves exactly as before, whole-day fold included.
+    #[test]
+    fn a_peer_without_prints_changes_nothing() {
+        let from = hour("2026-08-01T00");
+        let shared = [in_session(
+            event("claude", "opus", hour("2026-08-04T09"), 60, Some(1)),
+            "s",
+        )];
+        let mut store = FleetStore::new();
+        store.upsert_local(&device("a"), from, &shared, 1);
+        store
+            .devices
+            .get_mut("a")
+            .expect("a")
+            .session_prints
+            .clear();
+
+        let kept = read_on(&mut store, "b", from, &shared);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(store.overlaps().len(), 1, "the same day, folded as before");
+        assert_eq!(fleet_total(&store), 60);
+    }
+
+    /// A peer this device left calls out for leaves the store: what was left
+    /// out for it is released, so the next read counts it here.
+    #[test]
+    fn a_peer_that_leaves_hands_back_what_was_left_out_for_it() {
+        let from = hour("2026-08-01T00");
+        let moved = [in_session(
+            event("claude", "opus", hour("2026-08-04T09"), 100, Some(1)),
+            "s",
+        )];
+        let mut store = FleetStore::new();
+        read_on(&mut store, "z", from, &moved);
+        read_on(&mut store, "b", from, &moved);
+        assert!(!store.release_left_out("b"), "z is still here");
+
+        store.devices.remove("z");
+        assert!(store.release_left_out("b"));
+        assert!(store.devices["b"].left_out.is_empty());
+        read_on(&mut store, "b", from, &moved);
+        assert_eq!(tokens_for(&store, "b"), 100);
+    }
+
+    /// Past the hours peers publish prints for, a deep read finds what this
+    /// device left out in its own record, and leaves it out again.
+    #[test]
+    fn a_deep_read_leaves_out_again_what_peers_no_longer_print() {
+        let from = hour("2026-08-01T00");
+        let moved = [in_session(
+            event("claude", "opus", hour("2026-08-04T09"), 100, Some(1)),
+            "s",
+        )];
+        let mut store = FleetStore::new();
+        read_on(&mut store, "z", from, &moved);
+        read_on(&mut store, "b", from, &moved);
+
+        let later = from.start() + chrono::Duration::days(HOURLY_RETENTION_DAYS + 20);
+        store.compact(later, HOURLY_RETENTION_DAYS);
+        assert!(store.devices["z"].session_prints.is_empty(), "aged out");
+        let left_out = store.left_out("b", &moved, later);
+        assert_eq!(left_out.count(), 1);
+        store.backfill_local_leaving(&device("b"), from, &moved, &left_out, later);
+        assert_eq!(fleet_total(&store), 100);
+    }
+
+    /// Adopting the device calls were left out for moves the record to the
+    /// adopter for what moves with it, so nothing comes back as uncounted.
+    #[test]
+    fn an_adoption_moves_what_was_left_out_for_the_retired_device() {
+        let from = hour("2026-08-01T00");
+        let moved = [in_session(
+            event("claude", "opus", hour("2026-08-04T09"), 100, Some(1)),
+            "s",
+        )];
+        let mut store = FleetStore::new();
+        read_on(&mut store, "r", from, &moved);
+        read_on(&mut store, "b", from, &moved);
+        store.upsert_local(
+            &device("n"),
+            from,
+            &[event("claude", "opus", hour("2026-08-20T09"), 1, Some(7))],
+            3,
+        );
+
+        store.adopt("r", "n", 4).expect("adopted");
+        assert!(!store.release_left_out("b"), "now left out for n");
+        assert_eq!(fleet_total(&store), 101);
+    }
+
+    /// A read with gaps leaves the session out too, and records its keys, so
+    /// a retry of the same read does not add it either.
+    #[test]
+    fn a_read_with_gaps_leaves_out_what_a_peer_counted_first() {
+        let from = hour("2026-08-01T00");
+        let own = in_session(
+            event("claude", "opus", hour("2026-08-02T08"), 3, Some(9)),
+            "b",
+        );
+        let moved = in_session(
+            event("claude", "opus", hour("2026-08-04T09"), 100, Some(1)),
+            "s",
+        );
+        let mut store = FleetStore::new();
+        read_on(&mut store, "z", from, std::slice::from_ref(&moved));
+        read_on(&mut store, "b", from, std::slice::from_ref(&own));
+
+        let partial = [own, moved];
+        let now = from.start() + chrono::Duration::days(10);
+        for _ in 0..2 {
+            let left_out = store.left_out("b", &partial, now);
+            assert_eq!(left_out.count(), 1);
+            store.merge_local_leaving(&device("b"), from, &partial, &left_out, 3);
+            assert_eq!(tokens_for(&store, "b"), 3);
+        }
+        assert_eq!(fleet_total(&store), 103);
+    }
+
+    #[test]
+    fn session_prints_round_trip_through_the_wire() {
+        let mut store = FleetStore::new();
+        let from = hour("2026-08-01T00");
+        let events = [
+            in_session(
+                event("claude", "opus", hour("2026-08-04T09"), 1, Some(1)),
+                "s",
+            ),
+            in_session(
+                event("claude", "opus", hour("2026-08-04T09"), 1, Some(2)),
+                "s",
+            ),
+            event("claude", "opus", hour("2026-08-04T09"), 1, Some(3)),
+        ];
+        store.upsert_local(&device("a"), from, &events, 1);
+        let now = from.start() + chrono::Duration::days(10);
+        let contribution = store
+            .contribution("a", now, &["claude".into()], WIRE_RETENTION_DAYS)
+            .expect("contribution");
+        let prints = &contribution.session_prints["claude"][&hour("2026-08-04T09")];
+        assert_eq!(prints.0.len(), 1, "a call with no session has no print");
+
+        let json = serde_json::to_string(&contribution).expect("json");
+        let back: Contribution = serde_json::from_str(&json).expect("parse");
+        assert_eq!(back.session_prints, contribution.session_prints);
+
+        let mut bare: serde_json::Value = serde_json::from_str(&json).expect("value");
+        bare.as_object_mut()
+            .expect("object")
+            .remove("sessionPrints");
+        let older: Contribution = serde_json::from_value(bare).expect("an older peer's");
+        assert!(older.session_prints.is_empty());
+    }
+
     /// The narrowed total is what a model row's tooltip attributes, so it has
     /// to come out of the same buckets the unnarrowed one adds up.
     #[test]

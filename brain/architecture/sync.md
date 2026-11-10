@@ -123,10 +123,12 @@ maintained on every fetch whether or not sync is on (the gate is in
   keeps every call's dedup key, and only the device reading the transcript
   knows each call's tokens, so that device is the one that drops them: its
   buckets never hold a call a peer's buckets count, and every view adds the
-  buckets up as they are. Each slice keeps, for the hours `counted_from`
-  covers, a **session print** per provider, hour and session: the call count
-  and an XOR of the folded keys (`DeviceSlice.session_prints`, published as
-  `sessionPrints`). `FleetStore::left_out` leaves a session-hour out of a read
+  buckets up as they are. Each slice keeps a **session print** per provider,
+  hour and session: the call count and an XOR of the folded keys
+  (`DeviceSlice.session_prints`, published as `sessionPrints` for the hours a
+  contribution carries). Prints are taken from hourly reads and kept as long
+  as the buckets: compaction leaves them, the 400-day prune takes them, so a
+  deep read of a session moved long after its calls still finds the peer's. `FleetStore::left_out` leaves a session-hour out of a read
   when a peer holds the same print, unless this device's own record holds it
   too and its id is the smaller: the first to publish keeps it, the smaller id
   wins a tie. The caller drops the same calls from what it rates
@@ -134,16 +136,18 @@ maintained on every fetch whether or not sync is on (the gate is in
   so a retry does not add them. Day digests are taken after, so the whole-day
   fold never drops a day twice. The slice remembers what it left out and for
   whom (`DeviceSlice.left_out`, local, kept as long as the buckets), which
-  answers for hours older than any peer still prints, so a deep read does not
-  count them again. Only with sync on: off, the report is this machine alone.
+  answers where the peer's prints are gone from the store (a wider republish
+  replaces them with only those its contribution carries), so a deep read does
+  not count them again. Only with sync on: off, the report is this machine alone.
   A peer the record names that leaves the store (forgotten, adopted, an old
   key) has its calls released (`release_left_out`) and the backfill runs again
   (`statefiles::redo_backfill`), since only a deep read reaches the hours past
   the window; `adopt` first re-points the record to the adopter for the hours
   that move with it. Not caught: a session-hour whose two copies differ (both
   machines carried on in the session within the hour of a `--copy`), a peer on
-  an older build (no prints), and a session-hour older than the hourly window
-  that was never left out. Kimi's session is the directory under the group or
+  an older build (no prints), and an hour this store never received the
+  peer's print for (it joined the fleet after those calls left the wire).
+  Kimi's session is the directory under the group or
   workspace (every agent of it shares one), Grok's the `sessionId` its turns
   name.
 - Separate file from the snapshot on purpose: the snapshot is rewritten wholesale

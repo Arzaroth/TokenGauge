@@ -312,8 +312,10 @@ then agree with no rule of their own.
 
 **Consequences.** Additive and optional, no schema bump: an older peer reads
 the object and ignores the prints, and with it the fleet behaves as before.
-Not caught: the hour of a `--copy` both sides carry on in, and session-hours
-older than the hourly window a device never left out. See
+Prints are kept locally as long as the buckets, not dropped with the hourly
+ones, so a deep read past the wire still finds them (about 200 KB a year per
+heavy device, more as base64). Not caught: the hour of a `--copy` both sides
+carry on in, and hours whose print never reached this store. See
 [architecture/sync.md](architecture/sync.md#the-fleet-store-is-the-durable-record).
 
 ## Panel and frontends

@@ -582,9 +582,12 @@ side's other usage, so the fleet counted the moved calls twice. Rules:
 - **The decision is made after the pull.** Before it, a source that dropped a
   moved session leaves it counted nowhere for a cycle.
 - **What was left out is remembered, and handed back when its holder goes.**
-  Peers print only the hourly window, so a deep read past it finds the call in
-  `DeviceSlice.left_out` instead; a holder that leaves the store releases its
-  calls and reruns the backfill, and `adopt` re-points the record first.
+  Prints are kept as long as the buckets, and `compact` must not take them:
+  a session moved long after its calls is read only by a deep read, and with
+  the peer's prints compacted away that read counted it twice. Where they are
+  gone anyway, the deep read finds the call in `DeviceSlice.left_out`; a holder
+  that leaves the store releases its calls and reruns the backfill, and
+  `adopt` re-points the record first.
 - **Only with sync on.** Off, the report is this machine alone, and a call held
   out for a peer it does not show is counted nowhere.
 

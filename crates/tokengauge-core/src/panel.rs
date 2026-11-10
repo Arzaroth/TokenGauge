@@ -3127,6 +3127,7 @@ mod tests {
                 kind,
                 count,
                 expires_at: b.expires_at.clone(),
+                clears: Vec::new(),
             })
             .collect();
         Some(b)

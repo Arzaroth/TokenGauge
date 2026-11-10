@@ -576,6 +576,15 @@ fn banked_resets(rest: &Map<String, Value>) -> Option<BankedResets> {
                 .map(|g| g.left())
                 .fold(0u32, u32::saturating_add),
             expires_at: soonest(same.iter().map(|g| g.ends_at.as_deref())),
+            clears: same
+                .iter()
+                .flat_map(|g| &g.clears)
+                .fold(Vec::new(), |mut all, c| {
+                    if !all.contains(c) {
+                        all.push(c.clone());
+                    }
+                    all
+                }),
         });
     }
     Some(BankedResets {
@@ -1288,6 +1297,7 @@ mod tests {
                     kind: ResetKind::Full,
                     count: 1,
                     expires_at: Some("2026-10-22T16:00:00+00:00".into()),
+                    clears: Vec::new(),
                 }],
             })
         );
@@ -1307,7 +1317,42 @@ mod tests {
                 kind: ResetKind::Fable,
                 count: 1,
                 expires_at: Some("2027-03-09T07:59:00+00:00".into()),
+                clears: vec!["seven_day_overage_included".into()],
             }]
+        );
+    }
+
+    #[test]
+    fn a_kind_carries_every_window_its_grants_clear() {
+        let fable = |id: &str, clears: Value| {
+            grant(
+                serde_json::json!({"id": id, "type": "full", "gives_back_weekly": true,
+                                     "clears": clears}),
+            )
+        };
+        let resets = banked(block(
+            false,
+            vec![
+                fable(
+                    "launch-2610-fable",
+                    serde_json::json!(["five_hour", "seven_day_overage_included"]),
+                ),
+                fable(
+                    "launch-2610-fable-12mo",
+                    serde_json::json!(["seven_day_overage_included"]),
+                ),
+                fable(
+                    "launch-2610-fable-6mo",
+                    serde_json::json!(["five_hour", "seven_day_overage_included"]),
+                ),
+            ],
+        ))
+        .unwrap();
+        assert_eq!(resets.kinds.len(), 1);
+        assert_eq!(resets.kinds[0].count, 3);
+        assert_eq!(
+            resets.kinds[0].clears,
+            vec!["five_hour".to_string(), "seven_day_overage_included".into()]
         );
     }
 
@@ -1355,11 +1400,13 @@ mod tests {
                     kind: ResetKind::Weekly,
                     count: 3,
                     expires_at: Some("2026-10-22T17:00:00+02:00".into()),
+                    clears: Vec::new(),
                 },
                 BankedKind {
                     kind: ResetKind::Fable,
                     count: 1,
                     expires_at: Some("2027-03-09T07:59:00+00:00".into()),
+                    clears: Vec::new(),
                 },
             ]
         );

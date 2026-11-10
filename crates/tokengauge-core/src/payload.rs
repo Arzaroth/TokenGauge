@@ -52,6 +52,11 @@ pub struct BankedKind {
     pub kind: ResetKind,
     pub count: u32,
     pub expires_at: Option<String>,
+    /// The windows these resets clear, as the provider keys them
+    /// (`five_hour`, `seven_day_overage_included`): a Fable reset clears the
+    /// 5-hour window too on an account that has one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clears: Vec<String>,
 }
 
 /// Claude Code's own names for what a banked reset clears.
@@ -688,6 +693,7 @@ mod tests {
                     kind: ResetKind::Fable,
                     count: 1,
                     expires_at: Some("2026-10-22T16:00:00+00:00".into()),
+                    clears: vec!["five_hour".into(), "seven_day_overage_included".into()],
                 }],
             }),
             ..UsageSnapshot::at(chrono::Utc::now())
@@ -701,7 +707,8 @@ mod tests {
         assert_eq!(
             json["bankedResets"]["kinds"],
             serde_json::json!([{"kind": "fable", "count": 1,
-                                "expiresAt": "2026-10-22T16:00:00+00:00"}])
+                                "expiresAt": "2026-10-22T16:00:00+00:00",
+                                "clears": ["five_hour", "seven_day_overage_included"]}])
         );
         for (kind, name) in [
             (ResetKind::Session, "session"),

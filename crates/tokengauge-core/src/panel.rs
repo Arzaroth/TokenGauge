@@ -683,7 +683,7 @@ fn banked_marker(row: &ProviderRow) -> Option<String> {
     use crate::ResetKind::{Fable, Full, Session, Weekly};
     let one = banked.available == 1;
     let kind = match banked.kinds.as_slice() {
-        [only] => Some(only.kind),
+        [only] if only.count == banked.available => Some(only.kind),
         _ => None,
     };
     let template = match (kind, one) {
@@ -3131,6 +3131,17 @@ mod tests {
             })
             .collect();
         Some(b)
+    }
+
+    #[test]
+    fn a_kind_names_the_marker_only_when_it_covers_every_reset() {
+        let mut r = row();
+        r.banked_resets = of_kinds(&[(crate::ResetKind::Fable, 1)]);
+        r.banked_resets.as_mut().unwrap().available = 2;
+        assert_eq!(
+            section(&panel_spec(&r), "limits", None).title,
+            "LIMITS · 2 resets banked, expires in 1h 30m"
+        );
     }
 
     #[test]

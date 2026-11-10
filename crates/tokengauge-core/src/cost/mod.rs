@@ -432,12 +432,14 @@ pub fn read_checked(roots: &Roots, since: NaiveDate) -> TranscriptRead {
         &roots.kimi,
         since,
         &mut kimi_seen,
+        &mut firsts,
         &mut gaps,
     ));
     events.extend(grok_cli::read_events(
         &roots.grok,
         since,
         &mut grok_seen,
+        &mut firsts,
         &mut gaps,
     ));
     if let Some(store) = &roots.remuda {

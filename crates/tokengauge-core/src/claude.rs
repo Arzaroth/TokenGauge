@@ -576,9 +576,10 @@ fn banked_resets(rest: &Map<String, Value>) -> Option<BankedResets> {
                 .map(|g| g.left())
                 .fold(0u32, u32::saturating_add),
             expires_at: soonest(same.iter().map(|g| g.ends_at.as_deref())),
-            clears: same
+            clears: same[0]
+                .clears
                 .iter()
-                .flat_map(|g| &g.clears)
+                .filter(|c| same.iter().all(|g| g.clears.contains(c)))
                 .fold(Vec::new(), |mut all, c| {
                     if !all.contains(c) {
                         all.push(c.clone());
@@ -1323,7 +1324,7 @@ mod tests {
     }
 
     #[test]
-    fn a_kind_carries_every_window_its_grants_clear() {
+    fn a_kind_carries_only_the_windows_every_one_of_its_grants_clears() {
         let fable = |id: &str, clears: Value| {
             grant(
                 serde_json::json!({"id": id, "type": "full", "gives_back_weekly": true,
@@ -1352,6 +1353,24 @@ mod tests {
         assert_eq!(resets.kinds[0].count, 3);
         assert_eq!(
             resets.kinds[0].clears,
+            vec!["seven_day_overage_included".to_string()]
+        );
+        let idc = banked(block(
+            false,
+            vec![
+                fable(
+                    "a",
+                    serde_json::json!(["five_hour", "seven_day_overage_included"]),
+                ),
+                fable(
+                    "b",
+                    serde_json::json!(["seven_day_overage_included", "five_hour"]),
+                ),
+            ],
+        ))
+        .unwrap();
+        assert_eq!(
+            idc.kinds[0].clears,
             vec!["five_hour".to_string(), "seven_day_overage_included".into()]
         );
     }

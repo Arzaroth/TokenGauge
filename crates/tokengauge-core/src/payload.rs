@@ -52,9 +52,10 @@ pub struct BankedKind {
     pub kind: ResetKind,
     pub count: u32,
     pub expires_at: Option<String>,
-    /// The windows these resets clear, as the provider keys them
-    /// (`five_hour`, `seven_day_overage_included`): a Fable reset clears the
-    /// 5-hour window too on an account that has one.
+    /// The windows every one of these resets clears, as the provider keys
+    /// them (`five_hour`, `seven_day_overage_included`): a Fable reset clears
+    /// the 5-hour window too on an account that has one, and the provider
+    /// picks which grant a spend uses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clears: Vec<String>,
 }

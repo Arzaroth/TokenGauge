@@ -142,8 +142,10 @@ maintained on every fetch whether or not sync is on (the gate is in
   the window; `adopt` first re-points the record to the adopter for the hours
   that move with it. Not caught: a session-hour whose two copies differ (both
   machines carried on in the session within the hour of a `--copy`), a peer on
-  an older build (no prints), a session-hour older than the hourly window that
-  was never left out, and Kimi and Grok, whose events carry no session.
+  an older build (no prints), and a session-hour older than the hourly window
+  that was never left out. Kimi's session is the directory under the group or
+  workspace (every agent of it shares one), Grok's the `sessionId` its turns
+  name.
 - Separate file from the snapshot on purpose: the snapshot is rewritten wholesale
   on every fetch; the store must not be.
 - **Store retention and wire retention differ.** The store keeps

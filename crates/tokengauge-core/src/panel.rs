@@ -657,7 +657,8 @@ fn reset_footnote(used: u8, reset: &str) -> String {
     }
 }
 
-/// `1 reset banked, expires in 2d 8h`.
+/// `1 Fable reset banked, expires in 2d 8h`, or `3 resets banked` for a
+/// count the provider does not split or that mixes kinds.
 fn banked_marker(row: &ProviderRow) -> Option<String> {
     let banked = row.banked_resets.as_ref().filter(|b| b.available > 0)?;
     let left = banked
@@ -679,19 +680,28 @@ fn banked_marker(row: &ProviderRow) -> Option<String> {
             )
         })
         .unwrap_or_default();
-    Some(if banked.available == 1 {
-        tf!(
-            "{count} reset banked{expiry}",
-            count = banked.available,
-            expiry = expiry
-        )
-    } else {
-        tf!(
-            "{count} resets banked{expiry}",
-            count = banked.available,
-            expiry = expiry
-        )
-    })
+    use crate::ResetKind::{Fable, Full, Session, Weekly};
+    let one = banked.available == 1;
+    let kind = match banked.kinds.as_slice() {
+        [only] => Some(only.kind),
+        _ => None,
+    };
+    let template = match (kind, one) {
+        (Some(Fable), true) => crate::i18n::tr("{count} Fable reset banked{expiry}"),
+        (Some(Fable), false) => crate::i18n::tr("{count} Fable resets banked{expiry}"),
+        (Some(Session), true) => crate::i18n::tr("{count} 5-hour reset banked{expiry}"),
+        (Some(Session), false) => crate::i18n::tr("{count} 5-hour resets banked{expiry}"),
+        (Some(Weekly), true) => crate::i18n::tr("{count} weekly reset banked{expiry}"),
+        (Some(Weekly), false) => crate::i18n::tr("{count} weekly resets banked{expiry}"),
+        (Some(Full), true) => crate::i18n::tr("{count} full reset banked{expiry}"),
+        (Some(Full), false) => crate::i18n::tr("{count} full resets banked{expiry}"),
+        (None, true) => crate::i18n::tr("{count} reset banked{expiry}"),
+        (None, false) => crate::i18n::tr("{count} resets banked{expiry}"),
+    };
+    Some(crate::i18n::fill(
+        template,
+        &[("count", &banked.available), ("expiry", &expiry)],
+    ))
 }
 
 fn limit_rows(row: &ProviderRow) -> Vec<PanelRow> {
@@ -3107,6 +3117,40 @@ mod tests {
             }),
             kinds: Vec::new(),
         })
+    }
+
+    fn of_kinds(kinds: &[(crate::ResetKind, u32)]) -> Option<crate::BankedResets> {
+        let mut b = banked(kinds.iter().map(|(_, n)| n).sum(), Some(90))?;
+        b.kinds = kinds
+            .iter()
+            .map(|&(kind, count)| crate::BankedKind {
+                kind,
+                count,
+                expires_at: b.expires_at.clone(),
+            })
+            .collect();
+        Some(b)
+    }
+
+    #[test]
+    fn a_banked_reset_says_what_it_clears() {
+        use crate::ResetKind::{Fable, Full, Session, Weekly};
+        let mut r = row();
+        for (kinds, marker) in [
+            (vec![(Fable, 1)], "1 Fable reset banked"),
+            (vec![(Fable, 2)], "2 Fable resets banked"),
+            (vec![(Session, 1)], "1 5-hour reset banked"),
+            (vec![(Weekly, 3)], "3 weekly resets banked"),
+            (vec![(Full, 1)], "1 full reset banked"),
+            (vec![(Fable, 1), (Weekly, 2)], "3 resets banked"),
+        ] {
+            r.banked_resets = of_kinds(&kinds);
+            assert_eq!(
+                section(&panel_spec(&r), "limits", None).title,
+                format!("LIMITS · {marker}, expires in 1h 30m"),
+                "{kinds:?}"
+            );
+        }
     }
 
     #[test]

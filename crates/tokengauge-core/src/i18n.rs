@@ -296,6 +296,38 @@ const FRENCH: &[(&str, &str)] = &[
         "{count} resets banked{expiry}",
         "{count} réinitialisations en réserve{expiry}",
     ),
+    (
+        "{count} Fable reset banked{expiry}",
+        "{count} réinitialisation Fable en réserve{expiry}",
+    ),
+    (
+        "{count} Fable resets banked{expiry}",
+        "{count} réinitialisations Fable en réserve{expiry}",
+    ),
+    (
+        "{count} 5-hour reset banked{expiry}",
+        "{count} réinitialisation 5 h en réserve{expiry}",
+    ),
+    (
+        "{count} 5-hour resets banked{expiry}",
+        "{count} réinitialisations 5 h en réserve{expiry}",
+    ),
+    (
+        "{count} weekly reset banked{expiry}",
+        "{count} réinitialisation hebdomadaire en réserve{expiry}",
+    ),
+    (
+        "{count} weekly resets banked{expiry}",
+        "{count} réinitialisations hebdomadaires en réserve{expiry}",
+    ),
+    (
+        "{count} full reset banked{expiry}",
+        "{count} réinitialisation complète en réserve{expiry}",
+    ),
+    (
+        "{count} full resets banked{expiry}",
+        "{count} réinitialisations complètes en réserve{expiry}",
+    ),
     ("live login", "connexion active"),
     ("active", "actif"),
     ("not in total", "hors total"),

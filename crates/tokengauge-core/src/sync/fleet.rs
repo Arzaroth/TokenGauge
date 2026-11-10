@@ -92,15 +92,16 @@ pub struct DeviceSlice {
     /// nothing either way.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub counted_from: BTreeMap<String, Hour>,
-    /// The session prints of this device's hourly buckets, from the hours
-    /// `counted_from` covers: published, and what a peer that reads one of
-    /// these sessions again leaves out.
+    /// The session prints of this device's buckets, kept as long as they are,
+    /// past the hours a contribution carries: a deep read reaches calls
+    /// older than any peer still publishes, and leaves out what these say a
+    /// peer counted first.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub session_prints: Prints,
     /// The session-hours this device's reads held and left out, by the peer
-    /// that counted them first. Kept as long as the buckets, past the hours
-    /// any peer still publishes prints for, so a deep read does not count
-    /// them again. Local only.
+    /// that counted them first, for when the peer's own prints are gone from
+    /// this store: a peer republishing its history wider replaces them with
+    /// those its contribution carries. Local only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub left_out: BTreeMap<String, Prints>,
     /// A peer's limit windows as it last published them. Never this
@@ -809,6 +810,10 @@ impl FleetStore {
             slice.buckets.retain(|bucket| bucket.hour >= floor);
             slice.days.retain(|day| day.date >= floor_date);
             slice.windows.trails.retain(|trail| trail.resets_at > now);
+            for hours in slice.session_prints.values_mut() {
+                hours.retain(|hour, _| *hour >= floor);
+            }
+            slice.session_prints.retain(|_, hours| !hours.is_empty());
             slice.left_out.retain(|_, prints| {
                 for hours in prints.values_mut() {
                     hours.retain(|hour, _| *hour >= floor);
@@ -836,10 +841,6 @@ impl FleetStore {
                 hours.retain(|hour, _| *hour >= floor);
             }
             slice.counted.retain(|_, hours| !hours.is_empty());
-            for hours in slice.session_prints.values_mut() {
-                hours.retain(|hour, _| *hour >= floor);
-            }
-            slice.session_prints.retain(|_, hours| !hours.is_empty());
             for from in slice.counted_from.values_mut() {
                 *from = (*from).max(floor);
             }
@@ -978,9 +979,10 @@ impl FleetStore {
     /// device that published first keeps it, which is the one that does not
     /// leave it out here: a device holding the print in its own record
     /// counted it before it saw the peer's, and then the smaller id keeps it.
-    /// Past the hours any peer still publishes prints for, this device's own
-    /// record of what it left out answers instead, while the peer it left
-    /// them out for is still in the store.
+    /// Where this store no longer holds the peer's print, past the hours a
+    /// contribution carries, this device's own record of what it left out
+    /// answers instead, while the peer it left them out for is still in the
+    /// store.
     pub fn left_out(&self, local_id: &str, events: &[UsageEvent], now: DateTime<Utc>) -> LeftOut {
         let own = self.devices.get(local_id);
         let aged = Hour::containing(now).minus_days(HOURLY_RETENTION_DAYS);
@@ -2719,10 +2721,39 @@ mod tests {
         assert_eq!(tokens_for(&store, "b"), 100);
     }
 
-    /// Past the hours peers publish prints for, a deep read finds what this
-    /// device left out in its own record, and leaves it out again.
+    /// A session moved here long after its calls were made is read only by a
+    /// deep read, past the hours any contribution carries. The peer's prints
+    /// outlive their hourly buckets, so the read still leaves them out.
     #[test]
-    fn a_deep_read_leaves_out_again_what_peers_no_longer_print() {
+    fn a_deep_read_leaves_out_what_a_peer_printed_before_the_hourly_window() {
+        let from = hour("2026-08-01T00");
+        let moved = [in_session(
+            event("claude", "opus", hour("2026-08-04T09"), 100, Some(1)),
+            "s",
+        )];
+        let mut store = FleetStore::new();
+        read_on(&mut store, "z", from, &moved);
+        read_on(&mut store, "b", from, &[]);
+
+        let later = from.start() + chrono::Duration::days(HOURLY_RETENTION_DAYS + 20);
+        store.compact(later, HOURLY_RETENTION_DAYS);
+        assert!(!store.devices["z"].session_prints.is_empty());
+        let left_out = store.left_out("b", &moved, later);
+        assert_eq!(left_out.count(), 1);
+        store.backfill_local_leaving(&device("b"), from, &moved, &left_out, later);
+        assert_eq!(fleet_total(&store), 100);
+
+        store.prune(later + chrono::Duration::days(STORE_RETENTION_DAYS));
+        assert!(
+            store.devices["z"].session_prints.is_empty(),
+            "pruned with the buckets"
+        );
+    }
+
+    /// Where the peer's prints are gone from this store, a deep read finds
+    /// what this device left out in its own record, and leaves it out again.
+    #[test]
+    fn a_deep_read_leaves_out_again_what_it_left_out_before() {
         let from = hour("2026-08-01T00");
         let moved = [in_session(
             event("claude", "opus", hour("2026-08-04T09"), 100, Some(1)),
@@ -2734,7 +2765,12 @@ mod tests {
 
         let later = from.start() + chrono::Duration::days(HOURLY_RETENTION_DAYS + 20);
         store.compact(later, HOURLY_RETENTION_DAYS);
-        assert!(store.devices["z"].session_prints.is_empty(), "aged out");
+        store
+            .devices
+            .get_mut("z")
+            .expect("z")
+            .session_prints
+            .clear();
         let left_out = store.left_out("b", &moved, later);
         assert_eq!(left_out.count(), 1);
         store.backfill_local_leaving(&device("b"), from, &moved, &left_out, later);

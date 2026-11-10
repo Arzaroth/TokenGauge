@@ -72,6 +72,9 @@ pub enum ResetKind {
     Full,
     /// The Fable limit, handing this week's Fable use back to the weekly limit.
     Fable,
+    /// A kind a newer build wrote: read rather than failing the snapshot.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -722,6 +725,12 @@ mod tests {
         let older: BankedResets =
             serde_json::from_value(serde_json::json!({"available": 2, "expiresAt": null})).unwrap();
         assert!(older.kinds.is_empty());
+        let newer: BankedResets = serde_json::from_value(serde_json::json!({
+            "available": 1, "expiresAt": null,
+            "kinds": [{"kind": "lunar", "count": 1, "expiresAt": null}]
+        }))
+        .unwrap();
+        assert_eq!(newer.kinds[0].kind, ResetKind::Other);
         let unsplit = BankedResets {
             kinds: Vec::new(),
             ..usage.banked_resets.clone().unwrap()

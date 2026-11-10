@@ -695,8 +695,12 @@ fn banked_marker(row: &ProviderRow) -> Option<String> {
         (Some(Weekly), false) => crate::i18n::tr("{count} weekly resets banked{expiry}"),
         (Some(Full), true) => crate::i18n::tr("{count} full reset banked{expiry}"),
         (Some(Full), false) => crate::i18n::tr("{count} full resets banked{expiry}"),
-        (None, true) => crate::i18n::tr("{count} reset banked{expiry}"),
-        (None, false) => crate::i18n::tr("{count} resets banked{expiry}"),
+        (None | Some(crate::ResetKind::Other), true) => {
+            crate::i18n::tr("{count} reset banked{expiry}")
+        }
+        (None | Some(crate::ResetKind::Other), false) => {
+            crate::i18n::tr("{count} resets banked{expiry}")
+        }
     };
     Some(crate::i18n::fill(
         template,
@@ -3155,6 +3159,7 @@ mod tests {
             (vec![(Weekly, 3)], "3 weekly resets banked"),
             (vec![(Full, 1)], "1 full reset banked"),
             (vec![(Fable, 1), (Weekly, 2)], "3 resets banked"),
+            (vec![(crate::ResetKind::Other, 2)], "2 resets banked"),
         ] {
             r.banked_resets = of_kinds(&kinds);
             assert_eq!(

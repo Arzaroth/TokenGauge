@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `tokengauge --sync-export` prints everything another machine needs to join
+  the fleet on its own: the key, the `[sync]` transport and the S3 keys, never
+  the device id or label. `tokengauge --sync-join -` takes it where it took a
+  bare key, so a new machine is set up in one step.
+- `tokengauge --sync-s3-credentials -` keeps the S3 keys in a private file
+  beside the fleet key instead of `AWS_ACCESS_KEY_ID` and
+  `AWS_SECRET_ACCESS_KEY` in every process's environment. The variables still
+  work when the file is absent.
+
 ## [0.59.0] - 2026-11-07
 
 ### Added

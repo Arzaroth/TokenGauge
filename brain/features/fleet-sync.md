@@ -14,7 +14,10 @@ Settings panes are the highest-drift surface and this one handles S3 keys and a
 fleet key, so setup is not reimplemented per desktop:
 
 1. **Core commands**: `--sync-init` (generate and print the key), `--sync-join -`
-   (key from stdin; an argument lands in shell history and `/proc/<pid>/cmdline`),
+   (key or fleet bundle from stdin; an argument lands in shell history and
+   `/proc/<pid>/cmdline`), `--sync-export` (the bundle another machine joins
+   with, [../architecture/sync.md](../architecture/sync.md#fleet-bundle)),
+   `--sync-s3-credentials -` (S3 keys into a private file),
    `--sync-force`, `--sync-status [--json]`, `--sync-test` (probe round trip),
    `--sync-forget <device>`, `--sync-adopt <device>` (fold a reinstalled
    machine's old entry into this one, see

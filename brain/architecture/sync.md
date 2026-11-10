@@ -208,7 +208,7 @@ Plaintext payload, before compression and encryption:
 The key is 32 random bytes at `<state_dir>/tokengauge-sync-key`, mode 0600 on
 Unix only (on Windows it inherits the profile directory's ACL), printed as
 `tgsync1<base32>`. `--sync-init` generates it, `--sync-join -` installs it from
-stdin. No passphrase, no KDF. What it buys: the storage holder cannot read
+stdin, alone or inside a fleet bundle (below). No passphrase, no KDF. What it buys: the storage holder cannot read
 counts, model names or hostnames. Not multi-user, no per-device revocation, and
 possession of the key is the only authentication (decision 0002).
 
@@ -230,8 +230,25 @@ One transport is active; fan-out is a non-goal. Config lives under `[sync]`
 (`enabled`, `transport`, `label`, `retention_days` 35, `peer_max_age_days` 30),
 `[sync.providers]`, `[sync.dir] path`, `[sync.s3]` (`endpoint`, `region`,
 `bucket`, `prefix`), parsed in `sync/config.rs`;
-S3 credentials come from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, never the
-snapshot or a log, and `--doctor` redacts them.
+S3 credentials come from `[sync.s3]` `access_key_id` / `secret_access_key`, then
+`<state_dir>/tokengauge-s3-credentials` (JSON, written 0600 by
+`--sync-s3-credentials -` or a join), then `AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY`, each field on its own (`s3::resolve_credentials`);
+never the snapshot or a log, and `--doctor` redacts them.
+
+## Fleet bundle
+
+`--sync-export` prints a `SyncBundle` (`sync/bundle.rs`, `tokengauge_sync: 1`):
+the key, `enabled`, `transport`, `retention_days`, `peer_max_age_days`, the
+explicit `[sync.providers]`, `[sync.dir] path` with the home directory as `~/`,
+the `[sync.s3]` place, and the S3 keys the transport would sign with when it is
+`s3`. Never the device id (two machines would write one object) nor `label`.
+`--sync-join -` reads a bundle where it would read a key: it stores the key
+first through `store_key`, so a machine in another fleet is refused without
+`--sync-force` before anything else is written, then writes those `[sync]`
+fields (`config_join_sync`, leaving `label` alone) and the credentials file.
+Another `tokengauge_sync` format is refused, naming the side to update.
+remuda's `restore` drives it, so each tool writes only its own files.
 
 ## When it runs
 

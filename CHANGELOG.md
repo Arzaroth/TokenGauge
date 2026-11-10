@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A banked Claude reset says what it clears: `1 Fable reset banked`, `1 weekly
+  reset banked`. The snapshot carries the split as `bankedResets.kinds` for
+  remuda.
+
 ### Fixed
 
 - Fleet sync counts a Claude Code, Codex, Kimi or Grok session once when it is

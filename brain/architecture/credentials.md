@@ -127,8 +127,11 @@ Each `payloads[]` entry gains:
   fraction for Team seats (1.25, 6.25; remuda reads fractions from 0.10.0).
   Absent on an unmatched live login that cannot be told apart from a stored one.
 - `usage.bankedResets` - on a Claude payload holding a usable banked reset:
-  `available` (how many) and `expiresAt` (the soonest grant's expiry, RFC 3339
-  as Anthropic wrote it, or null). Absent otherwise
+  `available` (how many), `expiresAt` (the soonest grant's expiry, RFC 3339
+  as Anthropic wrote it, or null) and `kinds`, the same count split by what a
+  reset clears: `[{kind, count, expiresAt}]`, `kind` one of `session`,
+  `weekly`, `full`, `fable`, absent when the provider does not say (Codex).
+  Absent otherwise
   ([../features/banked-resets.md](../features/banked-resets.md)).
 - `usage.<window>.burn` - on each window with a reset and a duration (the
   extra windows' included): `perHour`, the percent of the window spent per

@@ -191,6 +191,41 @@ pub fn config_set_sync_s3(path: &Path, field: &str, value: &str) -> Result<()> {
     })
 }
 
+/// Write the `[sync]` settings a fleet bundle carries, leaving `label` and
+/// whatever the bundle does not name alone.
+pub fn config_join_sync(path: &Path, bundle: &sync::SyncBundle) -> Result<()> {
+    edit_config_file(path, |doc| {
+        let table = ensure_table(doc, "sync");
+        table["enabled"] = toml_edit::value(bundle.enabled);
+        table["transport"] = toml_edit::value(match bundle.transport {
+            SyncTransportKind::Dir => "dir",
+            SyncTransportKind::S3 => "s3",
+        });
+        table["retention_days"] = toml_edit::value(i64::from(bundle.retention_days));
+        table["peer_max_age_days"] = toml_edit::value(i64::from(bundle.peer_max_age_days));
+        if !bundle.providers.is_empty() {
+            let providers = ensure_subtable(table, "providers");
+            for (name, on) in &bundle.providers {
+                providers[name.as_str()] = toml_edit::value(*on);
+            }
+        }
+        if let Some(dir) = &bundle.dir {
+            ensure_subtable(table, "dir")["path"] = toml_edit::value(dir.as_str());
+        }
+        if let Some(place) = &bundle.s3 {
+            let s3 = ensure_subtable(table, "s3");
+            for (field, value) in [
+                ("endpoint", &place.endpoint),
+                ("region", &place.region),
+                ("bucket", &place.bucket),
+                ("prefix", &place.prefix),
+            ] {
+                s3[field] = toml_edit::value(value.as_str());
+            }
+        }
+    })
+}
+
 /// Take one provider in or out of sync. Only providers with a native reader can
 /// take part: a ccusage-sourced provider has no events to bucket.
 pub fn config_set_sync_provider(path: &Path, name: &str, enabled: bool) -> Result<()> {

@@ -15,6 +15,7 @@ pub enum SyncCommand {
     Init { force: bool },
     Join { key: String, force: bool },
     S3Credentials(String),
+    Export,
     Status { json: bool },
     Test,
     Forget(String),
@@ -33,6 +34,9 @@ pub fn from_args(args: &Args) -> Option<SyncCommand> {
             key: key.to_string(),
             force: args.sync_force,
         });
+    }
+    if args.sync_export {
+        return Some(SyncCommand::Export);
     }
     if let Some(from) = args.sync_s3_credentials.as_deref() {
         return Some(SyncCommand::S3Credentials(from.to_string()));
@@ -58,7 +62,8 @@ pub fn from_args(args: &Args) -> Option<SyncCommand> {
 pub fn run(command: SyncCommand, config: &TokenGaugeConfig, config_path: &Path) -> Result<()> {
     match command {
         SyncCommand::Init { force } => init(config, force),
-        SyncCommand::Join { key, force } => join(config, &key, force),
+        SyncCommand::Join { key, force } => join(config, config_path, &key, force),
+        SyncCommand::Export => export(config),
         SyncCommand::S3Credentials(from) => s3_credentials(config, &from),
         SyncCommand::Status { json } => status(config, json),
         SyncCommand::Test => test(config),
@@ -79,12 +84,26 @@ fn init(config: &TokenGaugeConfig, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn join(config: &TokenGaugeConfig, raw: &str, force: bool) -> Result<()> {
+fn join(config: &TokenGaugeConfig, config_path: &Path, raw: &str, force: bool) -> Result<()> {
     let raw = if raw.trim() == "-" {
         read_key_from_stdin()?
     } else {
         raw.to_string()
     };
+    if let Some(bundle) = tokengauge_core::sync::bundle::parse(&raw) {
+        let joined = tokengauge_core::sync::bundle::join(config, config_path, &bundle?, force)?;
+        eprintln!(
+            "Joined fleet {} (key at {}), with its transport in {}",
+            joined.key_id,
+            joined.key_path.display(),
+            config_path.display()
+        );
+        if let Some(path) = joined.credentials_path {
+            eprintln!("S3 credentials written to {}", path.display());
+        }
+        eprintln!("Check it with `tokengauge --sync-test`.");
+        return Ok(());
+    }
     let key = tokengauge_core::sync::FleetKey::parse(&raw)?;
     let path = tokengauge_core::sync::store_key(&config.cache_file, &key, force)?;
     eprintln!("Joined fleet {} (key at {})", key.id_hex(), path.display());
@@ -100,6 +119,20 @@ fn read_key_from_stdin() -> Result<String> {
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut typed)
         .context("could not read the fleet key from stdin")?;
     Ok(typed)
+}
+
+fn export(config: &TokenGaugeConfig) -> Result<()> {
+    let bundle = tokengauge_core::sync::bundle::export(config)?;
+    println!("{}", serde_json::to_string_pretty(&bundle)?);
+    eprintln!(
+        "This holds the fleet key{}: pipe it to `tokengauge --sync-join -` on the other machine rather than pasting it anywhere else.",
+        if bundle.s3_credentials.is_some() {
+            " and the S3 keys"
+        } else {
+            ""
+        }
+    );
+    Ok(())
 }
 
 fn s3_credentials(config: &TokenGaugeConfig, from: &str) -> Result<()> {

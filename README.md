@@ -329,8 +329,11 @@ paths, project names or credentials.
 
 For each hour, a print of every session's calls: how many, and a digest of
 their ids, with the session id itself reduced to a 32-bit digest. That is how
-a session moved or copied to another machine is counted once, and it says
-nothing a bucket does not already say beyond how many calls made it up.
+a session moved or copied to another machine is counted once. It tells the
+other machines what a bucket does not: how many calls each hour holds, which
+of them came from one session, how many sessions were active in that hour, and
+which hours belong to the same session. Whoever holds the folder or bucket sees
+none of it, since the object is sealed.
 
 Each limit's percent over time as this machine saw it, filed by a digest of the
 account rather than the login's name, so a machine that was off for a week

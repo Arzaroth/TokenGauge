@@ -219,7 +219,9 @@ Plaintext payload, before compression and encryption:
   (session id folded to 32 bits, call count, XOR of the calls' folded keys),
   base64 like the counted keys. Omitted when empty, so a device with none
   hashes as before and an older peer, which ignores the field, reads the
-  object as it always did. About 25 KB for a heavy month of Claude.
+  object as it always did. About 25 KB for a heavy month of Claude. Peers
+  learn from it what buckets do not say: each hour's call count, the number
+  of sessions active in it, and which hours share a session.
 - `windows` holds the device's open trails and the windows it closed within
   the wire retention, for the providers taking part, omitted when empty (so
   the content hash of a device with none is unchanged). Only logins with an

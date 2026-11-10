@@ -339,6 +339,12 @@ pub fn mark_backfilled(cache_file: &Path) {
     fs::remove_file(backfill_retry_path(cache_file)).ok();
 }
 
+/// Run the backfill again on the next fetch.
+pub fn redo_backfill(cache_file: &Path) {
+    fs::remove_file(backfill_marker_path(cache_file)).ok();
+    fs::remove_file(backfill_retry_path(cache_file)).ok();
+}
+
 /// When a backfill whose read had gaps may run again. A deep read that comes
 /// up short is not done, and must not repeat on every fetch while the gap
 /// lasts either.

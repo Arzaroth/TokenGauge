@@ -568,6 +568,29 @@ Four fleet-store rules came in with `--sync-adopt` (decision 0005,
   and keep 35 days of it. A device that writes after the instant is live and is
   not folded.
 
+A session moved between machines (t3cc `send`, decision 0009) keeps its calls'
+dedup keys, and the whole-day fold missed it: the two days differed by each
+side's other usage, so the fleet counted the moved calls twice. Rules:
+
+- **A call a peer counted first is left out where it is read, never at read
+  time.** Only the device holding the transcript knows each call's tokens, so
+  `FleetStore::left_out` drops it from that device's buckets and
+  `SyncOutcome.left_out` from what it rates; every fleet view then sums the
+  buckets with no rule of its own. A new view needs nothing, and a new path
+  that folds a read into the store has to take a `LeftOut` or it counts the
+  call again.
+- **The decision is made after the pull.** Before it, a source that dropped a
+  moved session leaves it counted nowhere for a cycle.
+- **What was left out is remembered, and handed back when its holder goes.**
+  Prints are kept as long as the buckets, and `compact` must not take them:
+  a session moved long after its calls is read only by a deep read, and with
+  the peer's prints compacted away that read counted it twice. Where they are
+  gone anyway, the deep read finds the call in `DeviceSlice.left_out`; a holder
+  that leaves the store releases its calls and reruns the backfill, and
+  `adopt` re-points the record first.
+- **Only with sync on.** Off, the report is this machine alone, and a call held
+  out for a peer it does not show is counted nowhere.
+
 Design notes in `brain/features/spend-history.md`, vocabulary in
 `brain/glossary.md`.
 

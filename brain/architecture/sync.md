@@ -118,6 +118,38 @@ maintained on every fetch whether or not sync is on (the gate is in
   (`tokengauge-backfill-retry`, `statefiles::backfill_due`), so a lasting gap
   costs one deep read an hour and the backfill completes once the tree reads
   whole.
+- **A call another device counted first is left out where it is read**
+  (decision 0009). A session moved or copied between machines (t3cc `send`)
+  keeps every call's dedup key, and only the device reading the transcript
+  knows each call's tokens, so that device is the one that drops them: its
+  buckets never hold a call a peer's buckets count, and every view adds the
+  buckets up as they are. Each slice keeps a **session print** per provider,
+  hour and session: the call count and an XOR of the folded keys
+  (`DeviceSlice.session_prints`, published as `sessionPrints` for the hours a
+  contribution carries). Prints are taken from hourly reads and kept as long
+  as the buckets: compaction leaves them, the 400-day prune takes them, so a
+  deep read of a session moved long after its calls still finds the peer's. `FleetStore::left_out` leaves a session-hour out of a read
+  when a peer holds the same print, unless this device's own record holds it
+  too and its id is the smaller: the first to publish keeps it, the smaller id
+  wins a tie. The caller drops the same calls from what it rates
+  (`SyncOutcome.left_out`), and a read with gaps records their keys as counted
+  so a retry does not add them. Day digests are taken after, so the whole-day
+  fold never drops a day twice. The slice remembers what it left out and for
+  whom (`DeviceSlice.left_out`, local, kept as long as the buckets), which
+  answers where the peer's prints are gone from the store (a wider republish
+  replaces them with only those its contribution carries), so a deep read does
+  not count them again. Only with sync on: off, the report is this machine alone.
+  A peer the record names that leaves the store (forgotten, adopted, an old
+  key) has its calls released (`release_left_out`) and the backfill runs again
+  (`statefiles::redo_backfill`), since only a deep read reaches the hours past
+  the window; `adopt` first re-points the record to the adopter for the hours
+  that move with it. Not caught: a session-hour whose two copies differ (both
+  machines carried on in the session within the hour of a `--copy`), a peer on
+  an older build (no prints), and an hour this store never received the
+  peer's print for (it joined the fleet after those calls left the wire).
+  Kimi's session is the directory under the group or
+  workspace (every agent of it shares one), Grok's the `sessionId` its turns
+  name.
 - Separate file from the snapshot on purpose: the snapshot is rewritten wholesale
   on every fetch; the store must not be.
 - **Store retention and wire retention differ.** The store keeps
@@ -159,6 +191,7 @@ Plaintext payload, before compression and encryption:
   ],
   "days": [ { "d": "2026-08-25", "n": 812, "x": "5a1e9f3c00b47d21" } ],
   "adopted": [ { "id": "dd8008fc...", "atMs": 1792512000000 } ],
+  "sessionPrints": { "claude": { "2026-08-25T14": "<12-byte records, base64>" } },
   "windows": {
     "trails": [ { "provider": "claude", "accountDigest": "3b1f...", "window": "secondary",
                   "windowMinutes": 10080, "resetsAt": "2026-11-07T08:00:00Z",
@@ -182,6 +215,13 @@ Plaintext payload, before compression and encryption:
   the instant it did, omitted
   when empty (so the content hash of a device that adopted nothing is
   unchanged). Carried on every contribution, not only the first.
+- `sessionPrints` holds, per provider and hour, one 12-byte record per session
+  (session id folded to 32 bits, call count, XOR of the calls' folded keys),
+  base64 like the counted keys. Omitted when empty, so a device with none
+  hashes as before and an older peer, which ignores the field, reads the
+  object as it always did. About 25 KB for a heavy month of Claude. Peers
+  learn from it what buckets do not say: each hour's call count, the number
+  of sessions active in it, and which hours share a session.
 - `windows` holds the device's open trails and the windows it closed within
   the wire retention, for the providers taking part, omitted when empty (so
   the content hash of a device with none is unchanged). Only logins with an
@@ -244,16 +284,19 @@ visible to whatever launches the panel.
 
 Each cycle that rebuilds costs, before `write_cache_full`:
 
-1. Bucket local events; publish only if the content hash changed, so an idle
-   machine writes nothing.
-2. Pull peers conditionally and merge them into the store, then fold every
+1. Pull peers conditionally and merge them into the store, then fold every
    device a peer's `adopted` names (`settle_adoptions`) and drop the peers
    whose object vanished (`drop_vanished`, below).
-3. Rewrite the fleet view from this machine's window history and every
+2. Rewrite the fleet view from this machine's window history and every
    peer's `windows` the store holds (`window_history::refresh_fleet_view`),
    from the store rather than from what was just pulled, so peers the store
    dropped leave the view with it.
-4. Feed the store into `build_report` as synthetic events beside local ones.
+3. Bucket local events, leaving out what a peer counted first (above). After
+   the pull, so a source that dropped a moved session hands it back in the
+   same cycle rather than one later.
+4. Publish only if the content hash changed, so an idle machine writes
+   nothing. A listing that lacked our own object puts it back here.
+5. Feed the store into `build_report` as synthetic events beside local ones.
 
 The merged `CostInfo` lands in the snapshot where the local one did, so every
 frontend shows the fleet number with no frontend code, and the revision file
@@ -321,10 +364,13 @@ retention:
 
 ## Hazards
 
-1. **A shared transcript tree double-counts.** Identical per-day `n` and digest
-   on two devices mean the same event set: the day is kept from the device with
-   the smaller id and `--doctor` names the pair. Partial overlap is undetectable
-   this cheaply and unsupported. Escape hatch: `[sync.providers] claude = false`.
+1. **A shared transcript tree or a moved session reads one call twice.**
+   Between two current builds, session prints leave each shared session-hour
+   out on all but one device (above), which covers a partial overlap too.
+   Against an older peer, identical per-day `n` and digest on two devices mean
+   the same event set: the day is kept from the device with the smaller id and
+   `--doctor` names the pair, and a partial overlap is not caught. Escape
+   hatch: `[sync.providers] claude = false`.
 2. **Clock skew is a non-issue**: buckets come from transcript timestamps and no
    merge orders by time.
 3. **A peer model with no local price** counts tokens and no money.
@@ -391,13 +437,20 @@ Events -> buckets -> synthetic events -> report equals the direct report; one
 bucket set read at +02:00 and -07:00 lands in the expected local days; overlap
 detection fires on identical day digests; a tampered envelope byte fails and a
 foreign `key_id` is skipped by name; SigV4 matches AWS's vectors; merge tests run
-against a fake transport (`crates/tokengauge-core/tests/fleet_sync.rs`).
+against a fake transport (`crates/tokengauge-core/tests/fleet_sync.rs`). A call
+counted on one device and read on another counts once in the report, the split,
+both exports and the day rows; a tie stays with the smaller id; a session the
+source dropped comes back; a copy both sides carried on counts each call once;
+an older peer changes nothing; a peer leaving hands its calls back; a deep read
+past the printed hours leaves them out again; an adoption moves the record
+(`sync::fleet::tests`, and
+`a_session_moved_from_a_peer_counts_once_on_the_first_refresh`).
 
 ## Sources
 
-- `crates/tokengauge-core/src/sync/{mod,contribution,fleet,hour,crypto,transport,s3,run,report,store,config}.rs` (`adopt`, `settle_adoptions`, `drop_vanished`, `store::lock`, `merge_local`, `KeySet`)
+- `crates/tokengauge-core/src/sync/{mod,contribution,fleet,hour,crypto,transport,s3,run,report,store,config}.rs` (`adopt`, `settle_adoptions`, `drop_vanished`, `store::lock`, `merge_local`, `KeySet`, `left_out`, `release_left_out`, `LeftOut`, `session_prints`, `PrintSet`)
 - `crates/tokengauge-core/src/window_history.rs` (`SharedWindows`, `WindowHistory::fold`, `record`, `refresh_fleet_view`)
 - `crates/tokengauge-core/src/fetch.rs` (`native_costs`), `crates/tokengauge-core/src/cost/mod.rs` (`window_start`, `dedup_key`, `read_checked`, `TranscriptRead`)
-- `crates/tokengauge-core/src/device.rs`, `crates/tokengauge-core/src/doctor.rs`
+- `crates/tokengauge-core/src/device.rs`, `crates/tokengauge-core/src/doctor.rs`, `crates/tokengauge-core/src/statefiles.rs` (`redo_backfill`)
 - `crates/tokengauge-waybar/src/sync_cli.rs`, `crates/tokengauge-tui/src/sync_view.rs`
 - `crates/tokengauge-core/tests/fleet_sync.rs`

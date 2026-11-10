@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use super::contribution::{Contribution, DeviceRecord, content_hash};
-use super::fleet::{Adoption, FleetStore, ObjectState, STORE_RETENTION_DAYS};
+use super::fleet::{Adoption, FleetStore, LeftOut, ObjectState, STORE_RETENTION_DAYS};
 use super::hour::Hour;
 use super::report::{DeviceStatus, OverlapNote, SkippedObject, SyncStatus};
 use super::{SCHEMA_VERSION, crypto, store, transport};
@@ -26,6 +26,9 @@ pub struct SyncOutcome {
     /// could not be read. `events` carries this device's stored record for
     /// them, and the caller drops its own read of them.
     pub held: Vec<&'static str>,
+    /// The calls of the caller's read that another device counted first,
+    /// which the caller drops before it rates the rest.
+    pub left_out: LeftOut,
 }
 
 /// Keep the durable store current, and - when sync is on - run a cycle and
@@ -65,14 +68,48 @@ pub fn refresh(
     let _lock = store::lock(&config.cache_file, || {}).ok();
     let (mut store, store_error) = store::load(&config.cache_file);
     status.error = store_error;
+
+    // Peers first: whether a call of this read is another device's is
+    // decided against what they published, and a source that has since
+    // dropped a moved session must not keep it out of this read for a cycle.
+    let mut fleet = None;
+    if config.sync.enabled {
+        // A store that would not parse is the more serious of the two, so it
+        // keeps the slot if it already claimed it.
+        match open_fleet(config, &device, &mut store, &mut status) {
+            Ok(opened) => {
+                if let Err(e) = pull(config, &device, &mut store, now, &mut status, &opened) {
+                    status.error.get_or_insert(format!("{e:#}"));
+                }
+                fleet = Some(opened);
+            }
+            Err(e) => {
+                status.error.get_or_insert(format!("{e:#}"));
+            }
+        }
+    }
+    let left_out = leave_out(config, &mut store, &device.id, local_events, now);
+
     let held = match gaps_error(gaps) {
         None => {
-            store.upsert_local(&device, from, local_events, now.timestamp_millis());
+            store.upsert_local_leaving(
+                &device,
+                from,
+                local_events,
+                &left_out,
+                now.timestamp_millis(),
+            );
             Vec::new()
         }
         Some(e) => {
             status.error.get_or_insert(e);
-            store.merge_local(&device, from, local_events, now.timestamp_millis());
+            store.merge_local_leaving(
+                &device,
+                from,
+                local_events,
+                &left_out,
+                now.timestamp_millis(),
+            );
             store.local_providers(&device.id)
         }
     };
@@ -80,11 +117,9 @@ pub fn refresh(
     // the record stands in for this device.
     let read: &[UsageEvent] = if held.is_empty() { local_events } else { &[] };
 
-    if config.sync.enabled
-        && let Err(e) = cycle(config, &device, &mut store, now, &mut status)
+    if let Some(fleet) = &fleet
+        && let Err(e) = publish(config, &device, &mut store, now, &mut status, fleet)
     {
-        // A store that would not parse is the more serious of the two, so it
-        // keeps the slot if it already claimed it.
         status.error.get_or_insert(format!("{e:#}"));
     }
 
@@ -100,6 +135,7 @@ pub fn refresh(
             status,
             store,
             held,
+            left_out,
         };
     }
 
@@ -127,7 +163,32 @@ pub fn refresh(
         status,
         store,
         held,
+        left_out,
     }
+}
+
+/// What a read leaves out for the peers that counted it first. Nothing with
+/// sync off: the report then counts this machine alone, and a call held out
+/// for a peer it does not show would be counted nowhere.
+///
+/// A peer this device left calls out for that the store no longer holds -
+/// forgotten, adopted, or of an old fleet key - takes them back, and the ones
+/// older than the read window only a deep read reaches, so the backfill runs
+/// again.
+fn leave_out(
+    config: &TokenGaugeConfig,
+    store: &mut FleetStore,
+    local_id: &str,
+    events: &[UsageEvent],
+    now: DateTime<Utc>,
+) -> LeftOut {
+    if !config.sync.enabled {
+        return LeftOut::default();
+    }
+    if store.release_left_out(local_id) {
+        crate::statefiles::redo_backfill(&config.cache_file);
+    }
+    store.left_out(local_id, events, now)
 }
 
 /// This machine's device id, for attributing the local row.
@@ -170,9 +231,16 @@ pub fn backfill(config: &TokenGaugeConfig, today: NaiveDate) -> BackfillOutcome 
     // marker stays off so the backfill runs again whole - an hour on, not on
     // the next fetch, so a gap that lasts costs one deep read an hour.
     let gap = gaps_error(&gaps);
+    let left_out = leave_out(config, &mut store, &device.id, &events, now);
     match &gap {
-        None => store.backfill_local(&device, window_hour(since), &events, now),
-        Some(_) => store.merge_local(&device, window_hour(since), &events, now.timestamp_millis()),
+        None => store.backfill_local_leaving(&device, window_hour(since), &events, &left_out, now),
+        Some(_) => store.merge_local_leaving(
+            &device,
+            window_hour(since),
+            &events,
+            &left_out,
+            now.timestamp_millis(),
+        ),
     }
     store.compact(now, i64::from(config.sync.retention_days));
     store.prune(now);
@@ -210,13 +278,19 @@ fn gaps_error(gaps: &[PathBuf]) -> Option<String> {
     ))
 }
 
-fn cycle(
+/// The key, the transport and our object's name, for one cycle.
+struct Fleet {
+    key: crypto::FleetKey,
+    transport: Box<dyn transport::Transport>,
+    own_name: String,
+}
+
+fn open_fleet(
     config: &TokenGaugeConfig,
     device: &DeviceRecord,
     store: &mut FleetStore,
-    now: DateTime<Utc>,
     status: &mut SyncStatus,
-) -> Result<()> {
+) -> Result<Fleet> {
     let key = crypto::load_key(&config.cache_file)?.context(
         "no fleet key on this machine; run `--sync-init` here, or `--sync-join <key>` to join an existing fleet",
     )?;
@@ -236,9 +310,29 @@ fn cycle(
         let _ = transport.delete(&previous);
     }
 
-    let providers = syncing_providers(config);
     let own_name = key.object_name(&device.id);
+    Ok(Fleet {
+        key,
+        transport,
+        own_name,
+    })
+}
 
+fn publish(
+    config: &TokenGaugeConfig,
+    device: &DeviceRecord,
+    store: &mut FleetStore,
+    now: DateTime<Utc>,
+    status: &mut SyncStatus,
+    fleet: &Fleet,
+) -> Result<()> {
+    let Fleet {
+        key,
+        transport,
+        own_name,
+    } = fleet;
+    let own_name = own_name.as_str();
+    let providers = syncing_providers(config);
     let history_path = crate::window_history::history_path(&config.cache_file);
     if let Some(mut contribution) = store.contribution(
         &device.id,
@@ -250,18 +344,34 @@ fn cycle(
             let since = now - chrono::Duration::days(i64::from(config.sync.retention_days).max(1));
             contribution.windows = SharedWindows::of(&history, &providers, since);
         }
-        let hash = publish_stamp(&contribution, &transport.describe(), &own_name);
+        let hash = publish_stamp(&contribution, &transport.describe(), own_name);
         if store.published_hash != Some(hash) {
             let body =
                 serde_json::to_vec(&contribution).context("could not serialise a contribution")?;
-            transport.put(&own_name, &key.seal(&own_name, &body)?)?;
+            transport.put(own_name, &key.seal(own_name, &body)?)?;
             store.published_hash = Some(hash);
-            store.published_name = Some(own_name.clone());
+            store.published_name = Some(own_name.to_string());
             store.last_publish_ms = Some(now.timestamp_millis());
             status.published = true;
         }
     }
+    Ok(())
+}
 
+fn pull(
+    config: &TokenGaugeConfig,
+    device: &DeviceRecord,
+    store: &mut FleetStore,
+    now: DateTime<Utc>,
+    status: &mut SyncStatus,
+    fleet: &Fleet,
+) -> Result<()> {
+    let Fleet {
+        key,
+        transport,
+        own_name,
+    } = fleet;
+    let own_name = own_name.as_str();
     let same_target = store.list_target(&transport.describe());
     let entries = transport.list()?;
     let listed: BTreeSet<String> = entries.iter().map(|entry| entry.name.clone()).collect();
@@ -298,7 +408,7 @@ fn cycle(
             continue;
         };
 
-        let reason = match read_peer(&key, &store.retired_key_ids, &entry.name, &sealed) {
+        let reason = match read_peer(key, &store.retired_key_ids, &entry.name, &sealed) {
             PeerOutcome::Absorbed(contribution) => {
                 store.absorb(&contribution);
                 None
@@ -322,12 +432,12 @@ fn cycle(
     }
 
     store.settle_adoptions(&device.id);
-    delete_adopted_leftovers(store, &device.id, &listed, &key, transport.as_ref());
+    delete_adopted_leftovers(store, &device.id, &listed, key, transport.as_ref());
     // A listing without this machine's own object is not one to delete peers
     // on the strength of: whatever hid ours may have hidden theirs. Ours is
     // put back on the next cycle, or peers would drop this machine while it
     // idles with nothing new to publish.
-    let own_listed = listed.contains(&own_name);
+    let own_listed = listed.contains(own_name);
     if !own_listed {
         store.published_hash = None;
     }
@@ -688,6 +798,7 @@ mod tests {
             days: Vec::new(),
             adopted: Vec::new(),
             windows: Default::default(),
+            session_prints: Default::default(),
         }
     }
 

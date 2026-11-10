@@ -133,6 +133,14 @@ commits; the **Avoid** list names the synonyms that blur it.
   contributions are its inputs. Kept whether or not sync is on: with sync off the
   fleet is just this machine, and the store is what history is read from.
   Avoid: peer cache, merge cache.
+- **Session print** - one session's calls within one provider-hour, as a call
+  count and an XOR of their folded dedup keys. Published, so a device reading a
+  session another one counted can tell. See
+  [architecture/sync.md](architecture/sync.md#the-fleet-store-is-the-durable-record).
+  Avoid: fingerprint (that is the day digest), session digest.
+- **Left out** - a call this device read and does not count, because a peer
+  counted it first (decision 0009). Avoid: deduped, skipped, dropped (a dropped
+  day is the whole-day fold's).
 - **Sync key** - the symmetric secret shared by every device in a fleet.
   Possession of it is membership. Avoid: token, password, secret.
 - **Envelope** - the sealed contribution format, `TGSYNC1` header plus

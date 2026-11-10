@@ -19,7 +19,7 @@ use chrono::{Local, NaiveDate, TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{TokenCounts, UsageEvent, dedup_key, jsonl_files};
+use super::{Firsts, TokenCounts, UsageEvent, dedup_key, first_seen, jsonl_files};
 use crate::model_to_provider;
 
 #[derive(Debug, Default, Deserialize)]
@@ -140,6 +140,7 @@ pub fn read_events(
     roots: &[PathBuf],
     since: NaiveDate,
     seen: &mut HashSet<u64>,
+    firsts: &mut Firsts,
     gaps: &mut Vec<PathBuf>,
 ) -> Vec<UsageEvent> {
     let mut events = Vec::new();
@@ -148,7 +149,7 @@ pub fn read_events(
             if file.file_name().and_then(|n| n.to_str()) != Some("updates.jsonl") {
                 continue;
             }
-            if !read_file(&file, since, seen, &mut events) {
+            if !read_file(&file, since, seen, firsts, &mut events) {
                 gaps.push(file.clone());
             }
         }
@@ -175,6 +176,7 @@ fn read_file(
     path: &Path,
     since: NaiveDate,
     seen: &mut HashSet<u64>,
+    firsts: &mut Firsts,
     events: &mut Vec<UsageEvent>,
 ) -> bool {
     let Ok(raw) = std::fs::read_to_string(path) else {
@@ -225,16 +227,17 @@ fn read_file(
         let Some(at) = at else {
             continue;
         };
-        let date = at.with_timezone(&Local).date_naive();
-        if date < since {
-            continue;
-        }
-
         let session = params
             .session_id
             .clone()
             .or_else(|| summary_session.clone())
             .unwrap_or_else(|| dir_session.to_string());
+        first_seen(firsts, &session, at);
+        let date = at.with_timezone(&Local).date_naive();
+        if date < since {
+            continue;
+        }
+
         let event_id = params
             .meta
             .as_ref()
@@ -277,7 +280,7 @@ fn read_file(
                 key: Some(key),
                 one_request: false,
                 service_tier: Default::default(),
-                session: None,
+                session: Some(session.clone()),
                 starts_session: false,
                 login: None,
                 source: crate::cost::Source::Cli,
@@ -349,6 +352,7 @@ mod tests {
             &[root.join("sessions")],
             day(2020, 1, 1),
             &mut seen,
+            &mut Default::default(),
             &mut Vec::new(),
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -381,6 +385,20 @@ mod tests {
 
     /// The cached read is part of the input count, not an extra bucket beside
     /// it. Counting it twice bills the cached part at the uncached rate.
+    /// The session the turn names is the event's, so a moved session is
+    /// recognised by it.
+    #[test]
+    fn a_turn_carries_the_session_it_names() {
+        let events = read_session(
+            &format!(
+                "{}\n",
+                turn(r#"{"modelUsage":{"grok-4":{"inputTokens":10,"outputTokens":5}}}"#)
+            ),
+            None,
+        );
+        assert_eq!(events[0].session.as_deref(), Some("s1"));
+    }
+
     #[test]
     fn a_cached_read_is_taken_out_of_the_input_count() {
         let events = read_session(

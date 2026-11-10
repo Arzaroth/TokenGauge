@@ -477,6 +477,7 @@ fn native_costs(
         gaps,
     } = cost::read_window(today, config.credentials.store_root());
     let outcome = sync::refresh(config, &events, since, &gaps);
+    outcome.left_out.drop_from(&mut events);
     events.retain(|event| !outcome.held.contains(&event.provider));
     events.extend(outcome.events);
 

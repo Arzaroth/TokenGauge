@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use chrono::{Local, NaiveDate, TimeZone, Utc};
 use serde::Deserialize;
 
-use super::{TokenCounts, UsageEvent, dedup_key, jsonl_files};
+use super::{Firsts, TokenCounts, UsageEvent, dedup_key, first_seen, jsonl_files};
 use crate::model_to_provider;
 
 /// What the subscription reports when no model was pinned. It is the plan, not
@@ -128,6 +128,14 @@ fn is_wire_file(root: &Path, path: &Path) -> bool {
     matches!(relative.components().count(), 3 | 5)
 }
 
+/// The session a wire file belongs to: the directory under the group or
+/// workspace, which every agent of a session shares.
+fn session_id(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    let name = relative.components().nth(1)?.as_os_str().to_str()?;
+    Some(name.to_string())
+}
+
 /// The session root holding `config.json`, walked back up from a wire file.
 fn session_root(root: &Path, path: &Path) -> Option<PathBuf> {
     let relative = path.strip_prefix(root).ok()?;
@@ -154,6 +162,7 @@ pub fn read_events(
     roots: &[PathBuf],
     since: NaiveDate,
     seen: &mut HashSet<u64>,
+    firsts: &mut Firsts,
     gaps: &mut Vec<PathBuf>,
 ) -> Vec<UsageEvent> {
     let mut events = Vec::new();
@@ -162,7 +171,7 @@ pub fn read_events(
             if !is_wire_file(root, &file) {
                 continue;
             }
-            if !read_file(root, &file, since, seen, &mut events) {
+            if !read_file(root, &file, since, seen, firsts, &mut events) {
                 gaps.push(file.clone());
             }
         }
@@ -175,11 +184,13 @@ fn read_file(
     path: &Path,
     since: NaiveDate,
     seen: &mut HashSet<u64>,
+    firsts: &mut Firsts,
     events: &mut Vec<UsageEvent>,
 ) -> bool {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return false;
     };
+    let run = session_id(root, path);
     let session = path
         .parent()
         .and_then(|p| p.file_name())
@@ -277,6 +288,9 @@ fn read_file(
         if tokens.total() == 0 {
             continue;
         }
+        if let Some(run) = &run {
+            first_seen(firsts, run, at);
+        }
         let date = at.with_timezone(&Local).date_naive();
         if date < since {
             continue;
@@ -309,7 +323,7 @@ fn read_file(
             key: Some(key),
             one_request: false,
             service_tier: Default::default(),
-            session: None,
+            session: run.clone(),
             starts_session: false,
             login: None,
             source: crate::cost::Source::Cli,
@@ -345,6 +359,7 @@ mod tests {
             &[home.join("sessions")],
             day(2020, 1, 1),
             &mut seen,
+            &mut Default::default(),
             &mut Vec::new(),
         );
         let _ = std::fs::remove_dir_all(home);
@@ -393,6 +408,25 @@ mod tests {
         let events = read(&tmp);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].tokens.total(), 30);
+    }
+
+    /// Every agent of a session is the session's, so a moved session is
+    /// recognised by the directory it was written under.
+    #[test]
+    fn every_agent_of_a_session_names_the_session() {
+        let tmp = home();
+        let sessions = tmp.join("sessions");
+        let record = r#"{"type":"usage.record","usageScope":"turn","model":"kimi-k2.6","time":1756000000000,"usage":{"inputOther":10,"output":20}}
+"#;
+        wire(&sessions, "ws/sess-1/agents/main/wire.jsonl", record);
+        wire(&sessions, "ws/sess-1/agents/helper/wire.jsonl", record);
+        wire(&sessions, "group/sess-2/wire.jsonl", record);
+        let mut named: Vec<_> = read(&tmp)
+            .into_iter()
+            .map(|e| e.session.expect("a session"))
+            .collect();
+        named.sort();
+        assert_eq!(named, ["sess-1", "sess-1", "sess-2"]);
     }
 
     /// The older shape names no model on the record; `config.json` at the tree

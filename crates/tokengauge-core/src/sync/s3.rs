@@ -9,6 +9,7 @@
 //! path-style addressing, which all of them accept.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -47,7 +48,7 @@ impl std::fmt::Debug for S3Transport {
 }
 
 impl S3Transport {
-    pub fn new(config: &SyncS3Config, timeout: Duration) -> Result<Self> {
+    pub fn new(config: &SyncS3Config, _cache_file: &Path, timeout: Duration) -> Result<Self> {
         let env = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
         let access_key_id = pick(&config.access_key_id, env("AWS_ACCESS_KEY_ID"))
             .context("no S3 access key; set [sync.s3] access_key_id or AWS_ACCESS_KEY_ID")?;
@@ -573,7 +574,12 @@ mod tests {
             secret_access_key: "shhh".into(),
             unknown: Default::default(),
         };
-        let transport = S3Transport::new(&configured, Duration::from_secs(5)).expect("build");
+        let transport = S3Transport::new(
+            &configured,
+            Path::new("/nonexistent/cache.json"),
+            Duration::from_secs(5),
+        )
+        .expect("build");
 
         assert_eq!(transport.access_key_id, "from-config");
         assert_eq!(transport.key_for("x.tgsync"), "fleet/v1/x.tgsync");
@@ -595,11 +601,21 @@ mod tests {
             secret_access_key: "s".into(),
             ..Default::default()
         };
-        let error = S3Transport::new(&config, Duration::from_secs(5)).unwrap_err();
+        let error = S3Transport::new(
+            &config,
+            Path::new("/nonexistent/cache.json"),
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
         assert!(format!("{error}").contains("endpoint"), "{error}");
 
         config.endpoint = "https://example.com".into();
-        let error = S3Transport::new(&config, Duration::from_secs(5)).unwrap_err();
+        let error = S3Transport::new(
+            &config,
+            Path::new("/nonexistent/cache.json"),
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
         assert!(format!("{error}").contains("bucket"), "{error}");
     }
 }

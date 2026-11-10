@@ -129,8 +129,10 @@ Each `payloads[]` entry gains:
 - `usage.bankedResets` - on a Claude payload holding a usable banked reset:
   `available` (how many), `expiresAt` (the soonest grant's expiry, RFC 3339
   as Anthropic wrote it, or null) and `kinds`, the same count split by what a
-  reset clears: `[{kind, count, expiresAt}]`, `kind` one of `session`,
-  `weekly`, `full`, `fable`, absent when the provider does not say (Codex).
+  reset clears: `[{kind, count, expiresAt, clears}]`, `kind` one of `session`,
+  `weekly`, `full`, `fable`, `clears` the window keys its grants reset
+  (omitted when none are named), the whole list absent when the provider does
+  not say (Codex).
   Absent otherwise
   ([../features/banked-resets.md](../features/banked-resets.md)).
 - `usage.<window>.burn` - on each window with a reset and a duration (the

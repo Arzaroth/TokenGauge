@@ -27,7 +27,11 @@ or remuda's page's.
   limit, and hands this week's Fable use back to the weekly limit.
 - Usable grants land on the payload as `usage.bankedResets: {available,
   expiresAt, kinds}`, omitted when there are none. `kinds` is
-  `[{kind, count, expiresAt}]` in the order the grants came, one entry per kind. remuda reads it
+  `[{kind, count, expiresAt, clears}]` in the order the grants came, one entry
+  per kind, `clears` the union of its grants' `clears`. A Fable reset lists
+  `five_hour` beside `seven_day_overage_included` on an account with a 5-hour
+  window (a Team Premium seat) and not on one without (a Max Ultra), so the
+  kind is the same and what it clears is the account's. remuda reads it
   ([../architecture/credentials.md](../architecture/credentials.md)).
 - Codex's reset credits are the same thing under another name:
   `wham/usage` carries `rate_limit_reset_credits: {available_count,

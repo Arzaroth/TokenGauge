@@ -683,6 +683,58 @@ mod tests {
     }
 
     #[test]
+    fn stored_credentials_are_private_and_come_after_the_config() {
+        let dir = std::env::temp_dir().join(format!(
+            "tg-s3-credentials-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("temp dir");
+        let cache = dir.join("cache.json");
+        let path = store_credentials(
+            &cache,
+            &S3Credentials {
+                access_key_id: "from-file".into(),
+                secret_access_key: "file-secret".into(),
+            },
+        )
+        .expect("store");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).expect("stat").permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        let unset = SyncS3Config::default();
+        assert_eq!(
+            resolve_credentials(&unset, &cache).expect("resolve"),
+            (Some("from-file".into()), Some("file-secret".into()))
+        );
+        let configured = SyncS3Config {
+            access_key_id: "from-config".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_credentials(&configured, &cache).expect("resolve"),
+            (Some("from-config".into()), Some("file-secret".into()))
+        );
+        assert_eq!(
+            format!("{:?}", load_credentials(&cache).expect("read")),
+            "Some(S3Credentials(<redacted>))"
+        );
+
+        let blank = S3Credentials {
+            access_key_id: "k".into(),
+            secret_access_key: " ".into(),
+        };
+        assert!(store_credentials(&cache, &blank).is_err());
+        fs::write(&path, "not json").expect("write");
+        assert!(load_credentials(&cache).is_err());
+    }
+
+    #[test]
     fn an_endpoint_or_bucket_that_is_missing_says_which() {
         let mut config = SyncS3Config {
             access_key_id: "k".into(),

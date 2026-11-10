@@ -725,8 +725,9 @@ mod tests {
         assert!(shown.contains("Endpoint"), "{shown}");
         assert!(
             shown.contains("AWS_ACCESS_KEY_ID"),
-            "credentials belong in the environment, and the screen should say so"
+            "the environment still works, and the screen should say so"
         );
+        assert!(shown.contains("--sync-s3-credentials -"), "{shown}");
         assert!(shown.contains("1-4 bucket"), "{shown}");
 
         assert!(press(&mut view, '2'));

@@ -37,4 +37,8 @@ pub use run::{
     BackfillOutcome, SyncOutcome, adopt, backfill, forget, local_device_id, refresh,
     test_round_trip,
 };
+pub use s3::{
+    S3Credentials, credentials_path as s3_credentials_path,
+    load_credentials as load_s3_credentials, store_credentials as store_s3_credentials,
+};
 pub use transport::{PeerEntry, Transport};

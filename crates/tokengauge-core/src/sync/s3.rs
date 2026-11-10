@@ -9,11 +9,13 @@
 //! path-style addressing, which all of them accept.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use hmac::{Hmac, Mac};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::transport::{PeerEntry, Transport, is_object_name};
@@ -21,6 +23,84 @@ use crate::SyncS3Config;
 
 const SERVICE: &str = "s3";
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+/// The keys an S3 transport signs with, kept in a private file beside the fleet
+/// key rather than in every process's environment, where they would also take
+/// the names every other S3 client on the machine reads.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct S3Credentials {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+}
+
+impl std::fmt::Debug for S3Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("S3Credentials(<redacted>)")
+    }
+}
+
+pub fn credentials_path(cache_file: &Path) -> PathBuf {
+    cache_file
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("tokengauge-s3-credentials")
+}
+
+pub fn load_credentials(cache_file: &Path) -> Result<Option<S3Credentials>> {
+    let path = credentials_path(cache_file);
+    match fs::read_to_string(&path) {
+        Ok(text) => Ok(Some(serde_json::from_str(&text).with_context(|| {
+            format!("{} does not hold S3 credentials", path.display())
+        })?)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("could not read {}", path.display())),
+    }
+}
+
+/// Written 0600 from the start, like the fleet key.
+pub fn store_credentials(cache_file: &Path, credentials: &S3Credentials) -> Result<PathBuf> {
+    if credentials.access_key_id.trim().is_empty()
+        || credentials.secret_access_key.trim().is_empty()
+    {
+        bail!("S3 credentials need both an access key id and a secret access key");
+    }
+    let path = credentials_path(cache_file);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    super::crypto::write_private(&tmp, serde_json::to_string(credentials)?.as_bytes())
+        .with_context(|| format!("could not write {}", tmp.display()))?;
+    fs::rename(&tmp, &path).with_context(|| format!("could not write {}", path.display()))?;
+    Ok(path)
+}
+
+/// The credentials a transport would sign with: `[sync.s3]`, then the file
+/// beside the fleet key, then `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`,
+/// each field on its own.
+pub fn resolve_credentials(
+    config: &SyncS3Config,
+    cache_file: &Path,
+) -> Result<(Option<String>, Option<String>)> {
+    let env = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
+    let stored = load_credentials(cache_file)?;
+    let from_file = |field: fn(&S3Credentials) -> &str| {
+        stored
+            .as_ref()
+            .map(|c| field(c).trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    Ok((
+        pick(
+            &config.access_key_id,
+            from_file(|c| &c.access_key_id).or_else(|| env("AWS_ACCESS_KEY_ID")),
+        ),
+        pick(
+            &config.secret_access_key,
+            from_file(|c| &c.secret_access_key).or_else(|| env("AWS_SECRET_ACCESS_KEY")),
+        ),
+    ))
+}
 
 pub struct S3Transport {
     endpoint: String,
@@ -48,14 +128,22 @@ impl std::fmt::Debug for S3Transport {
 }
 
 impl S3Transport {
-    pub fn new(config: &SyncS3Config, _cache_file: &Path, timeout: Duration) -> Result<Self> {
+    pub fn new(config: &SyncS3Config, cache_file: &Path, timeout: Duration) -> Result<Self> {
         let env = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
-        let access_key_id = pick(&config.access_key_id, env("AWS_ACCESS_KEY_ID"))
-            .context("no S3 access key; set [sync.s3] access_key_id or AWS_ACCESS_KEY_ID")?;
-        let secret_access_key = pick(&config.secret_access_key, env("AWS_SECRET_ACCESS_KEY"))
-            .context(
-                "no S3 secret key; set [sync.s3] secret_access_key or AWS_SECRET_ACCESS_KEY",
-            )?;
+        let file = credentials_path(cache_file);
+        let (access_key_id, secret_access_key) = resolve_credentials(config, cache_file)?;
+        let access_key_id = access_key_id.with_context(|| {
+            format!(
+                "no S3 access key; put it in {} (`--sync-s3-credentials -`), [sync.s3] access_key_id or AWS_ACCESS_KEY_ID",
+                file.display()
+            )
+        })?;
+        let secret_access_key = secret_access_key.with_context(|| {
+            format!(
+                "no S3 secret key; put it in {} (`--sync-s3-credentials -`), [sync.s3] secret_access_key or AWS_SECRET_ACCESS_KEY",
+                file.display()
+            )
+        })?;
         if config.endpoint.trim().is_empty() {
             bail!("[sync.s3] endpoint is not set");
         }

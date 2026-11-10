@@ -70,8 +70,9 @@ pub struct SyncS3Config {
     pub region: String,
     pub bucket: String,
     pub prefix: String,
-    /// Credentials belong in the environment; these exist for a machine where
-    /// that is awkward. They are never written into the snapshot or logged.
+    /// Credentials belong in `tokengauge-s3-credentials` beside the fleet key;
+    /// these win over it when set. They are never written into the snapshot or
+    /// logged.
     pub access_key_id: String,
     pub secret_access_key: String,
     /// See [`SyncConfig::unknown`].
@@ -171,13 +172,14 @@ pub fn config_set_sync_dir(path: &Path, dir: &str) -> Result<()> {
 
 /// Set one `[sync.s3]` field.
 ///
-/// Credentials are deliberately not settable here: they belong in the
-/// environment, not written into a config file by a setup screen.
+/// Credentials are deliberately not settable here: they belong in their own
+/// private file (`--sync-s3-credentials -`), not in a config file a setup
+/// screen writes.
 pub fn config_set_sync_s3(path: &Path, field: &str, value: &str) -> Result<()> {
     const FIELDS: &[&str] = &["endpoint", "region", "bucket", "prefix"];
     if !FIELDS.contains(&field) {
         return Err(anyhow!(
-            "'{field}' is not a settable S3 field ({}); credentials come from AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY",
+            "'{field}' is not a settable S3 field ({}); store credentials with `--sync-s3-credentials -`, or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY",
             FIELDS.join(", ")
         ));
     }

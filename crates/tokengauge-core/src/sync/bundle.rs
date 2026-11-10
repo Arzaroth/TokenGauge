@@ -176,7 +176,7 @@ mod tests {
     fn machine(dir: &Path, sync: &str) -> (TokenGaugeConfig, PathBuf) {
         let path = dir.join("config.toml");
         let text = format!(
-            "cache_file = \"{}\"\n{sync}",
+            "cache_file = '{}'\n{sync}",
             dir.join("cache.json").display()
         );
         std::fs::write(&path, &text).expect("write config");

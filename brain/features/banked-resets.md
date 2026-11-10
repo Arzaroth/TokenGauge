@@ -28,7 +28,8 @@ or remuda's page's.
 - Usable grants land on the payload as `usage.bankedResets: {available,
   expiresAt, kinds}`, omitted when there are none. `kinds` is
   `[{kind, count, expiresAt, clears}]` in the order the grants came, one entry
-  per kind, `clears` the union of its grants' `clears`. A Fable reset lists
+  per kind, `clears` the windows every one of its grants clears (the
+  intersection, since the provider picks which grant a spend uses). A Fable reset lists
   `five_hour` beside `seven_day_overage_included` on an account with a 5-hour
   window (a Team Premium seat) and not on one without (a Max Ultra), so the
   kind is the same and what it clears is the account's. remuda reads it

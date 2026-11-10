@@ -27,8 +27,9 @@ use serde_json::{Map, Value};
 use crate::credentials::{LiveLogin, LoginTokens};
 use crate::provider::check_status;
 use crate::{
-    BankedResets, CredentialState, CreditLimit, CreditLimitKind, CreditUnit, Credits,
-    ExtraRateWindow, ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8, slug,
+    BankedKind, BankedResets, CredentialState, CreditLimit, CreditLimitKind, CreditUnit, Credits,
+    ExtraRateWindow, ProviderPayload, ResetKind, UsageSnapshot, UsageWindow, http_client, pct_u8,
+    slug,
 };
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
@@ -494,6 +495,44 @@ struct Grant {
     usable_now: Option<bool>,
     use_requires_limit: Option<bool>,
     ends_at: Option<String>,
+    #[serde(default, deserialize_with = "crate::provider::null_as_default")]
+    clears: Vec<String>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    gives_back_weekly: Option<bool>,
+}
+
+impl Grant {
+    /// Claude Code's rule, in its order: a grant giving Fable's use back is a
+    /// Fable reset whatever its `type` says (the launch one says `full`).
+    fn kind(&self) -> ResetKind {
+        if self.gives_back_weekly == Some(true) {
+            return ResetKind::Fable;
+        }
+        match self.kind.as_deref() {
+            Some("session") => return ResetKind::Session,
+            Some("weekly") => return ResetKind::Weekly,
+            Some("full") => return ResetKind::Full,
+            _ => {}
+        }
+        let session = self.clears.iter().any(|c| c == "five_hour");
+        let other = self.clears.iter().any(|c| c != "five_hour");
+        match (session, other) {
+            (true, false) => ResetKind::Session,
+            (false, true) => ResetKind::Weekly,
+            _ => ResetKind::Full,
+        }
+    }
+
+    fn left(&self) -> u32 {
+        self.resets_left.unwrap_or(0.0) as u32
+    }
+}
+
+fn soonest<'a>(ends: impl Iterator<Item = Option<&'a str>>) -> Option<String> {
+    ends.filter_map(|at| Some((DateTime::parse_from_rfc3339(at?).ok()?, at?)))
+        .min_by_key(|(t, _)| *t)
+        .map(|(_, at)| at.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -523,20 +562,29 @@ fn banked_resets(rest: &Map<String, Value>) -> Option<BankedResets> {
     if usable.is_empty() {
         return None;
     }
-    let expires_at = usable
-        .iter()
-        .filter_map(|g| {
-            let at = g.ends_at.as_deref()?;
-            Some((DateTime::parse_from_rfc3339(at).ok()?, at))
-        })
-        .min_by_key(|(t, _)| *t)
-        .map(|(_, at)| at.to_string());
+    let mut kinds: Vec<BankedKind> = Vec::new();
+    for g in &usable {
+        let kind = g.kind();
+        if kinds.iter().any(|k| k.kind == kind) {
+            continue;
+        }
+        let same: Vec<&&Grant> = usable.iter().filter(|o| o.kind() == kind).collect();
+        kinds.push(BankedKind {
+            kind,
+            count: same
+                .iter()
+                .map(|g| g.left())
+                .fold(0u32, u32::saturating_add),
+            expires_at: soonest(same.iter().map(|g| g.ends_at.as_deref())),
+        });
+    }
     Some(BankedResets {
         available: usable
             .iter()
-            .map(|g| g.resets_left.unwrap_or(0.0) as u32)
+            .map(|g| g.left())
             .fold(0u32, u32::saturating_add),
-        expires_at,
+        expires_at: soonest(usable.iter().map(|g| g.ends_at.as_deref())),
+        kinds,
     })
 }
 
@@ -1236,7 +1284,84 @@ mod tests {
             Some(BankedResets {
                 available: 1,
                 expires_at: Some("2026-10-22T16:00:00+00:00".into()),
+                kinds: vec![BankedKind {
+                    kind: ResetKind::Full,
+                    count: 1,
+                    expires_at: Some("2026-10-22T16:00:00+00:00".into()),
+                }],
             })
+        );
+    }
+
+    #[test]
+    fn a_grant_giving_fable_use_back_is_a_fable_reset_whatever_its_type() {
+        let launch = grant(serde_json::json!({
+            "id": "launch-2610-fable", "ends_at": "2027-03-09T07:59:00+00:00",
+            "clears": ["seven_day_overage_included"],
+            "percent_used": {"seven_day_overage_included": 0}, "blocking": [],
+            "arm": null, "type": "full", "gives_back_weekly": true
+        }));
+        assert_eq!(
+            banked(block(false, vec![launch])).unwrap().kinds,
+            vec![BankedKind {
+                kind: ResetKind::Fable,
+                count: 1,
+                expires_at: Some("2027-03-09T07:59:00+00:00".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_grant_with_no_type_is_named_by_what_it_clears() {
+        let kind = |clears: Value| {
+            let g = grant(serde_json::json!({"type": null, "clears": clears}));
+            banked(block(false, vec![g])).unwrap().kinds[0].kind
+        };
+        assert_eq!(kind(serde_json::json!(["five_hour"])), ResetKind::Session);
+        assert_eq!(
+            kind(serde_json::json!(["seven_day", "seven_day_opus"])),
+            ResetKind::Weekly
+        );
+        assert_eq!(
+            kind(serde_json::json!(["five_hour", "seven_day"])),
+            ResetKind::Full
+        );
+        assert_eq!(kind(Value::Null), ResetKind::Full);
+        let unknown = grant(serde_json::json!({"type": "lunar", "clears": ["five_hour"]}));
+        assert_eq!(
+            banked(block(false, vec![unknown])).unwrap().kinds[0].kind,
+            ResetKind::Session
+        );
+    }
+
+    #[test]
+    fn each_kind_counts_and_expires_on_its_own() {
+        let resets = banked(block(
+            false,
+            vec![
+                grant(serde_json::json!({"id": "a", "resets_left": 2, "type": "weekly"})),
+                grant(serde_json::json!({"id": "f", "gives_back_weekly": true,
+                                         "ends_at": "2027-03-09T07:59:00+00:00"})),
+                grant(serde_json::json!({"id": "b", "type": "weekly",
+                                         "ends_at": "2026-10-22T17:00:00+02:00"})),
+            ],
+        ))
+        .unwrap();
+        assert_eq!(resets.available, 4);
+        assert_eq!(
+            resets.kinds,
+            vec![
+                BankedKind {
+                    kind: ResetKind::Weekly,
+                    count: 3,
+                    expires_at: Some("2026-10-22T17:00:00+02:00".into()),
+                },
+                BankedKind {
+                    kind: ResetKind::Fable,
+                    count: 1,
+                    expires_at: Some("2027-03-09T07:59:00+00:00".into()),
+                },
+            ]
         );
     }
 

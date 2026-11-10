@@ -3105,6 +3105,7 @@ mod tests {
                 (chrono::Utc::now() + chrono::Duration::minutes(m) + chrono::Duration::seconds(30))
                     .to_rfc3339()
             }),
+            kinds: Vec::new(),
         })
     }
 

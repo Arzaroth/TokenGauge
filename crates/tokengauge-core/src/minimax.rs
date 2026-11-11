@@ -130,12 +130,16 @@ fn window(
     })
 }
 
-fn to_payload(resp: RemainsResponse, now: DateTime<Utc>) -> Result<ProviderPayload> {
+fn to_payload(
+    resp: RemainsResponse,
+    now: DateTime<Utc>,
+    auth_hint: &str,
+) -> Result<ProviderPayload> {
     if let Some(base) = resp.base_resp.as_ref()
         && let Some(code) = base.status_code.filter(|code| *code != 0)
     {
         if AUTH_STATUS_CODES.contains(&code) {
-            return Err(anyhow!("MiniMax unauthorized - check MINIMAX_API_KEY"));
+            return Err(anyhow!("MiniMax unauthorized - {auth_hint}"));
         }
         return Err(anyhow!(
             "MiniMax: {}",
@@ -243,12 +247,14 @@ fn remains_for(
     let body = response
         .json()
         .context("MiniMax returned an unreadable quota")?;
-    to_payload(body, now)
+    to_payload(body, now, auth_hint)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const HINT: &str = "check MINIMAX_API_KEY";
 
     #[test]
     fn a_stored_key_answers_on_the_host_of_the_region_it_was_filed_under() {
@@ -261,7 +267,7 @@ mod tests {
     }
 
     fn usage(body: &str) -> UsageSnapshot {
-        to_payload(serde_json::from_str(body).unwrap(), Utc::now())
+        to_payload(serde_json::from_str(body).unwrap(), Utc::now(), HINT)
             .unwrap()
             .usage
             .unwrap()
@@ -290,7 +296,7 @@ mod tests {
                 "current_weekly_remaining_percent":40,"weekly_remains_time":3600000}]}"#,
         )
         .unwrap();
-        let weekly = to_payload(body, now)
+        let weekly = to_payload(body, now, HINT)
             .unwrap()
             .usage
             .unwrap()
@@ -321,14 +327,14 @@ mod tests {
                 "current_interval_status":3,"current_weekly_status":3}]}"#,
         )
         .unwrap();
-        assert!(to_payload(body, Utc::now()).is_err());
+        assert!(to_payload(body, Utc::now(), HINT).is_err());
     }
 
     #[test]
     fn a_bad_key_under_a_200_is_a_login_problem() {
         let body: RemainsResponse =
             serde_json::from_str(r#"{"base_resp":{"status_code":2049,"status_msg":"x"}}"#).unwrap();
-        let err = to_payload(body, Utc::now()).unwrap_err().to_string();
+        let err = to_payload(body, Utc::now(), HINT).unwrap_err().to_string();
         assert!(err.contains("unauthorized"), "{err}");
     }
 }

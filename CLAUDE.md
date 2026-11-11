@@ -360,8 +360,10 @@ Rules that are easy to regress:
   it. remuda switches the key in that same row, so the two must agree. An
   OAuth login counts only inside `expires`, and its access token names no
   account: it rotates, and a digest of it would be a new login each refresh.
-- **An API key is filed under a digest of itself.** GLM and opencode Go have no
-  account behind a key, so remuda names one `key-` and the first 16 hex digits
+- **An API key is filed under a digest of itself.** GLM, opencode Go, DeepSeek,
+  MiniMax, OpenRouter and Copilot have no account behind a key (a Copilot
+  token is a GitHub token, but asking GitHub whose it is costs a request), so
+  remuda names one `key-` and the first 16 hex digits
   of its SHA-256, and `credentials::key_account` must say the same, or the
   live key never matches its stored copy.
 - **The `[panel]` options are content, so `panel_spec` reads them**, never a

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.60.1] - 2026-11-11
+
 ### Fixed
 
 - A credential's banked resets sit on their own line under its limits title,

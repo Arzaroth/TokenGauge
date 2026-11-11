@@ -202,6 +202,59 @@ Panel {
 
   // -------------------------------------------------------------- pieces
 
+  // A provider's logo, inked in one colour through its alpha, with the bar
+  // glyph standing in while the logo is missing or failed.
+  component BrandMark: Item {
+    id: brandMark
+
+    property var entry: null
+    property color ink: root.foreground
+    property color glyphColor: root.accentColor
+    property real size: Style.font.body
+
+    width: size
+    height: size
+
+    Image {
+      id: brandMarkImage
+      anchors.fill: parent
+      source: root.markSource(brandMark.entry)
+      sourceSize.width: brandMark.size * 2
+      sourceSize.height: brandMark.size * 2
+      fillMode: Image.PreserveAspectFit
+      visible: false
+    }
+
+    Rectangle {
+      id: brandMarkInk
+      anchors.fill: parent
+      color: brandMark.ink
+      visible: false
+    }
+
+    MultiEffect {
+      anchors.fill: parent
+      source: brandMarkInk
+      visible: brandMarkImage.status === Image.Ready
+      maskEnabled: true
+      maskSource: brandMarkImage
+      // The defaults make any non-zero alpha fully opaque, which
+      // fattens a logo and fills in its fine strokes.
+      maskThresholdMin: 0.5
+      maskSpreadAtMin: 1.0
+    }
+
+    Text {
+      textFormat: Text.PlainText
+      anchors.centerIn: parent
+      visible: brandMarkImage.status !== Image.Ready
+      text: brandMark.entry ? String(brandMark.entry.glyph || "") : ""
+      color: brandMark.glyphColor
+      font.family: root.fontFamily
+      font.pixelSize: brandMark.size
+    }
+  }
+
   // A label / meter / footnote triple. Every limit row and every history row
   // is one of these, which is what keeps the two sections visually identical.
   component MeterRow: Column {
@@ -616,50 +669,11 @@ Panel {
             fontFamily: root.fontFamily
 
             iconComponent: Component {
-              Item {
-                id: heroMark
-                width: Style.font.display
-                height: Style.font.display
-
-                Image {
-                  id: heroMarkImage
-                  anchors.fill: parent
-                  source: root.markSource(root.provider)
-                  sourceSize.width: Style.font.display * 2
-                  sourceSize.height: Style.font.display * 2
-                  fillMode: Image.PreserveAspectFit
-                  visible: false
-                }
-
-                Rectangle {
-                  id: heroMarkInk
-                  anchors.fill: parent
-                  color: root.markColor
-                  visible: false
-                }
-
-                MultiEffect {
-                  anchors.fill: parent
-                  source: heroMarkInk
-                  visible: heroMarkImage.status === Image.Ready
-                  maskEnabled: true
-                  maskSource: heroMarkImage
-                  // The defaults make any non-zero alpha fully opaque, which
-                  // fattens a logo and fills in its fine strokes.
-                  maskThresholdMin: 0.5
-                  maskSpreadAtMin: 1.0
-                }
-
-                // The bar glyph stands in while the logo is missing or failed.
-                Text {
-                  textFormat: Text.PlainText
-                  anchors.centerIn: parent
-                  visible: heroMarkImage.status !== Image.Ready
-                  text: root.provider ? String(root.provider.glyph || "") : ""
-                  color: root.accentColor
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.display
-                }
+              BrandMark {
+                entry: root.provider
+                ink: root.markColor
+                glyphColor: root.accentColor
+                size: Style.font.display
               }
             }
 

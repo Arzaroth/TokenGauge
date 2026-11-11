@@ -945,6 +945,23 @@ mod tests {
     }
 
     #[test]
+    fn every_key_provider_remuda_stores_has_a_store_reader() {
+        for id in [
+            "glm",
+            "opencode",
+            "deepseek",
+            "minimax",
+            "openrouter",
+            "copilot",
+        ] {
+            assert!(
+                provider_meta(id).is_some_and(|meta| meta.store.is_some()),
+                "{id} has no StoreReader, so the logins remuda stores for it are never read"
+            );
+        }
+    }
+
+    #[test]
     fn provider_auth_status_covers_all_providers() {
         // Never panics and always yields a hint when not satisfied.
         for provider in PROVIDERS {

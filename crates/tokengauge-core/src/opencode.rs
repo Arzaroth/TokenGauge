@@ -595,6 +595,45 @@ mod tests {
     }
 
     #[test]
+    fn a_key_saved_for_another_provider_comes_from_the_database_once_it_imported_auth_json() {
+        use crate::provider::saved_api_key_in;
+        let dir = std::env::temp_dir().join(format!("tg-saved-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let auth = dir.join("auth.json");
+        std::fs::write(&auth, r#"{"deepseek": {"type": "api", "key": "stale"}}"#).unwrap();
+        let pi = dir.join("pi-auth.json");
+        std::fs::write(&pi, r#"{"deepseek": {"key": "from-pi"}}"#).unwrap();
+        let live = r#"{"type": "api", "key": "live"}"#;
+        let ids = &["deepseek"];
+
+        let imported = database("saved-imported", true, &[("deepseek", None, 1, live)]);
+        assert_eq!(
+            saved_api_key_in(&imported, &auth, Some(&pi), ids, NOW_MS),
+            Some(("live".into(), "deepseek".into()))
+        );
+
+        let pending = database("saved-pending", false, &[("deepseek", None, 1, live)]);
+        assert_eq!(
+            saved_api_key_in(&pending, &auth, Some(&pi), ids, NOW_MS),
+            Some(("stale".into(), "deepseek".into()))
+        );
+
+        let empty = database("saved-empty", true, &[]);
+        assert_eq!(
+            saved_api_key_in(&empty, &auth, Some(&pi), ids, NOW_MS),
+            Some(("from-pi".into(), "deepseek".into()))
+        );
+
+        let cn = r#"{"type": "api", "key": "cn"}"#;
+        let regional = database("saved-cn", true, &[("minimax-cn", None, 1, cn)]);
+        assert_eq!(
+            saved_api_key_in(&regional, &auth, None, &["minimax", "minimax-cn"], NOW_MS),
+            Some(("cn".into(), "minimax-cn".into()))
+        );
+    }
+
+    #[test]
     fn auth_json_is_asked_only_without_a_database_that_imported_it() {
         let go = r#"{"type": "key", "key": "go"}"#;
         let path = database("pending", false, &[("opencode-go", Some(true), 1, go)]);

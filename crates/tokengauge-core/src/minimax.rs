@@ -251,6 +251,16 @@ fn remains_for(
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_stored_key_answers_on_the_host_of_the_region_it_was_filed_under() {
+        assert_eq!(stored_host(r#"{"key": "k", "region": "cn"}"#), CN_HOST);
+        assert_eq!(
+            stored_host(r#"{"key": "k", "region": "global"}"#),
+            GLOBAL_HOST
+        );
+        assert_eq!(stored_host(r#"{"key": "k"}"#), GLOBAL_HOST);
+    }
+
     fn usage(body: &str) -> UsageSnapshot {
         to_payload(serde_json::from_str(body).unwrap(), Utc::now())
             .unwrap()

@@ -238,7 +238,7 @@ fn render_detail(frame: &mut Frame, area: Rect, state: &mut AppState) {
         .title(title)
         .border_style(Style::default().fg(dim()));
     let inner = block.inner(area);
-    let total: u16 = spec.iter().map(section_height).sum();
+    let total: u16 = spec.iter().map(|s| section_height(s, inner.width)).sum();
     let window = scroll_window(total, inner.height, state.detail_offset);
     state.detail_offset = window.offset;
     state.detail_page = inner.height.max(1);
@@ -271,7 +271,7 @@ fn render_detail(frame: &mut Frame, area: Rect, state: &mut AppState) {
 fn render_sections(frame: &mut Frame, area: Rect, spec: &[Section]) {
     let mut constraints: Vec<Constraint> = spec
         .iter()
-        .map(|section| Constraint::Length(section_height(section)))
+        .map(|section| Constraint::Length(section_height(section, area.width)))
         .collect();
     constraints.push(Constraint::Min(0));
     let chunks = Layout::vertical(constraints).split(area);
@@ -373,16 +373,32 @@ fn section_rows(section: &Section) -> &[PanelRow] {
     }
 }
 
-fn section_height(section: &Section) -> u16 {
+/// Lines the title and note take in a pane `width` wide, counted by the same
+/// `Paragraph` that draws them so a wrapped word never clips the last line.
+fn header_height(section: &Section, width: u16) -> u16 {
+    section_header(section).line_count(width) as u16
+}
+
+/// Lines the note alone wraps to, for a section whose title rides a border.
+fn note_height(section: &Section, width: u16) -> u16 {
+    section.note.as_deref().map_or(0, |note| {
+        Paragraph::new(note_line(note))
+            .wrap(Wrap { trim: false })
+            .line_count(width) as u16
+    })
+}
+
+fn section_height(section: &Section, width: u16) -> u16 {
     if section.id == DAY_CHART_ID {
         return DAY_CHART_HEIGHT;
     }
     let rows = section_rows(section).len() as u16;
     match section.kind {
-        // Header line, one line per meter, then a spacer before what follows.
-        SectionKind::Meters => rows + 2,
+        // Header, one line per meter, then a spacer before what follows.
+        SectionKind::Meters => header_height(section, width) + rows + 1,
+        SectionKind::Rows => header_height(section, width) + rows,
         // The title rides a top border rather than taking a line of its own.
-        SectionKind::Bars | SectionKind::Rows => rows + 1,
+        SectionKind::Bars => 1 + note_height(section, width) + rows,
     }
 }
 
@@ -398,12 +414,19 @@ fn render_section(frame: &mut Frame, area: Rect, section: &Section) {
     }
 }
 
-/// A dim heading on a line of its own, for the kinds that do not draw a table.
-fn section_header(title: &str) -> Paragraph<'static> {
-    Paragraph::new(Line::from(Span::styled(
-        format!(" {title}"),
+/// A dim heading on a line of its own, for the kinds that do not draw a table,
+/// with the section's note wrapped under it.
+fn section_header(section: &Section) -> Paragraph<'static> {
+    let mut lines = vec![Line::from(Span::styled(
+        format!(" {}", section.title),
         Style::default().fg(dim()).add_modifier(Modifier::BOLD),
-    )))
+    ))];
+    lines.extend(section.note.as_deref().map(note_line));
+    Paragraph::new(lines).wrap(Wrap { trim: false })
+}
+
+fn note_line(note: &str) -> Line<'static> {
+    Line::from(Span::styled(format!(" {note}"), Style::default().fg(dim())))
 }
 
 fn split_bar_spans(segments: &[Segment], width: usize) -> Vec<Span<'static>> {
@@ -448,9 +471,12 @@ fn render_meters(frame: &mut Frame, area: Rect, section: &Section) {
     if rows.is_empty() {
         return;
     }
-    let constraints: Vec<Constraint> = (0..rows.len() + 2).map(|_| Constraint::Length(1)).collect();
+    let header = header_height(section, area.width);
+    let constraints: Vec<Constraint> = std::iter::once(Constraint::Length(header))
+        .chain((0..rows.len() + 1).map(|_| Constraint::Length(1)))
+        .collect();
     let chunks = Layout::vertical(constraints).split(area);
-    frame.render_widget(section_header(&section.title), chunks[0]);
+    frame.render_widget(section_header(section), chunks[0]);
 
     // Size the label column to the widest label, capped, so a full name like
     // "Weekly (Sonnet)" does not ellipsize when there is room for it.
@@ -559,6 +585,21 @@ fn render_bars(frame: &mut Frame, area: Rect, section: &Section) {
     let block = section_block(&section.title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let inner = match section.note.as_deref() {
+        Some(note) => {
+            let split = Layout::vertical([
+                Constraint::Length(note_height(section, inner.width)),
+                Constraint::Min(0),
+            ])
+            .split(inner);
+            frame.render_widget(
+                Paragraph::new(note_line(note)).wrap(Wrap { trim: false }),
+                split[0],
+            );
+            split[1]
+        }
+        None => inner,
+    };
 
     let rows = section_rows(section);
     if rows.is_empty() {
@@ -634,8 +675,9 @@ fn render_bars(frame: &mut Frame, area: Rect, section: &Section) {
 /// figures - and the sync health note that qualifies every one of them, which
 /// is why it is drawn here and not only on the sync screen.
 fn render_rows(frame: &mut Frame, area: Rect, section: &Section) {
-    let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
-    frame.render_widget(section_header(&section.title), chunks[0]);
+    let header = header_height(section, area.width);
+    let chunks = Layout::vertical([Constraint::Length(header), Constraint::Min(0)]).split(area);
+    frame.render_widget(section_header(section), chunks[0]);
 
     let rows = section_rows(section);
     let label_w = rows
@@ -1115,6 +1157,45 @@ mod tests {
         assert!(out.contains("bucket unreachable"), "{out}");
     }
 
+    /// A wrapped title or note takes the lines it wraps to, counted the way
+    /// `Paragraph` wraps them, so the last word is drawn and the rows under it
+    /// keep their place.
+    #[test]
+    fn a_wrapped_title_and_note_keep_every_line_in_a_narrow_pane() {
+        in_english(a_wrapped_title_and_note_keep_every_line_in_a_narrow_pane_body);
+    }
+
+    fn a_wrapped_title_and_note_keep_every_line_in_a_narrow_pane_body() {
+        let mut cost = section(&provider_with_sync_note(), "cost");
+        cost.title = "work · Claude Team · active · not in total".into();
+        cost.note = Some("2 resets banked, expires in 1h 30m".into());
+        let last_label = cost.rows.last().expect("a row").label.clone();
+        for width in [14u16, 20, 30] {
+            let height = section_height(&cost, width);
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+            terminal
+                .draw(|frame| render_sections(frame, frame.area(), std::slice::from_ref(&cost)))
+                .expect("draw");
+            let buffer = terminal.backend().buffer();
+            let lines: Vec<String> = (0..height)
+                .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect();
+            let out = lines.join("\n");
+            assert!(
+                out.contains("30m"),
+                "the note's last word is clipped at {width}:\n{out}"
+            );
+            assert!(
+                out.contains("total"),
+                "the title's last word is clipped at {width}:\n{out}"
+            );
+            assert!(
+                out.contains(&last_label[..last_label.len().min(6)]),
+                "the last row is pushed off at {width}:\n{out}"
+            );
+        }
+    }
+
     /// A model list is trimmed to six because its tail is sub-1% noise. The
     /// device list is not: it answers "where did this total come from", and a
     /// machine dropped off the bottom makes the rows stop adding up to the
@@ -1178,7 +1259,7 @@ mod tests {
         let row = provider_with_sync_note();
         for section in panel_spec(&row, &Default::default()) {
             assert!(
-                section_height(&section) > 0,
+                section_height(&section, 80) > 0,
                 "{} reserves no lines",
                 section.id
             );

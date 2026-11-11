@@ -23,6 +23,11 @@ Canonical sections, in order (`panel::SECTION_IDS`), each dropped when it has no
 data: `status`, `plans`, `limits`, `cost`, `tokens_by_day`, `tokens_by_model`,
 `tokens_by_device`.
 
+- A section may carry a `note`: a dim line under its title that wraps, drawn
+  by every frontend (`every_panel_frontend_draws_the_section_note`). Something
+  long that qualifies a whole section goes there rather than into the title,
+  which stays short: today, a credential's banked resets
+  ([../features/banked-resets.md](../features/banked-resets.md)).
 - `plans` (the combined header) and a repeated `limits` exist only for a provider
   with several credentials; repeated sections share an id and differ in
   `Section.group`. See [../features/several-plans.md](../features/several-plans.md).
@@ -85,6 +90,7 @@ enforce what no type system can:
 | `every_frontend_says_when_it_last_refreshed` | `refresh_hint` used |
 | `every_frontend_with_a_bar_icon_says_the_same_thing_on_hover` | `bar_tooltip` used |
 | `every_panel_frontend_draws_split_bars` | segments drawn (matches the drawing call) |
+| `every_panel_frontend_draws_the_section_note` | `Section.note` drawn under the title |
 | `every_settings_pane_offers_the_panel_options` | `--set-panel` options offered |
 | `every_frontend_with_a_second_screen_draws_the_history_series` | history drawn (not waybar) |
 | `every_frontend_with_a_header_offers_remuda_while_it_serves` | remuda button (TUI, GNOME, Plasma, Omarchy) |

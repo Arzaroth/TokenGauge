@@ -628,12 +628,21 @@ mod gui {
 
                 for section in &row.panel {
                     ui.add_space(10.0);
-                    ui.label(
-                        RichText::new(section.title.as_str())
-                            .small()
-                            .strong()
-                            .color(SUB),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(section.title.as_str())
+                                .small()
+                                .strong()
+                                .color(SUB),
+                        )
+                        .wrap(),
                     );
+                    if let Some(note) = &section.note {
+                        ui.add(
+                            egui::Label::new(RichText::new(note.as_str()).small().color(SUB))
+                                .wrap(),
+                        );
+                    }
                     ui.add_space(2.0);
                     for panel_row in &section.rows {
                         match section.kind {

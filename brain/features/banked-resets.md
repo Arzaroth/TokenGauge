@@ -1,11 +1,11 @@
 # Banked resets
 
 Anthropic grants some Claude accounts limit resets to spend later (the Opus 5.5
-launch gave Team, Pro and Max one each). A credential holding one says so on
-its limits title, on every frontend: `LIMITS · 1 Fable reset banked, expires in
-2d 8h` for a provider with one credential, the same marker after `active` on a
-credential's group. TokenGauge only shows them; spending one is claude.ai's,
-or remuda's page's.
+launch gave Team, Pro and Max one each). A credential holding one says so in
+its limits section's note, the dim line under the title, on every frontend:
+`1 Fable reset banked, expires in 2d 8h` under `LIMITS` for a provider with one
+credential, under the credential's group title for one with several.
+TokenGauge only shows them; spending one is claude.ai's, or remuda's page's.
 
 - The usage request asks for them with `?cedar_ember=1`. The answer is the
   `cedar_ember` block: `eligible`, `at_limit`, and `grants[]` with
@@ -55,8 +55,11 @@ or remuda's page's.
 - The marker is resolved in `panel.rs` when the row renders, so the countdown
   moves between fetches. Once the soonest expiry passes the marker goes, since
   the count no longer says how many are left, and `rolled_over` makes the
-  snapshot stale at that moment so the next fetch brings the count back. It is a title marker rather than a row because a reset acts on
-  the windows of the section it heads, and it needs no new section kind.
+  snapshot stale at that moment so the next fetch brings the count back.
+- It is a `Section.note` rather than a row because a reset acts on the windows
+  of the section it heads, and rather than part of the title because listing
+  kinds and an expiry ran a group title past the edge of every narrow panel
+  (Omarchy cut it mid-word). The note wraps; the title stays short.
 
 ## Sources
 

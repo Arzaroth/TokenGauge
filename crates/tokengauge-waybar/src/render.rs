@@ -406,6 +406,12 @@ pub(crate) fn format_panel_section(section: &Section) -> Vec<String> {
             "  <span foreground=\"{dim}\">{}</span>",
             pango_escape(&section.title)
         )))
+        .chain(section.note.as_deref().map(|note| {
+            format!(
+                "  <span foreground=\"{dim}\"><small>{}</small></span>",
+                pango_escape(note)
+            )
+        }))
         .chain(lines)
         .collect()
 }

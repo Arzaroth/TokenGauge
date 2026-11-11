@@ -254,6 +254,20 @@ test('a meter carrying segments draws a split bar in place of the single fill', 
     assert.equal(Harness.byStyle(box, 'tokengauge-meter-fill').length, meters.length - 1);
 });
 
+test('a section note draws on its own line under the title', () => {
+    const {indicator} = enabled();
+    const noted = JSON.parse(panelJson);
+    const limits = noted.rows[0].panel.find(s => s.id === 'limits');
+    limits.note = '1 Fable reset (nothing to reset), 1 weekly reset banked, expires in 29d 2h';
+    answer(JSON.stringify(noted));
+    const box = open(indicator);
+
+    const notes = Harness.byStyle(box, 'tokengauge-section-note');
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0].text, limits.note);
+    assert.ok(notes[0].clutter_text.line_wrap, 'the note does not wrap');
+});
+
 test('a meter fill is painted rather than merely laid out', () => {
     const {indicator} = enabled();
     answer();

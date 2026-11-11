@@ -217,6 +217,10 @@ pub struct Section {
     /// apart. No frontend has to read it to draw the panel.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// A dim line under the title that wraps rather than lengthening it: a
+    /// credential's banked resets, which can name several kinds and an expiry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// Section ids in canonical order. A frontend that renders the panel renders
@@ -266,19 +270,19 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
                 kind: SectionKind::Rows,
                 rows: status,
                 group: None,
+                note: None,
             });
         }
 
         let limits = limit_rows(row);
         if !limits.is_empty() {
-            let mut title = vec![tr("LIMITS").to_string()];
-            title.extend(banked_marker(row));
             out.push(Section {
                 id: "limits",
-                title: title.join(" · "),
+                title: tr("LIMITS").into(),
                 kind: SectionKind::Meters,
                 rows: limits,
                 group: None,
+                note: banked_marker(row),
             });
         }
     }
@@ -298,6 +302,7 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
             kind: SectionKind::Rows,
             rows: cost_rows,
             group: None,
+            note: None,
         });
     }
 
@@ -310,6 +315,7 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
                 kind: SectionKind::Bars,
                 rows: days,
                 group: None,
+                note: None,
             });
         }
 
@@ -324,6 +330,7 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
                 kind: SectionKind::Bars,
                 rows: models,
                 group: None,
+                note: None,
             });
         }
 
@@ -335,6 +342,7 @@ pub fn panel_spec(row: &ProviderRow, options: &PanelConfig) -> Vec<Section> {
                 kind: SectionKind::Bars,
                 rows: devices,
                 group: None,
+                note: None,
             });
         }
     }
@@ -805,6 +813,7 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
             kind: SectionKind::Rows,
             rows: status,
             group: None,
+            note: None,
         });
     }
 
@@ -819,6 +828,7 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
             kind: SectionKind::Meters,
             rows: plans,
             group: None,
+            note: None,
         });
     }
 
@@ -841,7 +851,6 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
                 total = groups.len()
             ));
         }
-        title.extend(banked_marker(g));
         let (kind, rows) = match credential.state {
             Some(state) => (SectionKind::Rows, vec![state_row(state)]),
             None => {
@@ -862,6 +871,7 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
             kind,
             rows,
             group: Some(name),
+            note: banked_marker(g),
         });
     }
     out
@@ -2542,6 +2552,48 @@ mod tests {
     /// compiler knows about: one that never draws it shows the pooled bar and
     /// looks finished. The needle is the call that draws a meter's segments,
     /// not the word, which a type declaration alone would carry.
+    /// `Section.note` is a field no compiler makes a frontend read, and the
+    /// banked resets moved into it from the title: a frontend that skips it
+    /// says nothing about them at all.
+    #[test]
+    fn every_panel_frontend_draws_the_section_note() {
+        let frontends = [
+            (
+                "waybar",
+                "crates/tokengauge-waybar/src",
+                "rs",
+                "section.note",
+            ),
+            ("tray", "crates/tokengauge-tray/src", "rs", "section.note"),
+            ("tui", "crates/tokengauge-tui/src", "rs", "section.note"),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+                "modelData.note",
+            ),
+            (
+                "gnome",
+                "gnome/tokengauge@arzaroth.github.io",
+                "ts",
+                "section.note",
+            ),
+            (
+                "quickshell",
+                "omarchy/arzaroth.tokengauge",
+                "qml",
+                "modelData.note",
+            ),
+        ];
+        for (id, dir, extension, needle) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            assert!(
+                sources.iter().any(|src| src.contains(needle)),
+                "{id} ({dir}) never draws a section's `note` (`{needle}`)"
+            );
+        }
+    }
+
     #[test]
     fn every_panel_frontend_draws_split_bars() {
         let frontends = [
@@ -3157,8 +3209,8 @@ mod tests {
         r.banked_resets = of_kinds(&[(crate::ResetKind::Fable, 1)]);
         r.banked_resets.as_mut().unwrap().available = 2;
         assert_eq!(
-            section(&panel_spec(&r), "limits", None).title,
-            "LIMITS · 2 resets banked, expires in 1h 30m"
+            section(&panel_spec(&r), "limits", None).note.as_deref(),
+            Some("2 resets banked, expires in 1h 30m")
         );
     }
 
@@ -3169,8 +3221,8 @@ mod tests {
         r.banked_resets = of_kinds(&[(Fable, 1), (Weekly, 1)]);
         r.banked_resets.as_mut().unwrap().kinds[0].idle = true;
         assert_eq!(
-            section(&panel_spec(&r), "limits", None).title,
-            "LIMITS · 1 Fable reset (nothing to reset), 1 weekly reset banked, expires in 1h 30m"
+            section(&panel_spec(&r), "limits", None).note.as_deref(),
+            Some("1 Fable reset (nothing to reset), 1 weekly reset banked, expires in 1h 30m")
         );
     }
 
@@ -3192,8 +3244,8 @@ mod tests {
         ] {
             r.banked_resets = of_kinds(&kinds);
             assert_eq!(
-                section(&panel_spec(&r), "limits", None).title,
-                format!("LIMITS · {marker}, expires in 1h 30m"),
+                section(&panel_spec(&r), "limits", None).note,
+                Some(format!("{marker}, expires in 1h 30m")),
                 "{kinds:?}"
             );
         }
@@ -3204,13 +3256,13 @@ mod tests {
         let mut r = row();
         r.banked_resets = banked(1, Some(2 * 1440 + 8 * 60));
         assert_eq!(
-            section(&panel_spec(&r), "limits", None).title,
-            "LIMITS · 1 reset banked, expires in 2d 8h"
+            section(&panel_spec(&r), "limits", None).note.as_deref(),
+            Some("1 reset banked, expires in 2d 8h")
         );
         r.banked_resets = banked(2, None);
         assert_eq!(
-            section(&panel_spec(&r), "limits", None).title,
-            "LIMITS · 2 resets banked"
+            section(&panel_spec(&r), "limits", None).note.as_deref(),
+            Some("2 resets banked")
         );
     }
 
@@ -3219,7 +3271,12 @@ mod tests {
         let mut r = row();
         for gone in [banked(1, Some(-60)), banked(0, Some(60)), None] {
             r.banked_resets = gone;
-            assert_eq!(section(&panel_spec(&r), "limits", None).title, "LIMITS");
+            let spec = panel_spec(&r);
+            let limits = section(&spec, "limits", None);
+            assert_eq!(
+                (limits.title.as_str(), limits.note.as_deref()),
+                ("LIMITS", None)
+            );
         }
     }
 
@@ -3233,11 +3290,16 @@ mod tests {
         ]));
         assert_eq!(
             section(&spec, "limits", Some("work")).title,
-            "work · work plan · active · 1 reset banked, expires in 1h 30m"
+            "work · work plan · active"
+        );
+        assert_eq!(
+            section(&spec, "limits", Some("work")).note.as_deref(),
+            Some("1 reset banked, expires in 1h 30m")
         );
         assert_eq!(
             section(&spec, "limits", Some("perso")).title,
             "perso · perso plan"
         );
+        assert_eq!(section(&spec, "limits", Some("perso")).note, None);
     }
 }

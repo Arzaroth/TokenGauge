@@ -103,6 +103,10 @@
     padding-top: 4px;
 }
 
+.tokengauge-section-note {
+    font-size: 0.9em;
+}
+
 .tokengauge-cost-value {
     font-family: monospace;
 }

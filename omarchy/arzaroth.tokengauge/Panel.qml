@@ -790,11 +790,28 @@ Panel {
                      : modelData.kind === "bars" ? Style.space(4)
                      : Style.space(6)
 
-              PanelSectionHeader {
+              Column {
                 width: parent.width
-                text: modelData.title
-                foreground: root.foreground
-                fontFamily: root.fontFamily
+                spacing: Style.space(2)
+
+                PanelSectionHeader {
+                  width: parent.width
+                  text: parent.parent.modelData.title
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  wrapMode: Text.WordWrap
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  visible: !!parent.parent.modelData.note
+                  width: parent.width
+                  text: parent.parent.modelData.note || ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
               }
 
               Repeater {

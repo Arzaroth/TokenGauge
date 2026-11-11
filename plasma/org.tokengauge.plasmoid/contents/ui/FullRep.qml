@@ -501,10 +501,21 @@ Item {
 
                         Kirigami.Separator { Layout.fillWidth: true }
                         PlasmaComponents.Label {
+                            Layout.fillWidth: true
                             textFormat: Text.PlainText
                             text: modelData.title
                             font.bold: true
                             opacity: 0.85
+                            wrapMode: Text.WordWrap
+                        }
+                        PlasmaComponents.Label {
+                            Layout.fillWidth: true
+                            visible: !!modelData.note
+                            textFormat: Text.PlainText
+                            text: modelData.note || ""
+                            font: Kirigami.Theme.smallFont
+                            opacity: 0.6
+                            wrapMode: Text.WordWrap
                         }
                         Repeater {
                             model: modelData.kind === "meters" ? modelData.rows : []

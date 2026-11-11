@@ -11,8 +11,8 @@ commits; the **Avoid** list names the synonyms that blur it.
   readers and the brand. See [features/providers.md](features/providers.md).
   Avoid: backend, service, account.
 - **Banked reset** - a limit reset the provider granted to spend later (Claude's
-  grants, Codex's reset credits); one the account holds is marked on its limits
-  title, with its reset kind when the provider says. See [features/banked-resets.md](features/banked-resets.md).
+  grants, Codex's reset credits); one the account holds is named in the note
+  under its limits title, with its reset kind when the provider says. See [features/banked-resets.md](features/banked-resets.md).
   Avoid: credit, free reset, grant (the wire's word for the allowance).
 - **Reset kind** - what a banked reset clears, in Claude Code's words: `session`
   (the 5-hour window), `weekly`, `full`, or `fable` (the Fable limit, handing

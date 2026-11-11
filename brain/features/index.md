@@ -12,7 +12,7 @@ all six surfaces unless the doc records the exception. Back to the root map:
 | [Cost tracking](cost-tracking.md) | COST and TOKENS sections from local transcripts: today, month, 7-day, session, burn rate | `cost/`, `panel.rs` |
 | [Spend history](spend-history.md) | 30 d / 90 d / 12 mo chart on a second screen, past months at past prices, backfill, export | `history.rs`, `sync/fleet.rs`, `price-archive.json` |
 | [Fleet sync](fleet-sync.md) | Fleet-wide cost and tokens, TOKENS BY DEVICE, setup screen and commands | `sync/`, `sync_cli.rs`, `sync_view.rs` |
-| [Banked resets](banked-resets.md) | Claude limit resets granted to spend later, marked on the credential's limits title | `claude.rs`, `panel.rs` |
+| [Banked resets](banked-resets.md) | Claude limit resets granted to spend later, in the note under the credential's limits title | `claude.rs`, `panel.rs` |
 | [Pace](pace.md) | Projected usage at reset per window (`ends ~16%`, `empty in 2h`), at the window's recent burn | `pace.rs` |
 | [Window history](window-history.md) | Each window's trail since it opened, and the burn read off it | `window_history.rs` |
 | [Notifications](notifications.md) | Threshold alerts per window, active plan only | `waybar/src/snapshot.rs`, `launch.rs` |

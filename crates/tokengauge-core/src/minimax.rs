@@ -337,4 +337,14 @@ mod tests {
         let err = to_payload(body, Utc::now(), HINT).unwrap_err().to_string();
         assert!(err.contains("unauthorized"), "{err}");
     }
+
+    #[test]
+    fn a_stored_key_refused_under_a_200_names_the_stored_key() {
+        let body: RemainsResponse =
+            serde_json::from_str(r#"{"base_resp":{"status_code":1004,"status_msg":"x"}}"#).unwrap();
+        let err = to_payload(body, Utc::now(), "replace the stored key")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "MiniMax unauthorized - replace the stored key");
+    }
 }

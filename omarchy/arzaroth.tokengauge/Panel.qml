@@ -1327,7 +1327,7 @@ Panel {
             visible: root.settingsOpen
             width: parent.width
             topPadding: Style.space(4)
-            text: usage.t("A number toggles a provider, p walks the pin, a, b and t switch how several credentials are drawn, y sets up fleet sync so tokens and cost add up across your machines, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml.")
+            text: usage.t("Click a provider to toggle it, p walks the pin, a, b and t switch how several credentials are drawn, y sets up fleet sync so tokens and cost add up across your machines, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml.")
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

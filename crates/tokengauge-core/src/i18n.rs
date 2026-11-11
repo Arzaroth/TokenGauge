@@ -550,8 +550,8 @@ const FRENCH: &[(&str, &str)] = &[
     ("Absolute", "Absolu"),
     ("System", "Système"),
     (
-        "A number toggles a provider, p walks the pin, a, b and t switch how several credentials are drawn, y sets up fleet sync so tokens and cost add up across your machines, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml.",
-        "Un chiffre active ou désactive un fournisseur, p change l’épingle, a, b et t changent l’affichage de plusieurs identifiants, y configure la synchro de flotte pour additionner tokens et coûts entre vos machines, u et s ouvrent le tableau de bord et la page d’état du fournisseur. Les seuils, l’intervalle d’actualisation et l’action au clic se règlent dans ~/.config/tokengauge/config.toml.",
+        "Click a provider to toggle it, p walks the pin, a, b and t switch how several credentials are drawn, y sets up fleet sync so tokens and cost add up across your machines, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml.",
+        "Un clic sur un fournisseur l’active ou le désactive, p change l’épingle, a, b et t changent l’affichage de plusieurs identifiants, y configure la synchro de flotte pour additionner tokens et coûts entre vos machines, u et s ouvrent le tableau de bord et la page d’état du fournisseur. Les seuils, l’intervalle d’actualisation et l’action au clic se règlent dans ~/.config/tokengauge/config.toml.",
     ),
     ("No provider data yet.", "Pas encore de données."),
     ("Updated", "Actualisé"),

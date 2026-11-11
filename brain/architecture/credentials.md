@@ -38,7 +38,10 @@ token is "not signed in - run `claude setup-token`", distinct from "expired".
 - Layout: `<store>/<provider>/<name>.json`, one file per credential, in the shape
   of the CLI's own file (`.credentials.json` for Claude, `auth.json` for Codex,
   Grok and cursor-agent, `credentials/kimi-code.json` for Kimi), so the existing
-  parsers read it. GLM and opencode Go hold `{"key": "..."}`. Claude's
+  parsers read it. GLM, opencode Go, DeepSeek and Copilot hold `{"key": "..."}`;
+  MiniMax adds `region` (`global` or `cn`, the host its key answers on; absent
+  reads as global), and OpenRouter an optional `management` key that adds the
+  account balance beside the inference `key`. Claude's
   `mcpOAuth` block stays in the live file.
 - A credential file is a `.json` directly under `<store>/<provider>/`, not a
   dot-file and not `*.meta.json`. Dot-files (`.dirs.json`, locks, set-aside
@@ -185,6 +188,6 @@ test config turns the store off (`CredentialsConfig::off()`, or
 
 - `crates/tokengauge-core/src/credentials.rs` (`StoreReader`, `key_account`, store walk, permission checks)
 - `crates/tokengauge-core/src/providers.rs` (`PROVIDER_META[].store`, `provider_auth_status`)
-- `crates/tokengauge-core/src/{claude,codex,grok,kimi,cursor,glm,opencode}.rs` (live login, stored fetch, `plan_weight`)
+- `crates/tokengauge-core/src/{claude,codex,grok,kimi,cursor,glm,opencode,deepseek,minimax,openrouter,copilot}.rs` (live login, stored fetch, `plan_weight`)
 - `crates/tokengauge-core/src/fetch.rs`, `crates/tokengauge-core/src/rows.rs`, `crates/tokengauge-core/src/payload.rs`
 - `crates/tokengauge-core/src/snapshot.rs` (`CacheMeta.credentials`), `crates/tokengauge-core/src/doctor.rs`

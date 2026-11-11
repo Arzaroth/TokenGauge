@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A credential's banked resets sit on their own line under its limits title,
   wrapping, instead of lengthening the title past the edge of the panel. The
   title wraps too where a frontend used to cut it off (Omarchy, Plasma, the
-  tray).
+  tray), and the TUI gives a wrapped title and note the lines they take.
 
 ## [0.60.0] - 2026-11-11
 

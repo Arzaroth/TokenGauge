@@ -131,6 +131,6 @@ Notes:
 ## Sources
 
 - `crates/tokengauge-core/src/providers.rs` (`PROVIDER_META`, `natively_read`, `provider_auth_status`)
-- `crates/tokengauge-core/src/{claude,codex,kimi,grok,glm,openrouter,opencode,cursor}.rs`
+- `crates/tokengauge-core/src/{claude,codex,kimi,grok,glm,openrouter,opencode,cursor,copilot,deepseek,minimax}.rs`
 - `crates/tokengauge-core/src/provider.rs`, `crates/tokengauge-core/src/config.rs` (`ProvidersConfig`)
 - selvedge's `src/brands.rs` and `assets/providers/`

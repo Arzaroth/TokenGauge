@@ -15,8 +15,11 @@ up by plan multiplier. The mechanism and the remuda contracts are
   into.
 - An expired or unverified credential is a `Rows` group with one line saying
   which and why, not a provider error.
-- A prepaid credential (DeepSeek, an OpenRouter key with no cap) has no window,
-  so its group is `Rows` with the balance the COST section would draw for it.
+- A credential that reports a balance and no window (DeepSeek; an OpenRouter
+  key with no cap whose account balance was not asked, or has no credit) is a
+  `Rows` group with the balance the COST section would draw for it. One that
+  reports a window draws its meters, and its balance only in COST, for the
+  active credential.
 - **ALL PLANS** (the `plans` section, `Meters`): one meter per window label at
   least two weighted credentials report, valued `"<used>% of <capacity>%"` in
   units of the largest plan, filled to the pooled fraction

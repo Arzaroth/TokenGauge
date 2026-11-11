@@ -823,6 +823,7 @@ mod tests {
         let banked = crate::BankedResets {
             available: 1,
             expires_at: Some((chrono::Utc::now() + chrono::Duration::hours(3)).to_rfc3339()),
+            kinds: Vec::new(),
         };
         let payload = ProviderPayload {
             stale_reason: None,

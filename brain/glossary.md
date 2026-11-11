@@ -11,9 +11,14 @@ commits; the **Avoid** list names the synonyms that blur it.
   readers and the brand. See [features/providers.md](features/providers.md).
   Avoid: backend, service, account.
 - **Banked reset** - a limit reset the provider granted to spend later (Claude's
-  grants, Codex's reset credits), clearing every window at once; one the account
-  holds is marked on its limits title. See [features/banked-resets.md](features/banked-resets.md).
+  grants, Codex's reset credits); one the account holds is marked on its limits
+  title, with its reset kind when the provider says. See [features/banked-resets.md](features/banked-resets.md).
   Avoid: credit, free reset, grant (the wire's word for the allowance).
+- **Reset kind** - what a banked reset clears, in Claude Code's words: `session`
+  (the 5-hour window), `weekly`, `full`, or `fable` (the Fable limit, handing
+  this week's Fable use back to the weekly limit). See
+  [features/banked-resets.md](features/banked-resets.md). Avoid: scope, type
+  (the wire's field, which a Fable reset sets to `full`).
 - **Window** - a provider-reported rate limit over a fixed span, with a
   percentage used and a reset instant. Credential-scoped, so it reads the same on
   every machine. See [architecture/snapshot.md](architecture/snapshot.md).

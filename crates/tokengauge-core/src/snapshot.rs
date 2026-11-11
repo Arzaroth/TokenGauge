@@ -457,6 +457,7 @@ mod tests {
             p.usage.as_mut().unwrap().banked_resets = Some(crate::BankedResets {
                 available: 1,
                 expires_at: Some(at.to_rfc3339()),
+                kinds: Vec::new(),
             });
             p
         };

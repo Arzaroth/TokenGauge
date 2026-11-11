@@ -500,6 +500,8 @@ struct Grant {
     #[serde(rename = "type")]
     kind: Option<String>,
     gives_back_weekly: Option<bool>,
+    #[serde(default, deserialize_with = "crate::provider::null_as_default")]
+    percent_used: Map<String, Value>,
 }
 
 impl Grant {
@@ -522,6 +524,11 @@ impl Grant {
             (false, true) => ResetKind::Weekly,
             _ => ResetKind::Full,
         }
+    }
+
+    /// Every limit the grant resets is at 0%, so spending it clears nothing.
+    fn idle(&self) -> bool {
+        !self.percent_used.is_empty() && self.percent_used.values().all(|p| p.as_f64() == Some(0.0))
     }
 
     fn left(&self) -> u32 {
@@ -586,6 +593,7 @@ fn banked_resets(rest: &Map<String, Value>) -> Option<BankedResets> {
                     }
                     all
                 }),
+            idle: same.iter().all(|g| g.idle()),
         });
     }
     Some(BankedResets {
@@ -1299,6 +1307,7 @@ mod tests {
                     count: 1,
                     expires_at: Some("2026-10-22T16:00:00+00:00".into()),
                     clears: Vec::new(),
+                    idle: false,
                 }],
             })
         );
@@ -1319,8 +1328,28 @@ mod tests {
                 count: 1,
                 expires_at: Some("2027-03-09T07:59:00+00:00".into()),
                 clears: vec!["seven_day_overage_included".into()],
+                idle: true,
             }]
         );
+    }
+
+    #[test]
+    fn a_kind_is_idle_only_when_every_one_of_its_grants_would_clear_nothing() {
+        let weekly = |id: &str, used: Value| {
+            grant(serde_json::json!({"id": id, "type": "weekly", "percent_used": used}))
+        };
+        let idle = |grants: Vec<Value>| banked(block(false, grants)).unwrap().kinds[0].idle;
+        assert!(idle(vec![weekly("a", serde_json::json!({"seven_day": 0}))]));
+        assert!(!idle(vec![weekly(
+            "a",
+            serde_json::json!({"seven_day": 44})
+        )]));
+        assert!(!idle(vec![
+            weekly("a", serde_json::json!({"seven_day": 0})),
+            weekly("b", serde_json::json!({"seven_day": 0, "five_hour": 8})),
+        ]));
+        assert!(!idle(vec![weekly("a", serde_json::json!({}))]));
+        assert!(!idle(vec![weekly("a", Value::Null)]));
     }
 
     #[test]
@@ -1420,12 +1449,14 @@ mod tests {
                     count: 3,
                     expires_at: Some("2026-10-22T17:00:00+02:00".into()),
                     clears: Vec::new(),
+                    idle: false,
                 },
                 BankedKind {
                     kind: ResetKind::Fable,
                     count: 1,
                     expires_at: Some("2027-03-09T07:59:00+00:00".into()),
                     clears: Vec::new(),
+                    idle: false,
                 },
             ]
         );

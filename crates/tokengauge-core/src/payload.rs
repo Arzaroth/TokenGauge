@@ -58,6 +58,10 @@ pub struct BankedKind {
     /// picks which grant a spend uses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clears: Vec<String>,
+    /// Every one of these resets would clear nothing now: each limit it
+    /// resets is at 0%. claude.ai greys such a reset out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idle: bool,
 }
 
 /// Claude Code's own names for what a banked reset clears.
@@ -698,6 +702,7 @@ mod tests {
                     count: 1,
                     expires_at: Some("2026-10-22T16:00:00+00:00".into()),
                     clears: vec!["five_hour".into(), "seven_day_overage_included".into()],
+                    idle: false,
                 }],
             }),
             ..UsageSnapshot::at(chrono::Utc::now())

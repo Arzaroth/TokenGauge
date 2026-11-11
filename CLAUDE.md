@@ -306,8 +306,9 @@ Rules that are easy to regress:
   refresh hint and notifications follow the plan in use, and the per-credential
   rows sit under `credentials`. `panel_spec` draws the `plans` header and one
   `limits` section per credential, told apart by `Section.group`. There is no
-  new `SectionKind`: a group title carries its markers, and every frontend
-  draws the result as it is.
+  new `SectionKind`: a group title carries its short markers, a long one
+  (the banked resets) rides `Section.note` under it, and every frontend draws
+  the result as it is.
 - **Session cost and threshold notifications skip `active: false`.** One
   figure per provider, and it follows the plan being spent from.
 - **remuda's page is opened by `remuda open` and nothing else** (decision

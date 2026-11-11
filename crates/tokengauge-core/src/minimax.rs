@@ -35,24 +35,23 @@ fn env_clean(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-pub(crate) fn credential() -> Option<(String, &'static str)> {
+pub(crate) fn credential() -> Result<Option<(String, &'static str)>> {
     if let Some(key) = env_clean("MINIMAX_API_KEY") {
         let host = if env_clean("MINIMAX_REGION").as_deref() == Some("cn") {
             CN_HOST
         } else {
             GLOBAL_HOST
         };
-        return Some((key, host));
+        return Ok(Some((key, host)));
     }
-    let (key, saved_as) = saved_api_key(SAVED_AS)?;
-    Some((
-        key,
-        if saved_as.starts_with("minimax-cn") {
+    Ok(saved_api_key(SAVED_AS)?.map(|(key, saved_as)| {
+        let host = if saved_as.starts_with("minimax-cn") {
             CN_HOST
         } else {
             GLOBAL_HOST
-        },
-    ))
+        };
+        (key, host)
+    }))
 }
 
 #[derive(Deserialize)]
@@ -187,7 +186,7 @@ fn to_payload(resp: RemainsResponse, now: DateTime<Utc>) -> Result<ProviderPaylo
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let (key, host) =
-        credential().ok_or_else(|| anyhow!("MiniMax key missing - set MINIMAX_API_KEY"))?;
+        credential()?.ok_or_else(|| anyhow!("MiniMax key missing - set MINIMAX_API_KEY"))?;
     Ok(vec![remains_for(
         &key,
         host,
@@ -198,7 +197,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
 }
 
 pub(crate) fn live_login() -> LiveLogin {
-    key_login(credential().map(|(key, _)| key))
+    key_login(credential().ok().flatten().map(|(key, _)| key))
 }
 
 /// A stored key's host, from the region remuda filed it under. A key stored

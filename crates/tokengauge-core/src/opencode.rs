@@ -155,14 +155,17 @@ fn row_login(value: &str, now_ms: i64) -> Option<Login> {
 /// key opencode stopped using. Each integration's login is the row opencode
 /// selects, the active one, else the newest.
 fn database_login(path: &Path, now_ms: i64) -> Result<Option<Option<Login>>> {
-    database_login_for(path, ACCOUNT_IDS, now_ms)
+    database_login_for(path, ACCOUNT_IDS, false, now_ms)
         .map(|found| found.map(|login| login.map(|(login, _)| login)))
 }
 
-/// The first of `ids` with a login in the database, and that id.
+/// The first of `ids` with a login in the database, and that id. With
+/// `keys_only`, an OAuth login is passed over for the next id, as remuda
+/// passes over a slot that holds no key.
 pub(crate) fn database_login_for(
     path: &Path,
     ids: &[&str],
+    keys_only: bool,
     now_ms: i64,
 ) -> Result<Option<Option<(Login, String)>>> {
     use rusqlite::{Connection, OpenFlags, OptionalExtension};
@@ -199,7 +202,10 @@ pub(crate) fn database_login_for(
             let value = selected
                 .query_row([id], |row| row.get::<_, String>(0))
                 .optional()?;
-            if let Some(login) = value.and_then(|value| row_login(&value, now_ms)) {
+            if let Some(login) = value
+                .and_then(|value| row_login(&value, now_ms))
+                .filter(|login| !keys_only || matches!(login, Login::Key(_)))
+            {
                 return Ok(Some(Some((login, (*id).to_string()))));
             }
         }
@@ -609,26 +615,26 @@ mod tests {
 
         let imported = database("saved-imported", true, &[("deepseek", None, 1, live)]);
         assert_eq!(
-            saved_api_key_in(&imported, &auth, Some(&pi), ids, NOW_MS),
+            saved_api_key_in(&imported, &auth, Some(&pi), ids, NOW_MS).unwrap(),
             Some(("live".into(), "deepseek".into()))
         );
 
         let pending = database("saved-pending", false, &[("deepseek", None, 1, live)]);
         assert_eq!(
-            saved_api_key_in(&pending, &auth, Some(&pi), ids, NOW_MS),
+            saved_api_key_in(&pending, &auth, Some(&pi), ids, NOW_MS).unwrap(),
             Some(("stale".into(), "deepseek".into()))
         );
 
         let empty = database("saved-empty", true, &[]);
         assert_eq!(
-            saved_api_key_in(&empty, &auth, Some(&pi), ids, NOW_MS),
+            saved_api_key_in(&empty, &auth, Some(&pi), ids, NOW_MS).unwrap(),
             Some(("from-pi".into(), "deepseek".into()))
         );
 
         let cn = r#"{"type": "api", "key": "cn"}"#;
         let regional = database("saved-cn", true, &[("minimax-cn", None, 1, cn)]);
         assert_eq!(
-            saved_api_key_in(&regional, &auth, None, &["minimax", "minimax-cn"], NOW_MS),
+            saved_api_key_in(&regional, &auth, None, &["minimax", "minimax-cn"], NOW_MS).unwrap(),
             Some(("cn".into(), "minimax-cn".into()))
         );
     }

@@ -283,6 +283,7 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     Ok(vec![usage_for(
         api_key()?,
         management_key(),
+        endpoints()?,
         timeout,
         "check OPENROUTER_API_KEY",
         Utc::now(),
@@ -294,7 +295,9 @@ pub(crate) fn live_login() -> LiveLogin {
 }
 
 /// remuda stores the inference key as `key` and a management key, when the
-/// login has one, as `management`.
+/// login has one, as `management`. A stored key was captured for
+/// openrouter.ai, so it never goes to the gateway `OPENROUTER_BASE_URL` names
+/// for the live one.
 pub(crate) fn fetch_stored(
     text: &str,
     timeout: Duration,
@@ -313,6 +316,7 @@ pub(crate) fn fetch_stored(
     usage_for(
         stored_key(text)?,
         management,
+        endpoints_for(None)?,
         timeout,
         "`remuda login -p openrouter` replaces the stored key",
         now,
@@ -322,11 +326,11 @@ pub(crate) fn fetch_stored(
 fn usage_for(
     key: String,
     management: Option<String>,
+    (credits_url, key_url): (String, String),
     timeout: Duration,
     auth_hint: &str,
     now: DateTime<Utc>,
 ) -> Result<ProviderPayload> {
-    let (credits_url, key_url) = endpoints()?;
     let client = http_client(timeout)?;
 
     // `/key` first, and it is the one that must succeed: it describes the

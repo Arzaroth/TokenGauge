@@ -855,13 +855,24 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
             Some(state) => (SectionKind::Rows, vec![state_row(state)]),
             None => {
                 let rows = limit_rows(g);
-                if rows.is_empty() {
-                    (
-                        SectionKind::Rows,
-                        vec![PanelRow::new(tr("Limits"), tr("none reported"))],
-                    )
-                } else {
+                if !rows.is_empty() {
                     (SectionKind::Meters, rows)
+                } else {
+                    // A prepaid credential sells a balance rather than a
+                    // window, and the balance is the figure it was asked for.
+                    let balance = cost_rows(
+                        None,
+                        g.credits.map(|b| (b, g.credit_unit)),
+                        g.credit_limit.as_ref(),
+                    );
+                    if balance.is_empty() {
+                        (
+                            SectionKind::Rows,
+                            vec![PanelRow::new(tr("Limits"), tr("none reported"))],
+                        )
+                    } else {
+                        (SectionKind::Rows, balance)
+                    }
                 }
             }
         };

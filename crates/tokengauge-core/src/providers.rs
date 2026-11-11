@@ -760,34 +760,42 @@ fn antigravity_auth() -> AuthStatus {
 }
 
 fn deepseek_auth() -> AuthStatus {
-    if crate::deepseek::api_key().is_some() {
-        AuthStatus {
+    match crate::deepseek::api_key() {
+        Ok(Some(_)) => AuthStatus {
             ok: true,
             detail: "key found".to_string(),
             hint: "",
-        }
-    } else {
-        AuthStatus {
+        },
+        Ok(None) => AuthStatus {
             ok: false,
             detail: "no key".to_string(),
             hint: "set DEEPSEEK_API_KEY, or sign in to DeepSeek in opencode or pi",
-        }
+        },
+        Err(e) => AuthStatus {
+            ok: false,
+            detail: e.to_string(),
+            hint: "set DEEPSEEK_API_KEY, or sign in to DeepSeek in opencode or pi",
+        },
     }
 }
 
 fn minimax_auth() -> AuthStatus {
-    if crate::minimax::credential().is_some() {
-        AuthStatus {
+    match crate::minimax::credential() {
+        Ok(Some(_)) => AuthStatus {
             ok: true,
             detail: "key found".to_string(),
             hint: "",
-        }
-    } else {
-        AuthStatus {
+        },
+        Ok(None) => AuthStatus {
             ok: false,
             detail: "no key".to_string(),
             hint: "set MINIMAX_API_KEY, or sign in to MiniMax in opencode or pi",
-        }
+        },
+        Err(e) => AuthStatus {
+            ok: false,
+            detail: e.to_string(),
+            hint: "set MINIMAX_API_KEY, or sign in to MiniMax in opencode or pi",
+        },
     }
 }
 

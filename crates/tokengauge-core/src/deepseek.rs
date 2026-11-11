@@ -15,12 +15,15 @@ use crate::{CreditUnit, Credits, ProviderPayload, UsageSnapshot, http_client};
 const BALANCE_URL: &str = "https://api.deepseek.com/user/balance";
 const SAVED_AS: &[&str] = &["deepseek"];
 
-pub(crate) fn api_key() -> Option<String> {
-    std::env::var("DEEPSEEK_API_KEY")
+pub(crate) fn api_key() -> Result<Option<String>> {
+    if let Some(key) = std::env::var("DEEPSEEK_API_KEY")
         .ok()
         .map(|key| key.trim().to_string())
         .filter(|key| !key.is_empty())
-        .or_else(|| saved_api_key(SAVED_AS).map(|(key, _)| key))
+    {
+        return Ok(Some(key));
+    }
+    Ok(saved_api_key(SAVED_AS)?.map(|(key, _)| key))
 }
 
 #[derive(Deserialize)]
@@ -75,12 +78,12 @@ fn to_payload(resp: BalanceResponse) -> Result<ProviderPayload> {
 }
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
-    let key = api_key().ok_or_else(|| anyhow!("DeepSeek key missing - set DEEPSEEK_API_KEY"))?;
+    let key = api_key()?.ok_or_else(|| anyhow!("DeepSeek key missing - set DEEPSEEK_API_KEY"))?;
     Ok(vec![balance_for(&key, timeout, "check DEEPSEEK_API_KEY")?])
 }
 
 pub(crate) fn live_login() -> LiveLogin {
-    key_login(api_key())
+    key_login(api_key().ok().flatten())
 }
 
 pub(crate) fn fetch_stored(

@@ -26,7 +26,7 @@ use crate::{ProviderPayload, UsageSnapshot};
 /// A literal key opencode or pi filed under one of `ids`, with the id it was
 /// under. A pi `$VAR` or `!command` entry is pi's to resolve, and a key filed
 /// under any other id belongs to a gateway and is never sent.
-pub(crate) fn saved_api_key(ids: &[&str]) -> Option<(String, String)> {
+pub(crate) fn saved_api_key(ids: &[&str]) -> Result<Option<(String, String)>> {
     let pi_dir = std::env::var_os("PI_CODING_AGENT_DIR")
         .filter(|dir| !dir.is_empty())
         .map(std::path::PathBuf::from)
@@ -42,27 +42,27 @@ pub(crate) fn saved_api_key(ids: &[&str]) -> Option<(String, String)> {
 
 /// opencode 2 reads its database once it has imported `auth.json`, so the
 /// database answers for opencode then, and a stale `auth.json` beside it is
-/// never asked.
+/// never asked. A database that cannot be read is an error, never a reason to
+/// send the key opencode stopped using.
 pub(crate) fn saved_api_key_in(
     database: &std::path::Path,
     opencode_auth: &std::path::Path,
     pi_auth: Option<&std::path::Path>,
     ids: &[&str],
     now_ms: i64,
-) -> Option<(String, String)> {
+) -> Result<Option<(String, String)>> {
     let from_file = |path: &std::path::Path| {
         let raw = std::fs::read_to_string(path).ok()?;
         saved_key_in(&raw, ids)
     };
-    let opencode = match crate::opencode::database_login_for(database, ids, now_ms) {
-        Ok(Some(found)) => found.and_then(|(login, id)| match login {
+    let opencode = match crate::opencode::database_login_for(database, ids, true, now_ms)? {
+        Some(found) => found.and_then(|(login, id)| match login {
             crate::opencode::Login::Key(key) => Some((key, id)),
             crate::opencode::Login::Access(_) => None,
         }),
-        Ok(None) => from_file(opencode_auth),
-        Err(_) => None,
+        None => from_file(opencode_auth),
     };
-    opencode.or_else(|| pi_auth.and_then(from_file))
+    Ok(opencode.or_else(|| pi_auth.and_then(from_file)))
 }
 
 fn saved_key_in(raw: &str, ids: &[&str]) -> Option<(String, String)> {

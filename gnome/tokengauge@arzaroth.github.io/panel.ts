@@ -172,6 +172,12 @@ export const DEFAULT_PANEL_OPTIONS: PanelOptions = {
     language: 'auto',
 };
 
+/// A provider a settings pane can switch on, named as the core names it.
+export interface CatalogEntry {
+    id: string;
+    label: string;
+}
+
 export interface Snapshot {
     strings?: Record<string, string>;
     version: string;
@@ -179,6 +185,8 @@ export interface Snapshot {
     errors: FetchError[];
     enabled: string[];
     providers: string[];
+    /// Absent from a binary older than the provider catalog.
+    provider_catalog?: CatalogEntry[];
     primary: string;
     window: string;
     theme: Partial<Theme>;

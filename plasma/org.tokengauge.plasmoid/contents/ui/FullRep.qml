@@ -55,6 +55,13 @@ Item {
     // The core's own list, never a guess: a hardcoded fallback here silently
     // hid every provider added since it was written.
     readonly property var oauthProviders: root.snapshot.providers || []
+    readonly property var providerCatalog: root.snapshot.provider_catalog || []
+
+    function providerLabel(id) {
+        for (var i = 0; i < providerCatalog.length; i++)
+            if (providerCatalog[i].id === id) return providerCatalog[i].label
+        return id.charAt(0).toUpperCase() + id.slice(1)
+    }
 
     // ---- reusable pieces -----------------------------------------------------
 
@@ -684,7 +691,7 @@ Item {
                     model: full.settingsOpen ? full.oauthProviders : []
                     PlasmaComponents.CheckBox {
                         required property var modelData
-                        text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
+                        text: full.providerLabel(modelData)
                         checked: (root.snapshot.enabled || []).indexOf(modelData) !== -1
                         onToggled: root.action("--set-provider " + modelData + "=" + (checked ? "true" : "false"))
                     }

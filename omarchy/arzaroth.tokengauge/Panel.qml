@@ -173,12 +173,22 @@ Panel {
 
   // A disabled provider has no row to carry its display name, so the settings
   // pane falls back to the id - which needs the same acronym casing.
+  function catalogEntry(id) {
+    var key = String(id || "").toLowerCase()
+    var list = usage.providerCatalog
+    for (var i = 0; i < list.length; i++)
+      if (String(list[i].id) === key) return list[i]
+    return null
+  }
+
   function providerLabel(id) {
     var key = String(id || "").toLowerCase()
     for (var i = 0; i < providers.length; i++) {
       var row = providers[i]
       if (String(row.provider).toLowerCase() === key) return String(row.label || row.provider)
     }
+    var entry = catalogEntry(key)
+    if (entry) return String(entry.label)
     if (/^(glm|gpt|zai|ai)$/i.test(key)) return key.toUpperCase()
     return key.charAt(0).toUpperCase() + key.slice(1)
   }

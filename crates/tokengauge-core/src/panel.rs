@@ -2727,6 +2727,50 @@ mod tests {
         }
     }
 
+    /// A settings pane lists providers that have no row yet, so it names them
+    /// from `provider_catalog` (the tray from `provider_label`). Title-casing
+    /// the id read DeepSeek as Deepseek and opencode Go as Opencode.
+    #[test]
+    fn every_settings_pane_names_providers_as_the_core_does() {
+        let frontends = [
+            (
+                "tray",
+                "crates/tokengauge-tray/src",
+                "rs",
+                ".checkbox(&mut on, tokengauge_core::provider_label(provider))",
+            ),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+                "text: full.providerLabel(modelData)",
+            ),
+            (
+                "gnome",
+                "gnome/tokengauge@arzaroth.github.io",
+                "ts",
+                "title: providerLabel(snapshot, name)",
+            ),
+            (
+                "quickshell",
+                "omarchy/arzaroth.tokengauge",
+                "qml",
+                "text: root.providerLabel(providerChip.providerId)",
+            ),
+        ];
+        for (id, dir, extension, needle) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            assert!(
+                sources.iter().any(|src| src.contains(needle)),
+                "{id} ({dir}) no longer names its provider switches through the catalog"
+            );
+            assert!(
+                sources.iter().any(|src| src.contains("provider_catalog")) || extension == "rs",
+                "{id} ({dir}) never reads `provider_catalog`"
+            );
+        }
+    }
+
     /// remuda's button, on every surface that can draw one (decision 0004).
     ///
     /// Each must read `serving` off the status core resolves, and open the page

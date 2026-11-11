@@ -89,16 +89,16 @@ pub fn export(config: &TokenGaugeConfig) -> Result<SyncBundle> {
         bucket: sync.s3.bucket.trim().to_string(),
         prefix: sync.s3.prefix.trim().to_string(),
     };
-    let s3_credentials = match s3::resolve_credentials(&sync.s3, &config.cache_file)? {
-        (Some(access_key_id), Some(secret_access_key))
-            if sync.transport == SyncTransportKind::S3 =>
-        {
-            Some(S3Credentials {
+    let s3_credentials = if sync.transport == SyncTransportKind::S3 {
+        match s3::resolve_credentials(&sync.s3, &config.cache_file)? {
+            (Some(access_key_id), Some(secret_access_key)) => Some(S3Credentials {
                 access_key_id,
                 secret_access_key,
-            })
+            }),
+            _ => None,
         }
-        _ => None,
+    } else {
+        None
     };
     Ok(SyncBundle {
         tokengauge_sync: BUNDLE_FORMAT,
@@ -328,6 +328,24 @@ prefix = "tg"
         let bundle = export(&config).expect("export");
         assert_eq!(bundle.dir.as_deref(), Some("/srv/fleet"));
         assert!(bundle.s3.is_none());
+        assert!(bundle.s3_credentials.is_none());
+    }
+
+    #[test]
+    fn a_folder_fleet_exports_past_a_damaged_s3_keys_file_it_never_reads() {
+        let dir = scratch("folder-stale-s3");
+        let (config, _) = machine(
+            &dir,
+            "[sync]\nenabled = true\ntransport = \"dir\"\n[sync.dir]\npath = \"/srv/fleet\"\n",
+        );
+        crypto::store_key(&config.cache_file, &FleetKey::generate(), false).expect("key");
+        std::fs::write(
+            s3::credentials_path(&config.cache_file),
+            "not toml at all {",
+        )
+        .expect("write");
+        assert!(s3::load_credentials(&config.cache_file).is_err());
+        let bundle = export(&config).expect("export");
         assert!(bundle.s3_credentials.is_none());
     }
 

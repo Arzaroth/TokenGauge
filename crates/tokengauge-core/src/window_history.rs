@@ -262,14 +262,15 @@ impl WindowHistory {
 
 impl Trail {
     fn closed(&self) -> Option<ClosedWindow> {
-        self.closed_at(self.opened_at, *self.samples.last()?)
+        self.closed_at(self.opened_at, &self.samples)
     }
 
     fn closed_at(
         &self,
         opened_at: Option<DateTime<Utc>>,
-        (ms, used): (i64, u8),
+        samples: &[(i64, u8)],
     ) -> Option<ClosedWindow> {
+        let &(ms, used) = samples.last()?;
         (self.window_minutes >= CLOSED_MIN_MINUTES).then(|| ClosedWindow {
             provider: self.provider.clone(),
             credential: self.credential.clone(),
@@ -518,14 +519,11 @@ impl Trail {
     fn merge(&mut self, peer: &Trail) -> Vec<ClosedWindow> {
         let mut ended = Vec::new();
         let mut opened = self.opened_at.max(peer.opened_at);
-        if let Some(at) = opened.filter(|at| Some(*at) != self.opened_at)
-            && let Some(&last) = self
+        if let Some(at) = opened.filter(|at| Some(*at) != self.opened_at) {
+            let before = self
                 .samples
-                .iter()
-                .rev()
-                .find(|(t, _)| *t <= at.timestamp_millis())
-        {
-            ended.extend(self.closed_at(self.opened_at, last));
+                .partition_point(|(t, _)| *t <= at.timestamp_millis());
+            ended.extend(self.closed_at(self.opened_at, &self.samples[..before]));
         }
         let floor = opened.map_or(i64::MIN, |at| at.timestamp_millis());
         let mut points: Vec<(i64, u8)> = self
@@ -541,20 +539,11 @@ impl Trail {
             .rev()
             .find(|&i| points[i].1 < points[i - 1].1)
         {
-            let before = points[drop - 1];
-            ended.extend(self.closed_at(opened, before));
-            opened = DateTime::from_timestamp_millis(before.0);
+            ended.extend(self.closed_at(opened, &points[..drop]));
+            opened = DateTime::from_timestamp_millis(points[drop - 1].0);
             points.drain(..drop);
         }
-        let mut samples: Vec<(i64, u8)> = Vec::with_capacity(points.len());
-        for point in points {
-            match samples.as_mut_slice() {
-                [.., (_, before), last] if *before == point.1 && last.1 == point.1 => {
-                    last.0 = point.0;
-                }
-                _ => samples.push(point),
-            }
-        }
+        let mut samples = squeeze(points);
         if samples.len() > MAX_SAMPLES {
             samples.drain(..samples.len() - MAX_SAMPLES);
         }
@@ -562,6 +551,19 @@ impl Trail {
         self.opened_at = opened;
         ended
     }
+}
+
+fn squeeze(points: impl IntoIterator<Item = (i64, u8)>) -> Vec<(i64, u8)> {
+    let mut samples: Vec<(i64, u8)> = Vec::new();
+    for point in points {
+        match samples.as_mut_slice() {
+            [.., (_, before), last] if *before == point.1 && last.1 == point.1 => {
+                last.0 = point.0;
+            }
+            _ => samples.push(point),
+        }
+    }
+    samples
 }
 
 impl WindowHistory {

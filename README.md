@@ -40,7 +40,7 @@ Monitor token usage, costs, and limits for AI coding assistants from your Waybar
 | OpenRouter | API key | `openrouter = true` | `OPENROUTER_API_KEY` env, plus `OPENROUTER_MANAGEMENT_KEY` for the account balance |
 | opencode Go | API key | `opencode = true` | `OPENCODE_API_KEY` env, or the key `/connect` files in `$XDG_DATA_HOME/opencode/opencode.db` (opencode 2) or `auth.json` (opencode 1) |
 | Cursor | CLI | `cursor = true` | `~/.config/cursor/auth.json` (`cursor-agent` CLI; `~/.cursor/auth.json` or the Keychain on macOS) or `CURSOR_ACCESS_TOKEN` |
-| Copilot | Token | `copilot = true` | `COPILOT_QUOTA_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token` |
+| Copilot | Token | `copilot = true` | `COPILOT_QUOTA_TOKEN`, `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token` |
 | Antigravity | CLI | `antigravity = true` | `agy`'s sign-in (Secret Service keyring, or `~/.gemini/antigravity-cli/antigravity-oauth-token`) |
 | DeepSeek | API key | `deepseek = true` | `DEEPSEEK_API_KEY`, or the key opencode or pi saved |
 | Muse | CLI | `muse = true` | `muse login` (`MUSE_AUTH_PATH`, or `~/.config/muse/auth.json`) |

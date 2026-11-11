@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are spelled, rather than Deepseek, Minimax, Openrouter and Opencode.
 - A DeepSeek or MiniMax key opencode 2 keeps is read from `opencode.db`, as
   opencode reads it, rather than from the `auth.json` it stopped using.
+- Copilot reads `COPILOT_GITHUB_TOKEN`, which the Copilot CLI asks before
+  `GH_TOKEN`.
 
 ## [0.60.1] - 2026-11-11
 

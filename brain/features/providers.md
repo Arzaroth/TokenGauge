@@ -16,7 +16,7 @@ its live `auth.json`.
 | OpenRouter | `OPENROUTER_API_KEY`; optional management key for the balance | Credit, Key limit | no (vendor-reported cost) | yes (key, optional `management`) | none |
 | opencode Go | `OPENCODE_API_KEY` / `OPENCODE_GO_API_KEY`, then opencode 2's `opencode.db`, then opencode 1's `auth.json` | 5-hour, Weekly, Monthly | no | yes (key) | none |
 | Cursor | `CURSOR_ACCESS_TOKEN`, `~/.config/cursor/auth.json` (`~/.cursor/auth.json` on macOS, `CURSOR_CONFIG_DIR`) from `cursor-agent`, then the macOS Keychain | Included, Cursor models, Other models | no | yes | vs Pro |
-| Copilot | `COPILOT_QUOTA_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token` | Monthly | no | yes (key) | none |
+| Copilot | `COPILOT_QUOTA_TOKEN`, `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token` | Monthly | no | yes (key) | none |
 | Antigravity | `agy`'s sign-in: Secret Service keyring, then `antigravity-oauth-token` | Session, Weekly + other model groups | no | no | none |
 | DeepSeek | `DEEPSEEK_API_KEY`, opencode's saved key (`opencode.db` once opencode 2 imported `auth.json`), pi's | balance only | no | yes (key) | none |
 | MiniMax | `MINIMAX_API_KEY` (+ `MINIMAX_REGION=cn`), opencode's saved key (`opencode.db` once opencode 2 imported `auth.json`), pi's | Session, Weekly | no | yes (key + `region`) | none |

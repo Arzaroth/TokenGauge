@@ -202,7 +202,13 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Monthly", "Weekly", "Tertiary"),
         natively_read: false,
         fetch: copilot::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: copilot::live_login,
+            tokens: crate::credentials::stored_key_tokens,
+            fetch: copilot::fetch_stored,
+            check: crate::credentials::check_stored_key,
+            weigh: None,
+        }),
         auth: copilot_auth,
         enabled_in: |c| c.copilot,
     },
@@ -234,7 +240,13 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Balance", "Weekly", "Tertiary"),
         natively_read: false,
         fetch: deepseek::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: deepseek::live_login,
+            tokens: crate::credentials::stored_key_tokens,
+            fetch: deepseek::fetch_stored,
+            check: crate::credentials::check_stored_key,
+            weigh: None,
+        }),
         auth: deepseek_auth,
         enabled_in: |c| c.deepseek,
     },
@@ -250,7 +262,13 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Session", "Weekly", "Tertiary"),
         natively_read: false,
         fetch: minimax::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: minimax::live_login,
+            tokens: crate::credentials::stored_key_tokens,
+            fetch: minimax::fetch_stored,
+            check: crate::credentials::check_stored_key,
+            weigh: None,
+        }),
         auth: minimax_auth,
         enabled_in: |c| c.minimax,
     },
@@ -288,7 +306,13 @@ pub const PROVIDER_META: &[ProviderMeta] = &[
         windows: ("Credit", "Key limit", "Tertiary"),
         natively_read: false,
         fetch: openrouter::fetch,
-        store: None,
+        store: Some(StoreReader {
+            live: openrouter::live_login,
+            tokens: crate::credentials::stored_key_tokens,
+            fetch: openrouter::fetch_stored,
+            check: crate::credentials::check_stored_key,
+            weigh: None,
+        }),
         auth: openrouter_auth,
         enabled_in: |c| c.openrouter,
     },
@@ -736,34 +760,42 @@ fn antigravity_auth() -> AuthStatus {
 }
 
 fn deepseek_auth() -> AuthStatus {
-    if crate::deepseek::api_key().is_some() {
-        AuthStatus {
+    match crate::deepseek::api_key() {
+        Ok(Some(_)) => AuthStatus {
             ok: true,
             detail: "key found".to_string(),
             hint: "",
-        }
-    } else {
-        AuthStatus {
+        },
+        Ok(None) => AuthStatus {
             ok: false,
             detail: "no key".to_string(),
             hint: "set DEEPSEEK_API_KEY, or sign in to DeepSeek in opencode or pi",
-        }
+        },
+        Err(e) => AuthStatus {
+            ok: false,
+            detail: e.to_string(),
+            hint: "set DEEPSEEK_API_KEY, or sign in to DeepSeek in opencode or pi",
+        },
     }
 }
 
 fn minimax_auth() -> AuthStatus {
-    if crate::minimax::credential().is_some() {
-        AuthStatus {
+    match crate::minimax::credential() {
+        Ok(Some(_)) => AuthStatus {
             ok: true,
             detail: "key found".to_string(),
             hint: "",
-        }
-    } else {
-        AuthStatus {
+        },
+        Ok(None) => AuthStatus {
             ok: false,
             detail: "no key".to_string(),
             hint: "set MINIMAX_API_KEY, or sign in to MiniMax in opencode or pi",
-        }
+        },
+        Err(e) => AuthStatus {
+            ok: false,
+            detail: e.to_string(),
+            hint: "set MINIMAX_API_KEY, or sign in to MiniMax in opencode or pi",
+        },
     }
 }
 
@@ -918,6 +950,23 @@ mod tests {
         // GLM authenticates with an API key - no CLI.
         assert_eq!(provider_cli_name("glm"), None);
         assert_eq!(provider_cli_name("nope"), None);
+    }
+
+    #[test]
+    fn every_key_provider_remuda_stores_has_a_store_reader() {
+        for id in [
+            "glm",
+            "opencode",
+            "deepseek",
+            "minimax",
+            "openrouter",
+            "copilot",
+        ] {
+            assert!(
+                provider_meta(id).is_some_and(|meta| meta.store.is_some()),
+                "{id} has no StoreReader, so the logins remuda stores for it are never read"
+            );
+        }
     }
 
     #[test]

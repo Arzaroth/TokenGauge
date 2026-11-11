@@ -13,13 +13,13 @@ its live `auth.json`.
 | Kimi | `~/.kimi-code/credentials/kimi-code.json` (`KIMI_CODE_HOME`; the older CLI's `~/.kimi` when `~/.kimi-code` holds no credential) or `KIMI_CODE_API_KEY` | Weekly, Rate Limit + Monthly total (ratio pools) | yes | yes | vs Plus |
 | Grok | `~/.grok/auth.json` (`grok login`, `GROK_HOME`) | Pool (weekly or monthly, per the CLI's billing period), On-demand | yes | yes | by price |
 | GLM (z.ai) | `Z_AI_API_KEY` (legacy `ZAI_API_TOKEN`), `Z_AI_API_HOST`, `Z_AI_QUOTA_URL` | Weekly, 30-day, 5-hour | no (ccusage) | yes (key) | weekly credits |
-| OpenRouter | `OPENROUTER_API_KEY`; optional management key for the balance | Credit, Key limit | no (vendor-reported cost) | no | none |
+| OpenRouter | `OPENROUTER_API_KEY`; optional management key for the balance | Credit, Key limit | no (vendor-reported cost) | yes (key, optional `management`) | none |
 | opencode Go | `OPENCODE_API_KEY` / `OPENCODE_GO_API_KEY`, then opencode 2's `opencode.db`, then opencode 1's `auth.json` | 5-hour, Weekly, Monthly | no | yes (key) | none |
 | Cursor | `CURSOR_ACCESS_TOKEN`, `~/.config/cursor/auth.json` (`~/.cursor/auth.json` on macOS, `CURSOR_CONFIG_DIR`) from `cursor-agent`, then the macOS Keychain | Included, Cursor models, Other models | no | yes | vs Pro |
-| Copilot | `COPILOT_QUOTA_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token` | Monthly | no | no | none |
+| Copilot | `COPILOT_QUOTA_TOKEN`, `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token` | Monthly | no | yes (key) | none |
 | Antigravity | `agy`'s sign-in: Secret Service keyring, then `antigravity-oauth-token` | Session, Weekly + other model groups | no | no | none |
-| DeepSeek | `DEEPSEEK_API_KEY`, opencode's or pi's saved key | balance only | no | no | none |
-| MiniMax | `MINIMAX_API_KEY`, opencode's or pi's saved key | Session, Weekly | no | no | none |
+| DeepSeek | `DEEPSEEK_API_KEY`, opencode's saved key (`opencode.db` once opencode 2 imported `auth.json`), pi's | balance only | no | yes (key) | none |
+| MiniMax | `MINIMAX_API_KEY` (+ `MINIMAX_REGION=cn`), opencode's saved key (`opencode.db` once opencode 2 imported `auth.json`), pi's | Session, Weekly | no | yes (key + `region`) | none |
 | Muse | `MUSE_AUTH_PATH`, `~/.config/muse/auth.json` (`muse login`) | Session, Weekly | no | no | none |
 
 Notes:
@@ -131,6 +131,6 @@ Notes:
 ## Sources
 
 - `crates/tokengauge-core/src/providers.rs` (`PROVIDER_META`, `natively_read`, `provider_auth_status`)
-- `crates/tokengauge-core/src/{claude,codex,kimi,grok,glm,openrouter,opencode,cursor}.rs`
+- `crates/tokengauge-core/src/{claude,codex,kimi,grok,glm,openrouter,opencode,cursor,copilot,deepseek,minimax}.rs`
 - `crates/tokengauge-core/src/provider.rs`, `crates/tokengauge-core/src/config.rs` (`ProvidersConfig`)
 - selvedge's `src/brands.rs` and `assets/providers/`

@@ -8,6 +8,7 @@ use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::Deserialize;
 
+use crate::credentials::{LiveLogin, key_login, stored_key};
 use crate::provider::{check_status, saved_api_key};
 use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
@@ -34,24 +35,23 @@ fn env_clean(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-pub(crate) fn credential() -> Option<(String, &'static str)> {
+pub(crate) fn credential() -> Result<Option<(String, &'static str)>> {
     if let Some(key) = env_clean("MINIMAX_API_KEY") {
         let host = if env_clean("MINIMAX_REGION").as_deref() == Some("cn") {
             CN_HOST
         } else {
             GLOBAL_HOST
         };
-        return Some((key, host));
+        return Ok(Some((key, host)));
     }
-    let (key, saved_as) = saved_api_key(SAVED_AS)?;
-    Some((
-        key,
-        if saved_as.starts_with("minimax-cn") {
+    Ok(saved_api_key(SAVED_AS)?.map(|(key, saved_as)| {
+        let host = if saved_as.starts_with("minimax-cn") {
             CN_HOST
         } else {
             GLOBAL_HOST
-        },
-    ))
+        };
+        (key, host)
+    }))
 }
 
 #[derive(Deserialize)]
@@ -130,12 +130,16 @@ fn window(
     })
 }
 
-fn to_payload(resp: RemainsResponse, now: DateTime<Utc>) -> Result<ProviderPayload> {
+fn to_payload(
+    resp: RemainsResponse,
+    now: DateTime<Utc>,
+    auth_hint: &str,
+) -> Result<ProviderPayload> {
     if let Some(base) = resp.base_resp.as_ref()
         && let Some(code) = base.status_code.filter(|code| *code != 0)
     {
         if AUTH_STATUS_CODES.contains(&code) {
-            return Err(anyhow!("MiniMax unauthorized - check MINIMAX_API_KEY"));
+            return Err(anyhow!("MiniMax unauthorized - {auth_hint}"));
         }
         return Err(anyhow!(
             "MiniMax: {}",
@@ -186,25 +190,81 @@ fn to_payload(resp: RemainsResponse, now: DateTime<Utc>) -> Result<ProviderPaylo
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let (key, host) =
-        credential().ok_or_else(|| anyhow!("MiniMax key missing - set MINIMAX_API_KEY"))?;
+        credential()?.ok_or_else(|| anyhow!("MiniMax key missing - set MINIMAX_API_KEY"))?;
+    Ok(vec![remains_for(
+        &key,
+        host,
+        timeout,
+        "check MINIMAX_API_KEY",
+    )?])
+}
+
+pub(crate) fn live_login() -> LiveLogin {
+    key_login(credential().ok().flatten().map(|(key, _)| key))
+}
+
+/// A stored key's host, from the region remuda filed it under. A key stored
+/// before regions were is global, as an unset `MINIMAX_REGION` is.
+fn stored_host(text: &str) -> &'static str {
+    let region = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| value.get("region")?.as_str().map(str::to_string));
+    if region.as_deref() == Some("cn") {
+        CN_HOST
+    } else {
+        GLOBAL_HOST
+    }
+}
+
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    _now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    remains_for(
+        &stored_key(text)?,
+        stored_host(text),
+        timeout,
+        "`remuda login -p minimax` replaces the stored key",
+    )
+}
+
+fn remains_for(
+    key: &str,
+    host: &str,
+    timeout: Duration,
+    auth_hint: &str,
+) -> Result<ProviderPayload> {
     let response = http_client(timeout)?
         .get(format!("{host}/v1/token_plan/remains"))
         .bearer_auth(key)
         .send()
         .context("MiniMax quota request failed")?;
-    check_status(response.status(), "MiniMax", "check MINIMAX_API_KEY")?;
+    check_status(response.status(), "MiniMax", auth_hint)?;
     let body = response
         .json()
         .context("MiniMax returned an unreadable quota")?;
-    Ok(vec![to_payload(body, Utc::now())?])
+    to_payload(body, Utc::now(), auth_hint)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const HINT: &str = "check MINIMAX_API_KEY";
+
+    #[test]
+    fn a_stored_key_answers_on_the_host_of_the_region_it_was_filed_under() {
+        assert_eq!(stored_host(r#"{"key": "k", "region": "cn"}"#), CN_HOST);
+        assert_eq!(
+            stored_host(r#"{"key": "k", "region": "global"}"#),
+            GLOBAL_HOST
+        );
+        assert_eq!(stored_host(r#"{"key": "k"}"#), GLOBAL_HOST);
+    }
+
     fn usage(body: &str) -> UsageSnapshot {
-        to_payload(serde_json::from_str(body).unwrap(), Utc::now())
+        to_payload(serde_json::from_str(body).unwrap(), Utc::now(), HINT)
             .unwrap()
             .usage
             .unwrap()
@@ -233,7 +293,7 @@ mod tests {
                 "current_weekly_remaining_percent":40,"weekly_remains_time":3600000}]}"#,
         )
         .unwrap();
-        let weekly = to_payload(body, now)
+        let weekly = to_payload(body, now, HINT)
             .unwrap()
             .usage
             .unwrap()
@@ -264,14 +324,24 @@ mod tests {
                 "current_interval_status":3,"current_weekly_status":3}]}"#,
         )
         .unwrap();
-        assert!(to_payload(body, Utc::now()).is_err());
+        assert!(to_payload(body, Utc::now(), HINT).is_err());
     }
 
     #[test]
     fn a_bad_key_under_a_200_is_a_login_problem() {
         let body: RemainsResponse =
             serde_json::from_str(r#"{"base_resp":{"status_code":2049,"status_msg":"x"}}"#).unwrap();
-        let err = to_payload(body, Utc::now()).unwrap_err().to_string();
+        let err = to_payload(body, Utc::now(), HINT).unwrap_err().to_string();
         assert!(err.contains("unauthorized"), "{err}");
+    }
+
+    #[test]
+    fn a_stored_key_refused_under_a_200_names_the_stored_key() {
+        let body: RemainsResponse =
+            serde_json::from_str(r#"{"base_resp":{"status_code":1004,"status_msg":"x"}}"#).unwrap();
+        let err = to_payload(body, Utc::now(), "replace the stored key")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "MiniMax unauthorized - replace the stored key");
     }
 }

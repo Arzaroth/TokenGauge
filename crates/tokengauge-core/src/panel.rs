@@ -855,13 +855,24 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
             Some(state) => (SectionKind::Rows, vec![state_row(state)]),
             None => {
                 let rows = limit_rows(g);
-                if rows.is_empty() {
-                    (
-                        SectionKind::Rows,
-                        vec![PanelRow::new(tr("Limits"), tr("none reported"))],
-                    )
-                } else {
+                if !rows.is_empty() {
                     (SectionKind::Meters, rows)
+                } else {
+                    // A prepaid credential sells a balance rather than a
+                    // window, and the balance is the figure it was asked for.
+                    let balance = cost_rows(
+                        None,
+                        g.credits.map(|b| (b, g.credit_unit)),
+                        g.credit_limit.as_ref(),
+                    );
+                    if balance.is_empty() {
+                        (
+                            SectionKind::Rows,
+                            vec![PanelRow::new(tr("Limits"), tr("none reported"))],
+                        )
+                    } else {
+                        (SectionKind::Rows, balance)
+                    }
                 }
             }
         };
@@ -1662,6 +1673,27 @@ mod tests {
         spec.iter()
             .find(|s| s.id == id && s.group.as_deref() == group)
             .unwrap_or_else(|| panic!("no {id} section for {group:?}"))
+    }
+
+    #[test]
+    fn a_prepaid_credential_draws_its_balance_where_a_plan_draws_its_limits() {
+        let prepaid = |name: &str, active: bool, balance: Option<f64>| {
+            let mut r = credential(name, active, None, 0, 0);
+            r.session_used = None;
+            r.weekly_used = None;
+            r.credits = balance;
+            r.credit_unit = CreditUnit::Cny;
+            r
+        };
+        let spec = panel_spec(&grouped(vec![
+            prepaid("work", true, Some(12.5)),
+            prepaid("perso", false, None),
+        ]));
+        let work = section(&spec, "limits", Some("work"));
+        assert_eq!(work.kind, SectionKind::Rows);
+        assert_eq!(work.rows[0].value, "¥12.50");
+        let perso = section(&spec, "limits", Some("perso"));
+        assert_eq!(perso.rows[0].value, tr("none reported"));
     }
 
     /// Decision 0003's two worked examples, in units of the largest plan.

@@ -155,13 +155,26 @@ fn row_login(value: &str, now_ms: i64) -> Option<Login> {
 /// key opencode stopped using. Each integration's login is the row opencode
 /// selects, the active one, else the newest.
 fn database_login(path: &Path, now_ms: i64) -> Result<Option<Option<Login>>> {
+    database_login_for(path, ACCOUNT_IDS, false, now_ms)
+        .map(|found| found.map(|login| login.map(|(login, _)| login)))
+}
+
+/// The first of `ids` with a login in the database, and that id. With
+/// `keys_only`, an OAuth login is passed over for the next id, as remuda
+/// passes over a slot that holds no key.
+pub(crate) fn database_login_for(
+    path: &Path,
+    ids: &[&str],
+    keys_only: bool,
+    now_ms: i64,
+) -> Result<Option<Option<(Login, String)>>> {
     use rusqlite::{Connection, OpenFlags, OptionalExtension};
     match std::fs::metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(anyhow!("opencode's opencode.db could not be read")),
         Ok(_) => {}
     }
-    let read = || -> rusqlite::Result<Option<Option<Login>>> {
+    let read = || -> rusqlite::Result<Option<Option<(Login, String)>>> {
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -185,12 +198,15 @@ fn database_login(path: &Path, now_ms: i64) -> Result<Option<Option<Login>>> {
             "SELECT value FROM credential WHERE integration_id = ?1 \
              ORDER BY active DESC, time_created DESC, id DESC LIMIT 1",
         )?;
-        for id in ACCOUNT_IDS {
+        for id in ids {
             let value = selected
                 .query_row([id], |row| row.get::<_, String>(0))
                 .optional()?;
-            if let Some(login) = value.and_then(|value| row_login(&value, now_ms)) {
-                return Ok(Some(Some(login)));
+            if let Some(login) = value
+                .and_then(|value| row_login(&value, now_ms))
+                .filter(|login| !keys_only || matches!(login, Login::Key(_)))
+            {
+                return Ok(Some(Some((login, (*id).to_string()))));
             }
         }
         Ok(Some(None))
@@ -582,6 +598,60 @@ mod tests {
 
         let path = database("empty", true, &[("anthropic", Some(true), 1, &other)]);
         assert_eq!(database_login(&path, NOW_MS).unwrap(), Some(None));
+    }
+
+    #[test]
+    fn a_key_saved_for_another_provider_comes_from_the_database_once_it_imported_auth_json() {
+        use crate::provider::saved_api_key_in;
+        let dir = std::env::temp_dir().join(format!("tg-saved-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let auth = dir.join("auth.json");
+        std::fs::write(&auth, r#"{"deepseek": {"type": "api", "key": "stale"}}"#).unwrap();
+        let pi = dir.join("pi-auth.json");
+        std::fs::write(&pi, r#"{"deepseek": {"key": "from-pi"}}"#).unwrap();
+        let live = r#"{"type": "api", "key": "live"}"#;
+        let ids = &["deepseek"];
+
+        let imported = database("saved-imported", true, &[("deepseek", None, 1, live)]);
+        assert_eq!(
+            saved_api_key_in(&imported, &auth, Some(&pi), ids, NOW_MS).unwrap(),
+            Some(("live".into(), "deepseek".into()))
+        );
+
+        let pending = database("saved-pending", false, &[("deepseek", None, 1, live)]);
+        assert_eq!(
+            saved_api_key_in(&pending, &auth, Some(&pi), ids, NOW_MS).unwrap(),
+            Some(("stale".into(), "deepseek".into()))
+        );
+
+        let empty = database("saved-empty", true, &[]);
+        assert_eq!(
+            saved_api_key_in(&empty, &auth, Some(&pi), ids, NOW_MS).unwrap(),
+            Some(("from-pi".into(), "deepseek".into()))
+        );
+
+        let signed_in = format!(
+            r#"{{"type": "oauth", "access": "tok", "expires": {}}}"#,
+            NOW_MS + 1
+        );
+        let unreadable = dir.join("junk.db");
+        std::fs::write(&unreadable, "not a database").unwrap();
+        assert!(saved_api_key_in(&unreadable, &auth, Some(&pi), ids, NOW_MS).is_err());
+
+        let cn = r#"{"type": "api", "key": "cn"}"#;
+        let regional = database(
+            "saved-cn",
+            true,
+            &[
+                ("minimax", None, 2, &signed_in),
+                ("minimax-cn", None, 1, cn),
+            ],
+        );
+        assert_eq!(
+            saved_api_key_in(&regional, &auth, None, &["minimax", "minimax-cn"], NOW_MS).unwrap(),
+            Some(("cn".into(), "minimax-cn".into()))
+        );
     }
 
     #[test]

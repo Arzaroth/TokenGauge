@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- DeepSeek, MiniMax, OpenRouter and Copilot logins stored in remuda are shown
+  beside the live one, as GLM's and opencode Go's are.
+
 ### Changed
 
 - A closed weekly window keeps the trail it closed with for eight weeks
@@ -21,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Settings panes name DeepSeek, MiniMax, OpenRouter and opencode Go as they
   are spelled, rather than Deepseek, Minimax, Openrouter and Opencode.
+- A DeepSeek or MiniMax key opencode 2 keeps is read from `opencode.db`, as
+  opencode reads it, rather than from the `auth.json` it stopped using.
+- Copilot reads `COPILOT_GITHUB_TOKEN`, which the Copilot CLI asks before
+  `GH_TOKEN`.
 
 ## [0.60.1] - 2026-11-11
 

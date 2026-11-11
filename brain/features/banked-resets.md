@@ -50,7 +50,8 @@ or remuda's page's.
 - The marker names each kind it holds (`1 Fable reset banked`, `1 Fable reset,
   1 weekly reset banked`) and says only `3 resets banked` when the count is not
   split, the split does not add up to it, or it holds a kind this build cannot
-  name.
+  name. An idle kind is marked `(nothing to reset)`, as claude.ai greys
+  it out.
 - The marker is resolved in `panel.rs` when the row renders, so the countdown
   moves between fetches. Once the soonest expiry passes the marker goes, since
   the count no longer says how many are left, and `rolled_over` makes the

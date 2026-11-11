@@ -2,7 +2,8 @@
 //! endpoint the Copilot CLI and editors read. GitHub documents no personal-account
 //! usage API.
 //!
-//! The token is `COPILOT_QUOTA_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, or what
+//! The token is `COPILOT_QUOTA_TOKEN`, `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`,
+//! `GITHUB_TOKEN`, or what
 //! `gh auth token` prints.
 use std::process::Command;
 use std::time::Duration;
@@ -18,7 +19,12 @@ use crate::provider::{check_status, json_num};
 use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
 const QUOTA_URL: &str = "https://api.github.com/copilot_internal/user";
-pub(crate) const TOKEN_ENVS: &[&str] = &["COPILOT_QUOTA_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
+pub(crate) const TOKEN_ENVS: &[&str] = &[
+    "COPILOT_QUOTA_TOKEN",
+    "COPILOT_GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+];
 const GH_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(crate) fn token() -> Option<String> {

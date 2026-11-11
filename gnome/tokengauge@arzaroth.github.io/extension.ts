@@ -739,6 +739,8 @@ class TokenGaugeIndicator extends PanelMenu.Button {
     _section(section: Panel.Section): St.BoxLayout {
         const box_ = box(true, {style_class: 'tokengauge-section', x_expand: true});
         box_.add_child(label(section.title, 'tokengauge-section-title'));
+        if (section.note)
+            box_.add_child(label(section.note, 'tokengauge-dim tokengauge-section-note'));
         for (const row of section.rows) {
             switch (section.kind) {
             case 'meters': box_.add_child(this._meter(row)); break;

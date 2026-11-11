@@ -238,7 +238,7 @@ fn render_detail(frame: &mut Frame, area: Rect, state: &mut AppState) {
         .title(title)
         .border_style(Style::default().fg(dim()));
     let inner = block.inner(area);
-    let total: u16 = spec.iter().map(section_height).sum();
+    let total: u16 = spec.iter().map(|s| section_height(s, inner.width)).sum();
     let window = scroll_window(total, inner.height, state.detail_offset);
     state.detail_offset = window.offset;
     state.detail_page = inner.height.max(1);
@@ -271,7 +271,7 @@ fn render_detail(frame: &mut Frame, area: Rect, state: &mut AppState) {
 fn render_sections(frame: &mut Frame, area: Rect, spec: &[Section]) {
     let mut constraints: Vec<Constraint> = spec
         .iter()
-        .map(|section| Constraint::Length(section_height(section)))
+        .map(|section| Constraint::Length(section_height(section, area.width)))
         .collect();
     constraints.push(Constraint::Min(0));
     let chunks = Layout::vertical(constraints).split(area);
@@ -373,16 +373,26 @@ fn section_rows(section: &Section) -> &[PanelRow] {
     }
 }
 
-fn section_height(section: &Section) -> u16 {
+/// Lines the section's note wraps to in a pane `width` wide.
+fn note_height(section: &Section, width: u16) -> u16 {
+    let room = width.saturating_sub(2).max(1) as usize;
+    section
+        .note
+        .as_deref()
+        .map_or(0, |note| note.chars().count().div_ceil(room).max(1) as u16)
+}
+
+fn section_height(section: &Section, width: u16) -> u16 {
     if section.id == DAY_CHART_ID {
         return DAY_CHART_HEIGHT;
     }
     let rows = section_rows(section).len() as u16;
+    let note = note_height(section, width);
     match section.kind {
         // Header line, one line per meter, then a spacer before what follows.
-        SectionKind::Meters => rows + 2,
+        SectionKind::Meters => rows + 2 + note,
         // The title rides a top border rather than taking a line of its own.
-        SectionKind::Bars | SectionKind::Rows => rows + 1,
+        SectionKind::Bars | SectionKind::Rows => rows + 1 + note,
     }
 }
 
@@ -398,12 +408,19 @@ fn render_section(frame: &mut Frame, area: Rect, section: &Section) {
     }
 }
 
-/// A dim heading on a line of its own, for the kinds that do not draw a table.
-fn section_header(title: &str) -> Paragraph<'static> {
-    Paragraph::new(Line::from(Span::styled(
-        format!(" {title}"),
+/// A dim heading on a line of its own, for the kinds that do not draw a table,
+/// with the section's note wrapped under it.
+fn section_header(section: &Section) -> Paragraph<'static> {
+    let mut lines = vec![Line::from(Span::styled(
+        format!(" {}", section.title),
         Style::default().fg(dim()).add_modifier(Modifier::BOLD),
-    )))
+    ))];
+    lines.extend(section.note.as_deref().map(note_line));
+    Paragraph::new(lines).wrap(Wrap { trim: false })
+}
+
+fn note_line(note: &str) -> Line<'static> {
+    Line::from(Span::styled(format!(" {note}"), Style::default().fg(dim())))
 }
 
 fn split_bar_spans(segments: &[Segment], width: usize) -> Vec<Span<'static>> {
@@ -448,9 +465,12 @@ fn render_meters(frame: &mut Frame, area: Rect, section: &Section) {
     if rows.is_empty() {
         return;
     }
-    let constraints: Vec<Constraint> = (0..rows.len() + 2).map(|_| Constraint::Length(1)).collect();
+    let header = 1 + note_height(section, area.width);
+    let constraints: Vec<Constraint> = std::iter::once(Constraint::Length(header))
+        .chain((0..rows.len() + 1).map(|_| Constraint::Length(1)))
+        .collect();
     let chunks = Layout::vertical(constraints).split(area);
-    frame.render_widget(section_header(&section.title), chunks[0]);
+    frame.render_widget(section_header(section), chunks[0]);
 
     // Size the label column to the widest label, capped, so a full name like
     // "Weekly (Sonnet)" does not ellipsize when there is room for it.
@@ -559,6 +579,21 @@ fn render_bars(frame: &mut Frame, area: Rect, section: &Section) {
     let block = section_block(&section.title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let inner = match section.note.as_deref() {
+        Some(note) => {
+            let split = Layout::vertical([
+                Constraint::Length(note_height(section, area.width)),
+                Constraint::Min(0),
+            ])
+            .split(inner);
+            frame.render_widget(
+                Paragraph::new(note_line(note)).wrap(Wrap { trim: false }),
+                split[0],
+            );
+            split[1]
+        }
+        None => inner,
+    };
 
     let rows = section_rows(section);
     if rows.is_empty() {
@@ -634,8 +669,9 @@ fn render_bars(frame: &mut Frame, area: Rect, section: &Section) {
 /// figures - and the sync health note that qualifies every one of them, which
 /// is why it is drawn here and not only on the sync screen.
 fn render_rows(frame: &mut Frame, area: Rect, section: &Section) {
-    let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
-    frame.render_widget(section_header(&section.title), chunks[0]);
+    let header = 1 + note_height(section, area.width);
+    let chunks = Layout::vertical([Constraint::Length(header), Constraint::Min(0)]).split(area);
+    frame.render_widget(section_header(section), chunks[0]);
 
     let rows = section_rows(section);
     let label_w = rows
@@ -1178,7 +1214,7 @@ mod tests {
         let row = provider_with_sync_note();
         for section in panel_spec(&row, &Default::default()) {
             assert!(
-                section_height(&section) > 0,
+                section_height(&section, 80) > 0,
                 "{} reserves no lines",
                 section.id
             );

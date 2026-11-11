@@ -44,6 +44,9 @@ export interface Section {
     title: string;
     kind: SectionKind;
     rows: SectionRow[];
+    /// A dim line under the title: a credential's banked resets. Absent when
+    /// there is none, and from a binary older than the field.
+    note?: string;
 }
 
 export interface HistoryPoint {

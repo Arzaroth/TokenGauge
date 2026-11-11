@@ -2552,6 +2552,48 @@ mod tests {
     /// compiler knows about: one that never draws it shows the pooled bar and
     /// looks finished. The needle is the call that draws a meter's segments,
     /// not the word, which a type declaration alone would carry.
+    /// `Section.note` is a field no compiler makes a frontend read, and the
+    /// banked resets moved into it from the title: a frontend that skips it
+    /// says nothing about them at all.
+    #[test]
+    fn every_panel_frontend_draws_the_section_note() {
+        let frontends = [
+            (
+                "waybar",
+                "crates/tokengauge-waybar/src",
+                "rs",
+                "section.note",
+            ),
+            ("tray", "crates/tokengauge-tray/src", "rs", "section.note"),
+            ("tui", "crates/tokengauge-tui/src", "rs", "section.note"),
+            (
+                "plasma",
+                "plasma/org.tokengauge.plasmoid/contents/ui",
+                "qml",
+                "modelData.note",
+            ),
+            (
+                "gnome",
+                "gnome/tokengauge@arzaroth.github.io",
+                "ts",
+                "section.note",
+            ),
+            (
+                "quickshell",
+                "omarchy/arzaroth.tokengauge",
+                "qml",
+                "modelData.note",
+            ),
+        ];
+        for (id, dir, extension, needle) in frontends {
+            let sources = frontend_sources(id, dir, extension);
+            assert!(
+                sources.iter().any(|src| src.contains(needle)),
+                "{id} ({dir}) never draws a section's `note` (`{needle}`)"
+            );
+        }
+    }
+
     #[test]
     fn every_panel_frontend_draws_split_bars() {
         let frontends = [

@@ -1770,4 +1770,22 @@ mod tests {
             .collect();
         assert_eq!(kept, [(90, 2), (90, 0)]);
     }
+
+    #[test]
+    fn interleaved_refills_never_put_a_drop_inside_a_closed_week() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(
+                Some("work"),
+                "a",
+                reset,
+                &[(h(10), 40), (h(30), 60)],
+            )],
+            closed: Vec::new(),
+        };
+        let theirs = trail_of(None, "a", reset, &[(h(20), 5), (h(40), 10)]);
+        history.fold(&[&peer(vec![theirs], Vec::new())], Utc::now());
+        assert_eq!(history.closed.len(), 1);
+        assert_eq!(history.closed[0].samples, [(h(20), 5), (h(30), 60)]);
+    }
 }

@@ -92,6 +92,7 @@ enforce what no type system can:
 | `every_panel_frontend_draws_split_bars` | segments drawn (matches the drawing call) |
 | `every_panel_frontend_draws_the_section_note` | `Section.note` drawn under the title |
 | `every_settings_pane_offers_the_panel_options` | `--set-panel` options offered |
+| `every_settings_pane_names_providers_as_the_core_does` | provider switches named from `provider_catalog` |
 | `every_frontend_with_a_second_screen_draws_the_history_series` | history drawn (not waybar) |
 | `every_frontend_with_a_header_offers_remuda_while_it_serves` | remuda button (TUI, GNOME, Plasma, Omarchy) |
 

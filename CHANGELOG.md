@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`closed[].samples` in `tokengauge-window-history.json` and the fleet
   view), so remuda can project a pool from the hours a usual week spends it
   rather than the last few. The record itself is still kept a year.
+- Omarchy: the settings pane lists providers as a grid of chips with their
+  logos, lit while enabled, in place of thirteen switch rows. The number keys
+  no longer toggle providers.
+
+### Fixed
+
+- Settings panes name DeepSeek, MiniMax, OpenRouter and opencode Go as they
+  are spelled, rather than Deepseek, Minimax, Openrouter and Opencode.
 
 ## [0.60.1] - 2026-11-11
 

@@ -549,7 +549,11 @@ impl Trail {
             .rev()
             .find(|&i| points[i].1 < points[i - 1].1)
         {
-            ended.extend(self.closed_at(opened, &points[..drop]));
+            let start = (1..drop)
+                .rev()
+                .find(|&i| points[i].1 < points[i - 1].1)
+                .unwrap_or(0);
+            ended.extend(self.closed_at(opened, &points[start..drop]));
             opened = DateTime::from_timestamp_millis(points[drop - 1].0);
             points.drain(..drop);
         }

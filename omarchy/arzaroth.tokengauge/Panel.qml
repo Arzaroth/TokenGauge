@@ -1158,6 +1158,13 @@ Panel {
                 border.color: enabledNow ? Commons.Color.accent : root.alpha(root.foreground, 0.22)
                 opacity: usage.loading ? 0.6 : 1
 
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: root.providerLabel(providerId)
+                Accessible.checkable: true
+                Accessible.checked: enabledNow
+                Accessible.onToggleAction: if (!usage.loading) usage.setProvider(providerId, !enabledNow)
+                Accessible.onPressAction: if (!usage.loading) usage.setProvider(providerId, !enabledNow)
+
                 Row {
                   anchors.left: parent.left
                   anchors.right: parent.right

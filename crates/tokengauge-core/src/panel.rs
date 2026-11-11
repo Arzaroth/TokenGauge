@@ -709,7 +709,12 @@ fn banked_marker(row: &ProviderRow) -> Option<String> {
                 (Full | Other, true) => crate::i18n::tr("{count} full reset"),
                 (Full | Other, false) => crate::i18n::tr("{count} full resets"),
             };
-            crate::i18n::fill(template, &[("count", &k.count)])
+            let item = crate::i18n::fill(template, &[("count", &k.count)]);
+            if k.idle {
+                tf!("{item} (nothing to reset)", item = item)
+            } else {
+                item
+            }
         })
         .collect::<Vec<_>>()
         .join(", ");
@@ -3154,6 +3159,18 @@ mod tests {
         assert_eq!(
             section(&panel_spec(&r), "limits", None).title,
             "LIMITS · 2 resets banked, expires in 1h 30m"
+        );
+    }
+
+    #[test]
+    fn an_idle_kind_is_marked_as_having_nothing_to_reset() {
+        use crate::ResetKind::{Fable, Weekly};
+        let mut r = row();
+        r.banked_resets = of_kinds(&[(Fable, 1), (Weekly, 1)]);
+        r.banked_resets.as_mut().unwrap().kinds[0].idle = true;
+        assert_eq!(
+            section(&panel_spec(&r), "limits", None).title,
+            "LIMITS · 1 Fable reset (nothing to reset), 1 weekly reset banked, expires in 1h 30m"
         );
     }
 

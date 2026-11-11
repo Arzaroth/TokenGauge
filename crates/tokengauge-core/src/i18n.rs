@@ -311,6 +311,7 @@ const FRENCH: &[(&str, &str)] = &[
     ("{count} full reset", "{count} réinitialisation complète"),
     ("{count} full resets", "{count} réinitialisations complètes"),
     ("{list} banked{expiry}", "{list} en réserve{expiry}"),
+    ("{item} (nothing to reset)", "{item} (rien à réinitialiser)"),
     ("live login", "connexion active"),
     ("active", "actif"),
     ("not in total", "hors total"),

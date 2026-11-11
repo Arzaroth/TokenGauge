@@ -1681,4 +1681,88 @@ mod tests {
             [(Some("a"), Some("work"), 91), (Some("z"), None, 91)]
         );
     }
+
+    #[test]
+    fn a_closed_week_keeps_the_trail_it_closed_with() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(
+                Some("work"),
+                "a",
+                reset,
+                &[(h(1), 5), (h(20), 40), (h(30), 40), (h(40), 40)],
+            )],
+            closed: Vec::new(),
+        };
+        history.prune(reset + Duration::minutes(1));
+        assert!(history.trails.is_empty());
+        assert_eq!(history.closed[0].used, 40);
+        assert_eq!(
+            history.closed[0].samples,
+            [(h(1), 5), (h(20), 40), (h(40), 40)]
+        );
+    }
+
+    #[test]
+    fn the_same_closed_week_from_two_machines_keeps_both_their_samples() {
+        let (reset, h) = week();
+        let mut history = WindowHistory {
+            trails: vec![trail_of(
+                Some("work"),
+                "a",
+                reset,
+                &[(h(10), 20), (h(20), 50)],
+            )],
+            closed: Vec::new(),
+        };
+        let mut refilled = trail_of(None, "a", reset, &[(h(80), 2)]);
+        refilled.opened_at = DateTime::from_timestamp_millis(h(75));
+        let theirs = ClosedWindow {
+            provider: "claude".into(),
+            credential: None,
+            account_digest: Some("a".into()),
+            window: "secondary".into(),
+            window_minutes: 10080,
+            opened_at: reset - Duration::days(7),
+            resets_at: reset,
+            used: 70,
+            seen_at: DateTime::from_timestamp_millis(h(60)).unwrap(),
+            samples: vec![(h(10), 20), (h(60), 70)],
+        };
+        history.fold(&[&peer(vec![refilled], vec![theirs])], Utc::now());
+        assert_eq!(history.closed.len(), 1);
+        assert_eq!(history.closed[0].used, 70);
+        assert_eq!(
+            history.closed[0].samples,
+            [(h(10), 20), (h(20), 50), (h(60), 70)]
+        );
+    }
+
+    #[test]
+    fn a_closed_week_loses_its_samples_after_eight_weeks_and_keeps_its_figure() {
+        let now = Utc::now();
+        let record = |days: i64| ClosedWindow {
+            provider: "claude".into(),
+            credential: Some("work".into()),
+            account_digest: Some("a".into()),
+            window: "secondary".into(),
+            window_minutes: 10080,
+            opened_at: now - Duration::days(days + 7),
+            resets_at: now - Duration::days(days),
+            used: 90,
+            seen_at: now - Duration::days(days),
+            samples: vec![(0, 10), (1, 90)],
+        };
+        let mut history = WindowHistory {
+            trails: Vec::new(),
+            closed: vec![record(55), record(57)],
+        };
+        history.prune(now);
+        let kept: Vec<_> = history
+            .closed
+            .iter()
+            .map(|c| (c.used, c.samples.len()))
+            .collect();
+        assert_eq!(kept, [(90, 2), (90, 0)]);
+    }
 }

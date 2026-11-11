@@ -8,6 +8,7 @@
 //! See `brain/architecture/sync.md` for the design and decision 0001 in
 //! `brain/decisions.md` for why it is shaped this way.
 
+pub mod bundle;
 pub mod config;
 pub mod contribution;
 pub mod crypto;
@@ -19,6 +20,7 @@ pub mod s3;
 pub mod store;
 pub mod transport;
 
+pub use bundle::{BUNDLE_FORMAT, BundleS3, Joined, SyncBundle};
 pub use contribution::{
     Adopted, Bucket, BucketKey, Contribution, DayDigest, DeviceRecord, Granularity, SCHEMA_VERSION,
     WIRE_RETENTION_DAYS, bucketize, content_hash, day_digests, syncable,
@@ -36,5 +38,9 @@ pub use report::{
 pub use run::{
     BackfillOutcome, SyncOutcome, adopt, backfill, forget, local_device_id, refresh,
     test_round_trip,
+};
+pub use s3::{
+    S3Credentials, credentials_path as s3_credentials_path,
+    load_credentials as load_s3_credentials, store_credentials as store_s3_credentials,
 };
 pub use transport::{PeerEntry, Transport};

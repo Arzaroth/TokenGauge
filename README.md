@@ -296,6 +296,13 @@ Pass the key as an argument only in a script you trust: an argument lands in
 shell history and in `/proc/<pid>/cmdline`, and possession of the key is the
 only authentication there is.
 
+To set a machine up in one step, transport and all, print the fleet with
+`tokengauge --sync-export` on a machine already in it and pipe that to
+`tokengauge --sync-join -` on the new one, through something private (an ssh
+session, a wormhole). The bundle holds the key, the `[sync]` settings with your
+home directory written as `~/`, and the S3 keys; never this machine's device id
+or label.
+
 The desktop frontends all have a button for this: the Plasma applet's settings
 pane, the GNOME popup header, `y` in the Omarchy widget's settings, and the
 tray menu.
@@ -304,8 +311,12 @@ tray menu.
 
 Press `x` on the sync screen to switch, then set the endpoint, bucket, region
 and prefix. Works with S3, Cloudflare R2, Backblaze B2's S3 endpoint, MinIO and
-Garage. Credentials come from `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
-rather than the config file.
+Garage. Store the credentials with `tokengauge --sync-s3-credentials -`, which
+reads the access key id and the secret from stdin, one per line, into a private
+file beside the fleet key (`tokengauge-s3-credentials`, mode 0600 on Unix).
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` still work when that file is
+absent, but they sit in every process's environment and claim the names every
+other S3 client reads.
 
 ```toml
 [sync]

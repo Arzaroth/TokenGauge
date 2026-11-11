@@ -281,7 +281,7 @@ pub fn store_key(cache_file: &Path, key: &FleetKey, overwrite: bool) -> Result<P
 }
 
 #[cfg(unix)]
-fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+pub(super) fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let mut file = fs::OpenOptions::new()
@@ -299,7 +299,7 @@ fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 /// states the limitation rather than implying the 0600 above applies
 /// everywhere.
 #[cfg(not(unix))]
-fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+pub(super) fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let mut body = contents.to_vec();
     body.push(b'\n');
     fs::write(path, body)

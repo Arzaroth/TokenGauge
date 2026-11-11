@@ -28,7 +28,7 @@ pub trait Transport: Send {
     fn delete(&self, name: &str) -> Result<()>;
 }
 
-pub fn open(config: &SyncConfig) -> Result<Box<dyn Transport>> {
+pub fn open(config: &SyncConfig, cache_file: &Path) -> Result<Box<dyn Transport>> {
     match config.transport {
         SyncTransportKind::Dir => {
             if config.dir.path.as_os_str().is_empty() {
@@ -38,6 +38,7 @@ pub fn open(config: &SyncConfig) -> Result<Box<dyn Transport>> {
         }
         SyncTransportKind::S3 => Ok(Box::new(super::s3::S3Transport::new(
             &config.s3,
+            cache_file,
             std::time::Duration::from_secs(30),
         )?)),
     }

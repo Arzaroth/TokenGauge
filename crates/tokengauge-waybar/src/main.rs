@@ -130,9 +130,20 @@ pub struct Args {
     /// Join the fleet a `--sync-init` key belongs to. Prefer `--sync-join -`,
     /// which reads the key from stdin: an argument lands in shell history and
     /// in `/proc/<pid>/cmdline`, and possession of the key is the only
-    /// authentication there is.
+    /// authentication there is. Stdin can also hold what `--sync-export`
+    /// printed, which sets up the transport and its S3 keys too.
     #[arg(long, value_name = "KEY")]
     sync_join: Option<String>,
+    /// Print everything another machine needs to join this fleet on its own,
+    /// as JSON: the key, the `[sync]` transport and the S3 keys, never this
+    /// device's id or label. Pipe it to `tokengauge --sync-join -` there.
+    #[arg(long)]
+    sync_export: bool,
+    /// Store the S3 keys the bucket transport signs with, in a private file
+    /// beside the fleet key: `--sync-s3-credentials -`, then the access key id
+    /// and the secret access key on stdin, one per line.
+    #[arg(long, value_name = "-")]
+    sync_s3_credentials: Option<String>,
     /// Replace an existing fleet key. Every machine has to be re-keyed
     /// together: devices holding the old key stop being readable.
     #[arg(long)]
@@ -155,7 +166,7 @@ pub struct Args {
     #[arg(
         long,
         value_name = "DEVICE",
-        conflicts_with_all = ["sync_init", "sync_join", "sync_status", "sync_test", "sync_forget", "sync_setup"]
+        conflicts_with_all = ["sync_init", "sync_join", "sync_export", "sync_s3_credentials", "sync_status", "sync_test", "sync_forget", "sync_setup"]
     )]
     sync_adopt: Option<String>,
     /// Open the TUI on its sync screen, in a terminal.

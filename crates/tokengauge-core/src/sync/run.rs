@@ -301,7 +301,7 @@ fn open_fleet(
         .map(|change| change.dropped.clone())
         .unwrap_or_default();
 
-    let transport = transport::open(&config.sync)?;
+    let transport = transport::open(&config.sync, &config.cache_file)?;
     status.transport = transport.describe();
 
     // Our own object under the old key is unreadable to everyone now, including
@@ -589,7 +589,7 @@ pub fn test_round_trip(config: &TokenGaugeConfig) -> Result<Vec<String>> {
         .context("no fleet key on this machine; run `--sync-init` or `--sync-join <key>` first")?;
     steps.push(format!("fleet key {}", key.id_hex()));
 
-    let transport = transport::open(&config.sync)?;
+    let transport = transport::open(&config.sync, &config.cache_file)?;
     steps.push(transport.describe());
 
     let device = crate::device_identity(&config.cache_file);
@@ -645,7 +645,7 @@ pub fn forget(config: &TokenGaugeConfig, wanted: &str, waiting: impl FnOnce()) -
     // A delete that failed used to be swallowed, reporting success while the
     // object stayed in storage and the device rejoined on the next cycle.
     if let Some(key) = crypto::load_key(&config.cache_file)? {
-        let transport = transport::open(&config.sync)?;
+        let transport = transport::open(&config.sync, &config.cache_file)?;
         let name = key.object_name(&id);
         transport.delete(&name)?;
         store.objects.remove(&name);
@@ -691,7 +691,7 @@ pub fn adopt(config: &TokenGaugeConfig, wanted: &str, waiting: impl FnOnce()) ->
         None
     };
     if let Some(key) = key {
-        let transport = transport::open(&config.sync)?;
+        let transport = transport::open(&config.sync, &config.cache_file)?;
         let now = Utc::now();
         let own_name = key.object_name(&local);
         if let Some(contribution) = store.contribution(

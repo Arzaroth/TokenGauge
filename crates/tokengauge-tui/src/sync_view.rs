@@ -398,7 +398,11 @@ impl SyncView {
             lines.push(field("Region", or_unset(&s3.region, "3"), Style::default()));
             lines.push(field("Prefix", or_unset(&s3.prefix, "4"), Style::default()));
             lines.push(Line::from(Span::styled(
-                "            Credentials come from AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.",
+                "            Credentials: `tokengauge --sync-s3-credentials -` keeps them in a",
+                dim,
+            )));
+            lines.push(Line::from(Span::styled(
+                "            private file; AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY still work.",
                 dim,
             )));
         }
@@ -721,8 +725,9 @@ mod tests {
         assert!(shown.contains("Endpoint"), "{shown}");
         assert!(
             shown.contains("AWS_ACCESS_KEY_ID"),
-            "credentials belong in the environment, and the screen should say so"
+            "the environment still works, and the screen should say so"
         );
+        assert!(shown.contains("--sync-s3-credentials -"), "{shown}");
         assert!(shown.contains("1-4 bucket"), "{shown}");
 
         assert!(press(&mut view, '2'));

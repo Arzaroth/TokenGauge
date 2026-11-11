@@ -34,8 +34,9 @@ function run(command: string, cancellable: Gio.Cancellable, callback: RunCallbac
     });
 }
 
-function titleCase(name: string): string {
-    return name.charAt(0).toUpperCase() + name.slice(1);
+function providerLabel(snapshot: Panel.Snapshot, name: string): string {
+    const entry = (snapshot.provider_catalog || []).find(e => e.id === name);
+    return entry ? entry.label : name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 export default class TokenGaugePreferences extends ExtensionPreferences {
@@ -154,7 +155,7 @@ export default class TokenGaugePreferences extends ExtensionPreferences {
             const enabled = snapshot.enabled || [];
             for (const name of names) {
                 const row = new Adw.SwitchRow({
-                    title: titleCase(name),
+                    title: providerLabel(snapshot, name),
                     active: enabled.includes(name),
                 });
                 // The row stays insensitive until its write lands, so a second

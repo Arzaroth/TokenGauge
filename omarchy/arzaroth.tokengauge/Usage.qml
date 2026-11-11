@@ -34,6 +34,7 @@ Item {
   // Every toggleable provider, not just the enabled ones - the settings pane
   // needs the full list to draw a switch for each.
   readonly property var allProviders: snapshot && Array.isArray(snapshot.providers) ? snapshot.providers : []
+  readonly property var providerCatalog: snapshot && Array.isArray(snapshot.provider_catalog) ? snapshot.provider_catalog : []
   readonly property string primary: snapshot ? String(snapshot.primary || "") : ""
   // An older binary carries no `panel_options`; its panel is drawn with the
   // defaults, so that is what the switches show.

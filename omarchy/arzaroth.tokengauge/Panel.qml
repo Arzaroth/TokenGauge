@@ -101,18 +101,10 @@ Panel {
     return text === "" || text === "-" || text === "—" ? "" : text
   }
 
-  // The settings pane is a list of switches with no focus chain of its own:
-  // KeyboardPanel hands focus to the key catcher, whose movement keys are
-  // already spoken for by the provider tabs and the scroll. Number keys map to
-  // the switch rows in order, `p` walks the pin, so nothing in the pane is
-  // mouse-only.
-  function toggleProviderAt(index) {
-    var list = usage.allProviders
-    if (index < 0 || index >= list.length) return
-    var id = String(list[index])
-    usage.setProvider(id, usage.enabledProviders.indexOf(id) < 0)
-  }
-
+  // The settings pane has no focus chain of its own: KeyboardPanel hands
+  // focus to the key catcher, whose movement keys are already spoken for by
+  // the provider tabs and the scroll. Letters toggle the panel options and `p`
+  // walks the pin; the provider chips are clicked.
   function togglePanelOption(key) {
     var options = usage.panelOptions
     if (key === "plans_total")
@@ -173,12 +165,22 @@ Panel {
 
   // A disabled provider has no row to carry its display name, so the settings
   // pane falls back to the id - which needs the same acronym casing.
+  function catalogEntry(id) {
+    var key = String(id || "").toLowerCase()
+    var list = usage.providerCatalog
+    for (var i = 0; i < list.length; i++)
+      if (String(list[i].id) === key) return list[i]
+    return null
+  }
+
   function providerLabel(id) {
     var key = String(id || "").toLowerCase()
     for (var i = 0; i < providers.length; i++) {
       var row = providers[i]
       if (String(row.provider).toLowerCase() === key) return String(row.label || row.provider)
     }
+    var entry = catalogEntry(key)
+    if (entry) return String(entry.label)
     if (/^(glm|gpt|zai|ai)$/i.test(key)) return key.toUpperCase()
     return key.charAt(0).toUpperCase() + key.slice(1)
   }
@@ -201,6 +203,59 @@ Panel {
   }
 
   // -------------------------------------------------------------- pieces
+
+  // A provider's logo, inked in one colour through its alpha, with the bar
+  // glyph standing in while the logo is missing or failed.
+  component BrandMark: Item {
+    id: brandMark
+
+    property var entry: null
+    property color ink: root.foreground
+    property color glyphColor: root.accentColor
+    property real size: Style.font.body
+
+    width: size
+    height: size
+
+    Image {
+      id: brandMarkImage
+      anchors.fill: parent
+      source: root.markSource(brandMark.entry)
+      sourceSize.width: brandMark.size * 2
+      sourceSize.height: brandMark.size * 2
+      fillMode: Image.PreserveAspectFit
+      visible: false
+    }
+
+    Rectangle {
+      id: brandMarkInk
+      anchors.fill: parent
+      color: brandMark.ink
+      visible: false
+    }
+
+    MultiEffect {
+      anchors.fill: parent
+      source: brandMarkInk
+      visible: brandMarkImage.status === Image.Ready
+      maskEnabled: true
+      maskSource: brandMarkImage
+      // The defaults make any non-zero alpha fully opaque, which
+      // fattens a logo and fills in its fine strokes.
+      maskThresholdMin: 0.5
+      maskSpreadAtMin: 1.0
+    }
+
+    Text {
+      textFormat: Text.PlainText
+      anchors.centerIn: parent
+      visible: brandMarkImage.status !== Image.Ready
+      text: brandMark.entry ? String(brandMark.entry.glyph || "") : ""
+      color: brandMark.glyphColor
+      font.family: root.fontFamily
+      font.pixelSize: brandMark.size
+    }
+  }
 
   // A label / meter / footnote triple. Every limit row and every history row
   // is one of these, which is what keeps the two sections visually identical.
@@ -534,7 +589,6 @@ Panel {
         else if (root.settingsOpen && (t === "a" || t === "A")) root.togglePanelOption("active_credential_only")
         else if (root.settingsOpen && (t === "t" || t === "T")) root.togglePanelOption("plans_total")
         else if (root.settingsOpen && (t === "b" || t === "B")) root.togglePanelOption("split_bars")
-        else if (root.settingsOpen && /^[1-9]$/.test(t)) root.toggleProviderAt(Number(t) - 1)
         else if (t === "u" || t === "U") root.openProviderUrl("dashboard_url")
         else if (t === "s" || t === "S") root.openProviderUrl("status_url")
         else if ((t === "m" || t === "M") && usage.remudaServing && !usage.loading) usage.openRemuda()
@@ -616,50 +670,11 @@ Panel {
             fontFamily: root.fontFamily
 
             iconComponent: Component {
-              Item {
-                id: heroMark
-                width: Style.font.display
-                height: Style.font.display
-
-                Image {
-                  id: heroMarkImage
-                  anchors.fill: parent
-                  source: root.markSource(root.provider)
-                  sourceSize.width: Style.font.display * 2
-                  sourceSize.height: Style.font.display * 2
-                  fillMode: Image.PreserveAspectFit
-                  visible: false
-                }
-
-                Rectangle {
-                  id: heroMarkInk
-                  anchors.fill: parent
-                  color: root.markColor
-                  visible: false
-                }
-
-                MultiEffect {
-                  anchors.fill: parent
-                  source: heroMarkInk
-                  visible: heroMarkImage.status === Image.Ready
-                  maskEnabled: true
-                  maskSource: heroMarkImage
-                  // The defaults make any non-zero alpha fully opaque, which
-                  // fattens a logo and fills in its fine strokes.
-                  maskThresholdMin: 0.5
-                  maskSpreadAtMin: 1.0
-                }
-
-                // The bar glyph stands in while the logo is missing or failed.
-                Text {
-                  textFormat: Text.PlainText
-                  anchors.centerIn: parent
-                  visible: heroMarkImage.status !== Image.Ready
-                  text: root.provider ? String(root.provider.glyph || "") : ""
-                  color: root.accentColor
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.display
-                }
+              BrandMark {
+                entry: root.provider
+                ink: root.markColor
+                glyphColor: root.accentColor
+                size: Style.font.display
               }
             }
 
@@ -1114,40 +1129,80 @@ Panel {
             fontFamily: root.fontFamily
           }
 
-          Column {
-            width: parent.width
-            spacing: Style.space(6)
+          // Thirteen switch rows outgrew the pane, so the providers are a grid
+          // of chips, lit while enabled.
+          Grid {
+            id: providerGrid
             visible: root.settingsOpen
+            width: parent.width
+            columns: Math.max(1, Math.floor((width + columnSpacing) / (Style.space(120) + columnSpacing)))
+            columnSpacing: Style.space(6)
+            rowSpacing: Style.space(6)
+
+            readonly property real chipWidth: (width - columnSpacing * (columns - 1)) / columns
 
             Repeater {
               model: usage.allProviders
 
-              Item {
+              Rectangle {
+                id: providerChip
                 required property var modelData
-                width: parent.width
-                height: providerToggle.implicitHeight
+                readonly property string providerId: String(modelData)
+                readonly property bool enabledNow: usage.enabledProviders.indexOf(providerId) >= 0
 
-                required property int index
+                width: providerGrid.chipWidth
+                height: Math.round(Style.font.body * 2.4)
+                color: enabledNow ? root.alpha(Commons.Color.accent, 0.16)
+                  : chipMouse.containsMouse ? root.alpha(root.foreground, 0.06) : "transparent"
+                border.width: 1
+                border.color: enabledNow ? Commons.Color.accent : root.alpha(root.foreground, 0.22)
+                opacity: usage.loading ? 0.6 : 1
 
-                Text {
-                  textFormat: Text.PlainText
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: root.providerLabel(providerId)
+                Accessible.checkable: true
+                Accessible.checked: enabledNow
+                Accessible.onToggleAction: if (!usage.loading) usage.setProvider(providerId, !enabledNow)
+                Accessible.onPressAction: if (!usage.loading) usage.setProvider(providerId, !enabledNow)
+
+                Row {
                   anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.leftMargin: Style.space(10)
+                  anchors.rightMargin: Style.space(8)
                   anchors.verticalCenter: parent.verticalCenter
-                  text: (parent.index < 9 ? (parent.index + 1) + "  " : "") + root.providerLabel(modelData)
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
+                  spacing: Style.space(8)
+
+                  BrandMark {
+                    id: chipMark
+                    anchors.verticalCenter: parent.verticalCenter
+                    entry: root.catalogEntry(providerChip.providerId)
+                    size: Style.font.body
+                    ink: !providerChip.enabledNow ? root.dim
+                      : chipMark.entry && root.present(chipMark.entry.mark_color) !== "" ? chipMark.entry.mark_color
+                      : root.foreground
+                    glyphColor: ink
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - Style.font.body - parent.spacing
+                    text: root.providerLabel(providerChip.providerId)
+                    color: providerChip.enabledNow ? root.foreground : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    elide: Text.ElideRight
+                  }
                 }
 
-                ToggleSwitch {
-                  id: providerToggle
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  checked: usage.enabledProviders.indexOf(String(modelData)) >= 0
-                  busy: usage.loading
-                  foreground: root.foreground
-                  accent: Commons.Color.accent
-                  onToggled: usage.setProvider(String(modelData), !checked)
+                MouseArea {
+                  id: chipMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  enabled: !usage.loading
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: usage.setProvider(providerChip.providerId, !providerChip.enabledNow)
                 }
               }
             }
@@ -1272,7 +1327,7 @@ Panel {
             visible: root.settingsOpen
             width: parent.width
             topPadding: Style.space(4)
-            text: usage.t("A number toggles a provider, p walks the pin, a, b and t switch how several credentials are drawn, y sets up fleet sync so tokens and cost add up across your machines, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml.")
+            text: usage.t("Click a provider to toggle it, p walks the pin, a, b and t switch how several credentials are drawn, y sets up fleet sync so tokens and cost add up across your machines, u and s open the provider's usage dashboard and status page. Thresholds, refresh interval, and the click action live in ~/.config/tokengauge/config.toml.")
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

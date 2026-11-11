@@ -595,11 +595,9 @@ mod gui {
                 for (i, row) in snap.rows.iter().enumerate() {
                     let active = i == self.selected;
                     let chip = egui::Button::new(
-                        RichText::new(cap(&row.provider)).strong().color(if active {
-                            DARK
-                        } else {
-                            SUB
-                        }),
+                        RichText::new(tokengauge_core::provider_label(&row.provider))
+                            .strong()
+                            .color(if active { DARK } else { SUB }),
                     )
                     .fill(if active { BLUE } else { CARD })
                     .corner_radius(6);
@@ -615,7 +613,11 @@ mod gui {
         fn provider_panel(&mut self, ui: &mut egui::Ui, row: &Row) {
             card(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(cap(&row.provider)).size(16.0).strong());
+                    ui.label(
+                        RichText::new(tokengauge_core::provider_label(&row.provider))
+                            .size(16.0)
+                            .strong(),
+                    );
                     if row.stale {
                         ui.label(RichText::new("stale").small().color(PEACH));
                     }
@@ -753,7 +755,10 @@ mod gui {
                 ui.add_space(4.0);
                 for provider in PROVIDERS {
                     let mut on = snap.enabled.iter().any(|p| p == provider);
-                    if ui.checkbox(&mut on, cap(provider)).changed() {
+                    if ui
+                        .checkbox(&mut on, tokengauge_core::provider_label(provider))
+                        .changed()
+                    {
                         // The fetch thread only rewrites `enabled` once a whole
                         // fetch has finished. Without this the switch snaps back
                         // for the length of that fetch, and a second click
@@ -1148,19 +1153,7 @@ mod gui {
         if choice == "highest" {
             return tr("Highest usage").to_string();
         }
-        PROVIDERS
-            .iter()
-            .find(|p| **p == choice)
-            .map(|p| tokengauge_core::provider_label(p).to_string())
-            .unwrap_or_else(|| cap(choice))
-    }
-
-    fn cap(s: &str) -> String {
-        let mut chars = s.chars();
-        match chars.next() {
-            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-            None => String::new(),
-        }
+        tokengauge_core::provider_label(choice).to_string()
     }
 
     /// Tooltip text + the peak *session* usage percentage (what the icon shows).

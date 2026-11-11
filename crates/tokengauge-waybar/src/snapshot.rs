@@ -60,6 +60,26 @@ pub(crate) fn emit_json(config: &TokenGaugeConfig) -> Result<()> {
     Ok(())
 }
 
+/// Every provider a settings pane can switch on, with the name and mark it
+/// draws for one that has no row yet.
+fn provider_catalog() -> Vec<serde_json::Value> {
+    tokengauge_core::PROVIDERS
+        .iter()
+        .map(|id| {
+            let icon = provider_icon(id);
+            serde_json::json!({
+                "id": id,
+                "label": provider_label(id),
+                "icon_svg": provider_icon_svg_path(id)
+                    .map(|p| p.to_string_lossy().into_owned()),
+                "glyph": icon.glyph,
+                "color": icon.color_hex,
+                "mark_color": icon.mark_hex,
+            })
+        })
+        .collect()
+}
+
 /// The snapshot object itself. Split out from the printing so the key set five
 /// frontends parse can be pinned by a test - none of them are compiled here,
 /// and a renamed field reaches them as a blank panel.
@@ -218,6 +238,7 @@ pub(crate) fn json_snapshot(
         "errors": errors,
         "enabled": enabled,
         "providers": tokengauge_core::PROVIDERS,
+        "provider_catalog": provider_catalog(),
         "primary": config.waybar.primary,
         // What the settings panes' panel toggles show. The panel above is
         // already drawn with them; this is only so a toggle reads its state.
@@ -620,6 +641,7 @@ mod tests {
             "errors",
             "enabled",
             "providers",
+            "provider_catalog",
             "primary",
             "window",
             "theme",
@@ -634,6 +656,13 @@ mod tests {
             snapshot["remuda"],
             serde_json::json!({"serving": true, "version": "0.5.0"})
         );
+        let catalog = snapshot["provider_catalog"].as_array().expect("a catalog");
+        assert_eq!(catalog.len(), tokengauge_core::PROVIDERS.len());
+        let deepseek = catalog
+            .iter()
+            .find(|entry| entry["id"] == "deepseek")
+            .expect("deepseek in the catalog");
+        assert_eq!(deepseek["label"], "DeepSeek");
 
         let theme: Vec<&str> = snapshot["theme"]
             .as_object()

@@ -80,7 +80,7 @@ Omarchy ships its own `omarchy.agents` widget. Drop it with
   the neighboring bar panel, Esc closes. `u` and `s` mean what they mean in the
   TUI.
 - History: the number keys pick a range.
-- Settings pane: a number key toggles the provider on that row, `p` walks the
+- Settings pane: providers are a grid of chips toggled by click, `p` walks the
   pin through Highest and each enabled provider, `a`, `t` and `b` flip the
   panel options (active credential only, plans total, split bars), `y` opens
   sync setup.

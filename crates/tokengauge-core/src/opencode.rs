@@ -155,13 +155,23 @@ fn row_login(value: &str, now_ms: i64) -> Option<Login> {
 /// key opencode stopped using. Each integration's login is the row opencode
 /// selects, the active one, else the newest.
 fn database_login(path: &Path, now_ms: i64) -> Result<Option<Option<Login>>> {
+    database_login_for(path, ACCOUNT_IDS, now_ms)
+        .map(|found| found.map(|login| login.map(|(login, _)| login)))
+}
+
+/// The first of `ids` with a login in the database, and that id.
+pub(crate) fn database_login_for(
+    path: &Path,
+    ids: &[&str],
+    now_ms: i64,
+) -> Result<Option<Option<(Login, String)>>> {
     use rusqlite::{Connection, OpenFlags, OptionalExtension};
     match std::fs::metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(anyhow!("opencode's opencode.db could not be read")),
         Ok(_) => {}
     }
-    let read = || -> rusqlite::Result<Option<Option<Login>>> {
+    let read = || -> rusqlite::Result<Option<Option<(Login, String)>>> {
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -185,12 +195,12 @@ fn database_login(path: &Path, now_ms: i64) -> Result<Option<Option<Login>>> {
             "SELECT value FROM credential WHERE integration_id = ?1 \
              ORDER BY active DESC, time_created DESC, id DESC LIMIT 1",
         )?;
-        for id in ACCOUNT_IDS {
+        for id in ids {
             let value = selected
                 .query_row([id], |row| row.get::<_, String>(0))
                 .optional()?;
             if let Some(login) = value.and_then(|value| row_login(&value, now_ms)) {
-                return Ok(Some(Some(login)));
+                return Ok(Some(Some((login, (*id).to_string()))));
             }
         }
         Ok(Some(None))

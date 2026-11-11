@@ -196,7 +196,6 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         host,
         timeout,
         "check MINIMAX_API_KEY",
-        Utc::now(),
     )?])
 }
 
@@ -220,14 +219,13 @@ fn stored_host(text: &str) -> &'static str {
 pub(crate) fn fetch_stored(
     text: &str,
     timeout: Duration,
-    now: DateTime<Utc>,
+    _now: DateTime<Utc>,
 ) -> Result<ProviderPayload> {
     remains_for(
         &stored_key(text)?,
         stored_host(text),
         timeout,
         "`remuda login -p minimax` replaces the stored key",
-        now,
     )
 }
 
@@ -236,7 +234,6 @@ fn remains_for(
     host: &str,
     timeout: Duration,
     auth_hint: &str,
-    now: DateTime<Utc>,
 ) -> Result<ProviderPayload> {
     let response = http_client(timeout)?
         .get(format!("{host}/v1/token_plan/remains"))
@@ -247,7 +244,7 @@ fn remains_for(
     let body = response
         .json()
         .context("MiniMax returned an unreadable quota")?;
-    to_payload(body, now, auth_hint)
+    to_payload(body, Utc::now(), auth_hint)
 }
 
 #[cfg(test)]

@@ -42,8 +42,12 @@ account starts its own trail.
   early or when due, `closed` gains its `provider`, `credential`, `window`,
   `windowMinutes`, `openedAt` (the trail's, else a whole window before its
   reset), the `resetsAt` it was due at, `used`, the last
-  figure seen, and `seenAt`, when it was seen, with the `accountDigest` when
-  there was one. A record is kept a year after its reset. A trail that ends
+  figure seen, `seenAt`, when it was seen, and `samples`, the trail up to
+  then, with the `accountDigest` when there was one. A record is kept a year
+  after its reset, its `samples` eight weeks: enough for remuda to learn
+  which hours of a usual week spend a login, not a year of them rewritten at
+  every fetch. The same window closed on two machines keeps both their
+  samples. A trail that ends
   because its name now holds another account leaves none: its week did not
   close. Five-hour windows
   leave none: they close five times a day, and nothing reads them once closed.

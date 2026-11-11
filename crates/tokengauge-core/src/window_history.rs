@@ -6,7 +6,8 @@
 //! evenly since it opened. The trail is what a pace needs to tell a morning's
 //! burst from a steady afternoon. It holds the current instance of each window
 //! only: a trail ends when its window resets, and a window a day or longer
-//! leaves a closing record behind, kept a year, of how full it got.
+//! leaves a closing record behind, kept a year, of how full it got, with the
+//! trail itself for the first eight weeks.
 
 use std::fs;
 use std::path::{Path, PathBuf};

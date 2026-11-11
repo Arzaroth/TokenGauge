@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A closed weekly window keeps the trail it closed with for eight weeks
+  (`closed[].samples` in `tokengauge-window-history.json` and the fleet
+  view), so remuda can project a pool from the hours a usual week spends it
+  rather than the last few. The record itself is still kept a year.
+
 ## [0.60.1] - 2026-11-11
 
 ### Fixed

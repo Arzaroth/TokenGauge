@@ -198,7 +198,7 @@ Plaintext payload, before compression and encryption:
                   "samples": [[1792512000000, 12], [1792515600000, 14]] } ],
     "closed": [ { "provider": "claude", "accountDigest": "3b1f...", "window": "secondary",
                   "windowMinutes": 10080, "openedAt": "...", "resetsAt": "...",
-                  "used": 81, "seenAt": "..." } ]
+                  "used": 81, "seenAt": "...", "samples": [[1792512000000, 12]] } ]
   }
 }
 ```
@@ -433,7 +433,8 @@ every snapshot write and every cycle (`WindowHistory::fold` on a copy):
 - **A later instance** replaces the local trail under the local name, closing
   it; an earlier one is history already.
 - **A closed window** is filed once per instance (account, window, reset and
-  opening alike); whichever machine saw it last keeps its figure. One for an
+  opening alike); whichever machine saw it last keeps its figure, and the
+  samples of both are joined. One for an
   account this machine holds takes the local name.
 
 The view is what the burn, the pace and remuda's drain chart read. It is never

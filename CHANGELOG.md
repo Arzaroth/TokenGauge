@@ -9,9 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- A banked Claude reset says what it clears: `1 Fable reset banked`, `1 weekly
-  reset banked`. The snapshot carries the split as `bankedResets.kinds` for
-  remuda.
+- A banked Claude reset says what it clears: `1 Fable reset banked`, `1 Fable
+  reset, 1 weekly reset banked`. The snapshot carries the split as
+  `bankedResets.kinds` for remuda, with the resets that would clear nothing
+  yet marked `idle`.
 
 ### Fixed
 

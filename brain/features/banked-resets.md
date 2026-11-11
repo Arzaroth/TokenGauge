@@ -27,9 +27,13 @@ or remuda's page's.
   limit, and hands this week's Fable use back to the weekly limit.
 - Usable grants land on the payload as `usage.bankedResets: {available,
   expiresAt, kinds}`, omitted when there are none. `kinds` is
-  `[{kind, count, expiresAt, clears}]` in the order the grants came, one entry
-  per kind, `clears` the windows every one of its grants clears (the
-  intersection, since the provider picks which grant a spend uses).
+  `[{kind, count, expiresAt, clears, idle}]` in the order the grants came, one
+  entry per kind, `clears` the windows every one of its grants clears (the
+  intersection, since the provider picks which grant a spend uses), `idle`
+  true when every one of its grants has `percent_used` at 0 for each window it
+  resets, the state claude.ai greys out as "no usage to reset right now".
+  Idle resets still count in `available`: they are held, just not worth
+  spending yet.
   A kind this build does not know reads as `other` and draws the plain count,
   so a snapshot a newer build wrote still loads. A Fable reset lists
   `five_hour` beside `seven_day_overage_included` on an account with a 5-hour
@@ -43,9 +47,10 @@ or remuda's page's.
   names neither.
   `/wham/rate-limit-reset-credits` lists each credit with one, for one more
   request per credential, and nothing here asks it yet.
-- The marker names the kind when every reset banked is of one kind (`1 Fable
-  reset banked`, `2 weekly resets banked`) and says only `3 resets banked` for
-  a mix or an unsplit count.
+- The marker names each kind it holds (`1 Fable reset banked`, `1 Fable reset,
+  1 weekly reset banked`) and says only `3 resets banked` when the count is not
+  split, the split does not add up to it, or it holds a kind this build cannot
+  name.
 - The marker is resolved in `panel.rs` when the row renders, so the countdown
   moves between fetches. Once the soonest expiry passes the marker goes, since
   the count no longer says how many are left, and `rolled_over` makes the

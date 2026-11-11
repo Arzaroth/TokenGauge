@@ -25,6 +25,7 @@ const MAX_SAMPLES: usize = 2000;
 /// are kept once closed.
 const CLOSED_MIN_MINUTES: u32 = 1440;
 const CLOSED_KEEP_DAYS: i64 = 366;
+const CLOSED_SAMPLES_KEEP_DAYS: i64 = 56;
 
 pub fn history_path(cache_file: &Path) -> PathBuf {
     let parent = cache_file.parent().unwrap_or_else(|| Path::new("."));
@@ -65,6 +66,9 @@ pub struct ClosedWindow {
     /// The last figure seen, and when.
     pub used: u8,
     pub seen_at: DateTime<Utc>,
+    /// The trail it closed with, kept for `CLOSED_SAMPLES_KEEP_DAYS`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub samples: Vec<(i64, u8)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -257,6 +261,10 @@ impl WindowHistory {
         self.closed.extend(ended.iter().filter_map(Trail::closed));
         let horizon = now - chrono::Duration::days(CLOSED_KEEP_DAYS);
         self.closed.retain(|c| c.resets_at > horizon);
+        let horizon = now - chrono::Duration::days(CLOSED_SAMPLES_KEEP_DAYS);
+        for record in self.closed.iter_mut().filter(|c| c.resets_at <= horizon) {
+            record.samples.clear();
+        }
     }
 }
 
@@ -283,6 +291,7 @@ impl Trail {
             resets_at: self.resets_at,
             used,
             seen_at: DateTime::from_timestamp_millis(ms).unwrap_or(self.resets_at),
+            samples: squeeze(samples.iter().copied()),
         })
     }
 
@@ -621,6 +630,15 @@ impl WindowHistory {
                 kept.used = record.used;
                 kept.seen_at = record.seen_at;
             }
+            let mut points: Vec<(i64, u8)> = kept
+                .samples
+                .iter()
+                .chain(&record.samples)
+                .copied()
+                .collect();
+            points.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+            points.dedup_by_key(|p| p.0);
+            kept.samples = squeeze(points);
             return;
         }
         let credential = record.credential.clone().or_else(|| {
@@ -1199,11 +1217,17 @@ mod tests {
                 "openedAt",
                 "provider",
                 "resetsAt",
+                "samples",
                 "seenAt",
                 "used",
                 "window",
                 "windowMinutes"
             ]
+        );
+        assert!(
+            record["samples"][0]
+                .as_array()
+                .is_some_and(|s| s.len() == 2)
         );
     }
 
@@ -1423,6 +1447,7 @@ mod tests {
             resets_at: now - Duration::days(2),
             used: 80,
             seen_at: now - Duration::days(2),
+            samples: Vec::new(),
         };
         let old = ClosedWindow {
             resets_at: now - Duration::days(60),
@@ -1534,6 +1559,7 @@ mod tests {
             resets_at: reset,
             used: 70,
             seen_at: seen(75),
+            samples: Vec::new(),
         };
         history.fold(&[&peer(vec![refilled], vec![before_refill])], Utc::now());
         let ours = &history.trails[0];
@@ -1638,6 +1664,7 @@ mod tests {
             resets_at: reset - Duration::days(7),
             used: 91,
             seen_at: reset - Duration::days(7) - Duration::hours(1),
+            samples: Vec::new(),
         };
         let stranger = ClosedWindow {
             account_digest: Some("z".into()),

@@ -545,18 +545,16 @@ impl Trail {
             .collect();
         points.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
         points.dedup_by_key(|p| p.0);
-        if let Some(drop) = (1..points.len())
-            .rev()
-            .find(|&i| points[i].1 < points[i - 1].1)
-        {
-            let start = (1..drop)
-                .rev()
-                .find(|&i| points[i].1 < points[i - 1].1)
-                .unwrap_or(0);
+        let drops: Vec<usize> = (1..points.len())
+            .filter(|&i| points[i].1 < points[i - 1].1)
+            .collect();
+        let mut start = 0;
+        for drop in drops {
             ended.extend(self.closed_at(opened, &points[start..drop]));
             opened = DateTime::from_timestamp_millis(points[drop - 1].0);
-            points.drain(..drop);
+            start = drop;
         }
+        points.drain(..start);
         let mut samples = squeeze(points);
         if samples.len() > MAX_SAMPLES {
             samples.drain(..samples.len() - MAX_SAMPLES);
@@ -1785,7 +1783,21 @@ mod tests {
         };
         let theirs = trail_of(None, "a", reset, &[(h(20), 5), (h(40), 10)]);
         history.fold(&[&peer(vec![theirs], Vec::new())], Utc::now());
-        assert_eq!(history.closed.len(), 1);
-        assert_eq!(history.closed[0].samples, [(h(20), 5), (h(30), 60)]);
+        let records: Vec<_> = history
+            .closed
+            .iter()
+            .map(|c| (c.opened_at.timestamp_millis(), c.samples.clone()))
+            .collect();
+        assert_eq!(
+            records,
+            [
+                (
+                    (reset - Duration::days(7)).timestamp_millis(),
+                    vec![(h(10), 40)]
+                ),
+                (h(10), vec![(h(20), 5), (h(30), 60)]),
+            ]
+        );
+        assert_eq!(history.trails[0].samples, [(h(40), 10)]);
     }
 }

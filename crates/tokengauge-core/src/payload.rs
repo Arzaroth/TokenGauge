@@ -41,6 +41,44 @@ pub struct BankedResets {
     pub available: u32,
     /// The soonest grant's expiry, as the provider wrote it.
     pub expires_at: Option<String>,
+    /// `available` split by what a reset clears, when the provider says.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<BankedKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankedKind {
+    pub kind: ResetKind,
+    pub count: u32,
+    pub expires_at: Option<String>,
+    /// The windows every one of these resets clears, as the provider keys
+    /// them (`five_hour`, `seven_day_overage_included`): a Fable reset clears
+    /// the 5-hour window too on an account that has one, and the provider
+    /// picks which grant a spend uses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clears: Vec<String>,
+    /// Every one of these resets would clear nothing now: each limit it
+    /// resets is at 0%. claude.ai greys such a reset out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idle: bool,
+}
+
+/// Claude Code's own names for what a banked reset clears.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResetKind {
+    /// The 5-hour window only.
+    Session,
+    /// The weekly windows only.
+    Weekly,
+    /// Every window.
+    Full,
+    /// The Fable limit, handing this week's Fable use back to the weekly limit.
+    Fable,
+    /// A kind a newer build wrote: read rather than failing the snapshot.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -659,6 +697,13 @@ mod tests {
             banked_resets: Some(BankedResets {
                 available: 1,
                 expires_at: Some("2026-10-22T16:00:00+00:00".into()),
+                kinds: vec![BankedKind {
+                    kind: ResetKind::Fable,
+                    count: 1,
+                    expires_at: Some("2026-10-22T16:00:00+00:00".into()),
+                    clears: vec!["five_hour".into(), "seven_day_overage_included".into()],
+                    idle: false,
+                }],
             }),
             ..UsageSnapshot::at(chrono::Utc::now())
         };
@@ -667,6 +712,39 @@ mod tests {
         assert_eq!(
             json["bankedResets"]["expiresAt"],
             "2026-10-22T16:00:00+00:00"
+        );
+        assert_eq!(
+            json["bankedResets"]["kinds"],
+            serde_json::json!([{"kind": "fable", "count": 1,
+                                "expiresAt": "2026-10-22T16:00:00+00:00",
+                                "clears": ["five_hour", "seven_day_overage_included"]}])
+        );
+        for (kind, name) in [
+            (ResetKind::Session, "session"),
+            (ResetKind::Weekly, "weekly"),
+            (ResetKind::Full, "full"),
+            (ResetKind::Fable, "fable"),
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), name);
+        }
+        let older: BankedResets =
+            serde_json::from_value(serde_json::json!({"available": 2, "expiresAt": null})).unwrap();
+        assert!(older.kinds.is_empty());
+        let newer: BankedResets = serde_json::from_value(serde_json::json!({
+            "available": 1, "expiresAt": null,
+            "kinds": [{"kind": "lunar", "count": 1, "expiresAt": null}]
+        }))
+        .unwrap();
+        assert_eq!(newer.kinds[0].kind, ResetKind::Other);
+        let unsplit = BankedResets {
+            kinds: Vec::new(),
+            ..usage.banked_resets.clone().unwrap()
+        };
+        assert!(
+            serde_json::to_value(unsplit)
+                .unwrap()
+                .get("kinds")
+                .is_none()
         );
         let none = serde_json::to_value(UsageSnapshot::at(chrono::Utc::now())).unwrap();
         assert!(none.get("bankedResets").is_none());

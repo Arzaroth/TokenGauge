@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   beside the fleet key instead of `AWS_ACCESS_KEY_ID` and
   `AWS_SECRET_ACCESS_KEY` in every process's environment. The variables still
   work when the file is absent.
+- A banked Claude reset says what it clears: `1 Fable reset banked`, `1 Fable
+  reset, 1 weekly reset banked`. The snapshot carries the split as
+  `bankedResets.kinds` for remuda, with the resets that would clear nothing
+  yet marked `idle`.
 
 ### Fixed
 

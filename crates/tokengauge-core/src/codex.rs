@@ -925,6 +925,7 @@ fn to_payload(
         .map(|credits| BankedResets {
             available: credits.available_count,
             expires_at: None,
+            kinds: Vec::new(),
         });
     let plan = trimmed(resp.plan_type).or(plan_hint);
     let weight = plan_weight(plan.as_deref());

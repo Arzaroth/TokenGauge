@@ -631,8 +631,23 @@ mod tests {
             Some(("from-pi".into(), "deepseek".into()))
         );
 
+        let signed_in = format!(
+            r#"{{"type": "oauth", "access": "tok", "expires": {}}}"#,
+            NOW_MS + 1
+        );
+        let unreadable = dir.join("junk.db");
+        std::fs::write(&unreadable, "not a database").unwrap();
+        assert!(saved_api_key_in(&unreadable, &auth, Some(&pi), ids, NOW_MS).is_err());
+
         let cn = r#"{"type": "api", "key": "cn"}"#;
-        let regional = database("saved-cn", true, &[("minimax-cn", None, 1, cn)]);
+        let regional = database(
+            "saved-cn",
+            true,
+            &[
+                ("minimax", None, 2, &signed_in),
+                ("minimax-cn", None, 1, cn),
+            ],
+        );
         assert_eq!(
             saved_api_key_in(&regional, &auth, None, &["minimax", "minimax-cn"], NOW_MS).unwrap(),
             Some(("cn".into(), "minimax-cn".into()))

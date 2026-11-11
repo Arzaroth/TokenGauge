@@ -8,6 +8,7 @@ use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::Deserialize;
 
+use crate::credentials::{LiveLogin, key_login, stored_key};
 use crate::provider::{check_status, saved_api_key};
 use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
 
@@ -187,16 +188,63 @@ fn to_payload(resp: RemainsResponse, now: DateTime<Utc>) -> Result<ProviderPaylo
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let (key, host) =
         credential().ok_or_else(|| anyhow!("MiniMax key missing - set MINIMAX_API_KEY"))?;
+    Ok(vec![remains_for(
+        &key,
+        host,
+        timeout,
+        "check MINIMAX_API_KEY",
+        Utc::now(),
+    )?])
+}
+
+pub(crate) fn live_login() -> LiveLogin {
+    key_login(credential().map(|(key, _)| key))
+}
+
+/// A stored key's host, from the region remuda filed it under. A key stored
+/// before regions were is global, as an unset `MINIMAX_REGION` is.
+fn stored_host(text: &str) -> &'static str {
+    let region = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| value.get("region")?.as_str().map(str::to_string));
+    if region.as_deref() == Some("cn") {
+        CN_HOST
+    } else {
+        GLOBAL_HOST
+    }
+}
+
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    remains_for(
+        &stored_key(text)?,
+        stored_host(text),
+        timeout,
+        "`remuda login -p minimax` replaces the stored key",
+        now,
+    )
+}
+
+fn remains_for(
+    key: &str,
+    host: &str,
+    timeout: Duration,
+    auth_hint: &str,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
     let response = http_client(timeout)?
         .get(format!("{host}/v1/token_plan/remains"))
         .bearer_auth(key)
         .send()
         .context("MiniMax quota request failed")?;
-    check_status(response.status(), "MiniMax", "check MINIMAX_API_KEY")?;
+    check_status(response.status(), "MiniMax", auth_hint)?;
     let body = response
         .json()
         .context("MiniMax returned an unreadable quota")?;
-    Ok(vec![to_payload(body, Utc::now())?])
+    to_payload(body, now)
 }
 
 #[cfg(test)]

@@ -49,6 +49,7 @@ use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
+use crate::credentials::{LiveLogin, key_login, stored_key};
 use crate::provider::check_status;
 use crate::{
     CreditLimit, CreditLimitKind, CreditUnit, Credits, ProviderPayload, UsageSnapshot, UsageWindow,
@@ -279,24 +280,68 @@ fn to_payload(credits: CreditsData, key: KeyData, now: DateTime<Utc>) -> Provide
 // ---------------------------------------------------------------------------
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
-    let now = Utc::now();
-    let key = api_key()?;
+    Ok(vec![usage_for(
+        api_key()?,
+        management_key(),
+        timeout,
+        "check OPENROUTER_API_KEY",
+        Utc::now(),
+    )?])
+}
+
+pub(crate) fn live_login() -> LiveLogin {
+    key_login(api_key().ok())
+}
+
+/// remuda stores the inference key as `key` and a management key, when the
+/// login has one, as `management`.
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    let management = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("management")?
+                .as_str()
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .map(str::to_string)
+        });
+    usage_for(
+        stored_key(text)?,
+        management,
+        timeout,
+        "`remuda login -p openrouter` replaces the stored key",
+        now,
+    )
+}
+
+fn usage_for(
+    key: String,
+    management: Option<String>,
+    timeout: Duration,
+    auth_hint: &str,
+    now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
     let (credits_url, key_url) = endpoints()?;
     let client = http_client(timeout)?;
 
     // `/key` first, and it is the one that must succeed: it describes the
     // credential the user actually has and carries the cap and the spend.
-    let key_data: KeyData = get(&client, &key_url, &key)?;
+    let key_data: KeyData = get(&client, &key_url, &key, auth_hint)?;
 
     // `/credits` is account-wide and only a management key may ask. Without
     // one - which is the common case - the balance is simply absent, and a
     // provider with a cap and no balance is far better than no provider.
-    let credits = management_key()
+    let credits = management
         .unwrap_or(key)
-        .pipe(|k| get::<CreditsData>(&client, &credits_url, &k))
+        .pipe(|k| get::<CreditsData>(&client, &credits_url, &k, auth_hint))
         .unwrap_or_default();
 
-    Ok(vec![to_payload(credits, key_data, now)])
+    Ok(to_payload(credits, key_data, now))
 }
 
 /// Small enough not to want a crate for it.
@@ -311,6 +356,7 @@ fn get<T: serde::de::DeserializeOwned>(
     client: &reqwest::blocking::Client,
     url: &str,
     api_key: &str,
+    auth_hint: &str,
 ) -> Result<T> {
     let resp = client
         .get(url)
@@ -319,7 +365,7 @@ fn get<T: serde::de::DeserializeOwned>(
         .send()
         .with_context(|| format!("OpenRouter request failed: {url}"))?;
 
-    check_status(resp.status(), "OpenRouter", "check OPENROUTER_API_KEY")?;
+    check_status(resp.status(), "OpenRouter", auth_hint)?;
 
     let text = resp
         .text()

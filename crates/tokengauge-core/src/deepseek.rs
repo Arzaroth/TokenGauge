@@ -5,9 +5,10 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
+use crate::credentials::{LiveLogin, key_login, stored_key};
 use crate::provider::{check_status, saved_api_key};
 use crate::{CreditUnit, Credits, ProviderPayload, UsageSnapshot, http_client};
 
@@ -75,16 +76,36 @@ fn to_payload(resp: BalanceResponse) -> Result<ProviderPayload> {
 
 pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let key = api_key().ok_or_else(|| anyhow!("DeepSeek key missing - set DEEPSEEK_API_KEY"))?;
+    Ok(vec![balance_for(&key, timeout, "check DEEPSEEK_API_KEY")?])
+}
+
+pub(crate) fn live_login() -> LiveLogin {
+    key_login(api_key())
+}
+
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    _now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    balance_for(
+        &stored_key(text)?,
+        timeout,
+        "`remuda login -p deepseek` replaces the stored key",
+    )
+}
+
+fn balance_for(key: &str, timeout: Duration, auth_hint: &str) -> Result<ProviderPayload> {
     let response = http_client(timeout)?
         .get(BALANCE_URL)
         .bearer_auth(key)
         .send()
         .context("DeepSeek balance request failed")?;
-    check_status(response.status(), "DeepSeek", "check DEEPSEEK_API_KEY")?;
+    check_status(response.status(), "DeepSeek", auth_hint)?;
     let body = response
         .json()
         .context("DeepSeek returned an unreadable balance")?;
-    Ok(vec![to_payload(body)?])
+    to_payload(body)
 }
 
 #[cfg(test)]

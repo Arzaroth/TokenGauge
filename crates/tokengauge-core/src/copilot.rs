@@ -8,10 +8,11 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::credentials::{LiveLogin, key_login, stored_key};
 use crate::fetch::run_with_timeout;
 use crate::provider::{check_status, json_num};
 use crate::{ProviderPayload, UsageSnapshot, UsageWindow, http_client, pct_u8};
@@ -139,6 +140,26 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
     let token = token().ok_or_else(|| {
         anyhow!("Copilot not signed in - run `gh auth login` or set COPILOT_QUOTA_TOKEN")
     })?;
+    Ok(vec![quota_for(&token, timeout, "run `gh auth login`")?])
+}
+
+pub(crate) fn live_login() -> LiveLogin {
+    key_login(token())
+}
+
+pub(crate) fn fetch_stored(
+    text: &str,
+    timeout: Duration,
+    _now: DateTime<Utc>,
+) -> Result<ProviderPayload> {
+    quota_for(
+        &stored_key(text)?,
+        timeout,
+        "`remuda login -p copilot` replaces the stored token",
+    )
+}
+
+fn quota_for(token: &str, timeout: Duration, auth_hint: &str) -> Result<ProviderPayload> {
     let response = http_client(timeout)?
         .get(QUOTA_URL)
         .bearer_auth(token)
@@ -147,11 +168,11 @@ pub(crate) fn fetch(timeout: Duration) -> Result<Vec<ProviderPayload>> {
         .header("user-agent", "tokengauge")
         .send()
         .context("Copilot quota request failed")?;
-    check_status(response.status(), "Copilot", "run `gh auth login`")?;
+    check_status(response.status(), "Copilot", auth_hint)?;
     let body = response
         .json()
         .context("Copilot returned an unreadable quota")?;
-    Ok(vec![to_payload(body)?])
+    to_payload(body)
 }
 
 #[cfg(test)]

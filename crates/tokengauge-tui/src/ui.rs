@@ -373,13 +373,19 @@ fn section_rows(section: &Section) -> &[PanelRow] {
     }
 }
 
-/// Lines the section's note wraps to in a pane `width` wide.
+/// Lines the title and note take in a pane `width` wide, counted by the same
+/// `Paragraph` that draws them so a wrapped word never clips the last line.
+fn header_height(section: &Section, width: u16) -> u16 {
+    section_header(section).line_count(width) as u16
+}
+
+/// Lines the note alone wraps to, for a section whose title rides a border.
 fn note_height(section: &Section, width: u16) -> u16 {
-    let room = width.saturating_sub(2).max(1) as usize;
-    section
-        .note
-        .as_deref()
-        .map_or(0, |note| note.chars().count().div_ceil(room).max(1) as u16)
+    section.note.as_deref().map_or(0, |note| {
+        Paragraph::new(note_line(note))
+            .wrap(Wrap { trim: false })
+            .line_count(width) as u16
+    })
 }
 
 fn section_height(section: &Section, width: u16) -> u16 {
@@ -387,12 +393,12 @@ fn section_height(section: &Section, width: u16) -> u16 {
         return DAY_CHART_HEIGHT;
     }
     let rows = section_rows(section).len() as u16;
-    let note = note_height(section, width);
     match section.kind {
-        // Header line, one line per meter, then a spacer before what follows.
-        SectionKind::Meters => rows + 2 + note,
+        // Header, one line per meter, then a spacer before what follows.
+        SectionKind::Meters => header_height(section, width) + rows + 1,
+        SectionKind::Rows => header_height(section, width) + rows,
         // The title rides a top border rather than taking a line of its own.
-        SectionKind::Bars | SectionKind::Rows => rows + 1 + note,
+        SectionKind::Bars => 1 + note_height(section, width) + rows,
     }
 }
 
@@ -465,7 +471,7 @@ fn render_meters(frame: &mut Frame, area: Rect, section: &Section) {
     if rows.is_empty() {
         return;
     }
-    let header = 1 + note_height(section, area.width);
+    let header = header_height(section, area.width);
     let constraints: Vec<Constraint> = std::iter::once(Constraint::Length(header))
         .chain((0..rows.len() + 1).map(|_| Constraint::Length(1)))
         .collect();
@@ -582,7 +588,7 @@ fn render_bars(frame: &mut Frame, area: Rect, section: &Section) {
     let inner = match section.note.as_deref() {
         Some(note) => {
             let split = Layout::vertical([
-                Constraint::Length(note_height(section, area.width)),
+                Constraint::Length(note_height(section, inner.width)),
                 Constraint::Min(0),
             ])
             .split(inner);
@@ -669,7 +675,7 @@ fn render_bars(frame: &mut Frame, area: Rect, section: &Section) {
 /// figures - and the sync health note that qualifies every one of them, which
 /// is why it is drawn here and not only on the sync screen.
 fn render_rows(frame: &mut Frame, area: Rect, section: &Section) {
-    let header = 1 + note_height(section, area.width);
+    let header = header_height(section, area.width);
     let chunks = Layout::vertical([Constraint::Length(header), Constraint::Min(0)]).split(area);
     frame.render_widget(section_header(section), chunks[0]);
 
@@ -1149,6 +1155,45 @@ mod tests {
         assert!(out.contains("2 devices"), "{out}");
         assert!(out.contains("error"), "{out}");
         assert!(out.contains("bucket unreachable"), "{out}");
+    }
+
+    /// A wrapped title or note takes the lines it wraps to, counted the way
+    /// `Paragraph` wraps them, so the last word is drawn and the rows under it
+    /// keep their place.
+    #[test]
+    fn a_wrapped_title_and_note_keep_every_line_in_a_narrow_pane() {
+        in_english(a_wrapped_title_and_note_keep_every_line_in_a_narrow_pane_body);
+    }
+
+    fn a_wrapped_title_and_note_keep_every_line_in_a_narrow_pane_body() {
+        let mut cost = section(&provider_with_sync_note(), "cost");
+        cost.title = "work · Claude Team · active · not in total".into();
+        cost.note = Some("2 resets banked, expires in 1h 30m".into());
+        let last_label = cost.rows.last().expect("a row").label.clone();
+        for width in [14u16, 20, 30] {
+            let height = section_height(&cost, width);
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+            terminal
+                .draw(|frame| render_sections(frame, frame.area(), std::slice::from_ref(&cost)))
+                .expect("draw");
+            let buffer = terminal.backend().buffer();
+            let lines: Vec<String> = (0..height)
+                .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect();
+            let out = lines.join("\n");
+            assert!(
+                out.contains("30m"),
+                "the note's last word is clipped at {width}:\n{out}"
+            );
+            assert!(
+                out.contains("total"),
+                "the title's last word is clipped at {width}:\n{out}"
+            );
+            assert!(
+                out.contains(&last_label[..last_label.len().min(6)]),
+                "the last row is pushed off at {width}:\n{out}"
+            );
+        }
     }
 
     /// A model list is trimmed to six because its tail is sub-1% noise. The

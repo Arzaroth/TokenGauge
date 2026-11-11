@@ -296,8 +296,9 @@ The daemon owns sync wherever one runs. `--json` asks the daemon over the socket
 rather than fetching in its own subprocess, because a credential exported through
 `environment.d` reaches the systemd unit and not a panel spawned by the
 compositor (see [snapshot.md](snapshot.md)). Without a daemon, the frontend's
-subprocess is the only process and syncs itself, so the AWS variables must be
-visible to whatever launches the panel.
+subprocess is the only process and syncs itself. Keys in
+`tokengauge-s3-credentials` reach it with no setup; keys taken from the AWS
+variables must be visible to whatever launches the panel.
 
 Each cycle that rebuilds costs, before `write_cache_full`:
 

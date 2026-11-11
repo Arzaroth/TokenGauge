@@ -852,7 +852,10 @@ mod tests {
         assert_eq!(rows[0].banked_resets, Some(banked));
         let spec = crate::panel::panel_spec(&rows[0], &Default::default());
         assert!(
-            spec.iter().any(|s| s.title.contains("1 reset banked")),
+            spec.iter().any(|s| s
+                .note
+                .as_deref()
+                .is_some_and(|n| n.contains("1 reset banked"))),
             "no section says so"
         );
     }

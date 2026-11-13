@@ -1401,6 +1401,8 @@ impl FleetStore {
                         model,
                         login,
                         source,
+                        from: None,
+                        until: None,
                         sessions,
                         tokens,
                         usd,

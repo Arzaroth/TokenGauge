@@ -63,7 +63,7 @@ fn load(
 
 /// `--usage-json`: the document `selvedge::usage::export` declares, for
 /// remuda's usage page, which draws it and prices nothing itself.
-pub(crate) fn usage(config: &TokenGaugeConfig, since: Option<&str>) -> Result<()> {
+pub(crate) fn usage(config: &TokenGaugeConfig, since: Option<&str>, by_hour: bool) -> Result<()> {
     let since = parse_since(since)?;
     let (store, prices) = load(config)?;
     let now = chrono::Local::now();
@@ -73,6 +73,7 @@ pub(crate) fn usage(config: &TokenGaugeConfig, since: Option<&str>) -> Result<()
         &prices,
         pricing::archive(),
         now.timestamp_millis(),
+        by_hour,
     );
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());

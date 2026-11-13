@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `tokengauge --usage-json --by-hour` exports the record by the hour, each row
+  saying when it ran, so remuda can split a day's spend where a weekly window
+  reset instead of across the whole day.
+
 ## [0.61.0] - 2026-11-11
 
 ### Added

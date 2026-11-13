@@ -181,6 +181,11 @@ pub struct Args {
     /// priced.
     #[arg(long)]
     usage_json: bool,
+    /// With `--usage-json`: a row per hour the store kept instead of per
+    /// day, each saying when it ran, so spend splits where a quota window
+    /// reset. Past hourly retention a row is a whole UTC day.
+    #[arg(long)]
+    by_hour: bool,
     /// Oldest day `--export` or `--usage-json` includes, as `YYYY-MM-DD`.
     /// Defaults to everything the store still holds.
     #[arg(long, value_name = "DATE")]
@@ -347,6 +352,9 @@ impl Action {
         if args.since.is_some() && args.export.is_none() && !args.usage_json {
             anyhow::bail!("--since only applies to --export and --usage-json");
         }
+        if args.by_hour && !args.usage_json {
+            anyhow::bail!("--by-hour only applies to --usage-json");
+        }
         let default = if args.waybar_alias {
             Action::Bar
         } else {
@@ -420,7 +428,7 @@ fn main() -> Result<()> {
         Action::CheckUpdate => handle_check_update(&config),
         Action::InstallFrontend(spec) => handle_install_frontend(&spec),
         Action::Export(format) => export::run(&config, format, args.since.as_deref()),
-        Action::UsageJson => export::usage(&config, args.since.as_deref()),
+        Action::UsageJson => export::usage(&config, args.since.as_deref(), args.by_hour),
         Action::Backfill => handle_backfill(&config),
         Action::Update => handle_update(&config),
         Action::Refresh => {
@@ -904,6 +912,19 @@ mod tests {
             Ok(Action::UsageJson)
         ));
         assert!(action_for(&["--usage-json", "--export"]).is_err());
+    }
+
+    #[test]
+    fn by_hour_goes_with_usage_json_only() {
+        assert!(matches!(
+            action_for(&["--usage-json", "--by-hour", "--since", "2026-01-01"]),
+            Ok(Action::UsageJson)
+        ));
+        let error = match action_for(&["--by-hour", "--json"]) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("--by-hour was silently dropped"),
+        };
+        assert!(error.contains("--by-hour"), "{error}");
     }
 
     #[test]

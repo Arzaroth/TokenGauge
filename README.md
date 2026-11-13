@@ -257,8 +257,9 @@ drops the same double-read days and cannot disagree with what you see.
 JSON document, for [remuda](https://github.com/Arzaroth/remuda)'s usage page:
 one row per day, provider, model, login and source (`cli` or `proxy`), summed
 across devices, with the sessions begun and the cost of each rate. A model
-with no price that month has a `null` cost. The format is
-`selvedge::usage::export`.
+with no price that month has a `null` cost. `--by-hour` gives a row per hour
+instead, each with `from` and `until` (a whole UTC day once the store keeps
+only days). The format is `selvedge::usage::export`.
 
 The design notes are in [brain/features/spend-history.md](brain/features/spend-history.md).
 

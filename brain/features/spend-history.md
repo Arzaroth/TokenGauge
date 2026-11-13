@@ -103,6 +103,11 @@ model's cost is `null`, a gap like `--export`'s empty cell. remuda runs it and
 draws what it says, so the page and the panel never price a token two ways
 ([../decisions.md](../decisions.md#0006-spend-is-attributed-from-what-remuda-recorded)).
 
+`--by-hour` splits each row by the stretch the store kept instead: an hour, or
+the UTC day of a bucket past hourly retention, with `from` and `until` in ms
+(the row's `date` stays the local day). remuda's Value view asks for it, to
+split a day's spend at the instant a weekly window reset.
+
 ## Hazards
 
 1. **The store is the only copy.** A lost `tokengauge-fleet.json` is a year that

@@ -1338,7 +1338,9 @@ impl FleetStore {
     /// What `--usage-json` prints: the record per local day, provider, model,
     /// login and source, across every device, each rate priced at its month's
     /// prices. A model with no price for its month has no cost at all, a gap
-    /// rather than a zero.
+    /// rather than a zero. `by_hour` splits each day into the stretches the
+    /// store kept: an hour, or the UTC day of a bucket past hourly retention.
+    #[allow(clippy::too_many_arguments)]
     pub fn usage_export(
         &self,
         since: Option<NaiveDate>,
@@ -1346,8 +1348,16 @@ impl FleetStore {
         prices: &PriceTable,
         archive: &PriceArchive,
         now_ms: i64,
+        by_hour: bool,
     ) -> UsageExport {
-        type Key = (NaiveDate, String, String, Option<String>, Source);
+        type Key = (
+            NaiveDate,
+            Option<(i64, i64)>,
+            String,
+            String,
+            Option<String>,
+            Source,
+        );
         let dropped = self.dropped_days();
         let mut tables: HashMap<String, PriceTable> = HashMap::new();
         let mut folded: BTreeMap<Key, (TokenCounts, u64, Option<TypeCosts>)> = BTreeMap::new();
@@ -1366,9 +1376,11 @@ impl FleetStore {
                 let table = tables
                     .entry(month.clone())
                     .or_insert_with(|| prices.as_of(archive, &month));
+                let span = by_hour.then(|| bucket_span(bucket));
                 let entry = folded
                     .entry((
                         date,
+                        span,
                         bucket.provider.clone(),
                         bucket.model.clone(),
                         bucket.login.clone(),
@@ -1395,17 +1407,19 @@ impl FleetStore {
             rows: folded
                 .into_iter()
                 .map(
-                    |((date, provider, model, login, source), (tokens, sessions, usd))| UsageRow {
-                        date: date.to_string(),
-                        provider,
-                        model,
-                        login,
-                        source,
-                        from: None,
-                        until: None,
-                        sessions,
-                        tokens,
-                        usd,
+                    |((date, span, provider, model, login, source), (tokens, sessions, usd))| {
+                        UsageRow {
+                            date: date.to_string(),
+                            provider,
+                            model,
+                            login,
+                            source,
+                            from: span.map(|(from, _)| from),
+                            until: span.map(|(_, until)| until),
+                            sessions,
+                            tokens,
+                            usd,
+                        }
                     },
                 )
                 .collect(),
@@ -1701,6 +1715,15 @@ fn bucket_start(bucket: &Bucket) -> Hour {
 }
 
 /// The first hour of a UTC date.
+fn bucket_span(bucket: &Bucket) -> (i64, i64) {
+    let (start, hours) = match bucket.granularity {
+        Granularity::Hour => (bucket.hour, 1),
+        Granularity::Day => (day_start(Some(bucket.hour.utc_date())), 24),
+    };
+    let from = start.start().timestamp_millis();
+    (from, from + hours * 3_600_000)
+}
+
 fn day_start(date: Option<NaiveDate>) -> Hour {
     let midnight = date
         .and_then(|date| date.and_hms_opt(0, 0, 0))
@@ -2582,7 +2605,7 @@ mod tests {
         assert_eq!(exported, expected, "--export");
 
         let usage: u64 = store
-            .usage_export(None, utc, &prices, &archive, 3)
+            .usage_export(None, utc, &prices, &archive, 3, false)
             .rows
             .iter()
             .map(|row| row.tokens.total())
@@ -3181,6 +3204,7 @@ mod tests {
             &PriceTable::vendored(),
             &PriceArchive::vendored(),
             7,
+            false,
         );
 
         assert_eq!(export.schema_version, usage_export::SCHEMA_VERSION);
@@ -3217,9 +3241,90 @@ mod tests {
             &PriceTable::vendored(),
             &PriceArchive::vendored(),
             7,
+            false,
         );
         assert!(later.rows.is_empty());
         assert_eq!(later.covers_from.as_deref(), Some("2026-08-24"));
+    }
+
+    #[test]
+    fn the_usage_export_by_the_hour_says_when_each_stretch_ran() {
+        let mut store = FleetStore::default();
+        let me = device("a");
+        let at = hour("2026-08-24T22");
+        store.upsert_local(
+            &me,
+            at,
+            &[
+                event("claude", "claude-sonnet-4-5", at, 10, Some(1)),
+                event(
+                    "claude",
+                    "claude-sonnet-4-5",
+                    hour("2026-08-24T23"),
+                    20,
+                    Some(2),
+                ),
+            ],
+            0,
+        );
+        store
+            .devices
+            .get_mut(&me.id)
+            .expect("slice")
+            .buckets
+            .push(Bucket {
+                hour: Hour::midday("2026-03-01".parse().expect("date")),
+                provider: "claude".into(),
+                model: "claude-sonnet-4-5".into(),
+                granularity: Granularity::Day,
+                login: None,
+                sessions: 0,
+                source: Source::Cli,
+                tokens: TokenCounts {
+                    output: 5,
+                    ..Default::default()
+                },
+            });
+
+        let export = store.usage_export(
+            None,
+            FixedOffset::east_opt(2 * 3600).expect("offset"),
+            &PriceTable::vendored(),
+            &PriceArchive::vendored(),
+            7,
+            true,
+        );
+
+        let ms = |text: &str| hour(text).start().timestamp_millis();
+        let rows: Vec<(&str, Option<i64>, Option<i64>, u64)> = export
+            .rows
+            .iter()
+            .map(|r| (r.date.as_str(), r.from, r.until, r.tokens.output))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (
+                    "2026-03-01",
+                    Some(ms("2026-03-01T00")),
+                    Some(ms("2026-03-02T00")),
+                    5
+                ),
+                (
+                    "2026-08-25",
+                    Some(ms("2026-08-24T22")),
+                    Some(ms("2026-08-24T23")),
+                    10
+                ),
+                (
+                    "2026-08-25",
+                    Some(ms("2026-08-24T23")),
+                    Some(ms("2026-08-25T00")),
+                    20
+                ),
+            ]
+        );
+        assert!(export.rows.iter().all(|r| r.usd.is_some()));
     }
 
     #[test]

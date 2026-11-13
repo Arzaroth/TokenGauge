@@ -105,7 +105,8 @@ draws what it says, so the page and the panel never price a token two ways
 
 `--by-hour` splits each row by the stretch the store kept instead: an hour, or
 the UTC day of a bucket past hourly retention, with `from` and `until` in ms
-(the row's `date` stays the local day). remuda's Value view asks for it, to
+(the row's `date` stays the day export's: the local day of an hour, the UTC
+date of a rolled-up day). remuda's Value view asks for it, to
 split a day's spend at the instant a weekly window reset.
 
 ## Hazards

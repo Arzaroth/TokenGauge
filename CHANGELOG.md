@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.0] - 2026-11-13
+
 ### Added
 
 - `tokengauge --usage-json --by-hour` exports the record by the hour, each row

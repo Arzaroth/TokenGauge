@@ -1794,6 +1794,39 @@ mod tests {
     }
 
     #[test]
+    fn a_credential_on_the_free_tier_is_not_asked() {
+        let now = Utc::now();
+        let free = format!(
+            r#"{{"claudeAiOauth":{{"accessToken":"a-1","refreshToken":"r-1","expiresAt":{},"scopes":["user:profile"],"subscriptionType":null,"rateLimitTier":"default_claude_ai"}}}}"#,
+            now.timestamp_millis() + 3_600_000
+        );
+        assert_eq!(
+            check_stored(&free, now).unwrap(),
+            Some(CredentialState::NoPlan)
+        );
+        let payload = fetch_stored(&free, Duration::from_millis(1), now).unwrap();
+        assert_eq!(payload.credential.state, Some(CredentialState::NoPlan));
+        assert_eq!(payload.credential.plan_weight, None);
+        assert_eq!(
+            payload.usage.unwrap().login_method.as_deref(),
+            Some("Claude Free")
+        );
+
+        let oauth = parse_credentials(&free).unwrap();
+        let err = usage_for(&oauth, Duration::from_millis(1), now, "").unwrap_err();
+        assert!(err.to_string().contains(" has no plan - "), "{err}");
+    }
+
+    #[test]
+    fn only_the_free_tier_with_no_subscription_is_no_plan() {
+        assert!(on_free_plan(None, Some("default_claude_ai")));
+        assert!(on_free_plan(Some(" "), Some("default_claude_ai")));
+        assert!(!on_free_plan(Some("max"), Some("default_claude_ai")));
+        assert!(!on_free_plan(None, None));
+        assert!(!on_free_plan(None, Some("default_claude_max_5x")));
+    }
+
+    #[test]
     fn a_stored_credential_is_checked_without_sending_it_to_a_login() {
         let now = Utc::now();
         let stored = |expires: i64, scopes: &str| {

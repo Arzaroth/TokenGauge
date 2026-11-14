@@ -908,6 +908,19 @@ mod tests {
     }
 
     #[test]
+    fn an_account_with_no_plan_keeps_its_error_and_drops_its_old_figures() {
+        let mut payloads = Vec::new();
+        let mut errors = vec![ProviderFetchError::new(
+            "claude".into(),
+            &crate::provider::no_plan("Claude").to_string(),
+        )];
+        apply_stale_fallback(&mut payloads, &mut errors, &[claude_fetched_minutes_ago(1)]);
+        assert!(payloads.is_empty());
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].message, "Claude has no plan - no usage to report");
+    }
+
+    #[test]
     fn a_429_holds_nothing_it_cannot_date() {
         for updated_at in [None, Some("yesterday".to_string())] {
             let mut cached = claude_fetched_minutes_ago(1);

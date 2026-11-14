@@ -87,6 +87,10 @@ const ENV_TOKEN: &str = "TOKENGAUGE_CLAUDE_OAUTH_TOKEN";
 /// What a stored credential's 401 says. Logging the CLI in again changes the
 /// live login, not the stored one.
 const STORED_HINT: &str = "remuda refreshes stored credentials (`remuda refresh`)";
+/// The rate-limit tier of an account with no Claude plan.
+const FREE_TIER: &str = "default_claude_ai";
+/// The 403 the usage endpoint answers an account with no plan.
+const NO_PLAN_CODE: &str = "oauth_not_allowed_for_organization";
 const ENV_SCOPES: &str = "TOKENGAUGE_CLAUDE_OAUTH_SCOPES";
 
 /// The OS credential store Claude Code writes to on macOS (a keychain item) and
@@ -369,11 +373,24 @@ pub(crate) fn stored_tokens(text: &str) -> LoginTokens {
         .unwrap_or_default()
 }
 
+/// What the switcher files for an account with no plan: no subscription
+/// type, and the free tier. Claude Code itself never lowers a plan it
+/// recorded, so a live login can still say Max on an account that lapsed.
+fn on_free_plan(subscription_type: Option<&str>, tier: Option<&str>) -> bool {
+    subscription_type.map(str::trim).is_none_or(str::is_empty) && tier == Some(FREE_TIER)
+}
+
 /// Why a stored credential is not worth a request, if it is not. Worded for a
 /// credential the switcher keeps: the fix is never the CLI's login.
 fn stored_state(oauth: &Oauth, now: DateTime<Utc>) -> Result<Option<CredentialState>> {
     if oauth.access_token.trim().is_empty() {
         return Err(anyhow!("the stored credential holds no token"));
+    }
+    if on_free_plan(
+        oauth.subscription_type.as_deref(),
+        oauth.rate_limit_tier.as_deref(),
+    ) {
+        return Ok(Some(CredentialState::NoPlan));
     }
     if oauth
         .expires_at
@@ -656,6 +673,9 @@ fn plan_label(subscription_type: Option<&str>, tier: Option<&str>) -> Option<Str
         (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())).then(|| word.to_string())
     }
 
+    if on_free_plan(subscription_type, tier) {
+        return Some("Claude Free".to_string());
+    }
     let kind = subscription_type
         .and_then(classify)
         .or_else(|| tier.and_then(classify))?;
@@ -984,6 +1004,12 @@ fn usage_for(
     now: DateTime<Utc>,
     unauthorized_hint: &str,
 ) -> Result<ProviderPayload> {
+    if on_free_plan(
+        oauth.subscription_type.as_deref(),
+        oauth.rate_limit_tier.as_deref(),
+    ) {
+        return Err(crate::provider::no_plan("Claude"));
+    }
     let client = http_client(timeout)?;
     let resp = client
         .get(USAGE_URL)
@@ -995,7 +1021,16 @@ fn usage_for(
         .send()
         .context("Claude usage request failed")?;
 
-    check_status(resp.status(), "Claude", unauthorized_hint)?;
+    let status = resp.status();
+    if status == reqwest::StatusCode::FORBIDDEN {
+        let body = resp.text().unwrap_or_default();
+        if body.contains(NO_PLAN_CODE) {
+            return Err(crate::provider::no_plan("Claude"));
+        }
+        return check_status(status, "Claude", unauthorized_hint)
+            .and_then(|()| Err(anyhow!("Claude HTTP 403")));
+    }
+    check_status(status, "Claude", unauthorized_hint)?;
 
     let body: UsageResponse = resp.json().context("Claude usage JSON was invalid")?;
     let plan = plan_label(

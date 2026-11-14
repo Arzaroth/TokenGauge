@@ -66,6 +66,10 @@ impl ProviderFetchError {
     fn is_rate_limit(&self) -> bool {
         self.raw.contains("rate-limited")
     }
+
+    fn is_no_plan(&self) -> bool {
+        self.raw.contains(" has no plan - ")
+    }
 }
 
 /// How long a provider's last figures stay current while it answers 429.
@@ -364,6 +368,10 @@ fn apply_stale_fallback(
         // slot already has any payload (live or an earlier stale restore).
         if payloads.iter().any(same_slot) {
             return false;
+        }
+        // The last figures were the plan's that lapsed, not the account's now.
+        if err.is_no_plan() {
+            return true;
         }
         let answered = |p: &ProviderPayload| {
             p.credential.name.as_ref().is_some_and(|name| {

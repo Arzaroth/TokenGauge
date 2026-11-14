@@ -178,6 +178,11 @@ pub(crate) fn check_status(
     Ok(())
 }
 
+/// The error of an account with no plan to report usage for.
+pub(crate) fn no_plan(provider: &str) -> anyhow::Error {
+    anyhow!("{provider} has no plan - no usage to report")
+}
+
 /// A collection that may arrive as an explicit `null`.
 ///
 /// `#[serde(default)]` fills in a field that is **absent**. A field that is

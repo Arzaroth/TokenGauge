@@ -741,6 +741,11 @@ fn checks_with(
                     false,
                     "access token expired - remuda's timer refreshes it (`remuda refresh`)".into(),
                 )),
+                Ok(Some(CredentialState::NoPlan)) => out.push(check(
+                    label,
+                    true,
+                    "no plan - its account has no subscription, so it is not asked".into(),
+                )),
                 Ok(Some(state)) => out.push(check(label, false, format!("{state:?}"))),
                 Err(e) => out.push(check(label, false, format!("{e:#}"))),
             }

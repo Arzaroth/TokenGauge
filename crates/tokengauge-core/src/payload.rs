@@ -325,6 +325,8 @@ pub enum CredentialState {
     /// Its sidecar was written for other tokens, so whose they are is unknown
     /// until the switcher re-identifies them.
     Unverified,
+    /// Its account has no plan, so there is no usage to ask about.
+    NoPlan,
     /// A state from a newer build: one this build cannot draw, not a failure.
     #[serde(other)]
     Other,

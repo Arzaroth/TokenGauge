@@ -142,6 +142,12 @@ fn validate_oauth(oauth: Oauth, now: DateTime<Utc>) -> Result<Oauth> {
     if oauth.access_token.trim().is_empty() {
         return Err(anyhow!("Claude not signed in - run `claude setup-token`"));
     }
+    if on_free_plan(
+        oauth.subscription_type.as_deref(),
+        oauth.rate_limit_tier.as_deref(),
+    ) {
+        return Err(crate::provider::no_plan("Claude"));
+    }
     if oauth
         .expires_at
         .is_some_and(|ms| now.timestamp_millis() >= ms)
@@ -1004,12 +1010,6 @@ fn usage_for(
     now: DateTime<Utc>,
     unauthorized_hint: &str,
 ) -> Result<ProviderPayload> {
-    if on_free_plan(
-        oauth.subscription_type.as_deref(),
-        oauth.rate_limit_tier.as_deref(),
-    ) {
-        return Err(crate::provider::no_plan("Claude"));
-    }
     let client = http_client(timeout)?;
     let resp = client
         .get(USAGE_URL)
@@ -1812,8 +1812,8 @@ mod tests {
             Some("Claude Free")
         );
 
-        let oauth = parse_credentials(&free).unwrap();
-        let err = usage_for(&oauth, Duration::from_millis(1), now, "").unwrap_err();
+        let expired = free.replace(&(now.timestamp_millis() + 3_600_000).to_string(), "1");
+        let err = validate_oauth(parse_credentials(&expired).unwrap(), now).unwrap_err();
         assert!(err.to_string().contains(" has no plan - "), "{err}");
     }
 

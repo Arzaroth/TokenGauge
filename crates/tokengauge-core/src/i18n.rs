@@ -330,6 +330,12 @@ const FRENCH: &[(&str, &str)] = &[
         "Its sidecar was written for other tokens, so whose they are is unknown. remuda re-identifies it on its next run.",
         "Son fichier compagnon a été écrit pour d’autres jetons, on ne sait donc pas à qui ils sont. remuda le réidentifie à sa prochaine exécution.",
     ),
+    ("No plan", "Aucun forfait"),
+    ("nothing to ask", "rien à demander"),
+    (
+        "Its account has no subscription, so it has no usage limits to ask about.",
+        "Son compte n’a pas d’abonnement, il n’a donc pas de limites d’utilisation à demander.",
+    ),
     ("Unknown state", "État inconnu"),
     (
         "A newer build wrote a state this one cannot draw.",

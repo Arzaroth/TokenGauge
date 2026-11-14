@@ -368,7 +368,8 @@ pub(crate) struct StoreReader {
     /// Ask about a stored credential: a payload with usage, or one in a
     /// [`CredentialState`] when it is not worth asking.
     pub fetch: fn(&str, Duration, DateTime<Utc>) -> Result<ProviderPayload>,
-    /// The fetch's checks without the request, for `--doctor`.
+    /// The fetch's checks without the request, for `--doctor` and to keep a
+    /// credential that lost its plan from being carried.
     pub check: fn(&str, DateTime<Utc>) -> Result<Option<CredentialState>>,
     /// A stored credential's plan weight from its text and its sidecar's
     /// profile, for a provider that sells seats the token does not name.
@@ -506,7 +507,13 @@ pub(crate) fn fetch_provider(
             slots.push(Some(stored(payload, entry, reader)));
             continue;
         }
-        if let Some(payload) = carried(provider, entry, previous, now, max_age, in_use_max_age) {
+        let no_plan = matches!(
+            (reader.check)(&entry.text, now),
+            Ok(Some(CredentialState::NoPlan))
+        );
+        if !no_plan
+            && let Some(payload) = carried(provider, entry, previous, now, max_age, in_use_max_age)
+        {
             slots.push(Some(stored(payload, entry, reader)));
             continue;
         }
@@ -740,6 +747,11 @@ fn checks_with(
                     label,
                     false,
                     "access token expired - remuda's timer refreshes it (`remuda refresh`)".into(),
+                )),
+                Ok(Some(CredentialState::NoPlan)) => out.push(check(
+                    label,
+                    true,
+                    "no plan - its account has no subscription, so it is not asked".into(),
                 )),
                 Ok(Some(state)) => out.push(check(label, false, format!("{state:?}"))),
                 Err(e) => out.push(check(label, false, format!("{e:#}"))),
@@ -1383,6 +1395,30 @@ pub(crate) mod tests {
         due.usage.as_mut().unwrap().updated_at =
             Some((now - chrono::Duration::hours(1)).to_rfc3339());
         let (payloads, _) = fetch_provider("claude", &FAKE, &config, &[due], live_payload);
+        assert_eq!(named(&payloads, "perso").source.as_deref(), Some("fetched"));
+        let _ = std::fs::remove_dir_all(&store);
+    }
+
+    #[test]
+    fn a_credential_whose_account_lost_its_plan_is_not_carried() {
+        fn no_plan(_: &str, _: DateTime<Utc>) -> Result<Option<CredentialState>> {
+            Ok(Some(CredentialState::NoPlan))
+        }
+        let reader = StoreReader {
+            check: no_plan,
+            ..FAKE
+        };
+        let (store, config) = store_with_every_kind("lapsed");
+        let mut recent = ProviderPayload::live(
+            "claude",
+            "carried",
+            crate::UsageSnapshot::at(Utc::now() - chrono::Duration::minutes(5)),
+        );
+        recent.credential.name = Some("perso".into());
+        recent.credential.active = Some(false);
+        recent.credential.account_digest = Some(hex_sha256(b"u-perso")[..16].to_string());
+
+        let (payloads, _) = fetch_provider("claude", &reader, &config, &[recent], live_payload);
         assert_eq!(named(&payloads, "perso").source.as_deref(), Some("fetched"));
         let _ = std::fs::remove_dir_all(&store);
     }

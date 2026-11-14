@@ -40,8 +40,8 @@ commits; the **Avoid** list names the synonyms that blur it.
   `label`, `capturedAt` and `credsDigest`. Trusted only when `credsDigest`
   matches the credential file's bytes. See
   [architecture/credentials.md](architecture/credentials.md).
-- **Credential state** - `expired` or `unverified` on a stored credential's
-  payload that was not asked: a payload, not an error.
+- **Credential state** - `expired`, `unverified` or `no_plan` on a stored
+  credential's payload that was not asked: a payload, not an error.
 - **Plan weight** - a plan's nominal multiplier against the provider's base paid
   plan (Claude Pro 1, Max 5, Ultra 10, Team 1.25 or 6.25; ChatGPT Plus 1,
   Pro 100 10, Pro 200 20, Pro 500 50; Cursor Pro 1, Pro+ 3, Ultra 20; Kimi Plus 1,

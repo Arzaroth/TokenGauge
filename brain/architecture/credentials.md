@@ -99,7 +99,8 @@ its last payload is older than `[credentials] inactive_refresh_secs` (1800,
 remuda's refresh period, or `refresh_secs` while its 5-hour window is past 10%,
 which means another machine or tool is spending from it; `in_use` in
 `credentials.rs`), when one of its windows has reset, or when its name now
-holds another account (`accountDigest`); otherwise its payload is carried
+holds another account (`accountDigest`) or its text now says it has no plan;
+otherwise its payload is carried
 unchanged with its own `usage.updatedAt`. A stored credential with an expired
 access token is the `expired` state, not an error: remuda's timer refreshes
 inactive credentials every 30 minutes, so expiry means that timer has not run.
@@ -122,8 +123,8 @@ Each `payloads[]` entry gains:
   and for a live login matching nothing.
 - `active` - on every `claude` and `codex` payload: `true` for the live login's
   fetch, `false` for a stored credential's. Absent for other providers.
-- `credentialState` - absent when usage was fetched; `"expired"` or
-  `"unverified"` when no request was made (no windows, `error` null). An unknown
+- `credentialState` - absent when usage was fetched; `"expired"`,
+  `"unverified"` or `"no_plan"` when no request was made (no windows, `error` null). An unknown
   value is a state a reader cannot draw, not a failure.
 - `credentialLabel` - the sidecar's `label`, when present and trusted.
 - `planWeight` - the plan multiplier when known; an integer when whole, a

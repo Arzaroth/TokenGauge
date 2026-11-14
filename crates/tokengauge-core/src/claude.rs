@@ -87,6 +87,10 @@ const ENV_TOKEN: &str = "TOKENGAUGE_CLAUDE_OAUTH_TOKEN";
 /// What a stored credential's 401 says. Logging the CLI in again changes the
 /// live login, not the stored one.
 const STORED_HINT: &str = "remuda refreshes stored credentials (`remuda refresh`)";
+/// The rate-limit tier of an account with no Claude plan.
+const FREE_TIER: &str = "default_claude_ai";
+/// The 403 the usage endpoint answers an account with no plan.
+const NO_PLAN_CODE: &str = "oauth_not_allowed_for_organization";
 const ENV_SCOPES: &str = "TOKENGAUGE_CLAUDE_OAUTH_SCOPES";
 
 /// The OS credential store Claude Code writes to on macOS (a keychain item) and
@@ -137,6 +141,12 @@ fn parse_credentials(data: &str) -> Result<Oauth> {
 fn validate_oauth(oauth: Oauth, now: DateTime<Utc>) -> Result<Oauth> {
     if oauth.access_token.trim().is_empty() {
         return Err(anyhow!("Claude not signed in - run `claude setup-token`"));
+    }
+    if on_free_plan(
+        oauth.subscription_type.as_deref(),
+        oauth.rate_limit_tier.as_deref(),
+    ) {
+        return Err(crate::provider::no_plan("Claude"));
     }
     if oauth
         .expires_at
@@ -246,16 +256,31 @@ fn loaders() -> [Loader; 3] {
 /// keyring entry, which is exactly the macOS case where the file is a stub and
 /// the token lives in the keychain. The error reported when none work is the
 /// first concrete one, because a present-but-broken source (an expired file)
-/// is more actionable than a merely-absent one.
+/// is more actionable than a merely-absent one, unless a later one says the
+/// account has no plan, which no other source's fix would change.
 fn load_oauth(now: DateTime<Utc>) -> Result<(Oauth, &'static str)> {
+    first_usable(
+        loaders()
+            .into_iter()
+            .map(|(source, loader)| (source, loader())),
+        now,
+    )
+}
+
+fn first_usable(
+    sources: impl IntoIterator<Item = (&'static str, Source)>,
+    now: DateTime<Utc>,
+) -> Result<(Oauth, &'static str)> {
     let mut first_err: Option<anyhow::Error> = None;
-    for (source, loader) in loaders() {
-        if let Some(parsed) = loader() {
-            match parsed.and_then(|oauth| validate_oauth(oauth, now)) {
-                Ok(oauth) => return Ok((oauth, source)),
-                Err(e) => {
-                    first_err.get_or_insert(e);
-                }
+    for (source, parsed) in sources {
+        let Some(parsed) = parsed else {
+            continue;
+        };
+        match parsed.and_then(|oauth| validate_oauth(oauth, now)) {
+            Ok(oauth) => return Ok((oauth, source)),
+            Err(e) if e.to_string().contains(" has no plan - ") => first_err = Some(e),
+            Err(e) => {
+                first_err.get_or_insert(e);
             }
         }
     }
@@ -369,11 +394,24 @@ pub(crate) fn stored_tokens(text: &str) -> LoginTokens {
         .unwrap_or_default()
 }
 
+/// What the switcher files for an account with no plan: no subscription
+/// type, and the free tier. Claude Code itself never lowers a plan it
+/// recorded, so a live login can still say Max on an account that lapsed.
+fn on_free_plan(subscription_type: Option<&str>, tier: Option<&str>) -> bool {
+    subscription_type.map(str::trim).is_none_or(str::is_empty) && tier == Some(FREE_TIER)
+}
+
 /// Why a stored credential is not worth a request, if it is not. Worded for a
 /// credential the switcher keeps: the fix is never the CLI's login.
 fn stored_state(oauth: &Oauth, now: DateTime<Utc>) -> Result<Option<CredentialState>> {
     if oauth.access_token.trim().is_empty() {
         return Err(anyhow!("the stored credential holds no token"));
+    }
+    if on_free_plan(
+        oauth.subscription_type.as_deref(),
+        oauth.rate_limit_tier.as_deref(),
+    ) {
+        return Ok(Some(CredentialState::NoPlan));
     }
     if oauth
         .expires_at
@@ -656,6 +694,9 @@ fn plan_label(subscription_type: Option<&str>, tier: Option<&str>) -> Option<Str
         (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())).then(|| word.to_string())
     }
 
+    if on_free_plan(subscription_type, tier) {
+        return Some("Claude Free".to_string());
+    }
     let kind = subscription_type
         .and_then(classify)
         .or_else(|| tier.and_then(classify))?;
@@ -995,7 +1036,16 @@ fn usage_for(
         .send()
         .context("Claude usage request failed")?;
 
-    check_status(resp.status(), "Claude", unauthorized_hint)?;
+    let status = resp.status();
+    if status == reqwest::StatusCode::FORBIDDEN {
+        let body = resp.text().unwrap_or_default();
+        if body.contains(NO_PLAN_CODE) {
+            return Err(crate::provider::no_plan("Claude"));
+        }
+        return check_status(status, "Claude", unauthorized_hint)
+            .and_then(|()| Err(anyhow!("Claude HTTP 403")));
+    }
+    check_status(status, "Claude", unauthorized_hint)?;
 
     let body: UsageResponse = resp.json().context("Claude usage JSON was invalid")?;
     let plan = plan_label(
@@ -1756,6 +1806,50 @@ mod tests {
             None
         );
         assert_eq!(plan_weight(None, None), None);
+    }
+
+    #[test]
+    fn a_credential_on_the_free_tier_is_not_asked() {
+        let now = Utc::now();
+        let free = format!(
+            r#"{{"claudeAiOauth":{{"accessToken":"a-1","refreshToken":"r-1","expiresAt":{},"scopes":["user:profile"],"subscriptionType":null,"rateLimitTier":"default_claude_ai"}}}}"#,
+            now.timestamp_millis() + 3_600_000
+        );
+        assert_eq!(
+            check_stored(&free, now).unwrap(),
+            Some(CredentialState::NoPlan)
+        );
+        let payload = fetch_stored(&free, Duration::from_millis(1), now).unwrap();
+        assert_eq!(payload.credential.state, Some(CredentialState::NoPlan));
+        assert_eq!(payload.credential.plan_weight, None);
+        assert_eq!(
+            payload.usage.unwrap().login_method.as_deref(),
+            Some("Claude Free")
+        );
+
+        let expired = free.replace(&(now.timestamp_millis() + 3_600_000).to_string(), "1");
+        let err = validate_oauth(parse_credentials(&expired).unwrap(), now).unwrap_err();
+        assert!(err.to_string().contains(" has no plan - "), "{err}");
+    }
+
+    #[test]
+    fn a_free_credential_behind_a_hollow_file_still_says_no_plan() {
+        let now = Utc::now();
+        let hollow = parse_credentials(r#"{"claudeAiOauth":{"accessToken":""}}"#);
+        let free = parse_credentials(
+            r#"{"claudeAiOauth":{"accessToken":"a-1","scopes":["user:profile"],"rateLimitTier":"default_claude_ai"}}"#,
+        );
+        let err = first_usable([("file", Some(hollow)), ("keyring", Some(free))], now).unwrap_err();
+        assert!(err.to_string().contains(" has no plan - "), "{err}");
+    }
+
+    #[test]
+    fn only_the_free_tier_with_no_subscription_is_no_plan() {
+        assert!(on_free_plan(None, Some("default_claude_ai")));
+        assert!(on_free_plan(Some(" "), Some("default_claude_ai")));
+        assert!(!on_free_plan(Some("max"), Some("default_claude_ai")));
+        assert!(!on_free_plan(None, None));
+        assert!(!on_free_plan(None, Some("default_claude_max_5x")));
     }
 
     #[test]

@@ -906,6 +906,11 @@ fn state_row(state: crate::CredentialState) -> PanelRow {
                 "Its sidecar was written for other tokens, so whose they are is unknown. remuda re-identifies it on its next run.",
             ),
         ),
+        CredentialState::NoPlan => (
+            tr("No plan"),
+            tr("nothing to ask"),
+            tr("Its account has no subscription, so it has no usage limits to ask about."),
+        ),
         CredentialState::Other => (
             tr("Unknown state"),
             "",

@@ -1833,6 +1833,17 @@ mod tests {
     }
 
     #[test]
+    fn a_free_credential_behind_a_hollow_file_still_says_no_plan() {
+        let now = Utc::now();
+        let hollow = parse_credentials(r#"{"claudeAiOauth":{"accessToken":""}}"#);
+        let free = parse_credentials(
+            r#"{"claudeAiOauth":{"accessToken":"a-1","scopes":["user:profile"],"rateLimitTier":"default_claude_ai"}}"#,
+        );
+        let err = first_usable([("file", Some(hollow)), ("keyring", Some(free))], now).unwrap_err();
+        assert!(err.to_string().contains(" has no plan - "), "{err}");
+    }
+
+    #[test]
     fn only_the_free_tier_with_no_subscription_is_no_plan() {
         assert!(on_free_plan(None, Some("default_claude_ai")));
         assert!(on_free_plan(Some(" "), Some("default_claude_ai")));

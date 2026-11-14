@@ -122,8 +122,8 @@ Each `payloads[]` entry gains:
   and for a live login matching nothing.
 - `active` - on every `claude` and `codex` payload: `true` for the live login's
   fetch, `false` for a stored credential's. Absent for other providers.
-- `credentialState` - absent when usage was fetched; `"expired"` or
-  `"unverified"` when no request was made (no windows, `error` null). An unknown
+- `credentialState` - absent when usage was fetched; `"expired"`,
+  `"unverified"` or `"no_plan"` when no request was made (no windows, `error` null). An unknown
   value is a state a reader cannot draw, not a failure.
 - `credentialLabel` - the sidecar's `label`, when present and trusted.
 - `planWeight` - the plan multiplier when known; an integer when whole, a

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A Claude account whose subscription lapsed no longer shows the last figures
+  of its old plan, marked stale and "rate-limited", for ever. A stored
+  credential remuda files as free (remuda 0.42.3) reads "No plan" and is not
+  asked; one still saying a plan errors "Claude has no plan" once the usage
+  endpoint refuses it.
+
 ## [0.62.0] - 2026-11-13
 
 ### Added

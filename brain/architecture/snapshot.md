@@ -47,7 +47,9 @@ A snapshot is stale when it is:
 of an otherwise fresh snapshot. `apply_stale_fallback` serves the last good
 payload when a fetch fails, marked `stale` with `stale_reason`. A 429 is the
 exception: figures under thirty minutes old stay current through it
-(`RATE_LIMIT_GRACE_MINUTES`).
+(`RATE_LIMIT_GRACE_MINUTES`). An account with no plan is the other: its error
+(`provider::no_plan`) stays, and the figures of the plan that lapsed are not
+served.
 
 Opening a panel is the one other reason to fetch: `--panel-opened` (the tray's
 `Action::PanelOpened`) refreshes when `panel_open_wants_fetch` finds the snapshot

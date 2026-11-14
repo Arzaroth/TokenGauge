@@ -14,7 +14,12 @@ up by plan multiplier. The mechanism and the remuda contracts are
   `not in total`), active first. The bar keeps showing the plan the CLI is signed
   into.
 - An expired or unverified credential is a `Rows` group with one line saying
-  which and why, not a provider error.
+  which and why, not a provider error. So is a Claude credential with no plan
+  (`no_plan`): remuda files a lapsed account with no `subscriptionType` and
+  the `default_claude_ai` tier, labelled "Claude Free" and left out of the
+  total. A live login still saying a plan Claude Code recorded (it never
+  lowers one) is caught by the usage endpoint's 403
+  `oauth_not_allowed_for_organization`, an error with no stale figures.
 - A credential that reports credit figures and no window is a `Rows` group
   with the rows the COST section would draw for it, its balance and its key
   cap (`cost_rows`): DeepSeek, an OpenRouter key on an account with no

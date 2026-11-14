@@ -256,7 +256,8 @@ fn loaders() -> [Loader; 3] {
 /// keyring entry, which is exactly the macOS case where the file is a stub and
 /// the token lives in the keychain. The error reported when none work is the
 /// first concrete one, because a present-but-broken source (an expired file)
-/// is more actionable than a merely-absent one.
+/// is more actionable than a merely-absent one, unless a later one says the
+/// account has no plan, which no other source's fix would change.
 fn load_oauth(now: DateTime<Utc>) -> Result<(Oauth, &'static str)> {
     first_usable(
         loaders()
@@ -277,6 +278,7 @@ fn first_usable(
         };
         match parsed.and_then(|oauth| validate_oauth(oauth, now)) {
             Ok(oauth) => return Ok((oauth, source)),
+            Err(e) if e.to_string().contains(" has no plan - ") => first_err = Some(e),
             Err(e) => {
                 first_err.get_or_insert(e);
             }

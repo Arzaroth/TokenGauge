@@ -368,7 +368,8 @@ pub(crate) struct StoreReader {
     /// Ask about a stored credential: a payload with usage, or one in a
     /// [`CredentialState`] when it is not worth asking.
     pub fetch: fn(&str, Duration, DateTime<Utc>) -> Result<ProviderPayload>,
-    /// The fetch's checks without the request, for `--doctor`.
+    /// The fetch's checks without the request, for `--doctor` and to keep a
+    /// credential that lost its plan from being carried.
     pub check: fn(&str, DateTime<Utc>) -> Result<Option<CredentialState>>,
     /// A stored credential's plan weight from its text and its sidecar's
     /// profile, for a provider that sells seats the token does not name.
@@ -506,7 +507,13 @@ pub(crate) fn fetch_provider(
             slots.push(Some(stored(payload, entry, reader)));
             continue;
         }
-        if let Some(payload) = carried(provider, entry, previous, now, max_age, in_use_max_age) {
+        let no_plan = matches!(
+            (reader.check)(&entry.text, now),
+            Ok(Some(CredentialState::NoPlan))
+        );
+        if !no_plan
+            && let Some(payload) = carried(provider, entry, previous, now, max_age, in_use_max_age)
+        {
             slots.push(Some(stored(payload, entry, reader)));
             continue;
         }

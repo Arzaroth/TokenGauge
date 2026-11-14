@@ -99,7 +99,8 @@ its last payload is older than `[credentials] inactive_refresh_secs` (1800,
 remuda's refresh period, or `refresh_secs` while its 5-hour window is past 10%,
 which means another machine or tool is spending from it; `in_use` in
 `credentials.rs`), when one of its windows has reset, or when its name now
-holds another account (`accountDigest`); otherwise its payload is carried
+holds another account (`accountDigest`) or its text now says it has no plan;
+otherwise its payload is carried
 unchanged with its own `usage.updatedAt`. A stored credential with an expired
 access token is the `expired` state, not an error: remuda's timer refreshes
 inactive credentials every 30 minutes, so expiry means that timer has not run.

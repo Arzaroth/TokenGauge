@@ -258,14 +258,27 @@ fn loaders() -> [Loader; 3] {
 /// first concrete one, because a present-but-broken source (an expired file)
 /// is more actionable than a merely-absent one.
 fn load_oauth(now: DateTime<Utc>) -> Result<(Oauth, &'static str)> {
+    first_usable(
+        loaders()
+            .into_iter()
+            .map(|(source, loader)| (source, loader())),
+        now,
+    )
+}
+
+fn first_usable(
+    sources: impl IntoIterator<Item = (&'static str, Source)>,
+    now: DateTime<Utc>,
+) -> Result<(Oauth, &'static str)> {
     let mut first_err: Option<anyhow::Error> = None;
-    for (source, loader) in loaders() {
-        if let Some(parsed) = loader() {
-            match parsed.and_then(|oauth| validate_oauth(oauth, now)) {
-                Ok(oauth) => return Ok((oauth, source)),
-                Err(e) => {
-                    first_err.get_or_insert(e);
-                }
+    for (source, parsed) in sources {
+        let Some(parsed) = parsed else {
+            continue;
+        };
+        match parsed.and_then(|oauth| validate_oauth(oauth, now)) {
+            Ok(oauth) => return Ok((oauth, source)),
+            Err(e) => {
+                first_err.get_or_insert(e);
             }
         }
     }

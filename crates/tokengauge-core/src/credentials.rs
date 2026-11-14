@@ -1399,6 +1399,30 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&store);
     }
 
+    #[test]
+    fn a_credential_whose_account_lost_its_plan_is_not_carried() {
+        fn no_plan(_: &str, _: DateTime<Utc>) -> Result<Option<CredentialState>> {
+            Ok(Some(CredentialState::NoPlan))
+        }
+        let reader = StoreReader {
+            check: no_plan,
+            ..FAKE
+        };
+        let (store, config) = store_with_every_kind("lapsed");
+        let mut recent = ProviderPayload::live(
+            "claude",
+            "carried",
+            crate::UsageSnapshot::at(Utc::now() - chrono::Duration::minutes(5)),
+        );
+        recent.credential.name = Some("perso".into());
+        recent.credential.active = Some(false);
+        recent.credential.account_digest = Some(hex_sha256(b"u-perso")[..16].to_string());
+
+        let (payloads, _) = fetch_provider("claude", &reader, &config, &[recent], live_payload);
+        assert_eq!(named(&payloads, "perso").source.as_deref(), Some("fetched"));
+        let _ = std::fs::remove_dir_all(&store);
+    }
+
     /// A 5-hour window filling while the CLI is signed in elsewhere is another
     /// machine spending from it: asked as often as the live login, not left to
     /// reach 100% inside one 30-minute carry. A weekly window says nothing

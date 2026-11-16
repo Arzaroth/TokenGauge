@@ -29,7 +29,7 @@ same recording, so a frontend and the binary cannot quietly disagree:
   first and says so rather than passing vacuously.
 - The shell harness is local and opt-in (it pulls a Fedora image). Run it after a
   GNOME popup layout change, with `--live` and at `--gnome 45` as well as the
-  default 50: their scroll views differ. The St stub throws on an `undefined`
+  default 51: their scroll views differ. The St stub throws on an `undefined`
   initializer property, as GJS does, after a crash cut the GNOME panel off at
   COST from 0.30.0 to 0.39.0.
 - Waybar and the tray have no harness: waybar's surface is the binary's output

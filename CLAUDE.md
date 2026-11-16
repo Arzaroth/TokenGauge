@@ -647,7 +647,7 @@ extension throws, the popup runs off the monitor, or its content is squeezed
 instead of scrolled. It is local and opt-in, since it pulls a Fedora image, so
 it is not in CI. Run it after a change to how the GNOME popup draws or sizes:
 with `--live` for a panel that has token breakdowns and several credentials,
-and with `--gnome 45` as well as the default 50, because the two shells'
+and with `--gnome 45` as well as the default 51, because the two shells'
 scroll views differ (45's is an St.Bin, and its box lays rows out at their
 minimum height). The fixture carries no `bars` section, so the stubs and that
 fixture together missed a crash that cut the GNOME panel off at COST from
@@ -859,7 +859,7 @@ is the procedure.
   harnesses: `tests/qml/run.sh` and `tests/gnome/run.sh`. CI's `frontends` job
   runs all of them, so they are enforced rather than remembered. A change to
   the GNOME popup's layout also gets `tests/gnome/shell/run.sh --live`, at
-  `--gnome 45` and 50, which nothing enforces.
+  `--gnome 45` and 51, which nothing enforces.
 - `scripts/coverage.sh` runs `cargo llvm-cov` over the workspace and then ranks
   the files by uncovered lines; `--html` opens the browsable report. It is a
   local tool, not a CI gate - nothing fails on a number. The gaps it keeps

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The GNOME Shell extension loads on GNOME 51 (Fedora 45). It declared
+  shell versions 45 to 50 only, so GNOME 51 marked it out of date and never
+  enabled it. The headless shell harness now defaults to GNOME 51 too.
+
 ## [0.62.1] - 2026-11-14
 
 ### Fixed

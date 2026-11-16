@@ -13,8 +13,8 @@
 #
 # The panel defaults to tests/qml/fixtures/panel.json. --live serves what the
 # installed `tokengauge --json` prints instead, which is the one with token
-# breakdowns and several credentials in it. --gnome picks the shell (45-50,
-# default 50) through the Fedora release that shipped it. Screenshots and logs
+# breakdowns and several credentials in it. --gnome picks the shell (45-51,
+# default 51) through the Fedora release that shipped it. Screenshots and logs
 # land in --out, created private to you, or in a fresh temporary directory.
 set -euo pipefail
 
@@ -24,7 +24,7 @@ root="$(cd "$here/../../.." && pwd)"
 json="$root/tests/qml/fixtures/panel.json"
 live=0
 provider=""
-gnome=50
+gnome=51
 monitor="1920x1080"
 out=""
 while (($#)); do

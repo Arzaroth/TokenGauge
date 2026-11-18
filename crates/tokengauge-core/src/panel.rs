@@ -795,7 +795,7 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
         credential.active != Some(true)
             && !g.stale
             && match credential.state {
-                None => !has_total || counted(g, options.plans_total).is_some(),
+                None => !has_total || pooled.contains(&credential_name(g)),
                 Some(crate::CredentialState::NoPlan) => true,
                 Some(_) => false,
             }
@@ -825,7 +825,7 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
         out.push(Section {
             id: "plans",
             title: if hidden > 0 {
-                tf!("ALL PLANS · {count} credentials", count = pooled)
+                tf!("ALL PLANS · {count} credentials", count = pooled.len())
             } else {
                 tr("ALL PLANS").into()
             },
@@ -940,7 +940,7 @@ fn state_row(state: crate::CredentialState) -> PanelRow {
 /// Pro cannot make two busy plans look free; split, each credential gets the
 /// stretch of it its weight buys. The weights are the nominal multipliers the
 /// plans are sold with, so the weighted figure is an estimate and says so.
-fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> (Vec<PanelRow>, usize) {
+fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> (Vec<PanelRow>, Vec<String>) {
     struct Share<'a> {
         name: String,
         weight: f64,
@@ -1052,7 +1052,7 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> (Vec<PanelRow>, u
             Some(r)
         })
         .collect();
-    (rows, pooled_names.len())
+    (rows, pooled_names)
 }
 
 // ---------------------------------------------------------------------------

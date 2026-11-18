@@ -785,7 +785,7 @@ fn counted(row: &ProviderRow, total: PlansTotal) -> Option<f64> {
 fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Section> {
     let mut out = Vec::new();
 
-    let plans = plan_rows(groups, options);
+    let (plans, pooled) = plan_rows(groups, options);
     let has_total = !plans.is_empty();
     let has_active = groups
         .iter()
@@ -825,13 +825,7 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
         out.push(Section {
             id: "plans",
             title: if hidden > 0 {
-                tf!(
-                    "ALL PLANS · {count} credentials",
-                    count = groups
-                        .iter()
-                        .filter(|g| counted(g, options.plans_total).is_some())
-                        .count()
-                )
+                tf!("ALL PLANS · {count} credentials", count = pooled)
             } else {
                 tr("ALL PLANS").into()
             },
@@ -946,7 +940,7 @@ fn state_row(state: crate::CredentialState) -> PanelRow {
 /// Pro cannot make two busy plans look free; split, each credential gets the
 /// stretch of it its weight buys. The weights are the nominal multipliers the
 /// plans are sold with, so the weighted figure is an estimate and says so.
-fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
+fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> (Vec<PanelRow>, usize) {
     struct Share<'a> {
         name: String,
         weight: f64,
@@ -979,7 +973,8 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
         .map(credential_name)
         .collect();
 
-    by_label
+    let mut pooled_names: Vec<String> = Vec::new();
+    let rows = by_label
         .into_iter()
         .filter(|(_, shares)| shares.len() >= 2)
         .filter_map(|(label, shares)| {
@@ -1049,9 +1044,15 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
                 lines.push(tf!("Not in the total: {names}", names = left_out.join(", ")));
             }
             r.tooltip = lines.join("\n");
+            for s in &shares {
+                if !pooled_names.contains(&s.name) {
+                    pooled_names.push(s.name.clone());
+                }
+            }
             Some(r)
         })
-        .collect()
+        .collect();
+    (rows, pooled_names.len())
 }
 
 // ---------------------------------------------------------------------------

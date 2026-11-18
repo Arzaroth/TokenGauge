@@ -53,7 +53,7 @@ is the list.
 - `remuda::status` runs the check; `--json` carries a top-level
   `remuda: {serving, version}` resolved on every render (like `refresh_hint`),
   never stored in the snapshot. It never spawns `remuda`; a missing file is one
-  failed read. Off Linux it returns not serving without looking.
+  failed read. Off Linux and macOS it returns not serving without looking.
 - `tokengauge --open=remuda` runs `remuda open` and waits, so a chained
   `&& --json` gets remuda's error on stderr. The binary is `remuda` on `PATH`,
   else `~/.local/bin/remuda` (`launch::remuda_binary`), since GUIs often start

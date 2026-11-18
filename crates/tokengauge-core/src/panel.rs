@@ -785,7 +785,11 @@ fn counted(row: &ProviderRow, total: PlansTotal) -> Option<f64> {
 fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Section> {
     let mut out = Vec::new();
 
-    let (plans, pooled) = plan_rows(groups, options);
+    let Plans {
+        rows: plans,
+        pooled,
+        fully_pooled,
+    } = plan_rows(groups, options);
     let has_total = !plans.is_empty();
     let has_active = groups
         .iter()
@@ -795,7 +799,7 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
         credential.active != Some(true)
             && !g.stale
             && match credential.state {
-                None => !has_total || pooled.contains(&credential_name(g)),
+                None => !has_total || fully_pooled.contains(&credential_name(g)),
                 Some(crate::CredentialState::NoPlan) => true,
                 Some(_) => false,
             }
@@ -940,7 +944,7 @@ fn state_row(state: crate::CredentialState) -> PanelRow {
 /// Pro cannot make two busy plans look free; split, each credential gets the
 /// stretch of it its weight buys. The weights are the nominal multipliers the
 /// plans are sold with, so the weighted figure is an estimate and says so.
-fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> (Vec<PanelRow>, Vec<String>) {
+fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Plans {
     struct Share<'a> {
         name: String,
         weight: f64,
@@ -974,19 +978,27 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> (Vec<PanelRow>, V
         .collect();
 
     let mut pooled_names: Vec<String> = Vec::new();
+    let mut unpooled: Vec<String> = Vec::new();
     let rows = by_label
         .into_iter()
-        .filter(|(_, shares)| shares.len() >= 2)
         .filter_map(|(label, shares)| {
-            let pooled = selvedge::plans::pool(
-                &shares
-                    .iter()
-                    .map(|s| selvedge::plans::Share {
-                        used: f64::from(s.window.used),
-                        weight: s.weight,
-                    })
-                    .collect::<Vec<_>>(),
-            )?;
+            let pooled = (shares.len() >= 2)
+                .then(|| {
+                    selvedge::plans::pool(
+                        &shares
+                            .iter()
+                            .map(|s| selvedge::plans::Share {
+                                used: f64::from(s.window.used),
+                                weight: s.weight,
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .flatten();
+            let Some(pooled) = pooled else {
+                unpooled.extend(shares.iter().map(|s| s.name.clone()));
+                return None;
+            };
             let mut r = PanelRow::new(label, pooled.label());
             r.fraction = Some(pooled.fraction);
             r.tone = Tone::for_percent(crate::pct_u8(pooled.fraction * 100.0));
@@ -1052,7 +1064,22 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> (Vec<PanelRow>, V
             Some(r)
         })
         .collect();
-    (rows, pooled_names)
+    let fully_pooled = pooled_names
+        .iter()
+        .filter(|n| !unpooled.contains(n))
+        .cloned()
+        .collect();
+    Plans {
+        rows,
+        pooled: pooled_names,
+        fully_pooled,
+    }
+}
+
+struct Plans {
+    rows: Vec<PanelRow>,
+    pooled: Vec<String>,
+    fully_pooled: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

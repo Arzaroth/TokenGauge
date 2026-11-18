@@ -780,7 +780,8 @@ fn counted(row: &ProviderRow, total: PlansTotal) -> Option<f64> {
 /// many it covers - or the active group does, when there is no header. Only a
 /// healthy group is ever dropped: one that is stale, was not asked or is out
 /// of the total has something to say that its numbers alone do not, and the
-/// status section keeps every group's reason.
+/// status section keeps every group's reason. A group with no plan is the
+/// exception: it has no figures and nothing will change that.
 fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Section> {
     let mut out = Vec::new();
 
@@ -792,9 +793,12 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
     let droppable = |g: &ProviderRow| {
         let credential = g.credential.clone().unwrap_or_default();
         credential.active != Some(true)
-            && credential.state.is_none()
             && !g.stale
-            && (!has_total || counted(g, options.plans_total).is_some())
+            && match credential.state {
+                None => !has_total || counted(g, options.plans_total).is_some(),
+                Some(crate::CredentialState::NoPlan) => true,
+                Some(_) => false,
+            }
     };
     let shown: Vec<&ProviderRow> = groups
         .iter()

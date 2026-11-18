@@ -374,8 +374,9 @@ Rules that are easy to regress:
   header, and hiding why they are old is the failure. A `NoPlan` group is
   the one unasked group it drops: a free account has no figures and nothing
   will give it any, so keeping it only repeated "no plan" under the active
-  one forever. The header's title
-  carries the count it covers.
+  one forever (`panel::tests::active_only_drops_a_credential_with_no_plan`).
+  The header's title carries the count it pools, not the count of groups
+  (`panel::tests::the_total_counts_only_the_credentials_it_pools`).
   `split_bars` rides on `PanelRow.segments`, a field no compiler makes a
   frontend read - `panel::tests::every_panel_frontend_draws_split_bars` is the
   backstop, and it matches each frontend's drawing call, not the word. The

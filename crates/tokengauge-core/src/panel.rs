@@ -825,7 +825,13 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
         out.push(Section {
             id: "plans",
             title: if hidden > 0 {
-                tf!("ALL PLANS · {count} credentials", count = groups.len())
+                tf!(
+                    "ALL PLANS · {count} credentials",
+                    count = groups
+                        .iter()
+                        .filter(|g| counted(g, options.plans_total).is_some())
+                        .count()
+                )
             } else {
                 tr("ALL PLANS").into()
             },

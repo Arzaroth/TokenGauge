@@ -74,8 +74,9 @@ Plasma, GNOME, Omarchy and the tray (waybar and the TUI use the file):
 - `active_credential_only` (default `false`) - when `true`, draw only the active
   group plus any stale, expired, unverified or out-of-total group. A group with
   no plan (a free account) is hidden too: it has no figures to show and nothing
-  to fix. ALL PLANS is unchanged by the option and pools every credential it
-  counts, hidden or not; its title says how many ("ALL PLANS · 5 credentials").
+  to fix. The ALL PLANS meters are unchanged by the option and pool every
+  credential they count, hidden or not; once a group is hidden, the title adds
+  how many credentials feed a meter ("ALL PLANS · 5 credentials").
 - `plans_total = "weighted" | "absolute"` - absolute counts every asked credential
   100% and needs no weight (five plans read `409% of 500%`).
 - `split_bars = true` - one segment per credential under each ALL PLANS meter,

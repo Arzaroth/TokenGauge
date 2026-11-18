@@ -462,7 +462,7 @@ While `remuda serve` is running (by hand, or as remuda's
 that opens its page, and the TUI and the Omarchy panel open it with `m`. Waybar
 has no button; bind `tokengauge --open=remuda` to a click in its config
 instead. TokenGauge opens the page by running `remuda open`, so the page's
-access token never passes through it. This needs a remuda newer than 0.4.2 and Linux, where remuda runs.
+access token never passes through it. This needs a remuda newer than 0.4.2 on Linux, or 0.43.0 on macOS.
 
 Beside it, a `+` button (`+` in the TUI and the Omarchy panel,
 `tokengauge --open=remuda-add` for a waybar click) adds an account: it opens

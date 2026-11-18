@@ -51,9 +51,9 @@ pub fn runtime_dir(
         .or_else(|| store.store_root())
 }
 
-/// remuda runs on Linux only, so elsewhere nothing is looked at.
+/// remuda runs on Linux and macOS, so elsewhere nothing is looked at.
 pub fn status(config: &TokenGaugeConfig) -> Status {
-    if !cfg!(target_os = "linux") {
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
         return Status::default();
     }
     runtime_dir(std::env::var_os("XDG_RUNTIME_DIR"), &config.credentials)
@@ -88,7 +88,7 @@ fn started(pid: u32) -> Option<u64> {
     selvedge::proc::start_time(pid)
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::*;
     use std::net::TcpListener;
@@ -147,6 +147,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_start_time_is_the_twenty_second_stat_field() {
         let stat = "1234 (a) b (c)) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 20 21";
@@ -159,6 +160,20 @@ mod tests {
         assert_eq!(
             selvedge::proc::stat_start_time(&own),
             fields[19].parse().ok()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_start_time_on_macos_is_microseconds_since_the_epoch_as_remuda_writes_it() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+        let started = me();
+        assert!(
+            started <= now && now - started < 3_600_000_000,
+            "{started} {now}"
         );
     }
 

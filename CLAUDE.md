@@ -313,8 +313,8 @@ Rules that are easy to regress:
   figure per provider, and it follows the plan being spent from.
 - **remuda's page is opened by `remuda open` and nothing else** (decision
   0004, `brain/features/remuda-page.md`).
-  `remuda::status` decides whether a page is up from `serve.json`, `/proc` and
-  a connect, and never reads `serve.url` beside it, which holds the page's
+  `remuda::status` decides whether a page is up from `serve.json`, the pid's
+  start time and a connect, and never reads `serve.url` beside it, which holds the page's
   token. It is resolved per render into `--json`'s `remuda`, not stored, and
   `json_snapshot` takes it as a parameter (the daemon through a probe on
   `DaemonState` its tests stub) so no test reads the developer's

@@ -163,6 +163,20 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_start_time_on_macos_is_microseconds_since_the_epoch_as_remuda_writes_it() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+        let started = me();
+        assert!(
+            started <= now && now - started < 3_600_000_000,
+            "{started} {now}"
+        );
+    }
+
     #[test]
     fn a_live_server_is_serving() {
         let dir = temp_dir("live");

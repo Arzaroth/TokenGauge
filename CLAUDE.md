@@ -369,7 +369,7 @@ Rules that are easy to regress:
 - **The `[panel]` options are content, so `panel_spec` reads them**, never a
   frontend: `panel_spec(row, &config.panel)`, and `bar_tooltip` the same.
   `active_credential_only` drops only a *healthy* inactive group - one that
-  is stale, was not asked or is out of the total stays, and `status` keeps
+  is stale, was not asked, or feeds no ALL PLANS meter stays, and `status` keeps
   every group's reason - because a hidden group's figures still feed the
   header, and hiding why they are old is the failure. A `NoPlan` group is
   the one unasked group it drops: a free account has no figures and nothing

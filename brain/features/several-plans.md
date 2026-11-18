@@ -71,12 +71,16 @@ remuda's page.
 From `config.toml`, `tokengauge --set-panel KEY=VALUE`, or the settings pane of
 Plasma, GNOME, Omarchy and the tray (waybar and the TUI use the file):
 
-- `active_credential_only` (default `false`) - when `true`, draw only the active
-  group plus any stale, expired, unverified or out-of-total group. A group with
-  no plan (a free account) is hidden too: it has no figures to show and nothing
-  to fix. The ALL PLANS meters are unchanged by the option and pool every
-  credential they count, hidden or not; once a group is hidden, the title adds
-  how many credentials feed a meter ("ALL PLANS · 5 credentials").
+- `active_credential_only` (default `false`) - when `true` and one credential is
+  marked active, hide every other group that is not stale, expired or
+  unverified. When there is an ALL PLANS section, a group that feeds none of its
+  meters stays as well, since its figures would show nowhere else. A group with
+  no plan (a free account) is hidden even though it was not asked: it has no
+  figures and nothing to fix. With no active credential, every group shows. The
+  ALL PLANS meters are unchanged by the option and pool hidden credentials too.
+  Once a group is hidden, the count of what is left out goes on a title: ALL
+  PLANS says how many credentials feed its meters ("ALL PLANS · 5 credentials"),
+  and with no ALL PLANS section the active group says "1 of 2 shown".
 - `plans_total = "weighted" | "absolute"` - absolute counts every asked credential
   100% and needs no weight (five plans read `409% of 500%`).
 - `split_bars = true` - one segment per credential under each ALL PLANS meter,

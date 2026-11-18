@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- On macOS, the remuda page is offered while `remuda serve` runs (remuda
+  0.43.0 or newer), as on Linux: selvedge 0.17.0 tells the serving process
+  from a later one given its pid there too.
+
 ## [0.62.1] - 2026-11-14
 
 ### Fixed

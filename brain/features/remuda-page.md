@@ -14,12 +14,14 @@ remuda's side is its `src/served.rs` and "Finding a running page" in its
   when `XDG_RUNTIME_DIR` is unset or empty (TokenGauge takes the store from
   `[credentials] store`).
 - **`serve.json`**: `{"pid": u32, "started": u64, "port": u16, "version": string}`,
-  no secret. `started` is field 22 of `/proc/<pid>/stat`, counted from the text
-  after the last `)` (the command name may hold spaces and parentheses).
+  no secret. `started` is `selvedge::proc::start_time`: on Linux field 22 of
+  `/proc/<pid>/stat`, counted from the text after the last `)` (the command
+  name may hold spaces and parentheses); on macOS microseconds since the epoch,
+  from `proc_pidinfo`.
 - **`serve.url`** holds the URL with its access token, mode 0600. TokenGauge never
   reads it, logs its path or passes it on.
 - Neither file is removed when the page stops. A page is up only when
-  `serve.json` parses, `/proc/<pid>/stat` gives the recorded start time (rejects a
+  `serve.json` parses, the pid's start time is the recorded one (rejects a
   dead or reused pid), and a TCP connect to `127.0.0.1:<port>` succeeds within
   300 ms.
 - **`remuda open`** (`--add` lands on the add-account sheet) is the only way to the
@@ -31,7 +33,8 @@ remuda's side is its `src/served.rs` and "Finding a running page" in its
 Pinned by `remuda::tests::the_serve_keys_are_spelled_as_decision_0004_says` and
 `remuda::tests::a_start_time_is_the_twenty_second_stat_field`; renaming a key is a
 change to decision 0004 and to remuda. Needs a remuda newer than 0.4.2; against an
-older one the button never appears.
+older one the button never appears, and on macOS one from 0.43.0. Windows has no
+remuda, so nothing is looked at there.
 
 ## Adding an account
 

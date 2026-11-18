@@ -2121,6 +2121,32 @@ mod tests {
     }
 
     #[test]
+    fn active_only_keeps_a_credential_with_a_window_no_meter_draws() {
+        let mut extra = credential("extra", false, Some(5), 40, 40);
+        extra.tertiary_used = Some(50);
+        let groups = grouped(vec![
+            credential("work", true, Some(20), 30, 10),
+            credential("perso", false, Some(1), 40, 40),
+            extra,
+        ]);
+        let options = PanelConfig {
+            active_credential_only: true,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&groups, &options);
+        let shown: Vec<&str> = spec
+            .iter()
+            .filter(|s| s.id == "limits")
+            .filter_map(|s| s.group.as_deref())
+            .collect();
+        assert_eq!(shown, ["work", "extra"]);
+        assert_eq!(
+            section(&spec, "plans", None).title,
+            "ALL PLANS · 3 credentials"
+        );
+    }
+
+    #[test]
     fn active_only_with_no_header_puts_the_count_on_the_group() {
         let groups = grouped(vec![
             credential("work", true, None, 30, 10),

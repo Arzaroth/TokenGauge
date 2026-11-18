@@ -371,7 +371,10 @@ Rules that are easy to regress:
   `active_credential_only` drops only a *healthy* inactive group - one that
   is stale, was not asked or is out of the total stays, and `status` keeps
   every group's reason - because a hidden group's figures still feed the
-  header, and hiding why they are old is the failure. The header's title
+  header, and hiding why they are old is the failure. A `NoPlan` group is
+  the one unasked group it drops: a free account has no figures and nothing
+  will give it any, so keeping it only repeated "no plan" under the active
+  one forever. The header's title
   carries the count it covers.
   `split_bars` rides on `PanelRow.segments`, a field no compiler makes a
   frontend read - `panel::tests::every_panel_frontend_draws_split_bars` is the

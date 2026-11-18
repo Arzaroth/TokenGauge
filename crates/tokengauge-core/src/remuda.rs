@@ -51,9 +51,9 @@ pub fn runtime_dir(
         .or_else(|| store.store_root())
 }
 
-/// remuda runs on Linux only, so elsewhere nothing is looked at.
+/// remuda runs on Linux and macOS, so elsewhere nothing is looked at.
 pub fn status(config: &TokenGaugeConfig) -> Status {
-    if !cfg!(target_os = "linux") {
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
         return Status::default();
     }
     runtime_dir(std::env::var_os("XDG_RUNTIME_DIR"), &config.credentials)

@@ -2045,6 +2045,26 @@ mod tests {
     }
 
     #[test]
+    fn the_total_counts_only_the_credentials_it_pools() {
+        let mut free = credential("free", false, None, 0, 0);
+        free.credential.as_mut().unwrap().state = Some(crate::CredentialState::NoPlan);
+        let groups = grouped(vec![
+            credential("work", true, Some(20), 30, 10),
+            credential("perso", false, Some(1), 40, 40),
+            free,
+        ]);
+        let options = PanelConfig {
+            active_credential_only: true,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&groups, &options);
+        assert_eq!(
+            section(&spec, "plans", None).title,
+            "ALL PLANS · 2 credentials"
+        );
+    }
+
+    #[test]
     fn active_only_with_no_header_puts_the_count_on_the_group() {
         let groups = grouped(vec![
             credential("work", true, None, 30, 10),

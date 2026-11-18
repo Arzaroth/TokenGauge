@@ -2085,6 +2085,12 @@ mod tests {
             section(&spec, "plans", None).title,
             "ALL PLANS · 2 credentials"
         );
+        let shown: Vec<&str> = spec
+            .iter()
+            .filter(|s| s.id == "limits")
+            .filter_map(|s| s.group.as_deref())
+            .collect();
+        assert_eq!(shown, ["work", "odd"]);
     }
 
     #[test]

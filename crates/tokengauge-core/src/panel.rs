@@ -2019,6 +2019,26 @@ mod tests {
     }
 
     #[test]
+    fn active_only_drops_a_credential_with_no_plan() {
+        let mut free = credential("free", false, None, 0, 0);
+        free.credential.as_mut().unwrap().state = Some(crate::CredentialState::NoPlan);
+        let rows = vec![credential("work", true, Some(20), 30, 10), free];
+        let shown = |active_credential_only| {
+            let options = PanelConfig {
+                active_credential_only,
+                ..PanelConfig::default()
+            };
+            super::panel_spec(&grouped(rows.clone()), &options)
+                .iter()
+                .filter(|s| s.id == "limits")
+                .filter_map(|s| s.group.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shown(false), ["work", "free"]);
+        assert_eq!(shown(true), ["work"]);
+    }
+
+    #[test]
     fn active_only_with_no_header_puts_the_count_on_the_group() {
         let groups = grouped(vec![
             credential("work", true, None, 30, 10),

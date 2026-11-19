@@ -2157,6 +2157,45 @@ mod tests {
     }
 
     #[test]
+    fn a_title_one_credential_reports_twice_is_never_pooled() {
+        let scoped = |used| ExtraWindowRow {
+            title: "Weekly (scoped)".into(),
+            used: Some(used),
+            reset: "in 4d".into(),
+            pace: None,
+            placeholder: false,
+            resets_at: None,
+        };
+        let mut twice = credential("twice", false, Some(5), 40, 40);
+        twice.extra_windows = vec![scoped(20), scoped(70)];
+        let groups = grouped(vec![credential("work", true, Some(20), 30, 10), twice]);
+        let options = PanelConfig {
+            active_credential_only: true,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&groups, &options);
+        let plans = section(&spec, "plans", None);
+        assert!(
+            plans.rows.iter().all(|r| r.label != "Weekly (scoped)"),
+            "{:?}",
+            plans.rows.iter().map(|r| &r.label).collect::<Vec<_>>()
+        );
+        assert!(!plans.rows.is_empty());
+        let shown: Vec<&str> = spec
+            .iter()
+            .filter(|s| s.id == "limits")
+            .filter_map(|s| s.group.as_deref())
+            .collect();
+        assert_eq!(shown, ["work", "twice"]);
+        let scoped_rows = section(&spec, "limits", Some("twice"))
+            .rows
+            .iter()
+            .filter(|r| r.label == "Weekly (scoped)")
+            .count();
+        assert_eq!(scoped_rows, 2);
+    }
+
+    #[test]
     fn active_only_with_no_header_puts_the_count_on_the_group() {
         let groups = grouped(vec![
             credential("work", true, None, 30, 10),

@@ -82,7 +82,9 @@ Plasma, GNOME, Omarchy and the tray (waybar and the TUI use the file):
   Once a group is hidden, a title says so. ALL PLANS adds how many credentials
   feed its meters, shown or hidden ("ALL PLANS · 5 credentials"). With no ALL
   PLANS section, the active group says how many groups are shown out of all of
-  them ("1 of 2 shown").
+  them ("1 of 2 shown"). A title one credential reports twice (two scoped
+  windows with one name) is never pooled for that credential. The rule and its
+  tests live in [CLAUDE.md](../../CLAUDE.md), under the `[panel]` options.
 - `plans_total = "weighted" | "absolute"` - absolute counts every asked credential
   100% and needs no weight (five plans read `409% of 500%`).
 - `split_bars = true` - one segment per credential under each ALL PLANS meter,

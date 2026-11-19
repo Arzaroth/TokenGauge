@@ -380,6 +380,10 @@ Rules that are easy to regress:
   (`panel::tests::the_total_counts_only_the_credentials_it_pools`), and a
   group with a window no meter draws stays
   (`panel::tests::active_only_keeps_a_credential_with_a_window_no_meter_draws`).
+  ALL PLANS pools windows by title, so a title one credential reports twice
+  (Claude's scoped weeklies can share one) leaves that credential out of the
+  meter rather than merging its two figures
+  (`panel::tests::a_title_one_credential_reports_twice_is_never_pooled`).
   `split_bars` rides on `PanelRow.segments`, a field no compiler makes a
   frontend read - `panel::tests::every_panel_frontend_draws_split_bars` is the
   backstop, and it matches each frontend's drawing call, not the word. The

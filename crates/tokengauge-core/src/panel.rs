@@ -946,18 +946,20 @@ fn state_row(state: crate::CredentialState) -> PanelRow {
 /// plans are sold with, so the weighted figure is an estimate and says so.
 fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Plans {
     struct Share<'a> {
+        group: usize,
         name: String,
         weight: f64,
         window: Window<'a>,
     }
     let total_mode = options.plans_total;
     let mut by_label: Vec<(&str, Vec<Share<'_>>)> = Vec::new();
-    for g in groups {
+    for (group, g) in groups.iter().enumerate() {
         let Some(weight) = counted(g, total_mode) else {
             continue;
         };
         for window in windows(g) {
             let share = Share {
+                group,
                 name: credential_name(g),
                 weight,
                 window,
@@ -982,6 +984,14 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Plans {
     let rows = by_label
         .into_iter()
         .filter_map(|(label, shares)| {
+            let once: Vec<bool> = shares
+                .iter()
+                .map(|s| shares.iter().filter(|o| o.group == s.group).count() == 1)
+                .collect();
+            let (shares, twice): (Vec<_>, Vec<_>) =
+                shares.into_iter().zip(once).partition(|(_, once)| *once);
+            let shares: Vec<Share<'_>> = shares.into_iter().map(|(s, _)| s).collect();
+            unpooled.extend(twice.into_iter().map(|(s, _)| s.name));
             let pooled = (shares.len() >= 2)
                 .then(|| {
                     selvedge::plans::pool(

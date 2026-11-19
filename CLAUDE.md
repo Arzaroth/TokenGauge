@@ -369,10 +369,21 @@ Rules that are easy to regress:
 - **The `[panel]` options are content, so `panel_spec` reads them**, never a
   frontend: `panel_spec(row, &config.panel)`, and `bar_tooltip` the same.
   `active_credential_only` drops only a *healthy* inactive group - one that
-  is stale, was not asked or is out of the total stays, and `status` keeps
+  is stale, was not asked, or (when there is an ALL PLANS section) reports a
+  window none of its meters draws stays, and `status` keeps
   every group's reason - because a hidden group's figures still feed the
-  header, and hiding why they are old is the failure. The header's title
-  carries the count it covers.
+  header, and hiding why they are old is the failure. A `NoPlan` group is
+  the one unasked group it drops: a free account has no figures and nothing
+  will give it any, so keeping it only repeated "no plan" under the active
+  one forever (`panel::tests::active_only_drops_a_credential_with_no_plan`).
+  The header's title carries the count it pools, not the count of groups
+  (`panel::tests::the_total_counts_only_the_credentials_it_pools`), and a
+  group with a window no meter draws stays
+  (`panel::tests::active_only_keeps_a_credential_with_a_window_no_meter_draws`).
+  ALL PLANS pools windows by title, so a title one credential reports twice
+  (Claude's scoped weeklies can share one) leaves that credential out of the
+  meter rather than merging its two figures
+  (`panel::tests::a_title_one_credential_reports_twice_is_never_pooled`).
   `split_bars` rides on `PanelRow.segments`, a field no compiler makes a
   frontend read - `panel::tests::every_panel_frontend_draws_split_bars` is the
   backstop, and it matches each frontend's drawing call, not the word. The

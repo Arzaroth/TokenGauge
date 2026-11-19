@@ -780,11 +780,16 @@ fn counted(row: &ProviderRow, total: PlansTotal) -> Option<f64> {
 /// many it covers - or the active group does, when there is no header. Only a
 /// healthy group is ever dropped: one that is stale, was not asked or is out
 /// of the total has something to say that its numbers alone do not, and the
-/// status section keeps every group's reason.
+/// status section keeps every group's reason. A group with no plan is the
+/// exception: it has no figures and nothing will change that.
 fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Section> {
     let mut out = Vec::new();
 
-    let plans = plan_rows(groups, options);
+    let Plans {
+        rows: plans,
+        pooled,
+        fully_pooled,
+    } = plan_rows(groups, options);
     let has_total = !plans.is_empty();
     let has_active = groups
         .iter()
@@ -792,9 +797,12 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
     let droppable = |g: &ProviderRow| {
         let credential = g.credential.clone().unwrap_or_default();
         credential.active != Some(true)
-            && credential.state.is_none()
             && !g.stale
-            && (!has_total || counted(g, options.plans_total).is_some())
+            && match credential.state {
+                None => !has_total || fully_pooled.contains(&credential_name(g)),
+                Some(crate::CredentialState::NoPlan) => true,
+                Some(_) => false,
+            }
     };
     let shown: Vec<&ProviderRow> = groups
         .iter()
@@ -821,7 +829,7 @@ fn credential_sections(groups: &[ProviderRow], options: &PanelConfig) -> Vec<Sec
         out.push(Section {
             id: "plans",
             title: if hidden > 0 {
-                tf!("ALL PLANS · {count} credentials", count = groups.len())
+                tf!("ALL PLANS · {count} credentials", count = pooled.len())
             } else {
                 tr("ALL PLANS").into()
             },
@@ -936,20 +944,22 @@ fn state_row(state: crate::CredentialState) -> PanelRow {
 /// Pro cannot make two busy plans look free; split, each credential gets the
 /// stretch of it its weight buys. The weights are the nominal multipliers the
 /// plans are sold with, so the weighted figure is an estimate and says so.
-fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
+fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Plans {
     struct Share<'a> {
+        group: usize,
         name: String,
         weight: f64,
         window: Window<'a>,
     }
     let total_mode = options.plans_total;
     let mut by_label: Vec<(&str, Vec<Share<'_>>)> = Vec::new();
-    for g in groups {
+    for (group, g) in groups.iter().enumerate() {
         let Some(weight) = counted(g, total_mode) else {
             continue;
         };
         for window in windows(g) {
             let share = Share {
+                group,
                 name: credential_name(g),
                 weight,
                 window,
@@ -969,19 +979,36 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
         .map(credential_name)
         .collect();
 
-    by_label
+    let mut pooled_names: Vec<String> = Vec::new();
+    let mut unpooled: Vec<String> = Vec::new();
+    let rows = by_label
         .into_iter()
-        .filter(|(_, shares)| shares.len() >= 2)
         .filter_map(|(label, shares)| {
-            let pooled = selvedge::plans::pool(
-                &shares
-                    .iter()
-                    .map(|s| selvedge::plans::Share {
-                        used: f64::from(s.window.used),
-                        weight: s.weight,
-                    })
-                    .collect::<Vec<_>>(),
-            )?;
+            let once: Vec<bool> = shares
+                .iter()
+                .map(|s| shares.iter().filter(|o| o.group == s.group).count() == 1)
+                .collect();
+            let (shares, twice): (Vec<_>, Vec<_>) =
+                shares.into_iter().zip(once).partition(|(_, once)| *once);
+            let shares: Vec<Share<'_>> = shares.into_iter().map(|(s, _)| s).collect();
+            unpooled.extend(twice.into_iter().map(|(s, _)| s.name));
+            let pooled = (shares.len() >= 2)
+                .then(|| {
+                    selvedge::plans::pool(
+                        &shares
+                            .iter()
+                            .map(|s| selvedge::plans::Share {
+                                used: f64::from(s.window.used),
+                                weight: s.weight,
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .flatten();
+            let Some(pooled) = pooled else {
+                unpooled.extend(shares.iter().map(|s| s.name.clone()));
+                return None;
+            };
             let mut r = PanelRow::new(label, pooled.label());
             r.fraction = Some(pooled.fraction);
             r.tone = Tone::for_percent(crate::pct_u8(pooled.fraction * 100.0));
@@ -1039,9 +1066,30 @@ fn plan_rows(groups: &[ProviderRow], options: &PanelConfig) -> Vec<PanelRow> {
                 lines.push(tf!("Not in the total: {names}", names = left_out.join(", ")));
             }
             r.tooltip = lines.join("\n");
+            for s in &shares {
+                if !pooled_names.contains(&s.name) {
+                    pooled_names.push(s.name.clone());
+                }
+            }
             Some(r)
         })
-        .collect()
+        .collect();
+    let fully_pooled = pooled_names
+        .iter()
+        .filter(|n| !unpooled.contains(n))
+        .cloned()
+        .collect();
+    Plans {
+        rows,
+        pooled: pooled_names,
+        fully_pooled,
+    }
+}
+
+struct Plans {
+    rows: Vec<PanelRow>,
+    pooled: Vec<String>,
+    fully_pooled: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2012,6 +2060,139 @@ mod tests {
             section(&spec, "limits", Some("corp")).title,
             "corp · corp plan · not in total"
         );
+    }
+
+    #[test]
+    fn active_only_drops_a_credential_with_no_plan() {
+        let mut free = credential("free", false, None, 0, 0);
+        free.credential.as_mut().unwrap().state = Some(crate::CredentialState::NoPlan);
+        let rows = vec![credential("work", true, Some(20), 30, 10), free];
+        let shown = |active_credential_only| {
+            let options = PanelConfig {
+                active_credential_only,
+                ..PanelConfig::default()
+            };
+            super::panel_spec(&grouped(rows.clone()), &options)
+                .iter()
+                .filter(|s| s.id == "limits")
+                .filter_map(|s| s.group.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shown(false), ["work", "free"]);
+        assert_eq!(shown(true), ["work"]);
+    }
+
+    #[test]
+    fn the_total_counts_only_the_credentials_it_pools() {
+        let mut free = credential("free", false, None, 0, 0);
+        free.credential.as_mut().unwrap().state = Some(crate::CredentialState::NoPlan);
+        let groups = grouped(vec![
+            credential("work", true, Some(20), 30, 10),
+            credential("perso", false, Some(1), 40, 40),
+            free,
+        ]);
+        let options = PanelConfig {
+            active_credential_only: true,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&groups, &options);
+        assert_eq!(
+            section(&spec, "plans", None).title,
+            "ALL PLANS · 2 credentials"
+        );
+    }
+
+    #[test]
+    fn the_total_leaves_out_a_credential_whose_windows_pool_with_no_other() {
+        let mut odd = credential("odd", false, Some(5), 0, 0);
+        odd.session_used = None;
+        odd.weekly_used = None;
+        odd.tertiary_used = Some(50);
+        let groups = grouped(vec![
+            credential("work", true, Some(20), 30, 10),
+            credential("perso", false, Some(1), 40, 40),
+            odd,
+        ]);
+        let options = PanelConfig {
+            active_credential_only: true,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&groups, &options);
+        assert_eq!(
+            section(&spec, "plans", None).title,
+            "ALL PLANS · 2 credentials"
+        );
+        let shown: Vec<&str> = spec
+            .iter()
+            .filter(|s| s.id == "limits")
+            .filter_map(|s| s.group.as_deref())
+            .collect();
+        assert_eq!(shown, ["work", "odd"]);
+    }
+
+    #[test]
+    fn active_only_keeps_a_credential_with_a_window_no_meter_draws() {
+        let mut extra = credential("extra", false, Some(5), 40, 40);
+        extra.tertiary_used = Some(50);
+        let groups = grouped(vec![
+            credential("work", true, Some(20), 30, 10),
+            credential("perso", false, Some(1), 40, 40),
+            extra,
+        ]);
+        let options = PanelConfig {
+            active_credential_only: true,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&groups, &options);
+        let shown: Vec<&str> = spec
+            .iter()
+            .filter(|s| s.id == "limits")
+            .filter_map(|s| s.group.as_deref())
+            .collect();
+        assert_eq!(shown, ["work", "extra"]);
+        assert_eq!(
+            section(&spec, "plans", None).title,
+            "ALL PLANS · 3 credentials"
+        );
+    }
+
+    #[test]
+    fn a_title_one_credential_reports_twice_is_never_pooled() {
+        let scoped = |used| ExtraWindowRow {
+            title: "Weekly (scoped)".into(),
+            used: Some(used),
+            reset: "in 4d".into(),
+            pace: None,
+            placeholder: false,
+            resets_at: None,
+        };
+        let mut twice = credential("twice", false, Some(5), 40, 40);
+        twice.extra_windows = vec![scoped(20), scoped(70)];
+        let groups = grouped(vec![credential("work", true, Some(20), 30, 10), twice]);
+        let options = PanelConfig {
+            active_credential_only: true,
+            ..PanelConfig::default()
+        };
+        let spec = super::panel_spec(&groups, &options);
+        let plans = section(&spec, "plans", None);
+        assert!(
+            plans.rows.iter().all(|r| r.label != "Weekly (scoped)"),
+            "{:?}",
+            plans.rows.iter().map(|r| &r.label).collect::<Vec<_>>()
+        );
+        assert!(!plans.rows.is_empty());
+        let shown: Vec<&str> = spec
+            .iter()
+            .filter(|s| s.id == "limits")
+            .filter_map(|s| s.group.as_deref())
+            .collect();
+        assert_eq!(shown, ["work", "twice"]);
+        let scoped_rows = section(&spec, "limits", Some("twice"))
+            .rows
+            .iter()
+            .filter(|r| r.label == "Weekly (scoped)")
+            .count();
+        assert_eq!(scoped_rows, 2);
     }
 
     #[test]

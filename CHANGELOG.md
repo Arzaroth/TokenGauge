@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.43.0 or newer), as on Linux: selvedge 0.17.0 tells the serving process
   from a later one given its pid there too.
 
+### Fixed
+
+- "Active credential only" now hides a stored credential with no plan (a free
+  account), which it used to keep drawing as "No plan · not asked".
+
 ## [0.62.1] - 2026-11-14
 
 ### Fixed

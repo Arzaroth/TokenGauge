@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.63.0] - 2026-11-19
+
 ### Added
 
 - On macOS, the remuda page is offered while `remuda serve` runs (remuda
@@ -17,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - "Active credential only" now hides a stored credential with no plan (a free
   account), which it used to keep drawing as "No plan · not asked".
+- With "Active credential only" on, a credential that reports a limit no ALL
+  PLANS meter draws stays visible instead of hiding that figure, and the
+  "ALL PLANS · N credentials" title counts only the credentials its meters
+  pool. Two scoped limits one account reports under the same name are no
+  longer merged into one meter.
 
 ## [0.62.1] - 2026-11-14
 

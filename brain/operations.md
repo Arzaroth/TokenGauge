@@ -28,7 +28,7 @@ GNOME JavaScript, and a JSON parse of the frontend manifests.
   Linux, temporarily lift its target-gated dependency header and swap the three
   `cfg` attributes in `main.rs` for `#[cfg(all())]` / `#[cfg(any())]`, then revert
   (recipe in `CLAUDE.md`, Conventions).
-- Not enforced: `tests/gnome/shell/run.sh --live` at `--gnome 45` and 50 after a
+- Not enforced: `tests/gnome/shell/run.sh --live` at `--gnome 45` and 51 after a
   GNOME popup layout change; `cargo test -- --ignored agrees_with_ccusage_on_real_transcripts`
   after a reader change; `scripts/coverage.sh`. See
   [architecture/testing.md](architecture/testing.md).

@@ -1,4 +1,4 @@
-ARG FEDORA=44
+ARG FEDORA=45
 FROM registry.fedoraproject.org/fedora:${FEDORA}
 # A release past its end of life leaves the mirrors for the archive.
 RUN dnf -y makecache >/dev/null 2>&1 || sed -i \
